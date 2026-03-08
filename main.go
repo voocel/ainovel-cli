@@ -8,6 +8,7 @@ import (
 
 	"github.com/voocel/ainovel-cli/app"
 	"github.com/voocel/ainovel-cli/tools"
+	"github.com/voocel/ainovel-cli/tui"
 )
 
 //go:embed prompts/*.md
@@ -20,34 +21,54 @@ var referencesFS embed.FS
 var stylesFS embed.FS
 
 func main() {
-	prompt := parsePrompt()
-	if prompt == "" {
-		fmt.Fprintf(os.Stderr, "用法: novel <小说需求描述>\n")
-		fmt.Fprintf(os.Stderr, "示例: novel \"写一部3章的都市悬疑短篇，讲述一个程序员在深夜收到神秘代码后卷入一场阴谋\"\n")
-		os.Exit(1)
-	}
-
 	style := envOr("NOVEL_STYLE", "default")
 	refs := loadReferences(style)
 	prompts := loadPrompts()
 	styles := loadStyles()
+	cfg := buildConfig(style)
+
+	prompt := parsePrompt()
+	if prompt != "" {
+		// CLI 模式：有命令行参数，直接运行
+		cfg.Prompt = prompt
+		if err := app.Run(cfg, refs, prompts, styles); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// TUI 模式：无命令行参数，启动交互界面
+	if err := tui.Run(cfg, refs, prompts, styles); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func buildConfig(style string) app.Config {
+	provider := envOr("LLM_PROVIDER", "openai")
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if provider == "anthropic" {
+		apiKey = envOr("ANTHROPIC_API_KEY", apiKey)
+		baseURL = envOr("ANTHROPIC_BASE_URL", baseURL)
+	} else if provider == "gemini" {
+		apiKey = envOr("GEMINI_API_KEY", apiKey)
+		baseURL = envOr("GEMINI_BASE_URL", baseURL)
+	}
 
 	cfg := app.Config{
-		Prompt:    prompt,
 		NovelName: "novel",
-		APIKey:    os.Getenv("OPENAI_API_KEY"),
-		BaseURL:   os.Getenv("OPENAI_BASE_URL"),
+		Provider:  provider,
+		APIKey:    apiKey,
+		BaseURL:   baseURL,
 		ModelName: envOr("MODEL_NAME", ""),
 		Style:     style,
 	}
 	if v := os.Getenv("MAX_CHAPTERS"); v != "" {
 		fmt.Sscanf(v, "%d", &cfg.MaxChapters)
 	}
-
-	if err := app.Run(cfg, refs, prompts, styles); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	return cfg
 }
 
 func parsePrompt() string {
@@ -69,7 +90,6 @@ func loadReferences(style string) tools.References {
 		ContentExpansion:  mustRead(referencesFS, "references/content-expansion.md"),
 		DialogueWriting:   mustRead(referencesFS, "references/dialogue-writing.md"),
 	}
-	// 加载风格补充参考（可选）
 	if style != "" && style != "default" {
 		path := "references/" + style + "/style-references.md"
 		if data, err := referencesFS.ReadFile(path); err == nil {
