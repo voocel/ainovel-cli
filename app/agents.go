@@ -7,6 +7,7 @@ import (
 )
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
+// 返回 Agent 和 AskUserTool（供调用方注入 handler）。
 func BuildCoordinator(
 	cfg Config,
 	store *state.Store,
@@ -14,9 +15,10 @@ func BuildCoordinator(
 	refs tools.References,
 	prompts Prompts,
 	styles map[string]string,
-) *agentcore.Agent {
+) (*agentcore.Agent, *tools.AskUserTool) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, refs, cfg.Style)
+	askUser := tools.NewAskUserTool()
 
 	// Architect SubAgent 工具
 	architectTools := []agentcore.Tool{
@@ -75,10 +77,11 @@ func BuildCoordinator(
 
 	subagentTool := agentcore.NewSubAgentTool(architect, writer, editor)
 
-	return agentcore.NewAgent(
+	agent := agentcore.NewAgent(
 		agentcore.WithModel(model),
 		agentcore.WithSystemPrompt(prompts.Coordinator),
-		agentcore.WithTools(subagentTool, contextTool),
+		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(60),
 	)
+	return agent, askUser
 }

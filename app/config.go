@@ -14,8 +14,7 @@ type Config struct {
 	ModelName   string // LLM 模型名
 	APIKey      string // API Key
 	BaseURL     string // API Base URL（可选）
-	MaxChapters int    // 最大章节数
-	Style       string // 写作风格（default/suspense/fantasy/romance）
+	Style string // 写作风格（default/suspense/fantasy/romance）
 }
 
 // Prompts 嵌入的提示词。
@@ -70,8 +69,5 @@ func (c *Config) FillDefaults() {
 	}
 	if c.Style == "" {
 		c.Style = "default"
-	}
-	if c.MaxChapters <= 0 {
-		c.MaxChapters = 3
 	}
 }

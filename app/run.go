@@ -2,6 +2,8 @@ package app
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/domain"
@@ -19,6 +23,12 @@ import (
 // emitFn 是可选的 UIEvent 发射回调，用于向 TUI 转发结构化事件。
 // CLI 模式下为 nil，Runtime 模式下指向 events channel。
 type emitFn func(UIEvent)
+
+// deltaFn 是可选的流式 token 回调，用于向 TUI 转发 LLM 生成的文字。
+type deltaFn func(delta string)
+
+// clearFn 是可选的流式缓冲清空回调，在新一轮 LLM 输出开始时触发。
+type clearFn func()
 
 // Run 启动小说创作流程（CLI 模式，阻塞直到完成）。
 func Run(cfg Config, refs tools.References, prompts Prompts, styles map[string]string) error {
@@ -40,10 +50,11 @@ func Run(cfg Config, refs tools.References, prompts Prompts, styles map[string]s
 	}
 
 	// 3. 组装 Coordinator
-	coordinator := BuildCoordinator(cfg, store, model, refs, prompts, styles)
+	coordinator, askUser := BuildCoordinator(cfg, store, model, refs, prompts, styles)
+	askUser.SetHandler(cliAskUserHandler)
 
 	// 4. 确定性控制面：事件监听 + FollowUp 注入
-	registerSubscription(coordinator, store, cfg.MaxChapters, nil)
+	registerSubscription(coordinator, store, nil, nil, nil)
 
 	// 5. 初始化运行元信息（保留已有 SteerHistory）
 	if err := store.InitRunMeta(cfg.Style, cfg.ModelName); err != nil {
@@ -65,14 +76,14 @@ func Run(cfg Config, refs tools.References, prompts Prompts, styles map[string]s
 	// 7. 恢复或启动
 	progress, _ := store.LoadProgress()
 	runMeta, _ := store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta, cfg.MaxChapters)
+	recovery := determineRecovery(progress, runMeta)
 
 	if recovery.IsNew {
-		if err := store.InitProgress(cfg.NovelName, cfg.MaxChapters); err != nil {
+		if err := store.InitProgress(cfg.NovelName, 0); err != nil {
 			return fmt.Errorf("init progress: %w", err)
 		}
-		log.Printf("新建模式：%s（%d 章）", cfg.NovelName, cfg.MaxChapters)
-		promptText := fmt.Sprintf("请创作一部 %d 章的小说。要求如下：\n\n%s", cfg.MaxChapters, cfg.Prompt)
+		log.Printf("新建模式：%s", cfg.NovelName)
+		promptText := fmt.Sprintf("请创作一部小说，章节数量由你根据故事需要自行决定。要求如下：\n\n%s", cfg.Prompt)
 		if err := coordinator.Prompt(promptText); err != nil {
 			return fmt.Errorf("prompt: %w", err)
 		}
@@ -96,14 +107,40 @@ func Run(cfg Config, refs tools.References, prompts Prompts, styles map[string]s
 	return nil
 }
 
-// registerSubscription 注册 coordinator 事件订阅，包含确定性控制和可选的 UIEvent 转发。
-func registerSubscription(coordinator *agentcore.Agent, store *state.Store, maxChapters int, emit emitFn) {
+// registerSubscription 注册 coordinator 事件订阅，包含确定性控制和可选的 UIEvent/Delta 转发。
+func registerSubscription(coordinator *agentcore.Agent, store *state.Store, emit emitFn, onDelta deltaFn, onClear clearFn) {
 	coordinator.Subscribe(func(ev agentcore.Event) {
 		switch ev.Type {
 		case agentcore.EventToolExecStart:
 			log.Printf("[tool:start] %s", ev.Tool)
 			if emit != nil {
 				emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".start", Level: "info"})
+			}
+
+		case agentcore.EventToolExecUpdate:
+			// 区分流式 delta 和进度摘要
+			if delta, ok := parseStreamDelta(ev); ok {
+				if onDelta != nil {
+					onDelta(delta)
+				}
+				return
+			}
+			summary := parseProgressSummary(ev)
+			log.Printf("[progress] %s", summary)
+			if emit != nil {
+				emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: summary, Level: "info"})
+			}
+
+		case agentcore.EventMessageStart:
+			// 新一轮 LLM 输出开始，清空流式缓冲
+			if onClear != nil {
+				onClear()
+			}
+
+		case agentcore.EventMessageUpdate:
+			// Coordinator 自身思考时的流式 token
+			if ev.Delta != "" && onDelta != nil {
+				onDelta(ev.Delta)
 			}
 
 		case agentcore.EventToolExecEnd:
@@ -120,7 +157,7 @@ func registerSubscription(coordinator *agentcore.Agent, store *state.Store, maxC
 			}
 
 			if ev.Tool == "subagent" {
-				handleSubAgentDone(coordinator, store, maxChapters, emit)
+				handleSubAgentDone(coordinator, store, emit)
 				handleEditorDone(coordinator, store, emit)
 			}
 
@@ -169,7 +206,8 @@ type recoveryResult struct {
 }
 
 // determineRecovery 根据 Progress 和 RunMeta 判断恢复类型和 Prompt 文本。
-func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta, maxChapters int) recoveryResult {
+// 章节总数完全来自 Progress.TotalChapters（由大纲自动设定），不再由外部传入。
+func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recoveryResult {
 	if progress == nil {
 		return recoveryResult{IsNew: true}
 	}
@@ -232,7 +270,7 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta, maxCh
 }
 
 // handleSubAgentDone 在每次 SubAgent 调用完成后读取文件系统信号，注入确定性任务。
-func handleSubAgentDone(coordinator *agentcore.Agent, store *state.Store, maxChapters int, emit emitFn) {
+func handleSubAgentDone(coordinator *agentcore.Agent, store *state.Store, emit emitFn) {
 	result, err := store.LoadLastCommit()
 	if err != nil || result == nil {
 		return
@@ -281,20 +319,24 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *state.Store, maxCha
 		return
 	}
 
-	// 确定性判断 1：全书完成
-	if result.NextChapter > maxChapters {
-		log.Printf("[host] 所有 %d 章已完成，注入完成指令", maxChapters)
+	// 确定性判断 1：全书完成（TotalChapters 由大纲自动设定）
+	totalChapters := 0
+	if progress != nil {
+		totalChapters = progress.TotalChapters
+	}
+	if totalChapters > 0 && result.NextChapter > totalChapters {
+		log.Printf("[host] 所有 %d 章已完成，注入完成指令", totalChapters)
 		if err := store.MarkComplete(); err != nil {
 			log.Printf("[host] 标记完成失败: %v", err)
 		}
 		clearHandledSteer(store)
 		saveCheckpoint(store, fmt.Sprintf("ch%02d-commit", result.Chapter))
 		if emit != nil {
-			emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: fmt.Sprintf("全部 %d 章已完成", maxChapters), Level: "success"})
+			emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: fmt.Sprintf("全部 %d 章已完成", totalChapters), Level: "success"})
 		}
 		coordinator.FollowUp(agentcore.UserMsg(fmt.Sprintf(
 			"[系统] 全部 %d 章已写完。请总结全书并结束。不要再调用 writer。",
-			maxChapters)))
+			totalChapters)))
 		return
 	}
 
@@ -387,6 +429,50 @@ func saveCheckpoint(store *state.Store, label string) {
 	}
 }
 
+// parseStreamDelta 从 EventToolExecUpdate 中提取流式 delta 文本。
+// 如果事件是 SubAgent 转发的 token delta（含 "delta" 字段），返回文本和 true。
+func parseStreamDelta(ev agentcore.Event) (string, bool) {
+	if len(ev.Result) == 0 {
+		return "", false
+	}
+	var data struct {
+		Delta string `json:"delta"`
+	}
+	if err := json.Unmarshal(ev.Result, &data); err != nil {
+		return "", false
+	}
+	if data.Delta != "" {
+		return data.Delta, true
+	}
+	return "", false
+}
+
+// parseProgressSummary 从 EventToolExecUpdate 中提取可读摘要。
+func parseProgressSummary(ev agentcore.Event) string {
+	if len(ev.Result) == 0 {
+		return "progress"
+	}
+	var data struct {
+		Agent string `json:"agent"`
+		Tool  string `json:"tool"`
+		Turn  int    `json:"turn"`
+		Error bool   `json:"error"`
+	}
+	if err := json.Unmarshal(ev.Result, &data); err != nil {
+		return truncateLog(string(ev.Result), 60)
+	}
+	if data.Tool != "" {
+		if data.Error {
+			return fmt.Sprintf("%s → %s (error)", data.Agent, data.Tool)
+		}
+		return fmt.Sprintf("%s → %s", data.Agent, data.Tool)
+	}
+	if data.Turn > 0 {
+		return fmt.Sprintf("%s turn %d", data.Agent, data.Turn)
+	}
+	return truncateLog(string(ev.Result), 60)
+}
+
 func truncateLog(s string, maxRunes int) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
@@ -433,4 +519,160 @@ func createModel(cfg Config) (agentcore.ChatModel, error) {
 	default:
 		return llm.NewOpenAIModel(cfg.ModelName, cfg.APIKey, baseURL...)
 	}
+}
+
+// cliAskUserHandler 是 CLI 模式下的交互式选择器，上下键选择，回车确认。
+func cliAskUserHandler(_ context.Context, questions []tools.Question) (*tools.AskUserResponse, error) {
+	resp := &tools.AskUserResponse{
+		Answers: make(map[string]string),
+		Notes:   make(map[string]string),
+	}
+	for _, q := range questions {
+		m := newSelectModel(q)
+		p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
+		final, err := p.Run()
+		if err != nil {
+			return resp, err
+		}
+		result := final.(selectModel)
+		if result.cancelled {
+			continue
+		}
+		resp.Answers[q.Question] = result.answer
+		if result.isCustom {
+			resp.Notes[q.Question] = result.answer
+		}
+	}
+	return resp, nil
+}
+
+// ---------- 交互式选择器（bubbletea mini program）----------
+
+var (
+	selectCursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	selectDescStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	selectHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99"))
+	selectInputStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+)
+
+type selectModel struct {
+	question  tools.Question
+	items     []string // label 列表，最后一项是"自由输入"
+	descs     []string // 描述列表
+	cursor    int
+	answer    string
+	isCustom  bool
+	cancelled bool
+	typing    bool   // 是否进入自由输入模式
+	input     string // 自由输入缓冲
+}
+
+func newSelectModel(q tools.Question) selectModel {
+	items := make([]string, 0, len(q.Options)+1)
+	descs := make([]string, 0, len(q.Options)+1)
+	for _, opt := range q.Options {
+		items = append(items, opt.Label)
+		descs = append(descs, opt.Description)
+	}
+	items = append(items, "自由输入")
+	descs = append(descs, "以上都不合适，我自己写")
+	return selectModel{question: q, items: items, descs: descs}
+}
+
+func (m selectModel) Init() tea.Cmd { return nil }
+
+func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.typing {
+		return m.updateTyping(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.items)-1 {
+				m.cursor++
+			}
+		case "enter":
+			if m.cursor == len(m.items)-1 {
+				m.typing = true
+				return m, nil
+			}
+			m.answer = m.items[m.cursor]
+			return m, tea.Quit
+		case "q", "esc", "ctrl+c":
+			m.cancelled = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m selectModel) updateTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			text := strings.TrimSpace(m.input)
+			if text == "" {
+				return m, nil
+			}
+			m.answer = text
+			m.isCustom = true
+			return m, tea.Quit
+		case "esc":
+			m.typing = false
+			m.input = ""
+			return m, nil
+		case "ctrl+c":
+			m.cancelled = true
+			return m, tea.Quit
+		case "backspace":
+			if len(m.input) > 0 {
+				runes := []rune(m.input)
+				m.input = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Type == tea.KeyRunes {
+				m.input += string(msg.Runes)
+			} else if msg.Type == tea.KeySpace {
+				m.input += " "
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m selectModel) View() string {
+	var b strings.Builder
+	b.WriteString(selectHeaderStyle.Render(fmt.Sprintf("[%s] %s", m.question.Header, m.question.Question)))
+	b.WriteString("\n\n")
+
+	for i, item := range m.items {
+		cursor := "  "
+		if i == m.cursor {
+			cursor = selectCursorStyle.Render("❯ ")
+		}
+		label := item
+		if i == m.cursor {
+			label = selectCursorStyle.Render(item)
+		}
+		desc := selectDescStyle.Render(" " + m.descs[i])
+		b.WriteString(fmt.Sprintf("%s%s%s\n", cursor, label, desc))
+	}
+
+	if m.typing {
+		b.WriteString("\n")
+		b.WriteString(selectInputStyle.Render("  ✎ "))
+		b.WriteString(m.input)
+		b.WriteString(selectCursorStyle.Render("▌"))
+		b.WriteString(selectDescStyle.Render("  (Enter 确认, Esc 返回)"))
+	} else {
+		b.WriteString(selectDescStyle.Render("\n  ↑↓ 选择  Enter 确认  Esc 取消"))
+	}
+
+	return b.String()
 }

@@ -43,6 +43,11 @@ type UISnapshot struct {
 	RecoveryLabel     string // 恢复类型描述，空表示新建
 	IsRunning         bool
 
+	// 基础设定
+	Premise    string            // 前提概要
+	Outline    []OutlineSnapshot // 大纲（每章标题 + 核心事件）
+	Characters []string          // 角色列表（名字 + 身份）
+
 	// 详情区
 	LastCommitSummary  string
 	LastReviewSummary  string
@@ -50,12 +55,22 @@ type UISnapshot struct {
 	RecentSummaries    []string
 }
 
+// OutlineSnapshot 是大纲条目的展示摘要。
+type OutlineSnapshot struct {
+	Chapter   int
+	Title     string
+	CoreEvent string
+}
+
 // Runtime 封装协调器生命周期，提供 TUI 所需的非阻塞接口。
 type Runtime struct {
 	cfg         Config
 	store       *state.Store
 	coordinator *agentcore.Agent
+	askUser     *tools.AskUserTool
 	events      chan UIEvent
+	streamCh    chan string   // 流式 token channel（独立于 events，避免淹没事件日志）
+	clearCh     chan struct{} // 流式缓冲清空信号
 	done        chan struct{}
 	mu          sync.Mutex
 	running     bool
@@ -66,6 +81,11 @@ type Runtime struct {
 // Dir 返回当前运行时的输出目录。
 func (rt *Runtime) Dir() string {
 	return rt.store.Dir()
+}
+
+// AskUser 返回 ask_user 工具实例，供 TUI 注入交互 handler。
+func (rt *Runtime) AskUser() *tools.AskUserTool {
+	return rt.askUser
 }
 
 // NewRuntime 创建 Runtime：初始化 store/model/coordinator，注册事件订阅，但不启动 Prompt。
@@ -85,18 +105,21 @@ func NewRuntime(cfg Config, refs tools.References, prompts Prompts, styles map[s
 		return nil, fmt.Errorf("create model: %w", err)
 	}
 
-	coordinator := BuildCoordinator(cfg, store, model, refs, prompts, styles)
+	coordinator, askUser := BuildCoordinator(cfg, store, model, refs, prompts, styles)
 
 	rt := &Runtime{
 		cfg:         cfg,
 		store:       store,
 		coordinator: coordinator,
+		askUser:     askUser,
 		events:      make(chan UIEvent, 100),
+		streamCh:    make(chan string, 256),
+		clearCh:     make(chan struct{}, 4),
 		done:        make(chan struct{}),
 	}
 
-	// 注册事件订阅：确定性控制 + UIEvent 转发
-	registerSubscription(coordinator, store, cfg.MaxChapters, rt.emit)
+	// 注册事件订阅：确定性控制 + UIEvent 转发 + 流式 delta 转发
+	registerSubscription(coordinator, store, rt.emit, rt.emitDelta, rt.emitClear)
 
 	// 初始化运行元信息
 	if err := store.InitRunMeta(cfg.Style, cfg.ModelName); err != nil {
@@ -104,6 +127,43 @@ func NewRuntime(cfg Config, refs tools.References, prompts Prompts, styles map[s
 	}
 
 	return rt, nil
+}
+
+// Stream 返回只读流式 token 通道。
+func (rt *Runtime) Stream() <-chan string {
+	return rt.streamCh
+}
+
+// StreamClear 返回只读流式清空信号通道。
+func (rt *Runtime) StreamClear() <-chan struct{} {
+	return rt.clearCh
+}
+
+// emitClear 发送流式缓冲清空信号，非阻塞。
+func (rt *Runtime) emitClear() {
+	defer func() { recover() }()
+	select {
+	case rt.clearCh <- struct{}{}:
+	default:
+	}
+}
+
+// emitDelta 向流式通道发送 token，非阻塞（满时丢弃旧数据）。
+func (rt *Runtime) emitDelta(delta string) {
+	defer func() { recover() }()
+	select {
+	case rt.streamCh <- delta:
+	default:
+		// 满了就丢弃最旧的再写入
+		select {
+		case <-rt.streamCh:
+		default:
+		}
+		select {
+		case rt.streamCh <- delta:
+		default:
+		}
+	}
 }
 
 // emit 向事件通道发送事件，非阻塞（满时丢弃最旧事件）。
@@ -132,11 +192,11 @@ func (rt *Runtime) Start(prompt string) error {
 	}
 	rt.mu.Unlock()
 
-	if err := rt.store.InitProgress(rt.cfg.NovelName, rt.cfg.MaxChapters); err != nil {
+	if err := rt.store.InitProgress(rt.cfg.NovelName, 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
-	promptText := fmt.Sprintf("请创作一部 %d 章的小说。要求如下：\n\n%s", rt.cfg.MaxChapters, prompt)
+	promptText := fmt.Sprintf("请创作一部小说，章节数量由你根据故事需要自行决定。要求如下：\n\n%s", prompt)
 	if err := rt.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
@@ -161,7 +221,7 @@ func (rt *Runtime) Resume() (string, error) {
 
 	progress, _ := rt.store.LoadProgress()
 	runMeta, _ := rt.store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta, rt.cfg.MaxChapters)
+	recovery := determineRecovery(progress, runMeta)
 
 	if recovery.IsNew {
 		return "", nil
@@ -220,7 +280,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
 
 	// 恢复标签
-	recovery := determineRecovery(progress, runMeta, rt.cfg.MaxChapters)
+	recovery := determineRecovery(progress, runMeta)
 	if !recovery.IsNew {
 		snap.RecoveryLabel = recovery.Label
 	}
@@ -247,6 +307,8 @@ func (rt *Runtime) Close() {
 	finalizeSteerIfIdle(rt.store)
 	rt.closeOnce.Do(func() {
 		close(rt.events)
+		close(rt.streamCh)
+		close(rt.clearCh)
 	})
 }
 
@@ -282,6 +344,27 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 }
 
 func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
+	// 基础设定
+	if premise, _ := rt.store.LoadPremise(); premise != "" {
+		snap.Premise = truncateLog(premise, 80)
+	}
+	if outline, _ := rt.store.LoadOutline(); len(outline) > 0 {
+		for _, e := range outline {
+			snap.Outline = append(snap.Outline, OutlineSnapshot{
+				Chapter: e.Chapter, Title: e.Title, CoreEvent: e.CoreEvent,
+			})
+		}
+	}
+	if chars, _ := rt.store.LoadCharacters(); len(chars) > 0 {
+		for _, c := range chars {
+			label := c.Name
+			if c.Role != "" {
+				label += "（" + c.Role + "）"
+			}
+			snap.Characters = append(snap.Characters, label)
+		}
+	}
+
 	// 最近 commit：从 progress 的已完成章节 + 摘要推算（信号文件是一次性的，不可靠）
 	if progress != nil && len(progress.CompletedChapters) > 0 {
 		lastCh := progress.CompletedChapters[len(progress.CompletedChapters)-1]

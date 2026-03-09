@@ -21,7 +21,7 @@ const (
 	modeDone                   // 创作完成
 )
 
-// spinner 帧序列
+// 顶栏 spinner 帧序列
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // Model 是 TUI 的顶层状态。
@@ -29,11 +29,15 @@ type Model struct {
 	runtime      *app.Runtime
 	snapshot     app.UISnapshot
 	events       []app.UIEvent
-	viewport     viewport.Model
+	viewport     viewport.Model  // 事件流 viewport
+	streamVP     viewport.Model  // 流式输出 viewport
+	streamBuf    strings.Builder // 流式文本累积缓冲
 	textarea     textarea.Model
 	width        int
 	height       int
 	autoScroll   bool
+	streamScroll bool // 流式面板自动跟随
+	focusStream  bool // true=焦点在流式面板, false=事件流
 	mode         appMode
 	err          error
 	spinnerIdx   int
@@ -44,7 +48,7 @@ func NewModel(rt *app.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
 	ta.CharLimit = 500
-	ta.MaxHeight = 3
+	ta.MaxHeight = 1
 	ta.ShowLineNumbers = false
 	ta.Focus()
 
@@ -54,12 +58,17 @@ func NewModel(rt *app.Runtime) Model {
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
 
+	svp := viewport.New(80, 10)
+	svp.SetContent("")
+
 	return Model{
-		runtime:    rt,
-		autoScroll: true,
-		mode:       modeNew,
-		textarea:   ta,
-		viewport:   vp,
+		runtime:      rt,
+		autoScroll:   true,
+		streamScroll: true,
+		mode:         modeNew,
+		textarea:     ta,
+		viewport:     vp,
+		streamVP:     svp,
 	}
 }
 
@@ -68,6 +77,8 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		listenEvents(m.runtime),
 		listenDone(m.runtime),
+		listenStream(m.runtime),
+		listenStreamClear(m.runtime),
 		tickSnapshot(m.runtime),
 		checkResume(m.runtime),
 		tickSpinner(),
@@ -81,7 +92,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.textarea.SetWidth(m.width - 4)
+		m.textarea.SetWidth(m.inputWidth())
 		m.updateViewportSize()
 		return m, nil
 
@@ -96,6 +107,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.events = nil
 			m.viewport.SetContent("")
 			m.viewport.GotoTop()
+			m.streamBuf.Reset()
+			m.streamVP.SetContent("")
+			m.streamVP.GotoTop()
+			return m, nil
+		case tea.KeyTab:
+			m.focusStream = !m.focusStream
 			return m, nil
 		case tea.KeyEnter:
 			text := strings.TrimSpace(m.textarea.Value())
@@ -113,31 +130,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyUp, tea.KeyPgUp:
+			if m.focusStream {
+				m.streamScroll = false
+				var cmd tea.Cmd
+				m.streamVP, cmd = m.streamVP.Update(msg)
+				return m, cmd
+			}
 			m.autoScroll = false
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		case tea.KeyDown, tea.KeyPgDown:
+			if m.focusStream {
+				var cmd tea.Cmd
+				m.streamVP, cmd = m.streamVP.Update(msg)
+				if m.streamVP.AtBottom() {
+					m.streamScroll = true
+				}
+				return m, cmd
+			}
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
-			// 滚动到底部时恢复自动跟随
 			if m.viewport.AtBottom() {
 				m.autoScroll = true
 			}
 			return m, cmd
 		case tea.KeyEnd:
-			m.autoScroll = true
-			m.viewport.GotoBottom()
+			if m.focusStream {
+				m.streamScroll = true
+				m.streamVP.GotoBottom()
+			} else {
+				m.autoScroll = true
+				m.viewport.GotoBottom()
+			}
 			return m, nil
 		}
 
 	case tea.MouseMsg:
 		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		if msg.Action == tea.MouseActionPress {
-			m.autoScroll = false
-			if m.viewport.AtBottom() {
-				m.autoScroll = true
+		if m.focusStream {
+			m.streamVP, cmd = m.streamVP.Update(msg)
+			if msg.Action == tea.MouseActionPress {
+				m.streamScroll = m.streamVP.AtBottom()
+			}
+		} else {
+			m.viewport, cmd = m.viewport.Update(msg)
+			if msg.Action == tea.MouseActionPress {
+				m.autoScroll = m.viewport.AtBottom()
 			}
 		}
 		return m, cmd
@@ -181,7 +220,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
+		if m.snapshot.IsRunning {
+			m.refreshEventViewport()
+		}
 		return m, tickSpinner()
+
+	case streamDeltaMsg:
+		m.streamBuf.WriteString(string(msg))
+		m.streamVP.SetContent(m.streamBuf.String())
+		if m.streamScroll {
+			m.streamVP.GotoBottom()
+		}
+		return m, listenStream(m.runtime)
+
+	case streamClearMsg:
+		m.streamBuf.Reset()
+		m.streamVP.SetContent("")
+		m.streamVP.GotoTop()
+		m.streamScroll = true
+		return m, listenStreamClear(m.runtime)
 	}
 
 	// 更新 textarea 组件
@@ -196,6 +253,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
 	content := renderEventContent(m.events, centerW)
+	if m.snapshot.IsRunning {
+		content += renderSparkle(m.spinnerIdx)
+	}
 	m.viewport.SetContent(content)
 	if m.autoScroll {
 		m.viewport.GotoBottom()
@@ -206,8 +266,39 @@ func (m *Model) refreshEventViewport() {
 func (m *Model) updateViewportSize() {
 	centerW := m.eventFlowWidth()
 	bodyH := m.bodyHeight()
+	eventH, streamH := m.splitHeights(bodyH)
 	m.viewport.Width = centerW - 2
-	m.viewport.Height = bodyH
+	m.viewport.Height = eventH
+	m.streamVP.Width = centerW - 2
+	m.streamVP.Height = streamH - 1 // -1 为 stream panel header 行
+}
+
+// splitHeights 计算事件流和流式输出的高度分配。
+func (m *Model) splitHeights(bodyH int) (eventH, streamH int) {
+	eventH = bodyH * 40 / 100
+	if eventH < 3 {
+		eventH = 3
+	}
+	streamH = bodyH - eventH - 1 // -1 为分隔线
+	if streamH < 3 {
+		streamH = 3
+	}
+	return
+}
+
+func (m *Model) inputWidth() int {
+	if m.width == 0 {
+		return 60
+	}
+	// 与 renderInputBox 中 inputW 计算一致
+	keysW := 10  // "Tab·^L·Esc"
+	rightW := 30 // 进度+目录预估
+	sepW := 3 * 2
+	w := m.width - keysW - rightW - sepW - 4
+	if w < 20 {
+		w = 20
+	}
+	return w
 }
 
 func (m *Model) eventFlowWidth() int {
@@ -224,7 +315,7 @@ func (m *Model) bodyHeight() int {
 		return 20
 	}
 	topH := 1
-	inputH := 3
+	inputH := 2 // 单行输入 + top border
 	bodyH := m.height - topH - inputH
 	if bodyH < 3 {
 		bodyH = 3
@@ -246,11 +337,11 @@ func (m Model) View() string {
 
 	spinnerFrame := ""
 	if m.snapshot.IsRunning {
-		spinnerFrame = spinnerFrames[m.spinnerIdx]
+		spinnerFrame = spinnerFrames[m.spinnerIdx%len(spinnerFrames)]
 	}
 
 	topBar := renderTopBar(m.snapshot, m.width, spinnerFrame)
-	inputBox := renderInputBox(m.textarea.View(), m.width)
+	inputBox := renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width)
 
 	topH := lipgloss.Height(topBar)
 	inputH := lipgloss.Height(inputBox)
@@ -270,14 +361,22 @@ func (m Model) View() string {
 		leftW := m.width * 25 / 100
 		rightW := m.width * 30 / 100
 		centerW := m.width - leftW - rightW
+		eventH, streamH := m.splitHeights(bodyH)
 
-		if m.viewport.Width != centerW-2 || m.viewport.Height != bodyH {
+		if m.viewport.Width != centerW-2 || m.viewport.Height != eventH {
 			m.viewport.Width = centerW - 2
-			m.viewport.Height = bodyH
+			m.viewport.Height = eventH
+		}
+		if m.streamVP.Width != centerW-2 || m.streamVP.Height != streamH-1 {
+			m.streamVP.Width = centerW - 2
+			m.streamVP.Height = streamH - 1 // -1 为 stream panel header 行
 		}
 
+		eventFlow := renderEventFlowViewport(m.viewport, centerW, eventH)
+		streamPanel := renderStreamPanel(m.streamVP, centerW, streamH, m.focusStream)
+		center := lipgloss.JoinVertical(lipgloss.Left, eventFlow, streamPanel)
+
 		left := renderStatePanel(m.snapshot, leftW, bodyH)
-		center := renderEventFlowViewport(m.viewport, centerW, bodyH)
 		right := renderDetailPanel(m.snapshot, rightW, bodyH)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, center, right)
 	}

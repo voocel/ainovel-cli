@@ -9,12 +9,14 @@ import (
 
 // 消息类型
 type (
-	eventMsg      app.UIEvent
-	snapshotMsg   app.UISnapshot
-	doneMsg       struct{}
+	eventMsg       app.UIEvent
+	snapshotMsg    app.UISnapshot
+	doneMsg        struct{}
 	startResultMsg struct{ err error }
 	steerResultMsg struct{}
 	spinnerTickMsg time.Time
+	streamDeltaMsg string   // 流式 token 增量
+	streamClearMsg struct{} // 清空流式缓冲（新消息开始）
 )
 
 // --- Cmd 函数 ---
@@ -76,7 +78,27 @@ func steerRuntime(rt *app.Runtime, text string) tea.Cmd {
 }
 
 func tickSpinner() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(350*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
 	})
+}
+
+func listenStream(rt *app.Runtime) tea.Cmd {
+	return func() tea.Msg {
+		delta, ok := <-rt.Stream()
+		if !ok {
+			return nil
+		}
+		return streamDeltaMsg(delta)
+	}
+}
+
+func listenStreamClear(rt *app.Runtime) tea.Cmd {
+	return func() tea.Msg {
+		_, ok := <-rt.StreamClear()
+		if !ok {
+			return nil
+		}
+		return streamClearMsg{}
+	}
 }

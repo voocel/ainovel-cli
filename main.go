@@ -65,9 +65,6 @@ func buildConfig(style string) app.Config {
 		ModelName: envOr("MODEL_NAME", ""),
 		Style:     style,
 	}
-	if v := os.Getenv("MAX_CHAPTERS"); v != "" {
-		fmt.Sscanf(v, "%d", &cfg.MaxChapters)
-	}
 	return cfg
 }
 

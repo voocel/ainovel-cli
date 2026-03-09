@@ -58,6 +58,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 			return nil, fmt.Errorf("save outline: %w", err)
 		}
 		_ = t.store.UpdatePhase(domain.PhaseOutline)
+		// 根据大纲长度自动设定总章节数
+		_ = t.store.SetTotalChapters(len(entries))
 		return json.Marshal(map[string]any{"saved": true, "type": "outline", "chapters": len(entries)})
 
 	case "characters":

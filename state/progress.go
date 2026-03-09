@@ -34,6 +34,19 @@ func (s *Store) InitProgress(novelName string, totalChapters int) error {
 	})
 }
 
+// SetTotalChapters 根据大纲长度设定总章节数。
+func (s *Store) SetTotalChapters(n int) error {
+	p, err := s.LoadProgress()
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		p = &domain.Progress{}
+	}
+	p.TotalChapters = n
+	return s.SaveProgress(p)
+}
+
 // UpdatePhase 更新创作阶段。
 func (s *Store) UpdatePhase(phase domain.Phase) error {
 	p, err := s.LoadProgress()
