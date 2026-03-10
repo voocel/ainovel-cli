@@ -62,7 +62,8 @@ func (s *Store) UpdatePhase(phase domain.Phase) error {
 
 // MarkChapterComplete 标记章节完成，原子性更新进度。
 // 支持重写场景：如果章节已完成，先减去旧字数再加新字数。
-func (s *Store) MarkChapterComplete(chapter, wordCount int) error {
+// hookType 和 dominantStrand 用于节奏追踪，可为空。
+func (s *Store) MarkChapterComplete(chapter, wordCount int, hookType, dominantStrand string) error {
 	p, err := s.LoadProgress()
 	if err != nil {
 		return err
@@ -89,6 +90,29 @@ func (s *Store) MarkChapterComplete(chapter, wordCount int) error {
 	p.InProgressChapter = 0
 	p.CompletedScenes = nil
 	p.Phase = domain.PhaseWriting
+
+	// 节奏追踪：按章节顺序填充 history（确保索引对齐）
+	if dominantStrand != "" {
+		for len(p.StrandHistory) < chapter-1 {
+			p.StrandHistory = append(p.StrandHistory, "")
+		}
+		if len(p.StrandHistory) < chapter {
+			p.StrandHistory = append(p.StrandHistory, dominantStrand)
+		} else {
+			p.StrandHistory[chapter-1] = dominantStrand
+		}
+	}
+	if hookType != "" {
+		for len(p.HookHistory) < chapter-1 {
+			p.HookHistory = append(p.HookHistory, "")
+		}
+		if len(p.HookHistory) < chapter {
+			p.HookHistory = append(p.HookHistory, hookType)
+		} else {
+			p.HookHistory[chapter-1] = hookType
+		}
+	}
+
 	return s.SaveProgress(p)
 }
 

@@ -45,4 +45,6 @@ type CommitResult struct {
 	NextChapter    int    `json:"next_chapter"`
 	ReviewRequired bool   `json:"review_required"`
 	ReviewReason   string `json:"review_reason,omitempty"`
+	HookType       string `json:"hook_type,omitempty"`       // 钩子类型：crisis/mystery/desire/emotion/choice
+	DominantStrand string `json:"dominant_strand,omitempty"` // 本章主导线：quest/fire/constellation
 }

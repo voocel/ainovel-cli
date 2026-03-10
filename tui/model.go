@@ -31,7 +31,7 @@ type Model struct {
 	events       []app.UIEvent
 	viewport     viewport.Model  // 事件流 viewport
 	streamVP     viewport.Model  // 流式输出 viewport
-	streamBuf    strings.Builder // 流式文本累积缓冲
+	streamBuf    *strings.Builder // 流式文本累积缓冲
 	textarea     textarea.Model
 	width        int
 	height       int
@@ -41,6 +41,7 @@ type Model struct {
 	mode         appMode
 	err          error
 	spinnerIdx   int
+	streamRound  int // 流式输出轮次计数
 }
 
 // NewModel 创建 TUI Model。
@@ -48,6 +49,7 @@ func NewModel(rt *app.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
 	ta.CharLimit = 500
+	ta.SetHeight(1)
 	ta.MaxHeight = 1
 	ta.ShowLineNumbers = false
 	ta.Focus()
@@ -69,6 +71,7 @@ func NewModel(rt *app.Runtime) Model {
 		textarea:     ta,
 		viewport:     vp,
 		streamVP:     svp,
+		streamBuf:    &strings.Builder{},
 	}
 }
 
@@ -110,6 +113,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuf.Reset()
 			m.streamVP.SetContent("")
 			m.streamVP.GotoTop()
+			m.streamRound = 0
 			return m, nil
 		case tea.KeyTab:
 			m.focusStream = !m.focusStream
@@ -234,10 +238,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenStream(m.runtime)
 
 	case streamClearMsg:
-		m.streamBuf.Reset()
-		m.streamVP.SetContent("")
-		m.streamVP.GotoTop()
-		m.streamScroll = true
+		// 新一轮输出：保留历史内容，用分隔线标记新段落
+		m.streamRound++
+		if m.streamBuf.Len() > 0 {
+			m.streamBuf.WriteString("\n")
+			m.streamBuf.WriteString(renderStreamSeparator(m.streamRound, m.streamVP.Width))
+			m.streamBuf.WriteString("\n")
+		}
+		m.streamVP.SetContent(m.streamBuf.String())
+		if m.streamScroll {
+			m.streamVP.GotoBottom()
+		}
 		return m, listenStreamClear(m.runtime)
 	}
 
@@ -290,15 +301,7 @@ func (m *Model) inputWidth() int {
 	if m.width == 0 {
 		return 60
 	}
-	// 与 renderInputBox 中 inputW 计算一致
-	keysW := 10  // "Tab·^L·Esc"
-	rightW := 30 // 进度+目录预估
-	sepW := 3 * 2
-	w := m.width - keysW - rightW - sepW - 4
-	if w < 20 {
-		w = 20
-	}
-	return w
+	return m.width - 6 // border + padding + 提示符 "❯ "
 }
 
 func (m *Model) eventFlowWidth() int {
@@ -315,7 +318,7 @@ func (m *Model) bodyHeight() int {
 		return 20
 	}
 	topH := 1
-	inputH := 2 // 单行输入 + top border
+	inputH := 6 // top border + 输入行 + bottom border + 空行 + 提示行 + \n
 	bodyH := m.height - topH - inputH
 	if bodyH < 3 {
 		bodyH = 3

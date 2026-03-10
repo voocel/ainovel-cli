@@ -41,6 +41,7 @@ func (s *Store) UpdateForeshadow(chapter int, updates []domain.ForeshadowUpdate)
 	for _, u := range updates {
 		switch u.Action {
 		case "plant":
+			idx[u.ID] = len(entries)
 			entries = append(entries, domain.ForeshadowEntry{
 				ID:          u.ID,
 				Description: u.Description,
@@ -59,6 +60,21 @@ func (s *Store) UpdateForeshadow(chapter int, updates []domain.ForeshadowUpdate)
 		}
 	}
 	return s.SaveForeshadowLedger(entries)
+}
+
+// LoadActiveForeshadow 返回未回收的伏笔条目（status != "resolved"）。
+func (s *Store) LoadActiveForeshadow() ([]domain.ForeshadowEntry, error) {
+	all, err := s.LoadForeshadowLedger()
+	if err != nil {
+		return nil, err
+	}
+	var active []domain.ForeshadowEntry
+	for _, e := range all {
+		if e.Status != "resolved" {
+			active = append(active, e)
+		}
+	}
+	return active, nil
 }
 
 func renderForeshadow(entries []domain.ForeshadowEntry) string {

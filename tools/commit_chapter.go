@@ -50,6 +50,8 @@ func (t *CommitChapterTool) Schema() map[string]any {
 		schema.Property("timeline_events", schema.Array("本章时间线事件", timelineSchema)),
 		schema.Property("foreshadow_updates", schema.Array("伏笔操作", foreshadowSchema)),
 		schema.Property("relationship_changes", schema.Array("关系变化", relationshipSchema)),
+		schema.Property("hook_type", schema.Enum("章末钩子类型", "crisis", "mystery", "desire", "emotion", "choice")),
+		schema.Property("dominant_strand", schema.Enum("本章主导叙事线", "quest", "fire", "constellation")),
 	)
 }
 
@@ -62,6 +64,8 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		TimelineEvents      []domain.TimelineEvent     `json:"timeline_events"`
 		ForeshadowUpdates   []domain.ForeshadowUpdate  `json:"foreshadow_updates"`
 		RelationshipChanges []domain.RelationshipEntry `json:"relationship_changes"`
+		HookType            string                     `json:"hook_type"`
+		DominantStrand      string                     `json:"dominant_strand"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
@@ -122,7 +126,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 
 	// 5. 更新进度
-	if err := t.store.MarkChapterComplete(a.Chapter, wordCount); err != nil {
+	if err := t.store.MarkChapterComplete(a.Chapter, wordCount, a.HookType, a.DominantStrand); err != nil {
 		return nil, fmt.Errorf("mark chapter complete: %w", err)
 	}
 
@@ -152,6 +156,8 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		NextChapter:    a.Chapter + 1,
 		ReviewRequired: reviewRequired,
 		ReviewReason:   reviewReason,
+		HookType:       a.HookType,
+		DominantStrand: a.DominantStrand,
 	}
 
 	// 9. 写入信号文件供宿主程序读取（优先于清理操作，确保信号不丢失）

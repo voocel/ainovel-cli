@@ -34,8 +34,10 @@ type Progress struct {
 	InProgressChapter int         `json:"in_progress_chapter,omitempty"` // 正在写作的章节（场景级恢复）
 	CompletedScenes   []int       `json:"completed_scenes,omitempty"`    // 当前章节已完成的场景编号
 	Flow              FlowState   `json:"flow,omitempty"`                // 当前流程
-	PendingRewrites   []int       `json:"pending_rewrites,omitempty"`    // 待重写章节队列
-	RewriteReason     string      `json:"rewrite_reason,omitempty"`      // 重写原因
+	PendingRewrites []int    `json:"pending_rewrites,omitempty"` // 待重写章节队列
+	RewriteReason   string   `json:"rewrite_reason,omitempty"`   // 重写原因
+	StrandHistory   []string `json:"strand_history,omitempty"`   // 按章节顺序记录 dominant_strand
+	HookHistory     []string `json:"hook_history,omitempty"`     // 按章节顺序记录 hook_type
 }
 
 // IsResumable 判断是否可以从断点恢复。

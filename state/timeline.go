@@ -37,6 +37,22 @@ func (s *Store) AppendTimelineEvents(newEvents []domain.TimelineEvent) error {
 	return s.SaveTimeline(append(existing, newEvents...))
 }
 
+// LoadRecentTimeline 返回最近 window 章内的时间线事件（chapter >= current-window）。
+func (s *Store) LoadRecentTimeline(current, window int) ([]domain.TimelineEvent, error) {
+	all, err := s.LoadTimeline()
+	if err != nil {
+		return nil, err
+	}
+	minCh := max(current-window, 1)
+	var filtered []domain.TimelineEvent
+	for _, e := range all {
+		if e.Chapter >= minCh {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered, nil
+}
+
 func renderTimeline(events []domain.TimelineEvent) string {
 	var b strings.Builder
 	b.WriteString("# 时间线\n\n")

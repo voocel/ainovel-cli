@@ -22,6 +22,7 @@ type Character struct {
 	Description string   `json:"description"`
 	Arc         string   `json:"arc"`
 	Traits      []string `json:"traits"`
+	Tier        string   `json:"tier,omitempty"` // core / important / secondary / decorative（默认 important）
 }
 
 // WorldRule 世界观规则条目。

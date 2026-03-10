@@ -47,8 +47,8 @@ func main() {
 
 func buildConfig(style string) app.Config {
 	provider := envOr("LLM_PROVIDER", "openai")
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	apiKey := os.Getenv("Z_OPENAI_API_KEY")
+	baseURL := os.Getenv("Z_OPENAI_BASE_URL")
 	if provider == "anthropic" {
 		apiKey = envOr("ANTHROPIC_API_KEY", apiKey)
 		baseURL = envOr("ANTHROPIC_BASE_URL", baseURL)

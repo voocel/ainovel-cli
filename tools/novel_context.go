@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/domain"
 	"github.com/voocel/ainovel-cli/state"
 )
 
@@ -67,15 +68,14 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 	if outline, err := t.store.LoadOutline(); err == nil && outline != nil {
 		result["outline"] = outline
 	}
-	if chars, err := t.store.LoadCharacters(); err == nil && chars != nil {
-		result["characters"] = chars
-	}
-
 	if rules, err := t.store.LoadWorldRules(); err == nil && len(rules) > 0 {
 		result["world_rules"] = rules
 	}
 
 	if a.Chapter > 0 {
+		// 角色按 Tier 过滤：core/important 始终返回，secondary/decorative 按出场匹配
+		t.loadFilteredCharacters(result, a.Chapter)
+
 		// Writer/Editor 模式：加载章节相关上下文
 		if entry, err := t.store.GetChapterOutline(a.Chapter); err == nil {
 			result["current_chapter_outline"] = entry
@@ -83,21 +83,32 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		if summaries, err := t.store.LoadRecentSummaries(a.Chapter, 2); err == nil && len(summaries) > 0 {
 			result["recent_summaries"] = summaries
 		}
-		// V1: 加载状态数据
-		if timeline, err := t.store.LoadTimeline(); err == nil && len(timeline) > 0 {
+
+		// V3: 状态数据分级加载
+		// timeline：只取最近 5 章的事件（避免后期全量膨胀）
+		if timeline, err := t.store.LoadRecentTimeline(a.Chapter, 5); err == nil && len(timeline) > 0 {
 			result["timeline"] = timeline
 		}
-		if foreshadow, err := t.store.LoadForeshadowLedger(); err == nil && len(foreshadow) > 0 {
+		// foreshadow：只取未回收条目（已回收的对后续写作无意义）
+		if foreshadow, err := t.store.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
 			result["foreshadow_ledger"] = foreshadow
 		}
+		// relationships：保持全量（pair-key 去重，数据量天然可控）
 		if relationships, err := t.store.LoadRelationships(); err == nil && len(relationships) > 0 {
 			result["relationship_state"] = relationships
 		}
-		// V2: 加载场景级恢复状态
+
+		// V2: 加载场景级恢复状态 + 节奏追踪
 		if progress, err := t.store.LoadProgress(); err == nil && progress != nil {
 			checkpoint := map[string]any{
 				"in_progress_chapter": progress.InProgressChapter,
 				"completed_scenes":    progress.CompletedScenes,
+			}
+			if len(progress.StrandHistory) > 0 {
+				checkpoint["strand_history"] = progress.StrandHistory
+			}
+			if len(progress.HookHistory) > 0 {
+				checkpoint["hook_history"] = progress.HookHistory
 			}
 			result["checkpoint"] = checkpoint
 		}
@@ -105,31 +116,71 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		if plan, err := t.store.LoadChapterPlan(a.Chapter); err == nil && plan != nil {
 			result["chapter_plan"] = plan
 		}
-		// 写作参考资料
-		result["references"] = t.writerReferences()
+
+		// V3: 写作参考资料分阶段加载
+		result["references"] = t.writerReferences(a.Chapter)
 	} else {
-		// Architect 模式：加载模板
+		// Architect 模式：全量角色 + 模板
+		if chars, err := t.store.LoadCharacters(); err == nil && chars != nil {
+			result["characters"] = chars
+		}
 		result["references"] = t.architectReferences()
 	}
 
 	return json.Marshal(result)
 }
 
-func (t *ContextTool) writerReferences() map[string]string {
+// loadFilteredCharacters 按 Tier 和场景出场过滤角色。
+// core/important 始终返回；secondary/decorative 只在当前章节大纲提及时返回。
+func (t *ContextTool) loadFilteredCharacters(result map[string]any, chapter int) {
+	chars, err := t.store.LoadCharacters()
+	if err != nil || len(chars) == 0 {
+		return
+	}
+
+	// 获取当前章节大纲的场景描述，用于匹配次要角色
+	entry, err := t.store.GetChapterOutline(chapter)
+	if err != nil {
+		result["characters"] = chars
+		return
+	}
+	sceneText := strings.Join(entry.Scenes, " ") + " " + entry.CoreEvent + " " + entry.Title
+
+	var filtered []domain.Character
+	for _, c := range chars {
+		switch c.Tier {
+		case "secondary", "decorative":
+			if strings.Contains(sceneText, c.Name) {
+				filtered = append(filtered, c)
+			}
+		default: // core, important, 或未设置
+			filtered = append(filtered, c)
+		}
+	}
+	result["characters"] = filtered
+}
+
+// writerReferences 返回写作参考资料。章节 1 返回全量，后续章节裁剪掉不再需要的模板。
+func (t *ContextTool) writerReferences(chapter int) map[string]string {
 	refs := map[string]string{}
 	add := func(k, v string) {
 		if v != "" {
 			refs[k] = v
 		}
 	}
+	// 始终加载的核心参考
 	add("chapter_guide", t.refs.ChapterGuide)
 	add("hook_techniques", t.refs.HookTechniques)
 	add("quality_checklist", t.refs.QualityChecklist)
-	add("chapter_template", t.refs.ChapterTemplate)
 	add("consistency", t.refs.Consistency)
-	add("content_expansion", t.refs.ContentExpansion)
 	add("dialogue_writing", t.refs.DialogueWriting)
 	add("style_reference", t.refs.StyleReference)
+
+	// 仅首章加载的补充参考（后续章节不再需要）
+	if chapter <= 1 {
+		add("chapter_template", t.refs.ChapterTemplate)
+		add("content_expansion", t.refs.ContentExpansion)
+	}
 	return refs
 }
 

@@ -208,6 +208,19 @@ func renderStreamPanel(vp viewport.Model, width, height int, focused bool) strin
 	return header + "\n" + vpStyle.Render(vp.View())
 }
 
+// renderStreamSeparator 渲染流式面板中的轮次分隔线。
+func renderStreamSeparator(round, width int) string {
+	label := fmt.Sprintf(" #%d ", round)
+	lineW := (width - lipgloss.Width(label)) / 2
+	if lineW < 1 {
+		lineW = 1
+	}
+	line := strings.Repeat("─", lineW)
+	dimLine := lipgloss.NewStyle().Foreground(colorDim).Render(line)
+	dimLabel := lipgloss.NewStyle().Foreground(colorDim).Render(label)
+	return dimLine + dimLabel + dimLine
+}
+
 // renderDetailPanel 渲染右侧详情面板。
 // 优先展示基础设定（大纲、角色），然后是运行时信息（提交、审阅等）。
 func renderDetailPanel(snap app.UISnapshot, width, height int) string {

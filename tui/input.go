@@ -9,55 +9,60 @@ import (
 	"github.com/voocel/ainovel-cli/app"
 )
 
-// renderInputBox 渲染底部栏：左快捷键 | 中输入框 | 右进度+目录。
+// renderInputBox 渲染底部栏（两行布局）。
+// 第一行：❯ + 输入框
+// 第二行：左快捷键提示，右进度信息
 func renderInputBox(inputView string, snap app.UISnapshot, outputDir string, width int) string {
-	// 左侧：快捷键提示
-	keys := lipgloss.NewStyle().Foreground(colorDim).Render("Tab·^L·Esc")
+	innerW := width - 4 // border + padding
 
-	// 右侧：进度 + 输出目录
-	right := buildRightInfo(snap, outputDir)
+	// 第一行：提示符 + 输入框
+	prompt := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("❯ ")
+	line1 := prompt + inputView
 
-	// 中间：输入框，自适应宽度
-	leftW := lipgloss.Width(keys)
-	rightW := lipgloss.Width(right)
-	sep := lipgloss.NewStyle().Foreground(colorDim).Render(" │ ")
-	sepW := lipgloss.Width(sep)
-	inputW := width - leftW - rightW - sepW*2 - 4 // 4 为 padding+border 余量
-	if inputW < 20 {
-		inputW = 20
+	// 第二行：左快捷键，右进度
+	hints := lipgloss.NewStyle().Foreground(colorDim).Render("Tab 切换 · ^L 清屏 · Esc 重置 · Enter 发送")
+	info := buildRightInfo(snap, outputDir)
+
+	hintsW := lipgloss.Width(hints)
+	infoW := lipgloss.Width(info)
+	gap := innerW - hintsW - infoW
+	if gap < 1 {
+		gap = 1
 	}
+	line2 := hints + strings.Repeat(" ", gap) + info
 
-	input := lipgloss.NewStyle().Width(inputW).Render(inputView)
-
-	content := keys + sep + input + sep + right
-
-	style := lipgloss.NewStyle().
+	// 输入区（上横线 + 输入行）
+	inputStyle := lipgloss.NewStyle().
 		Width(width).
-		Border(baseBorder, true, false, false, false).
+		Border(baseBorder, true, false, true, false).
 		BorderForeground(colorDim).
 		Padding(0, 1)
+	inputBlock := inputStyle.Render(line1)
 
-	return style.Render(content)
+	// 提示行（无边框，紧贴下横线下方）
+	hintStyle := lipgloss.NewStyle().
+		Width(width).
+		Padding(0, 2)
+	hintBlock := hintStyle.Render(line2)
+
+	return inputBlock + "\n" + hintBlock + "\n"
 }
 
 // buildRightInfo 构建右侧进度和目录信息。
 func buildRightInfo(snap app.UISnapshot, outputDir string) string {
 	var parts []string
 
-	// 章节进度
+	if snap.ModelName != "" {
+		parts = append(parts, snap.ModelName)
+	}
 	if snap.TotalChapters > 0 {
 		parts = append(parts, fmt.Sprintf("Ch %d/%d", snap.CompletedCount, snap.TotalChapters))
 	}
-
-	// 字数
 	if snap.TotalWordCount > 0 {
 		parts = append(parts, formatNumber(snap.TotalWordCount)+"字")
 	}
-
-	// 输出目录（缩短为相对路径的最后一段）
 	if outputDir != "" {
-		dir := filepath.Base(outputDir)
-		parts = append(parts, "./"+dir)
+		parts = append(parts, "./"+filepath.Base(outputDir))
 	}
 
 	if len(parts) == 0 {
