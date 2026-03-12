@@ -7,22 +7,24 @@ import (
 
 // Config 小说应用配置。
 type Config struct {
-	Prompt      string // 用户的小说需求
-	NovelName   string // 小说名（用作输出目录名）
-	OutputDir   string // 输出根目录，默认 output/{NovelName}
-	Provider    string // LLM 提供商：openai / anthropic / gemini
-	ModelName   string // LLM 模型名
-	APIKey      string // API Key
-	BaseURL     string // API Base URL（可选）
-	Style string // 写作风格（default/suspense/fantasy/romance）
+	Prompt    string // 用户的小说需求
+	NovelName string // 小说名（用作输出目录名）
+	OutputDir string // 输出根目录，默认 output/{NovelName}
+	Provider  string // LLM 提供商：openai / anthropic / gemini
+	ModelName string // LLM 模型名
+	APIKey    string // API Key
+	BaseURL   string // API Base URL（可选）
+	Style     string // 写作风格（default/suspense/fantasy/romance）
 }
 
 // Prompts 嵌入的提示词。
 type Prompts struct {
-	Coordinator string
-	Architect   string
-	Writer      string
-	Editor      string
+	Coordinator    string
+	ArchitectShort string
+	ArchitectMid   string
+	ArchitectLong  string
+	Writer         string
+	Editor         string
 }
 
 // Validate 校验配置（CLI 模式，要求 Prompt 非空）。

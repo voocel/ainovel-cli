@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/voocel/agentcore"
@@ -120,5 +121,33 @@ func TestCreateModelUsesOpenRouterProvider(t *testing.T) {
 	}
 	if provider := providerModel.ProviderName(); provider != "openrouter" {
 		t.Fatalf("expected provider openrouter, got %q", provider)
+	}
+}
+
+func TestDetermineRecoveryIncludesPlanningTierGuidance(t *testing.T) {
+	progress := &domain.Progress{
+		Phase:             domain.PhaseWriting,
+		CurrentChapter:    3,
+		CompletedChapters: []int{1, 2},
+		TotalWordCount:    2400,
+		TotalChapters:     12,
+	}
+	runMeta := &domain.RunMeta{
+		PlanningTier: domain.PlanningTierLong,
+	}
+
+	recovery := determineRecovery(progress, runMeta)
+	if !strings.Contains(recovery.PromptText, "architect_long") {
+		t.Fatalf("expected architect_long guidance, got %q", recovery.PromptText)
+	}
+	if !strings.Contains(recovery.PromptText, "分层大纲") {
+		t.Fatalf("expected layered-outline guidance, got %q", recovery.PromptText)
+	}
+}
+
+func TestPlanningTierGuidanceForMid(t *testing.T) {
+	guidance := planningTierGuidance(&domain.RunMeta{PlanningTier: domain.PlanningTierMid})
+	if !strings.Contains(guidance, "architect_mid") {
+		t.Fatalf("expected architect_mid guidance, got %q", guidance)
 	}
 }

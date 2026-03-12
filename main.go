@@ -90,6 +90,8 @@ func loadReferences(style string) tools.References {
 		Consistency:       mustRead(referencesFS, "references/consistency.md"),
 		ContentExpansion:  mustRead(referencesFS, "references/content-expansion.md"),
 		DialogueWriting:   mustRead(referencesFS, "references/dialogue-writing.md"),
+		LongformPlanning:  mustRead(referencesFS, "references/longform-planning.md"),
+		Differentiation:   mustRead(referencesFS, "references/differentiation.md"),
 	}
 	if style != "" && style != "default" {
 		path := "references/" + style + "/style-references.md"
@@ -102,10 +104,12 @@ func loadReferences(style string) tools.References {
 
 func loadPrompts() app.Prompts {
 	return app.Prompts{
-		Coordinator: mustRead(promptsFS, "prompts/coordinator.md"),
-		Architect:   mustRead(promptsFS, "prompts/architect.md"),
-		Writer:      mustRead(promptsFS, "prompts/writer.md"),
-		Editor:      mustRead(promptsFS, "prompts/editor.md"),
+		Coordinator:    mustRead(promptsFS, "prompts/coordinator.md"),
+		ArchitectShort: mustRead(promptsFS, "prompts/architect-short.md"),
+		ArchitectMid:   mustRead(promptsFS, "prompts/architect-mid.md"),
+		ArchitectLong:  mustRead(promptsFS, "prompts/architect-long.md"),
+		Writer:         mustRead(promptsFS, "prompts/writer.md"),
+		Editor:         mustRead(promptsFS, "prompts/editor.md"),
 	}
 }
 

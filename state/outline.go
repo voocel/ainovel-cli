@@ -77,6 +77,16 @@ func (s *Store) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	return volumes, nil
 }
 
+// ClearLayeredOutline 清理分层大纲文件，供从长篇降级为普通大纲时使用。
+func (s *Store) ClearLayeredOutline() error {
+	return s.withWriteLock(func() error {
+		if err := s.removeFileUnlocked("layered_outline.json"); err != nil {
+			return err
+		}
+		return s.removeFileUnlocked("layered_outline.md")
+	})
+}
+
 // GetChapterFromLayered 从分层大纲中按全局章节号查找。
 func (s *Store) GetChapterFromLayered(chapter int) (*domain.OutlineEntry, error) {
 	volumes, err := s.LoadLayeredOutline()
@@ -151,11 +161,11 @@ func (s *Store) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 			for ci := range a.Chapters {
 				if ch == chapter {
 					cur = &chapterPos{
-						volume:    v.Index,
-						arc:       a.Index,
+						volume:     v.Index,
+						arc:        a.Index,
 						indexInArc: ci,
-						arcLen:    len(a.Chapters),
-						isLastArc: ai == len(v.Arcs)-1,
+						arcLen:     len(a.Chapters),
+						isLastArc:  ai == len(v.Arcs)-1,
 					}
 				} else if cur != nil && nextVol == 0 {
 					// 紧跟 cur 的下一章

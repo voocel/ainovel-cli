@@ -198,7 +198,10 @@ func (rt *Runtime) Start(prompt string) error {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
-	promptText := fmt.Sprintf("请创作一部小说，章节数量由你根据故事需要自行决定。要求如下：\n\n%s", prompt)
+	promptText := fmt.Sprintf(
+		"请创作一部小说，章节数量由你根据故事需要自行决定。若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。要求如下：\n\n%s",
+		prompt,
+	)
 	if err := rt.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}

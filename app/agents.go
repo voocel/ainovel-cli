@@ -44,13 +44,31 @@ func BuildCoordinator(
 		tools.NewSaveVolumeSummaryTool(store),
 	}
 
-	architect := agentcore.SubAgentConfig{
-		Name:         "architect",
-		Description:  "世界构建师：生成小说前提、大纲和角色档案",
+	architectShort := agentcore.SubAgentConfig{
+		Name:         "architect_short",
+		Description:  "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
 		Model:        model,
-		SystemPrompt: prompts.Architect,
+		SystemPrompt: prompts.ArchitectShort,
 		Tools:        architectTools,
 		MaxTurns:     10,
+	}
+
+	architectMid := agentcore.SubAgentConfig{
+		Name:         "architect_mid",
+		Description:  "中篇规划师：为多阶段但篇幅受控的故事生成可推进的设定与阶段化大纲",
+		Model:        model,
+		SystemPrompt: prompts.ArchitectMid,
+		Tools:        architectTools,
+		MaxTurns:     12,
+	}
+
+	architectLong := agentcore.SubAgentConfig{
+		Name:         "architect_long",
+		Description:  "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
+		Model:        model,
+		SystemPrompt: prompts.ArchitectLong,
+		Tools:        architectTools,
+		MaxTurns:     14,
 	}
 
 	// 动态拼接风格指令到 Writer prompt
@@ -77,7 +95,7 @@ func BuildCoordinator(
 		MaxTurns:     10,
 	}
 
-	subagentTool := agentcore.NewSubAgentTool(architect, writer, editor)
+	subagentTool := agentcore.NewSubAgentTool(architectShort, architectMid, architectLong, writer, editor)
 
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(model),

@@ -1,7 +1,9 @@
 package state
 
 import (
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/domain"
@@ -74,6 +76,52 @@ func TestAppendSteerEntry(t *testing.T) {
 	meta, _ = store.LoadRunMeta()
 	if len(meta.SteerHistory) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(meta.SteerHistory))
+	}
+}
+
+func TestAppendSteerEntryConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const workers = 32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			entry := domain.SteerEntry{
+				Input:     fmt.Sprintf("steer-%02d", i),
+				Timestamp: fmt.Sprintf("ts-%02d", i),
+			}
+			if err := store.AppendSteerEntry(entry); err != nil {
+				t.Errorf("AppendSteerEntry(%d): %v", i, err)
+			}
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	meta, err := store.LoadRunMeta()
+	if err != nil {
+		t.Fatalf("LoadRunMeta: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("expected run meta to exist")
+	}
+	if len(meta.SteerHistory) != workers {
+		t.Fatalf("expected %d steer entries, got %d", workers, len(meta.SteerHistory))
+	}
+
+	seen := make(map[string]struct{}, workers)
+	for _, entry := range meta.SteerHistory {
+		seen[entry.Input] = struct{}{}
+	}
+	if len(seen) != workers {
+		t.Fatalf("expected %d unique steer entries, got %d", workers, len(seen))
 	}
 }
 
@@ -162,6 +210,26 @@ func TestSetAndClearPendingSteer(t *testing.T) {
 	meta, _ = store.LoadRunMeta()
 	if meta.PendingSteer != "" {
 		t.Errorf("expected empty pending steer, got %s", meta.PendingSteer)
+	}
+}
+
+func TestSetPlanningTier(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	if err := store.SetPlanningTier(domain.PlanningTierLong); err != nil {
+		t.Fatalf("SetPlanningTier: %v", err)
+	}
+
+	meta, err := store.LoadRunMeta()
+	if err != nil {
+		t.Fatalf("LoadRunMeta: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("expected run meta to exist")
+	}
+	if meta.PlanningTier != domain.PlanningTierLong {
+		t.Fatalf("expected planning tier %q, got %q", domain.PlanningTierLong, meta.PlanningTier)
 	}
 }
 

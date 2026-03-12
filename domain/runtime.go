@@ -22,6 +22,15 @@ const (
 	FlowSteering  FlowState = "steering"
 )
 
+// PlanningTier 表示作品规划的长度级别。
+type PlanningTier string
+
+const (
+	PlanningTierShort PlanningTier = "short"
+	PlanningTierMid   PlanningTier = "mid"
+	PlanningTierLong  PlanningTier = "long"
+)
+
 // Progress 进度追踪，持久化到 meta/progress.json。
 type Progress struct {
 	NovelName         string      `json:"novel_name"`
@@ -34,10 +43,10 @@ type Progress struct {
 	InProgressChapter int         `json:"in_progress_chapter,omitempty"` // 正在写作的章节（场景级恢复）
 	CompletedScenes   []int       `json:"completed_scenes,omitempty"`    // 当前章节已完成的场景编号
 	Flow              FlowState   `json:"flow,omitempty"`                // 当前流程
-	PendingRewrites []int    `json:"pending_rewrites,omitempty"` // 待重写章节队列
-	RewriteReason   string   `json:"rewrite_reason,omitempty"`   // 重写原因
-	StrandHistory   []string `json:"strand_history,omitempty"`   // 按章节顺序记录 dominant_strand
-	HookHistory     []string `json:"hook_history,omitempty"`     // 按章节顺序记录 hook_type
+	PendingRewrites   []int       `json:"pending_rewrites,omitempty"`    // 待重写章节队列
+	RewriteReason     string      `json:"rewrite_reason,omitempty"`      // 重写原因
+	StrandHistory     []string    `json:"strand_history,omitempty"`      // 按章节顺序记录 dominant_strand
+	HookHistory       []string    `json:"hook_history,omitempty"`        // 按章节顺序记录 hook_type
 	// 长篇分层追踪（仅长篇模式使用，短篇/中篇为零值）
 	CurrentVolume int  `json:"current_volume,omitempty"`
 	CurrentArc    int  `json:"current_arc,omitempty"`
@@ -89,6 +98,7 @@ type RunMeta struct {
 	Provider     string       `json:"provider,omitempty"`
 	Style        string       `json:"style"`
 	Model        string       `json:"model"`
+	PlanningTier PlanningTier `json:"planning_tier,omitempty"`
 	SteerHistory []SteerEntry `json:"steer_history,omitempty"`
 	PendingSteer string       `json:"pending_steer,omitempty"` // 未完成的 Steer 指令，中断恢复时重新注入
 }

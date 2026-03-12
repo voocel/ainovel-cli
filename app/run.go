@@ -92,7 +92,10 @@ func Run(cfg Config, refs tools.References, prompts Prompts, styles map[string]s
 			return fmt.Errorf("init progress: %w", err)
 		}
 		log.Printf("新建模式：%s", cfg.NovelName)
-		promptText := fmt.Sprintf("请创作一部小说，章节数量由你根据故事需要自行决定。要求如下：\n\n%s", cfg.Prompt)
+		promptText := fmt.Sprintf(
+			"请创作一部小说，章节数量由你根据故事需要自行决定。若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。要求如下：\n\n%s",
+			cfg.Prompt,
+		)
 		if err := coordinator.Prompt(promptText); err != nil {
 			return fmt.Errorf("prompt: %w", err)
 		}
@@ -204,6 +207,22 @@ func registerSubscription(coordinator *agentcore.Agent, store *state.Store, prov
 	})
 }
 
+func planningTierGuidance(runMeta *domain.RunMeta) string {
+	if runMeta == nil {
+		return ""
+	}
+	switch runMeta.PlanningTier {
+	case domain.PlanningTierShort:
+		return "当前规划级别：short。如需调整设定或重做大纲，优先调用 architect_short。"
+	case domain.PlanningTierMid:
+		return "当前规划级别：mid。如需调整设定或重做大纲，优先调用 architect_mid。"
+	case domain.PlanningTierLong:
+		return "当前规划级别：long。如需调整设定或重做大纲，优先调用 architect_long，并保持分层大纲的一致性。"
+	default:
+		return ""
+	}
+}
+
 // submitSteer 提交用户干预（CLI 和 Runtime 共用）。
 func submitSteer(store *state.Store, coordinator *agentcore.Agent, text string) {
 	log.Printf("[steer] 用户干预: %s", text)
@@ -219,8 +238,17 @@ func submitSteer(store *state.Store, coordinator *agentcore.Agent, text string) 
 	if err := store.SetFlow(domain.FlowSteering); err != nil {
 		log.Printf("[warn] 设置流程状态失败: %v", err)
 	}
+	runMeta, err := store.LoadRunMeta()
+	if err != nil {
+		log.Printf("[warn] 读取运行元信息失败: %v", err)
+	}
+	guidance := planningTierGuidance(runMeta)
+	message := fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
+	if guidance != "" {
+		message += "\n" + guidance
+	}
 	coordinator.Steer(agentcore.UserMsg(fmt.Sprintf(
-		"[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)))
+		"%s", message)))
 }
 
 // recoveryResult 恢复链的判断结果。
@@ -236,14 +264,21 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 	if progress == nil {
 		return recoveryResult{IsNew: true}
 	}
+	guidance := planningTierGuidance(runMeta)
+	withGuidance := func(prompt string) string {
+		if guidance == "" {
+			return prompt
+		}
+		return prompt + "\n" + guidance
+	}
 
 	if progress.InProgressChapter > 0 {
 		ch := progress.InProgressChapter
 		scenes := len(progress.CompletedScenes)
 		return recoveryResult{
-			PromptText: fmt.Sprintf(
+			PromptText: withGuidance(fmt.Sprintf(
 				"第 %d 章正在进行中，已完成 %d 个场景。请调用 writer 从场景 %d 继续写作。总共需要写 %d 章。",
-				ch, scenes, scenes+1, progress.TotalChapters),
+				ch, scenes, scenes+1, progress.TotalChapters)),
 			Label: fmt.Sprintf("场景级恢复：第 %d 章已完成 %d 个场景", ch, scenes),
 		}
 	}
@@ -254,18 +289,18 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 			verb = "打磨"
 		}
 		return recoveryResult{
-			PromptText: fmt.Sprintf(
+			PromptText: withGuidance(fmt.Sprintf(
 				"有 %d 章待%s（受影响章节：%v）。原因：%s。请逐章调用 writer %s后继续正常写作。总共需要写 %d 章。",
-				len(progress.PendingRewrites), verb, progress.PendingRewrites, progress.RewriteReason, verb, progress.TotalChapters),
+				len(progress.PendingRewrites), verb, progress.PendingRewrites, progress.RewriteReason, verb, progress.TotalChapters)),
 			Label: fmt.Sprintf("%s恢复：%d 章待处理 %v", verb, len(progress.PendingRewrites), progress.PendingRewrites),
 		}
 	}
 
 	if progress.Flow == domain.FlowReviewing {
 		return recoveryResult{
-			PromptText: fmt.Sprintf(
+			PromptText: withGuidance(fmt.Sprintf(
 				"上次审阅中断，请重新调用 editor 对已完成章节进行全局审阅。已完成 %d 章，共 %d 字。总共需要写 %d 章。",
-				len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters),
+				len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
 			Label: "审阅恢复：上次审阅中断",
 		}
 	}
@@ -273,9 +308,9 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 	if progress.IsResumable() && runMeta != nil && runMeta.PendingSteer != "" {
 		next := progress.NextChapter()
 		return recoveryResult{
-			PromptText: fmt.Sprintf(
+			PromptText: withGuidance(fmt.Sprintf(
 				"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。\n\n[用户干预-恢复] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。",
-				next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters, runMeta.PendingSteer),
+				next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters, runMeta.PendingSteer)),
 			Label: "Steer 恢复：上次干预未完成，重新注入",
 		}
 	}
@@ -283,9 +318,9 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 	if progress.IsResumable() {
 		next := progress.NextChapter()
 		return recoveryResult{
-			PromptText: fmt.Sprintf(
+			PromptText: withGuidance(fmt.Sprintf(
 				"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。",
-				next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters),
+				next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
 			Label: fmt.Sprintf("恢复模式：从第 %d 章继续（已完成 %d 章，共 %d 字）",
 				next, len(progress.CompletedChapters), progress.TotalWordCount),
 		}
