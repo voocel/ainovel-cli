@@ -34,7 +34,7 @@ go.work.sum
 # GoReleaser artifacts
 dist/
 release-notes.md
+/ainovel-cli
 
-docs/
 refer/
 output

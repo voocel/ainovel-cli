@@ -82,7 +82,10 @@ Writer 自主决定每章的创作流程，建议路径：
 
 ```bash
 # 安装
-go install github.com/voocel/ainovel-cli@latest
+go install github.com/voocel/ainovel-cli/cmd/ainovel-cli@latest
+
+# 本地开发运行
+go run ./cmd/ainovel-cli
 
 # 首次运行，自动进入引导流程（选择 Provider → 输入 API Key → Base URL → 模型名）
 ainovel-cli
