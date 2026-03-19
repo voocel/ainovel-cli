@@ -95,7 +95,12 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 		return nil, fmt.Errorf("provider %s (%s): %w", providerKey, providerType, err)
 	}
 
-	m := llm.NewLiteLLMAdapter(model, client)
+	var m agentcore.ChatModel
+	if providerType == "openai" && strings.EqualFold(strings.TrimSpace(pc.WireAPI), "responses") {
+		m = newOpenAIResponsesModel(model, client)
+	} else {
+		m = llm.NewLiteLLMAdapter(model, client)
+	}
 	cache[cacheKey] = m
 	return m, nil
 }

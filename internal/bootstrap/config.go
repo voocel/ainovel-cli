@@ -10,6 +10,7 @@ type ProviderConfig struct {
 	Type    string `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini），自定义代理时指定
 	APIKey  string `json:"api_key,omitempty"`  // API Key
 	BaseURL string `json:"base_url,omitempty"` // API Base URL
+	WireAPI string `json:"wire_api,omitempty"` // OpenAI 兼容协议细分（chat/responses）
 }
 
 // ProviderType 返回有效的 API 协议类型。

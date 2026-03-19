@@ -166,7 +166,8 @@ func saveExampleConfig() {
     // "my-proxy": {
     //   "type": "openai",
     //   "api_key": "sk-xxx",
-    //   "base_url": "https://proxy.example.com/v1"
+    //   "base_url": "https://proxy.example.com/v1",
+    //   "wire_api": "responses"
     // }
   },
 
