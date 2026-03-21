@@ -27,7 +27,7 @@ type appMode int
 
 const (
 	modeNew     appMode = iota // 等待用户输入小说需求
-	modeRunning                // 正在创作
+	modeRunning                // 正在创作（包括出错停止，输入可恢复）
 	modeDone                   // 创作完成
 )
 
@@ -259,20 +259,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickSnapshot(m.runtime)
 
 	case doneMsg:
-		m.mode = modeDone
-		m.textarea.Placeholder = "创作已完成"
-		m.textarea.Blur()
+		if msg.complete {
+			m.mode = modeDone
+			m.textarea.Placeholder = "创作已完成"
+			m.textarea.Blur()
+		} else {
+			// 出错停止，保持 modeRunning，用户输入任意内容 Steer 即可恢复 agent 循环
+			m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+		}
 		return m, fetchSnapshot(m.runtime)
 
 	case startResultMsg:
 		if msg.err != nil {
 			m.err = msg.err
-			m.mode = modeNew
-			m.textarea.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
 			m.events = append(m.events, orchestrator.UIEvent{
 				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
 			})
 			m.refreshEventViewport()
+			if m.mode == modeNew {
+				m.textarea.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
+			}
 		} else if m.mode == modeNew {
 			m.mode = modeRunning
 			m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
@@ -280,7 +286,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchSnapshot(m.runtime)
 
 	case steerResultMsg:
-		return m, fetchSnapshot(m.runtime)
+		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime))
 
 	case spinnerTickMsg:
 		m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
@@ -533,7 +539,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				state.submit()
 				m.askState = nil
 				if m.mode != modeDone {
-					m.textarea.Focus()
+					return m, m.textarea.Focus()
 				}
 			}
 			return m, nil
@@ -562,7 +568,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.askState = nil
 		if m.mode != modeDone {
-			m.textarea.Focus()
+			return m, m.textarea.Focus()
 		}
 		return m, nil
 	case tea.KeyUp:
@@ -593,7 +599,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.submit()
 			m.askState = nil
 			if m.mode != modeDone {
-				m.textarea.Focus()
+				return m, m.textarea.Focus()
 			}
 		}
 	}

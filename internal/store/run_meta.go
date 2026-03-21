@@ -104,6 +104,34 @@ func (s *Store) ClearPendingSteer() error {
 	})
 }
 
+// ClearHandledSteer 原子性地清除 PendingSteer 并重置 FlowSteering 状态。
+// 同时操作 run.json 和 progress.json，在同一个写锁内完成，避免崩溃导致不一致。
+func (s *Store) ClearHandledSteer() error {
+	return s.withWriteLock(func() error {
+		meta, err := s.loadRunMetaUnlocked()
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if meta != nil && meta.PendingSteer != "" {
+			meta.PendingSteer = ""
+			if err := s.saveRunMetaUnlocked(*meta); err != nil {
+				return err
+			}
+		}
+		p, err := s.loadProgressUnlocked()
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if p != nil && p.Flow == domain.FlowSteering {
+			p.Flow = domain.FlowWriting
+			if err := s.saveProgressUnlocked(p); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // SetPlanningTier 记录当前作品采用的规划级别。
 func (s *Store) SetPlanningTier(tier domain.PlanningTier) error {
 	return s.withWriteLock(func() error {

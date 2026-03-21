@@ -111,6 +111,9 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 
 	coordinator, askUser := BuildCoordinator(cfg, store, models, bundle)
 
+	// 清理上次崩溃可能遗留的信号文件
+	store.ClearStaleSignals()
+
 	rt := &Runtime{
 		cfg:         cfg,
 		store:       store,
@@ -247,9 +250,19 @@ func (rt *Runtime) Resume() (string, error) {
 }
 
 // Steer 提交用户干预。
+// 如果 coordinator 已停止（出错），Steer 会重置完成信号并启动新的等待协程，使 agent 循环恢复后 TUI 能再次收到 doneMsg。
 func (rt *Runtime) Steer(text string) {
 	submitSteer(rt.store, rt.coordinator, text)
 	rt.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: "干预已提交: " + truncateLog(text, 40), Level: "info"})
+
+	rt.mu.Lock()
+	if !rt.running {
+		rt.running = true
+		rt.done = make(chan struct{})
+		rt.doneOnce = sync.Once{}
+		go rt.waitDone()
+	}
+	rt.mu.Unlock()
 }
 
 // Snapshot 读取 store 聚合为状态快照。

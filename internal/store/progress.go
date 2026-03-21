@@ -193,6 +193,13 @@ func (s *Store) ClearLastCommit() error {
 	return s.removeFile("meta/last_commit.json")
 }
 
+// ClearStaleSignals 清理残留的信号文件。
+// 在进程重启时调用，防止上次崩溃遗留的信号被误消费。
+func (s *Store) ClearStaleSignals() {
+	_ = s.removeFile("meta/last_commit.json")
+	_ = s.removeFile("meta/last_review.json")
+}
+
 // UpdateVolumeArc 更新当前卷弧位置。
 func (s *Store) UpdateVolumeArc(volume, arc int) error {
 	return s.withWriteLock(func() error {

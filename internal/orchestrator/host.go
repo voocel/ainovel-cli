@@ -95,7 +95,7 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 		if err := store.CompleteRewrite(result.Chapter); err != nil {
 			log.Printf("[host] 完成重写标记失败: %v", err)
 		}
-		clearHandledSteer(store)
+		flushPendingSteer(store, coordinator, emit)
 		updated, _ := store.LoadProgress()
 		if updated != nil && len(updated.PendingRewrites) == 0 {
 			log.Printf("[host] 所有重写/打磨已完成，恢复正常写作")
@@ -164,7 +164,7 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 					Summary: fmt.Sprintf("全部 %d 章已完成，等待最终评审", progress.TotalChapters), Level: "success"})
 			}
 		}
-		clearHandledSteer(store)
+		flushPendingSteer(store, coordinator, emit)
 		saveCheckpoint(store, fmt.Sprintf("ch%02d-commit", result.Chapter))
 		return true
 	}
@@ -179,7 +179,7 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 		if err := store.MarkComplete(); err != nil {
 			log.Printf("[host] 标记完成失败: %v", err)
 		}
-		clearHandledSteer(store)
+		flushPendingSteer(store, coordinator, emit)
 		saveCheckpoint(store, fmt.Sprintf("ch%02d-commit", result.Chapter))
 		if emit != nil {
 			emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: fmt.Sprintf("全部 %d 章已完成", totalChapters), Level: "success"})
@@ -202,11 +202,11 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 		coordinator.FollowUp(agentcore.UserMsg(fmt.Sprintf(
 			"[系统] review_required=true，%s。请调用 editor 对已完成章节进行全局审阅，然后根据审阅结果决定继续写第 %d 章还是修正已有章节。",
 			result.ReviewReason, result.NextChapter)))
-		clearHandledSteer(store)
+		flushPendingSteer(store, coordinator, emit)
 		saveCheckpoint(store, fmt.Sprintf("ch%02d-commit", result.Chapter))
 		return true
 	}
-	clearHandledSteer(store)
+	flushPendingSteer(store, coordinator, emit)
 	saveCheckpoint(store, fmt.Sprintf("ch%02d-commit", result.Chapter))
 	return true
 }
@@ -304,7 +304,7 @@ func handleEditorDone(coordinator *agentcore.Agent, store *storepkg.Store, emit 
 			emit(UIEvent{Time: time.Now(), Category: "REVIEW", Summary: "verdict=accept 审阅通过", Level: "success"})
 		}
 	}
-	clearHandledSteer(store)
+	flushPendingSteer(store, coordinator, emit)
 	saveCheckpoint(store, fmt.Sprintf("review-ch%02d-%s", review.Chapter, review.Verdict))
 	if emit != nil {
 		emit(UIEvent{Time: time.Now(), Category: "CHECK",

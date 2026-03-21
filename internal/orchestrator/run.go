@@ -45,6 +45,9 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 		defer cleanup()
 	}
 
+	// 1.6 清理上次崩溃可能遗留的信号文件
+	store.ClearStaleSignals()
+
 	// 2. 创建模型集合
 	models, err := bootstrap.NewModelSet(cfg)
 	if err != nil {
@@ -307,6 +310,15 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 		return prompt + "\n" + guidance
 	}
 
+	// 规划阶段崩溃：premise 或 outline 已保存但基础设定未完成
+	if progress.Phase == domain.PhasePremise || progress.Phase == domain.PhaseOutline {
+		return recoveryResult{
+			PromptText: withGuidance(
+				"上次在规划阶段中断。请调用 novel_context 检查当前基础设定状态，补全缺失的设定项（premise/outline/characters/world_rules），然后开始写作。"),
+			Label: fmt.Sprintf("恢复：规划阶段（%s）", progress.Phase),
+		}
+	}
+
 	if progress.InProgressChapter > 0 {
 		ch := progress.InProgressChapter
 		return recoveryResult{
@@ -336,6 +348,19 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 				"上次审阅中断，请重新调用 editor 对已完成章节进行全局审阅。已完成 %d 章，共 %d 字。总共需要写 %d 章。",
 				len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
 			Label: "审阅恢复：上次审阅中断",
+		}
+	}
+
+	// FlowSteering 但 PendingSteer 已丢失（崩溃导致不一致），重置为正常写作
+	if progress.Flow == domain.FlowSteering && (runMeta == nil || runMeta.PendingSteer == "") {
+		if progress.IsResumable() {
+			next := progress.NextChapter()
+			return recoveryResult{
+				PromptText: withGuidance(fmt.Sprintf(
+					"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。",
+					next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
+				Label: fmt.Sprintf("恢复模式：从第 %d 章继续（干预状态已重置）", next),
+			}
 		}
 	}
 
@@ -527,15 +552,26 @@ func truncateLog(s string, maxRunes int) string {
 }
 
 func clearHandledSteer(store *storepkg.Store) {
-	if err := store.ClearPendingSteer(); err != nil {
-		log.Printf("[host] 清除待处理干预失败: %v", err)
+	if err := store.ClearHandledSteer(); err != nil {
+		log.Printf("[host] 清除干预状态失败: %v", err)
 	}
-	progress, _ := store.LoadProgress()
-	if progress != nil && progress.Flow == domain.FlowSteering {
-		if err := store.SetFlow(domain.FlowWriting); err != nil {
-			log.Printf("[host] 重置流程状态失败: %v", err)
+}
+
+// flushPendingSteer 清除干预状态，如果有未处理的干预则追加 FollowUp 提醒 Coordinator。
+// 用于 SubAgent 完成后，确保用户干预不会被 Host 的系统 FollowUp 淹没。
+func flushPendingSteer(store *storepkg.Store, coordinator *agentcore.Agent, emit emitFn) {
+	meta, _ := store.LoadRunMeta()
+	if meta != nil && meta.PendingSteer != "" {
+		log.Printf("[host] 检测到未处理的用户干预，追加提醒：%s", meta.PendingSteer)
+		if emit != nil {
+			emit(UIEvent{Time: time.Now(), Category: "SYSTEM",
+				Summary: "提醒 Coordinator 处理用户干预", Level: "info"})
 		}
+		coordinator.FollowUp(agentcore.UserMsg(fmt.Sprintf(
+			"[系统-重要] 用户在写作期间提交了干预指令：「%s」。请优先处理此干预（可能需要修改设定或重写章节），然后再继续后续写作。",
+			meta.PendingSteer)))
 	}
+	clearHandledSteer(store)
 }
 
 func finalizeSteerIfIdle(store *storepkg.Store) {

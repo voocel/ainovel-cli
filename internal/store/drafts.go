@@ -33,19 +33,22 @@ func (s *Store) SaveDraft(chapter int, content string) error {
 }
 
 // AppendDraft 追加内容到现有草稿（续写模式）。
+// 读取和写入在同一个写锁内完成，防止并发追加丢失数据。
 func (s *Store) AppendDraft(chapter int, content string) error {
 	rel := fmt.Sprintf("drafts/%02d.draft.md", chapter)
-	existing, err := s.readFile(rel)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	var merged string
-	if len(existing) > 0 {
-		merged = string(existing) + "\n\n" + content
-	} else {
-		merged = content
-	}
-	return s.writeMarkdown(rel, merged)
+	return s.withWriteLock(func() error {
+		existing, err := s.readFileUnlocked(rel)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		var merged string
+		if len(existing) > 0 {
+			merged = string(existing) + "\n\n" + content
+		} else {
+			merged = content
+		}
+		return s.writeFileUnlocked(rel, []byte(merged))
+	})
 }
 
 // LoadDraft 读取整章草稿。
