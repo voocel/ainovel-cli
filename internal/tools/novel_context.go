@@ -120,10 +120,49 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		}
 
 		// Writer/Editor 模式：加载章节相关上下文
-		if entry, err := t.store.GetChapterOutline(a.Chapter); err == nil {
-			result["current_chapter_outline"] = entry
+		currentEntry, currentEntryErr := t.store.GetChapterOutline(a.Chapter)
+		if currentEntryErr == nil {
+			result["current_chapter_outline"] = currentEntry
 		} else {
-			warn("current_chapter_outline", err)
+			warn("current_chapter_outline", currentEntryErr)
+		}
+
+		// 下一章预告：让 Writer 知道后续走向，便于设计伏笔和章末钩子
+		if next, err := t.store.GetChapterOutline(a.Chapter + 1); err == nil && next != nil {
+			result["next_chapter_outline"] = next
+		}
+
+		// 状态数据统一加载（供 result 赋值和相关章节推荐共用，避免重复 IO）
+		foreshadow, foreshadowErr := t.store.LoadActiveForeshadow()
+		warn("foreshadow_ledger", foreshadowErr)
+		if len(foreshadow) > 0 {
+			result["foreshadow_ledger"] = foreshadow
+		}
+		relationships, relErr := t.store.LoadRelationships()
+		warn("relationship_state", relErr)
+		if len(relationships) > 0 {
+			result["relationship_state"] = relationships
+		}
+		allStateChanges, scErr := t.store.LoadStateChanges()
+		warn("recent_state_changes", scErr)
+		if len(allStateChanges) > 0 {
+			start := max(a.Chapter-2, 1)
+			var recent []domain.StateChange
+			for _, c := range allStateChanges {
+				if c.Chapter >= start && c.Chapter < a.Chapter {
+					recent = append(recent, c)
+				}
+			}
+			if len(recent) > 0 {
+				result["recent_state_changes"] = recent
+			}
+		}
+
+		// 相关章节推荐：长篇模式下根据结构化数据反查与当前章相关的历史章节
+		if progress != nil && progress.TotalChapters > 30 && currentEntry != nil {
+			if related := t.buildRelatedChapters(a.Chapter, currentEntry, foreshadow, relationships, allStateChanges); len(related) > 0 {
+				result["related_chapters"] = related
+			}
 		}
 
 		// 摘要加载：分层 vs 扁平窗口
@@ -142,24 +181,6 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 			result["timeline"] = timeline
 		} else {
 			warn("timeline", err)
-		}
-		// foreshadow：只取未回收条目
-		if foreshadow, err := t.store.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
-			result["foreshadow_ledger"] = foreshadow
-		} else {
-			warn("foreshadow_ledger", err)
-		}
-		// relationships：保持全量（pair-key 去重，数据量天然可控）
-		if relationships, err := t.store.LoadRelationships(); err == nil && len(relationships) > 0 {
-			result["relationship_state"] = relationships
-		} else {
-			warn("relationship_state", err)
-		}
-		// 状态变化：最近 2 章
-		if changes, err := t.store.LoadRecentStateChanges(a.Chapter, 2); err == nil && len(changes) > 0 {
-			result["recent_state_changes"] = changes
-		} else {
-			warn("recent_state_changes", err)
 		}
 
 		// Layered 模式：注入当前卷弧位置 + 弧目标/卷主题
@@ -232,7 +253,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 			}
 
 			// 角色声纹：提取出场角色的对话原文片段
-			if entry, err := t.store.GetChapterOutline(a.Chapter); err == nil && entry != nil {
+			if currentEntry != nil {
 				var voiceSamples []map[string]any
 				chars, _ := t.store.LoadCharacters()
 				for _, c := range chars {
@@ -374,6 +395,9 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 	if _, ok := result["style_rules"]; ok {
 		items = append(items, "风格规则:ok")
 	}
+	if n := sliceLen(result["related_chapters"]); n > 0 {
+		items = append(items, fmt.Sprintf("相关章:%d", n))
+	}
 
 	// 参考资料
 	if refs, ok := result["references"].(map[string]string); ok && len(refs) > 0 {
@@ -414,6 +438,8 @@ func sliceLen(v any) int {
 	case []domain.VolumeOutline:
 		return len(s)
 	case []domain.Character:
+		return len(s)
+	case []domain.RelatedChapter:
 		return len(s)
 	default:
 		return 0
@@ -649,4 +675,144 @@ func trimByBudget(result map[string]any, budget int) {
 	if len(trimmed) > 0 {
 		result["_trimmed"] = trimmed
 	}
+}
+
+// buildRelatedChapters 根据结构化数据反查与当前章相关的历史章节。
+// 从伏笔、角色出场、状态变化、关系四个维度推荐，去重后最多返回 5 条。
+// 所有数据通过参数传入，不做额外 IO。
+func (t *ContextTool) buildRelatedChapters(
+	chapter int,
+	entry *domain.OutlineEntry,
+	foreshadow []domain.ForeshadowEntry,
+	relationships []domain.RelationshipEntry,
+	stateChanges []domain.StateChange,
+) []domain.RelatedChapter {
+	const recentWindow = 10
+	const maxResults = 5
+
+	seen := make(map[int]struct{})
+	var results []domain.RelatedChapter
+	add := func(ch int, reason string) {
+		if ch <= 0 || ch >= chapter {
+			return
+		}
+		// 最近几章太近，不推荐
+		if ch > chapter-recentWindow {
+			return
+		}
+		if _, ok := seen[ch]; ok {
+			return
+		}
+		seen[ch] = struct{}{}
+		results = append(results, domain.RelatedChapter{Chapter: ch, Reason: reason})
+	}
+
+	// 拼接大纲文本用于关键词匹配
+	outlineText := entry.Title + " " + entry.CoreEvent
+	for _, s := range entry.Scenes {
+		outlineText += " " + s
+	}
+
+	// 1. 伏笔反查：活跃伏笔的描述是否与当前章大纲相关
+	for _, f := range foreshadow {
+		if strings.Contains(outlineText, f.ID) || containsAny(outlineText, strings.Fields(f.Description)) {
+			add(f.PlantedAt, fmt.Sprintf("伏笔%s(%s)埋设章", f.ID, truncateRunes(f.Description, 15)))
+		}
+		if len(results) >= maxResults {
+			break
+		}
+	}
+
+	// 2. 角色出场反查：批量单次遍历，IO 从 O(角色数×章节数) 降为 O(章节数)
+	chars, _ := t.store.LoadCharacters()
+	outlineChars := matchOutlineCharacters(outlineText, chars)
+	if len(outlineChars) > 0 {
+		appearances := t.store.FindCharacterAppearances(outlineChars, chapter, recentWindow)
+		for _, name := range outlineChars {
+			if len(results) >= maxResults {
+				break
+			}
+			if ch, ok := appearances[name]; ok {
+				add(ch, fmt.Sprintf("角色'%s'最后出场章", name))
+			}
+		}
+	}
+
+	// 3. 状态变化反查：在已加载的 slice 上操作，零 IO
+	for _, name := range outlineChars {
+		if len(results) >= maxResults {
+			break
+		}
+		ch := findLastStateChange(stateChanges, name, chapter)
+		if ch > 0 && ch <= chapter-recentWindow {
+			add(ch, fmt.Sprintf("'%s'状态变化章", name))
+		}
+	}
+
+	// 4. 关系反查：当前章涉及的角色对之间关系最后变化
+	if len(relationships) > 0 && len(outlineChars) >= 2 {
+		charSet := make(map[string]struct{}, len(outlineChars))
+		for _, c := range outlineChars {
+			charSet[c] = struct{}{}
+		}
+		for _, r := range relationships {
+			if len(results) >= maxResults {
+				break
+			}
+			_, aIn := charSet[r.CharacterA]
+			_, bIn := charSet[r.CharacterB]
+			if aIn && bIn {
+				add(r.Chapter, fmt.Sprintf("%s-%s关系变化", r.CharacterA, r.CharacterB))
+			}
+		}
+	}
+
+	return results
+}
+
+// findLastStateChange 在已加载的状态变化列表中查找实体最近一次变化的章节号。
+func findLastStateChange(changes []domain.StateChange, entity string, currentChapter int) int {
+	for i := len(changes) - 1; i >= 0; i-- {
+		if changes[i].Entity == entity && changes[i].Chapter < currentChapter {
+			return changes[i].Chapter
+		}
+	}
+	return 0
+}
+
+// matchOutlineCharacters 从大纲文本中匹配出场角色名。
+func matchOutlineCharacters(text string, chars []domain.Character) []string {
+	var matched []string
+	for _, c := range chars {
+		if strings.Contains(text, c.Name) {
+			matched = append(matched, c.Name)
+			continue
+		}
+		for _, alias := range c.Aliases {
+			if strings.Contains(text, alias) {
+				matched = append(matched, c.Name)
+				break
+			}
+		}
+	}
+	return matched
+}
+
+// containsAny 检查 text 是否包含 words 中的任一词（至少 2 字才匹配，避免噪音）。
+func containsAny(text string, words []string) bool {
+	for _, w := range words {
+		if len([]rune(w)) >= 2 && strings.Contains(text, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncateRunes 截断字符串到指定 rune 数。
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }

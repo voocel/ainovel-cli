@@ -122,6 +122,33 @@ func (s *Store) volumeCount() int {
 	return 20
 }
 
+// FindCharacterAppearances 批量查找多个角色的最后出场章节号。
+// 从 endChapter-recentWindow 向前单次遍历，找到即标记；全部找到或遍历结束后返回。
+// 相比逐角色逐章扫描，IO 次数从 O(角色数×章节数) 降为 O(章节数)。
+func (s *Store) FindCharacterAppearances(names []string, endChapter, recentWindow int) map[string]int {
+	result := make(map[string]int, len(names))
+	remaining := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		remaining[n] = struct{}{}
+	}
+	for ch := endChapter - recentWindow; ch >= 1; ch-- {
+		if len(remaining) == 0 {
+			break
+		}
+		sum, err := s.LoadSummary(ch)
+		if err != nil || sum == nil {
+			continue
+		}
+		for _, c := range sum.Characters {
+			if _, need := remaining[c]; need {
+				result[c] = ch
+				delete(remaining, c)
+			}
+		}
+	}
+	return result
+}
+
 // arcCountForVolume 从分层大纲获取指定卷的弧数，无大纲时返回安全上限。
 func (s *Store) arcCountForVolume(volume int) int {
 	volumes, err := s.LoadLayeredOutline()

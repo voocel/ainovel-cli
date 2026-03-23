@@ -30,19 +30,3 @@ func (s *Store) LoadStateChanges() ([]domain.StateChange, error) {
 	}
 	return changes, nil
 }
-
-// LoadRecentStateChanges 加载指定章节之前最近 count 章的状态变化。
-func (s *Store) LoadRecentStateChanges(currentChapter, count int) ([]domain.StateChange, error) {
-	all, err := s.LoadStateChanges()
-	if err != nil {
-		return nil, err
-	}
-	start := max(currentChapter-count, 1)
-	var result []domain.StateChange
-	for _, c := range all {
-		if c.Chapter >= start && c.Chapter < currentChapter {
-			result = append(result, c)
-		}
-	}
-	return result, nil
-}

@@ -71,6 +71,12 @@ type CharacterVoice struct {
 	Rules []string `json:"rules"` // 2-3 条语言特征规则，每条 ≤30 字
 }
 
+// RelatedChapter 推荐回读的相关章节。
+type RelatedChapter struct {
+	Chapter int    `json:"chapter"`
+	Reason  string `json:"reason"`
+}
+
 // CommitResult 是 commit_chapter 工具的结构化返回值。
 // 宿主程序和 Coordinator 读取此信号做控制决策。
 type CommitResult struct {
