@@ -64,7 +64,9 @@
 ]
 ```
 
-## 分层大纲模板（长篇）
+## 分层大纲模板（长篇 - 卷弧双层滚动展开）
+
+初始规划采用双层滚动：前 2 卷有弧骨架，其余卷为骨架卷；第一弧有详细章节。
 
 ```json
 [
@@ -75,22 +77,42 @@
     "arcs": [
       {
         "index": 1,
-        "title": "第一弧标题",
-        "goal": "这一弧的局部目标、局部阻力和阶段转折",
+        "title": "第一弧（已展开）",
+        "goal": "局部目标、阻力和转折",
         "chapters": [
-          {
-            "chapter": 1,
-            "title": "章节标题",
-            "core_event": "核心事件",
-            "hook": "章末钩子",
-            "scenes": ["场景1", "场景2", "场景3"]
-          }
+          {"chapter": 1, "title": "章节标题", "core_event": "核心事件", "hook": "章末钩子", "scenes": ["场景1", "场景2"]}
         ]
+      },
+      {
+        "index": 2,
+        "title": "第二弧（骨架弧）",
+        "goal": "这一弧的目标概述",
+        "estimated_chapters": 12,
+        "chapters": []
       }
     ]
+  },
+  {
+    "index": 2,
+    "title": "第二卷标题",
+    "theme": "第二卷主题",
+    "arcs": [
+      {"index": 1, "title": "弧标题", "goal": "弧目标", "estimated_chapters": 15, "chapters": []},
+      {"index": 2, "title": "弧标题", "goal": "弧目标", "estimated_chapters": 10, "chapters": []}
+    ]
+  },
+  {
+    "index": 3,
+    "title": "第三卷标题（骨架卷）",
+    "theme": "第三卷主题方向",
+    "estimated_chapters": 60,
+    "arcs": []
   }
 ]
 ```
+
+- 弧级展开：写作推进到骨架弧时，Architect 展开该弧的详细章节
+- 卷级展开：写作推进到骨架卷时，Architect 展开该卷的弧结构 + 首弧章节
 
 ## 长篇卷级检查清单
 

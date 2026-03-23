@@ -83,7 +83,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	// 7. 恢复或启动
 	progress, _ := store.LoadProgress()
 	runMeta, _ := store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta)
+	recovery := determineRecovery(progress, runMeta, store)
 
 	if recovery.IsNew {
 		if err := store.InitProgress(cfg.NovelName, 0); err != nil {
@@ -299,7 +299,7 @@ type recoveryResult struct {
 }
 
 // determineRecovery 根据 Progress 和 RunMeta 判断恢复类型和 Prompt 文本。
-func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recoveryResult {
+func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta, store ...*storepkg.Store) recoveryResult {
 	if progress == nil {
 		return recoveryResult{IsNew: true}
 	}
@@ -373,6 +373,36 @@ func determineRecovery(progress *domain.Progress, runMeta *domain.RunMeta) recov
 				"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。\n\n[用户干预-恢复] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。",
 				next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters, runMeta.PendingSteer)),
 			Label: "Steer 恢复：上次干预未完成，重新注入",
+		}
+	}
+
+	// 骨架展开恢复：评审已完成但下一卷/弧尚未展开
+	if progress.IsResumable() && progress.Layered && len(store) > 0 && store[0] != nil {
+		s := store[0]
+		next := progress.NextChapter()
+		// 检查下一章是否在大纲中——如果不在，说明下一卷或弧还是骨架
+		if _, err := s.GetChapterOutline(next); err != nil {
+			volumes := mustLoadLayered(s)
+			// 优先检查骨架卷
+			for _, v := range volumes {
+				if v.Index > progress.CurrentVolume && !v.IsExpanded() {
+					return recoveryResult{
+						PromptText: withGuidance(fmt.Sprintf(
+							"上次卷级评审已完成，但第 %d 卷尚未展开弧结构。请调用 architect_long 为该卷展开弧级规划（save_foundation type=expand_volume, volume=%d），然后继续写作。已完成 %d 章，共 %d 字。",
+							v.Index, v.Index, len(progress.CompletedChapters), progress.TotalWordCount)),
+						Label: fmt.Sprintf("恢复模式：展开第 %d 卷", v.Index),
+					}
+				}
+			}
+			// 再检查骨架弧
+			if vol, arc := domain.NextSkeletonArc(volumes, progress.CurrentVolume, progress.CurrentArc); vol > 0 {
+				return recoveryResult{
+					PromptText: withGuidance(fmt.Sprintf(
+						"上次弧级评审已完成，但第 %d 卷第 %d 弧尚未展开章节。请调用 architect_long 为该弧展开详细章节规划（save_foundation type=expand_arc, volume=%d, arc=%d），然后继续写作。已完成 %d 章，共 %d 字。",
+						vol, arc, vol, arc, len(progress.CompletedChapters), progress.TotalWordCount)),
+					Label: fmt.Sprintf("恢复模式：展开第 %d 卷第 %d 弧", vol, arc),
+				}
+			}
 		}
 	}
 
@@ -566,6 +596,14 @@ func flushPendingSteer(store *storepkg.Store, coordinator *agentcore.Agent, emit
 			meta.PendingSteer)))
 	}
 	clearHandledSteer(store)
+}
+
+func mustLoadLayered(s *storepkg.Store) []domain.VolumeOutline {
+	v, err := s.LoadLayeredOutline()
+	if err != nil {
+		slog.Warn("加载分层大纲失败", "module", "recovery", "err", err)
+	}
+	return v
 }
 
 func finalizeSteerIfIdle(store *storepkg.Store) {

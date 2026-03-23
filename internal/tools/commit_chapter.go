@@ -164,8 +164,8 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 
 	// 6b. 长篇模式：弧级边界检测
-	var arcEnd, volumeEnd bool
-	var vol, arc int
+	var arcEnd, volumeEnd, needsExpansion, needsVolumeExpansion bool
+	var vol, arc, nextVol, nextArc int
 	if progress != nil && progress.Layered {
 		boundary, bErr := t.store.CheckArcBoundary(a.Chapter)
 		if bErr != nil {
@@ -175,6 +175,10 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			volumeEnd = boundary.IsVolumeEnd
 			vol = boundary.Volume
 			arc = boundary.Arc
+			needsExpansion = boundary.NeedsExpansion
+			needsVolumeExpansion = boundary.NeedsVolumeExpansion
+			nextVol = boundary.NextVolume
+			nextArc = boundary.NextArc
 			_ = t.store.UpdateVolumeArc(vol, arc)
 		}
 	}
@@ -202,6 +206,10 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		VolumeEnd:      volumeEnd,
 		Volume:         vol,
 		Arc:            arc,
+		NeedsExpansion:       needsExpansion,
+		NeedsVolumeExpansion: needsVolumeExpansion,
+		NextVolume:           nextVol,
+		NextArc:              nextArc,
 	}
 
 	// 8. 写入信号文件

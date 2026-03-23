@@ -118,7 +118,7 @@ func BuildCoordinator(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
-		agentcore.WithMaxTurns(60),
+		agentcore.WithMaxTurns(200),
 		agentcore.WithContextPipeline(
 			memory.NewCompaction(memory.CompactionConfig{
 				Model:            coordinatorModel,

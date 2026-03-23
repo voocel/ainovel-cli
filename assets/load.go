@@ -61,9 +61,12 @@ func loadReferences(style string) tools.References {
 		Differentiation:   mustRead(referencesFS, "references/differentiation.md"),
 	}
 	if style != "" && style != "default" {
-		path := "references/" + style + "/style-references.md"
-		if data, err := referencesFS.ReadFile(path); err == nil {
+		genreDir := "references/genres/" + style + "/"
+		if data, err := referencesFS.ReadFile(genreDir + "style-references.md"); err == nil {
 			refs.StyleReference = string(data)
+		}
+		if data, err := referencesFS.ReadFile(genreDir + "arc-templates.md"); err == nil {
+			refs.ArcTemplates = string(data)
 		}
 	}
 	return refs

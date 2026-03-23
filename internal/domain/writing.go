@@ -90,8 +90,12 @@ type CommitResult struct {
 	DominantStrand string           `json:"dominant_strand,omitempty"`
 	Feedback       *OutlineFeedback `json:"feedback,omitempty"`
 	// 长篇分层信号
-	ArcEnd    bool `json:"arc_end,omitempty"`
-	VolumeEnd bool `json:"volume_end,omitempty"`
-	Volume    int  `json:"volume,omitempty"`
-	Arc       int  `json:"arc,omitempty"`
+	ArcEnd         bool `json:"arc_end,omitempty"`
+	VolumeEnd      bool `json:"volume_end,omitempty"`
+	Volume         int  `json:"volume,omitempty"`
+	Arc            int  `json:"arc,omitempty"`
+	NeedsExpansion       bool `json:"needs_expansion,omitempty"`        // 下一弧是骨架，需要展开章节
+	NeedsVolumeExpansion bool `json:"needs_volume_expansion,omitempty"` // 下一卷是骨架，需要展开弧结构
+	NextVolume           int  `json:"next_volume,omitempty"`            // 下一弧/卷序号
+	NextArc              int  `json:"next_arc,omitempty"`               // 下一弧序号
 }

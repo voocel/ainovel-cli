@@ -112,10 +112,24 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 
 	// 确定性判断 1.5：长篇弧/卷边界处理
 	if progress != nil && progress.Layered && result.ArcEnd {
-		isBookEnd := progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters
+		// 全书完成：无后续弧（包括骨架弧）
+		isBookEnd := result.NextVolume == 0 && result.NextArc == 0
+
+		// 根据是否需要展开下一卷/弧，生成尾部指令
+		var expansionTail string
+		if result.NeedsVolumeExpansion && !isBookEnd {
+			expansionTail = fmt.Sprintf(
+				"调用 architect_long 为第 %d 卷展开弧级结构和首弧章节（save_foundation type=expand_volume, volume=%d），然后继续写作。",
+				result.NextVolume, result.NextVolume)
+		} else if result.NeedsExpansion && !isBookEnd {
+			expansionTail = fmt.Sprintf(
+				"调用 architect_long 为第 %d 卷第 %d 弧展开详细章节规划（save_foundation type=expand_arc），然后继续写作。",
+				result.NextVolume, result.NextArc)
+		}
 
 		if result.VolumeEnd {
-			slog.Info("弧结束（卷结束），注入评审指令", "module", "host", "volume", result.Volume, "arc", result.Arc)
+			slog.Info("弧结束（卷结束），注入评审指令", "module", "host", "volume", result.Volume, "arc", result.Arc,
+				"needs_expansion", result.NeedsExpansion)
 			if err := store.SetFlow(domain.FlowReviewing); err != nil {
 				slog.Error("设置审阅流程失败", "module", "host", "err", err)
 			}
@@ -125,6 +139,9 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 			}
 
 			tail := "完成后继续写下一卷。"
+			if expansionTail != "" {
+				tail = expansionTail
+			}
 			if isBookEnd {
 				tail = "完成后总结全书并结束。不要再调用 writer。"
 			}
@@ -136,7 +153,8 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 					"%s",
 				result.Volume, result.Arc, result.Chapter, result.Volume, result.Arc, result.Volume, tail)))
 		} else {
-			slog.Info("弧结束，注入弧级评审指令", "module", "host", "volume", result.Volume, "arc", result.Arc)
+			slog.Info("弧结束，注入弧级评审指令", "module", "host", "volume", result.Volume, "arc", result.Arc,
+				"needs_expansion", result.NeedsExpansion)
 			if err := store.SetFlow(domain.FlowReviewing); err != nil {
 				slog.Error("设置审阅流程失败", "module", "host", "err", err)
 			}
@@ -144,12 +162,17 @@ func handleSubAgentDone(coordinator *agentcore.Agent, store *storepkg.Store, emi
 				emit(UIEvent{Time: time.Now(), Category: "SYSTEM",
 					Summary: fmt.Sprintf("第 %d 卷第 %d 弧结束，触发弧级评审", result.Volume, result.Arc), Level: "warn"})
 			}
+
+			tail := "完成后继续写下一弧的章节。"
+			if expansionTail != "" {
+				tail = expansionTail
+			}
 			coordinator.FollowUp(agentcore.UserMsg(fmt.Sprintf(
 				"[系统] 第 %d 卷第 %d 弧结束。请依次：\n"+
 					"1. 调用 editor 进行弧级评审（scope=arc，最新章节为第 %d 章）\n"+
 					"2. 调用 editor 生成弧摘要和角色快照（save_arc_summary，volume=%d，arc=%d）\n"+
-					"完成后继续写下一弧的章节。",
-				result.Volume, result.Arc, result.Chapter, result.Volume, result.Arc)))
+					"%s",
+				result.Volume, result.Arc, result.Chapter, result.Volume, result.Arc, tail)))
 		}
 
 		if isBookEnd {

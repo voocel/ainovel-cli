@@ -21,17 +21,19 @@ func NewSaveFoundationTool(store *store.Store) *SaveFoundationTool {
 
 func (t *SaveFoundationTool) Name() string { return "save_foundation" }
 func (t *SaveFoundationTool) Description() string {
-	return "保存小说基础设定。参数固定为 {type, content, scale?}。type 可选 premise / outline / layered_outline / characters / world_rules。premise 时 content 必须是 Markdown 字符串；outline、layered_outline、characters、world_rules 时 content 优先直接传 JSON 数组或对象，不要再手动包一层转义字符串；工具也兼容传入 JSON 字符串。scale 可选，仅允许 short / mid / long。"
+	return "保存小说基础设定。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / expand_volume。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 展开骨架弧的详细章节（需 volume + arc）；expand_volume 展开骨架卷的弧结构（需 volume，content 为弧数组，首弧可包含详细章节）。scale 可选，仅允许 short / mid / long。"
 }
 func (t *SaveFoundationTool) Label() string { return "保存设定" }
 
 func (t *SaveFoundationTool) Schema() map[string]any {
 	return schema.Object(
-		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules")).Required(),
+		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "expand_arc", "expand_volume")).Required(),
 		schema.Property("content", map[string]any{
-			"description": "内容。premise 传 Markdown 字符串；outline/layered_outline/characters/world_rules 直接传 JSON 数组或对象即可，也兼容传 JSON 字符串。不要把数组再次手动转义成难读的字符串。",
+			"description": "内容。premise 传 Markdown 字符串；其他类型直接传 JSON 数组或对象即可，也兼容传 JSON 字符串。expand_arc 时传章节数组。",
 		}).Required(),
 		schema.Property("scale", schema.Enum("规划级别", "short", "mid", "long")),
+		schema.Property("volume", schema.Int("目标卷序号（仅 expand_arc 时必传）")),
+		schema.Property("arc", schema.Int("目标弧序号（仅 expand_arc 时必传）")),
 	)
 }
 
@@ -40,6 +42,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		Type    string          `json:"type"`
 		Content json.RawMessage `json:"content"`
 		Scale   string          `json:"scale"`
+		Volume  int             `json:"volume"`
+		Arc     int             `json:"arc"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
@@ -127,8 +131,48 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		}
 		result["count"] = len(rules)
 
+	case "expand_arc":
+		if a.Volume <= 0 || a.Arc <= 0 {
+			return nil, fmt.Errorf("expand_arc requires volume and arc parameters")
+		}
+		var chapters []domain.OutlineEntry
+		if err := json.Unmarshal([]byte(content), &chapters); err != nil {
+			return nil, fmt.Errorf("parse expand_arc chapters JSON: %w", err)
+		}
+		if err := t.store.ExpandArc(a.Volume, a.Arc, chapters); err != nil {
+			return nil, fmt.Errorf("expand arc: %w", err)
+		}
+		result["volume"] = a.Volume
+		result["arc"] = a.Arc
+		result["chapters"] = len(chapters)
+
+	case "expand_volume":
+		if a.Volume <= 0 {
+			return nil, fmt.Errorf("expand_volume requires volume parameter")
+		}
+		var arcs []domain.ArcOutline
+		if err := json.Unmarshal([]byte(content), &arcs); err != nil {
+			return nil, fmt.Errorf("parse expand_volume arcs JSON: %w", err)
+		}
+		if len(arcs) == 0 {
+			return nil, fmt.Errorf("expand_volume requires at least one arc")
+		}
+		if err := t.store.ExpandVolume(a.Volume, arcs); err != nil {
+			return nil, fmt.Errorf("expand volume: %w", err)
+		}
+		result["volume"] = a.Volume
+		result["arcs"] = len(arcs)
+		// 统计展开弧中的章节数
+		chCount := 0
+		for _, arc := range arcs {
+			chCount += len(arc.Chapters)
+		}
+		if chCount > 0 {
+			result["chapters"] = chCount
+		}
+
 	default:
-		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules", a.Type)
+		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/expand_arc/expand_volume", a.Type)
 	}
 
 	// 返回剩余未完成项，引导 Architect 继续

@@ -29,6 +29,7 @@ type References struct {
 	StyleReference   string // 风格补充参考（可为空）
 	LongformPlanning string // 通用长篇规划参考
 	Differentiation  string // 通用差异化设计参考
+	ArcTemplates     string // 题材弧型模板（按 style 加载，可为空）
 }
 
 // ContextTool 组装当前章节所需上下文。
@@ -295,14 +296,57 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		// Architect 模式下也加载分层大纲（弧级规划需要看全貌）
 		if layered, err := t.store.LoadLayeredOutline(); err == nil && len(layered) > 0 {
 			result["layered_outline"] = layered
+			// 标注骨架状态：哪些卷/弧未展开
+			var skeletonVolumes []map[string]any
+			var skeletonArcs []map[string]any
+			for _, v := range layered {
+				if !v.IsExpanded() {
+					skeletonVolumes = append(skeletonVolumes, map[string]any{
+						"volume":             v.Index,
+						"title":              v.Title,
+						"theme":              v.Theme,
+						"estimated_chapters": v.EstimatedChapters,
+					})
+					continue
+				}
+				for _, a := range v.Arcs {
+					if !a.IsExpanded() {
+						skeletonArcs = append(skeletonArcs, map[string]any{
+							"volume":             v.Index,
+							"arc":                a.Index,
+							"title":              a.Title,
+							"goal":               a.Goal,
+							"estimated_chapters": a.EstimatedChapters,
+						})
+					}
+				}
+			}
+			if len(skeletonVolumes) > 0 {
+				result["skeleton_volumes"] = skeletonVolumes
+			}
+			if len(skeletonArcs) > 0 {
+				result["skeleton_arcs"] = skeletonArcs
+			}
 		} else {
 			warn("layered_outline", err)
 		}
-		// 加载已有的弧摘要（弧级规划时需要参考前续弧的内容）
+		// 加载已有的弧摘要（弧级规划/展开时需要参考前续弧的内容）
 		if volSummaries, err := t.store.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
 			result["volume_summaries"] = volSummaries
 		} else {
 			warn("volume_summaries", err)
+		}
+		// 加载角色快照（展开下一弧时参考角色当前状态）
+		if snapshots, err := t.store.LoadLatestSnapshots(); err == nil && len(snapshots) > 0 {
+			result["character_snapshots"] = snapshots
+		} else {
+			warn("character_snapshots", err)
+		}
+		// 加载风格规则（展开时保持风格一致性）
+		if styleRules, err := t.store.LoadStyleRules(); err == nil && styleRules != nil {
+			result["style_rules"] = styleRules
+		} else {
+			warn("style_rules", err)
 		}
 		result["references"] = t.architectReferences()
 
@@ -590,6 +634,7 @@ func (t *ContextTool) architectReferences() map[string]string {
 	add("longform_planning", t.refs.LongformPlanning)
 	add("differentiation", t.refs.Differentiation)
 	add("style_reference", t.refs.StyleReference)
+	add("arc_templates", t.refs.ArcTemplates)
 	return refs
 }
 

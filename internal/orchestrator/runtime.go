@@ -238,7 +238,7 @@ func (rt *Runtime) Resume() (string, error) {
 
 	progress, _ := rt.store.LoadProgress()
 	runMeta, _ := rt.store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta)
+	recovery := determineRecovery(progress, runMeta, rt.store)
 
 	if recovery.IsNew {
 		return "", nil
@@ -307,7 +307,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
 
 	// 恢复标签
-	recovery := determineRecovery(progress, runMeta)
+	recovery := determineRecovery(progress, runMeta, rt.store)
 	if !recovery.IsNew {
 		snap.RecoveryLabel = recovery.Label
 	}
