@@ -256,8 +256,8 @@ func registerSubscription(coordinator *agentcore.Agent, store *storepkg.Store, p
 	})
 }
 
-// submitSteer 提交用户干预（CLI 和 Runtime 共用）。
-func submitSteer(store *storepkg.Store, coordinator *agentcore.Agent, text string) {
+// persistSteer 将干预持久化到 store（不触发 coordinator）。
+func persistSteer(store *storepkg.Store, text string) {
 	slog.Info("用户干预", "module", "steer", "text", text)
 	if err := store.AppendSteerEntry(domain.SteerEntry{
 		Input:     text,
@@ -271,6 +271,11 @@ func submitSteer(store *storepkg.Store, coordinator *agentcore.Agent, text strin
 	if err := store.SetFlow(domain.FlowSteering); err != nil {
 		slog.Error("设置流程状态失败", "module", "steer", "err", err)
 	}
+}
+
+// submitSteer 提交用户干预（CLI 和 Runtime 共用，仅在 agent 循环运行中时调用）。
+func submitSteer(store *storepkg.Store, coordinator *agentcore.Agent, text string) {
+	persistSteer(store, text)
 	runMeta, err := store.LoadRunMeta()
 	if err != nil {
 		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)

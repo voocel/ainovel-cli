@@ -263,9 +263,33 @@ func (rt *Runtime) Resume() (string, error) {
 }
 
 // Steer 提交用户干预。
-// 如果 coordinator 已停止（出错），Steer 会重置完成信号并启动新的等待协程，使 agent 循环恢复后 TUI 能再次收到 doneMsg。
+// 如果 coordinator 正在运行，通过 Steer 注入消息。
+// 如果 coordinator 已停止（出错），通过 Prompt 重启 agent 循环。
 func (rt *Runtime) Steer(text string) {
-	submitSteer(rt.store, rt.coordinator, text)
+	rt.mu.Lock()
+	wasRunning := rt.running
+	rt.mu.Unlock()
+
+	if wasRunning {
+		submitSteer(rt.store, rt.coordinator, text)
+	} else {
+		// agent 循环已停止，持久化干预后通过 Prompt 重启
+		persistSteer(rt.store, text)
+		progress, _ := rt.store.LoadProgress()
+		runMeta, _ := rt.store.LoadRunMeta()
+		recovery := determineRecovery(progress, runMeta, rt.store)
+		promptText := recovery.PromptText
+		if recovery.IsNew {
+			promptText = fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
+		}
+		slog.Info("agent 已停止，通过 Prompt 重启", "module", "steer", "recovery", recovery.Label)
+		if err := rt.coordinator.Prompt(promptText); err != nil {
+			slog.Error("重启 Prompt 失败", "module", "steer", "err", err)
+			rt.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "恢复失败: " + err.Error(), Level: "error"})
+			return
+		}
+	}
+
 	rt.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: "干预已提交: " + truncateLog(text, 40), Level: "info"})
 
 	rt.mu.Lock()

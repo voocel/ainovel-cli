@@ -12,7 +12,7 @@ import (
 // renderInputBox 渲染底部栏（两行布局）。
 // 第一行：❯ + 输入框
 // 第二行：左快捷键提示，右进度信息
-func renderInputBox(inputView string, snap orchestrator.UISnapshot, outputDir string, width int) string {
+func renderInputBox(inputView string, snap orchestrator.UISnapshot, outputDir string, width int, quitPending bool) string {
 	innerW := width - 4 // border + padding
 
 	// 第一行：提示符 + 输入框
@@ -20,7 +20,12 @@ func renderInputBox(inputView string, snap orchestrator.UISnapshot, outputDir st
 	line1 := prompt + inputView
 
 	// 第二行：左快捷键，右进度
-	hints := lipgloss.NewStyle().Foreground(colorDim).Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · ^L 清屏 · Esc 重置 · Enter 发送")
+	var hints string
+	if quitPending {
+		hints = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Press Ctrl+C again to exit")
+	} else {
+		hints = lipgloss.NewStyle().Foreground(colorDim).Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · ^L 清屏 · Esc 重置 · Enter 发送")
+	}
 	info := buildRightInfo(snap, outputDir)
 
 	hintsW := lipgloss.Width(hints)

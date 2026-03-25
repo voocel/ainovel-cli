@@ -57,7 +57,8 @@ type Model struct {
 	mode         appMode
 	err          error
 	spinnerIdx   int
-	streamRound  int // 流式输出轮次计数
+	streamRound  int  // 流式输出轮次计数
+	quitPending  bool // 双次 Ctrl+C 退出确认
 }
 
 // NewModel 创建 TUI Model。
@@ -124,11 +125,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.askState != nil {
+			if msg.Type == tea.KeyCtrlC {
+				if m.quitPending {
+					return m, tea.Quit
+				}
+				m.quitPending = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+			}
+			m.quitPending = false
 			return m.handleAskUserKey(msg)
 		}
+		// 双次 Ctrl+C 退出
+		if msg.Type == tea.KeyCtrlC {
+			if m.quitPending {
+				return m, tea.Quit
+			}
+			m.quitPending = true
+			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+		}
+		m.quitPending = false
 		switch msg.Type {
-		case tea.KeyCtrlC:
-			return m, tea.Quit
 		case tea.KeyEscape:
 			m.textarea.Reset()
 			return m, nil
@@ -208,8 +224,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// 普通字符输入 → 转发给 textarea（过滤鼠标 SGR 序列残片）
-		if msg.Type == tea.KeyRunes && containsSGRFragment(string(msg.Runes)) {
+		// 普通字符输入 → 转发给 textarea（过滤终端转义序列残片）
+		if msg.Type == tea.KeyRunes && (containsSGRFragment(string(msg.Runes)) || isCSILeak(msg.Runes)) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -326,6 +342,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamVP.GotoBottom()
 		}
 		return m, listenStreamClear(m.runtime)
+
+	case quitResetMsg:
+		m.quitPending = false
+		return m, nil
 	}
 
 	// 非键盘消息（光标闪烁等 textarea 内部消息）转发
@@ -342,7 +362,7 @@ func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
 	}
 
 	topH := lipgloss.Height(renderTopBar(m.snapshot, m.width, ""))
-	inputH := lipgloss.Height(renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width))
+	inputH := lipgloss.Height(renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width, m.quitPending))
 	bodyH := m.height - topH - inputH
 	if bodyH < 1 {
 		return focusEvents, false
@@ -482,7 +502,7 @@ func (m Model) View() string {
 	}
 
 	topBar := renderTopBar(m.snapshot, m.width, spinnerFrame)
-	inputBox := renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width)
+	inputBox := renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width, m.quitPending)
 
 	topH := lipgloss.Height(topBar)
 	inputH := lipgloss.Height(inputBox)
@@ -611,6 +631,23 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// isCSILeak 检测 KeyRunes 是否为 CSI 转义序列泄漏的残片。
+// 终端发送方向键 \x1b[A 时，快速按键可能导致序列拆分：
+// \x1b 被解析为 Escape，"[" 或 "[A" 作为 KeyRunes 泄漏到 textarea。
+func isCSILeak(runes []rune) bool {
+	if len(runes) == 0 || runes[0] != '[' {
+		return false
+	}
+	for _, r := range runes[1:] {
+		if (r >= '0' && r <= '9') || r == ';' ||
+			(r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '~' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // containsSGRFragment 检测文本是否包含 SGR 鼠标序列残片（"<数字;数字;" 模式）。

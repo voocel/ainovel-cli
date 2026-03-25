@@ -65,6 +65,12 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	result := map[string]any{"saved": true, "type": a.Type, "scale": a.Scale}
 
+	// 写作阶段禁止全量覆盖大纲，只允许增量操作（expand_arc / append_volume）
+	if (a.Type == "outline" || a.Type == "layered_outline") && t.isWriting() {
+		return nil, fmt.Errorf(
+			"写作阶段禁止使用 %s 全量覆盖大纲。请使用 expand_arc 展开骨架弧，或 append_volume 追加新卷", a.Type)
+	}
+
 	switch a.Type {
 	case "premise":
 		if err := t.store.SavePremise(content); err != nil {
@@ -197,6 +203,11 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid content: expected Markdown string or valid JSON value")
 	}
 	return string(raw), nil
+}
+
+func (t *SaveFoundationTool) isWriting() bool {
+	p, _ := t.store.LoadProgress()
+	return p != nil && p.Phase == domain.PhaseWriting
 }
 
 // remaining 检查基础设定中还缺少哪些必要项。
