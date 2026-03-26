@@ -1,19 +1,99 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/litellm"
 )
 
+// SwappableModel 是可热切换的 ChatModel 包装器。
+// 已开始的请求继续使用旧实例；后续请求自动切到新实例。
+type SwappableModel struct {
+	mu       sync.RWMutex
+	model    agentcore.ChatModel
+	provider string
+	name     string
+}
+
+func NewSwappableModel(provider, name string, model agentcore.ChatModel) *SwappableModel {
+	return &SwappableModel{
+		model:    model,
+		provider: provider,
+		name:     name,
+	}
+}
+
+func (m *SwappableModel) Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	current := m.current()
+	return current.Generate(ctx, messages, tools, opts...)
+}
+
+func (m *SwappableModel) GenerateStream(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
+	current := m.current()
+	return current.GenerateStream(ctx, messages, tools, opts...)
+}
+
+func (m *SwappableModel) SupportsTools() bool {
+	current := m.current()
+	return current.SupportsTools()
+}
+
+func (m *SwappableModel) ProviderName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.provider
+}
+
+func (m *SwappableModel) Info() llm.ModelInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if info, ok := m.model.(interface{ Info() llm.ModelInfo }); ok {
+		modelInfo := info.Info()
+		if modelInfo.Name == "" {
+			modelInfo.Name = m.name
+		}
+		if modelInfo.Provider == "" {
+			modelInfo.Provider = m.provider
+		}
+		return modelInfo
+	}
+	return llm.ModelInfo{
+		Name:     m.name,
+		Provider: m.provider,
+	}
+}
+
+func (m *SwappableModel) Swap(provider, name string, model agentcore.ChatModel) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.model = model
+	m.provider = provider
+	m.name = name
+}
+
+func (m *SwappableModel) Current() (provider, name string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.provider, m.name
+}
+
+func (m *SwappableModel) current() agentcore.ChatModel {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.model
+}
+
 // ModelSet 持有按角色分配的模型实例，未配置的角色回退到默认模型。
 type ModelSet struct {
-	Default agentcore.ChatModel
-	models  map[string]agentcore.ChatModel
+	Default *SwappableModel
+	models  map[string]*SwappableModel
+	config  Config
 }
 
 // ForRole 返回指定角色的模型，未配置时返回默认模型。
@@ -28,12 +108,59 @@ func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
 func (ms *ModelSet) Summary() string {
 	var parts []string
 	for role, m := range ms.models {
-		parts = append(parts, fmt.Sprintf("%s=%s", role, modelName(m)))
+		provider, name := m.Current()
+		parts = append(parts, fmt.Sprintf("%s=%s/%s", role, provider, name))
 	}
 	if len(parts) == 0 {
-		return fmt.Sprintf("default=%s", modelName(ms.Default))
+		provider, name := ms.Default.Current()
+		return fmt.Sprintf("default=%s/%s", provider, name)
 	}
-	return fmt.Sprintf("default=%s %s", modelName(ms.Default), strings.Join(parts, " "))
+	provider, name := ms.Default.Current()
+	return fmt.Sprintf("default=%s/%s %s", provider, name, strings.Join(parts, " "))
+}
+
+// CurrentSelection 返回角色当前生效的 provider/model。
+// role 为空或 "default" 时返回默认模型。
+func (ms *ModelSet) CurrentSelection(role string) (provider, model string, explicit bool) {
+	if role == "" || role == "default" {
+		provider, model = ms.Default.Current()
+		return provider, model, true
+	}
+	if sw, ok := ms.models[role]; ok {
+		provider, model = sw.Current()
+		return provider, model, true
+	}
+	provider, model = ms.Default.Current()
+	return provider, model, false
+}
+
+// Swap 切换默认模型或指定角色模型。
+// role 为空或 "default" 时切换默认模型；其他角色切换为显式覆盖。
+func (ms *ModelSet) Swap(role, provider, model string) error {
+	pc, ok := ms.config.Providers[provider]
+	if !ok {
+		return fmt.Errorf("provider %q is not configured", provider)
+	}
+	next, err := createModelFromConfig(provider, model, pc, make(map[string]agentcore.ChatModel))
+	if err != nil {
+		return err
+	}
+
+	if role == "" || role == "default" {
+		ms.Default.Swap(provider, model, next)
+		return nil
+	}
+
+	if !knownRoles[role] {
+		return fmt.Errorf("unknown role %q", role)
+	}
+
+	if existing, ok := ms.models[role]; ok {
+		existing.Swap(provider, model, next)
+		return nil
+	}
+	ms.models[role] = NewSwappableModel(provider, model, next)
+	return nil
 }
 
 func modelName(m agentcore.ChatModel) string {
@@ -56,8 +183,9 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 	}
 
 	ms := &ModelSet{
-		Default: defaultModel,
-		models:  make(map[string]agentcore.ChatModel),
+		Default: NewSwappableModel(cfg.Provider, cfg.ModelName, defaultModel),
+		models:  make(map[string]*SwappableModel),
+		config:  cfg,
 	}
 
 	// 创建角色覆盖模型
@@ -70,7 +198,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("role %s model: %w", role, err)
 		}
-		ms.models[role] = m
+		ms.models[role] = NewSwappableModel(rc.Provider, rc.Model, m)
 		slog.Info("角色模型分配", "module", "config", "role", role, "provider", rc.Provider, "model", rc.Model)
 	}
 

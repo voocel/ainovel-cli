@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -39,6 +40,7 @@ type Model struct {
 	runtime      *orchestrator.Runtime
 	askBridge    *askUserBridge
 	askState     *askUserState
+	modelSwitch  *modelSwitchState
 	snapshot     orchestrator.UISnapshot
 	events       []orchestrator.UIEvent
 	viewport     viewport.Model   // 事件流 viewport
@@ -135,6 +137,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitPending = false
 			return m.handleAskUserKey(msg)
 		}
+		if m.modelSwitch != nil {
+			if msg.Type == tea.KeyCtrlC {
+				if m.quitPending {
+					return m, tea.Quit
+				}
+				m.quitPending = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+			}
+			m.quitPending = false
+			return m.handleModelSwitchKey(msg)
+		}
 		// 双次 Ctrl+C 退出
 		if msg.Type == tea.KeyCtrlC {
 			if m.quitPending {
@@ -165,6 +178,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
 				return m, nil
+			}
+			if cmd, ok := parseSlashCommand(text); ok {
+				m.textarea.Reset()
+				return m.handleSlashCommand(cmd)
 			}
 			m.textarea.Reset()
 			switch m.mode {
@@ -233,6 +250,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
+		// 弹窗打开时屏蔽鼠标，避免底层面板高亮乱跳
+		if m.modelSwitch != nil || m.askState != nil {
+			return m, nil
+		}
 		if pane, ok := m.paneAtMouse(msg.X, msg.Y); ok {
 			m.hoverPane = pane
 			m.hoverActive = true
@@ -476,7 +497,7 @@ func (m *Model) bodyHeight() int {
 		return 20
 	}
 	topH := 1
-	inputH := 6 // top border + 输入行 + bottom border + 空行 + 提示行 + \n
+	inputH := 6
 	bodyH := m.height - topH - inputH
 	if bodyH < 3 {
 		bodyH = 3
@@ -543,6 +564,12 @@ func (m Model) View() string {
 	}
 
 	view := lipgloss.JoinVertical(lipgloss.Left, topBar, body, inputBox)
+
+	// 弹窗覆盖叠加：浮在 body 底部上方，不影响布局
+	if m.modelSwitch != nil {
+		commandBar := renderModelSwitchBar(m.width, m.modelSwitch)
+		view = overlayAboveInput(view, commandBar, inputH)
+	}
 	if m.askState != nil {
 		return renderAskUserModal(m.width, m.height, m.askState)
 	}
@@ -631,6 +658,96 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
+	switch cmd.name {
+	case "model":
+		roleHint := ""
+		if len(cmd.args) > 0 {
+			roleHint = cmd.args[0]
+			if normalizeRoleKey(roleHint) == "" {
+				m.events = append(m.events, orchestrator.UIEvent{
+					Time: time.Now(), Category: "ERROR", Summary: "未知角色：" + roleHint, Level: "error",
+				})
+				m.refreshEventViewport()
+				return m, nil
+			}
+		}
+		m.modelSwitch = newModelSwitchState(m.runtime, roleHint)
+		m.textarea.Blur()
+		return m, nil
+	default:
+		m.events = append(m.events, orchestrator.UIEvent{
+			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
+		})
+		m.refreshEventViewport()
+		return m, nil
+	}
+}
+
+func (m Model) handleModelSwitchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.modelSwitch == nil {
+		return m, nil
+	}
+	state := m.modelSwitch
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.modelSwitch = nil
+		if m.mode != modeDone {
+			return m, m.textarea.Focus()
+		}
+		return m, nil
+	case tea.KeyTab, tea.KeyDown:
+		state.moveFocus(1)
+		return m, nil
+	case tea.KeyShiftTab, tea.KeyUp:
+		state.moveFocus(-1)
+		return m, nil
+	case tea.KeyLeft:
+		state.cycle(-1, m.runtime)
+		return m, nil
+	case tea.KeyRight:
+		state.cycle(1, m.runtime)
+		return m, nil
+	case tea.KeyEnter:
+		if err := state.apply(m.runtime); err != nil {
+			state.message = err.Error()
+			return m, nil
+		}
+		m.modelSwitch = nil
+		if m.mode != modeDone {
+			return m, tea.Batch(m.textarea.Focus(), fetchSnapshot(m.runtime))
+		}
+		return m, fetchSnapshot(m.runtime)
+	default:
+		return m, nil
+	}
+}
+
+// overlayAboveInput 将 overlay 浮动叠加在 base 视图的底部（inputBox 上方），
+// 不改变整体布局高度。仅覆盖 overlay 卡片自身宽度，右侧透出底层内容。
+func overlayAboveInput(base, overlay string, inputLineCount int) string {
+	baseLines := strings.Split(base, "\n")
+	overLines := strings.Split(strings.TrimRight(overlay, "\n"), "\n")
+
+	endY := len(baseLines) - inputLineCount
+	startY := endY - len(overLines)
+	if startY < 0 {
+		startY = 0
+	}
+
+	for i, ol := range overLines {
+		y := startY + i
+		if y >= 0 && y < endY {
+			olW := lipgloss.Width(ol)
+			// 截掉基线左侧 olW 个可见字符，拼接 overlay + 剩余右侧内容
+			right := ansi.TruncateLeft(baseLines[y], olW, "")
+			baseLines[y] = ol + right
+		}
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 // isCSILeak 检测 KeyRunes 是否为 CSI 转义序列泄漏的残片。

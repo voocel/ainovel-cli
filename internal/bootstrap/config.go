@@ -3,13 +3,15 @@ package bootstrap
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // ProviderConfig 定义单个 LLM 提供商的凭证。
 type ProviderConfig struct {
-	Type    string `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini），自定义代理时指定
-	APIKey  string `json:"api_key,omitempty"`  // API Key
-	BaseURL string `json:"base_url,omitempty"` // API Base URL
+	Type    string   `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini），自定义代理时指定
+	APIKey  string   `json:"api_key,omitempty"`  // API Key
+	BaseURL string   `json:"base_url,omitempty"` // API Base URL
+	Models  []string `json:"models,omitempty"`   // 可选模型列表，供 TUI 切换时展示
 }
 
 // RequiresAPIKey 返回该 provider 是否必须显式配置 api_key。
@@ -164,4 +166,38 @@ func (c *Config) FillDefaults() {
 	if c.ContextWindow <= 0 {
 		c.ContextWindow = 128000
 	}
+}
+
+// CandidateModels 返回某个 provider 下可供切换的模型列表。
+// 优先使用 provider 显式声明的 models；同时补充当前配置中已出现过的该 provider 模型。
+func (c Config) CandidateModels(provider string) []string {
+	if provider == "" {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	models := make([]string, 0, 4)
+	add := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			return
+		}
+		seen[model] = true
+		models = append(models, model)
+	}
+
+	if pc, ok := c.Providers[provider]; ok {
+		for _, model := range pc.Models {
+			add(model)
+		}
+	}
+	if c.Provider == provider {
+		add(c.ModelName)
+	}
+	for _, rc := range c.Roles {
+		if rc.Provider == provider {
+			add(rc.Model)
+		}
+	}
+	return models
 }

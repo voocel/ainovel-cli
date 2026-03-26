@@ -1,11 +1,13 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,14 +48,14 @@ type UISnapshot struct {
 	IsRunning         bool
 
 	// 基础设定
-	Premise           string            // 前提概要
-	Outline           []OutlineSnapshot // 大纲（每章标题 + 核心事件）
-	Characters        []string          // 角色列表（名字 + 身份）
-	Layered          bool   // 是否分层模式（滚动规划）
-	CurrentVolumeArc string // 当前卷弧位置（如"第1卷·第1弧"）
-	NextVolumeTitle  string // 下一卷预览标题（如有）
-	CompassDirection string // 终局方向
-	CompassScale     string // 预估规模
+	Premise          string            // 前提概要
+	Outline          []OutlineSnapshot // 大纲（每章标题 + 核心事件）
+	Characters       []string          // 角色列表（名字 + 身份）
+	Layered          bool              // 是否分层模式（滚动规划）
+	CurrentVolumeArc string            // 当前卷弧位置（如"第1卷·第1弧"）
+	NextVolumeTitle  string            // 下一卷预览标题（如有）
+	CompassDirection string            // 终局方向
+	CompassScale     string            // 预估规模
 
 	// 详情区
 	LastCommitSummary  string
@@ -69,10 +71,10 @@ type OutlineSnapshot struct {
 	CoreEvent string
 }
 
-
 // Runtime 封装协调器生命周期，提供 TUI 所需的非阻塞接口。
 type Runtime struct {
 	cfg         bootstrap.Config
+	models      *bootstrap.ModelSet
 	store       *storepkg.Store
 	coordinator *agentcore.Agent
 	askUser     *tools.AskUserTool
@@ -128,6 +130,7 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 
 	rt := &Runtime{
 		cfg:         cfg,
+		models:      models,
 		store:       store,
 		coordinator: coordinator,
 		askUser:     askUser,
@@ -304,15 +307,15 @@ func (rt *Runtime) Steer(text string) {
 
 // Snapshot 读取 store 聚合为状态快照。
 func (rt *Runtime) Snapshot() UISnapshot {
+	rt.mu.Lock()
+	currentProvider, currentModel, _ := rt.models.CurrentSelection("default")
 	snap := UISnapshot{
 		NovelName: rt.cfg.NovelName,
-		Provider:  rt.cfg.Provider,
-		ModelName: rt.cfg.ModelName,
+		Provider:  currentProvider,
+		ModelName: currentModel,
 		Style:     rt.cfg.Style,
+		IsRunning: rt.running,
 	}
-
-	rt.mu.Lock()
-	snap.IsRunning = rt.running
 	rt.mu.Unlock()
 
 	progress, _ := rt.store.LoadProgress()
@@ -346,6 +349,145 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	rt.fillDetails(&snap, progress)
 
 	return snap
+}
+
+// ConfiguredProviders 返回已配置的 provider 列表。
+func (rt *Runtime) ConfiguredProviders() []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	providers := make([]string, 0, len(rt.cfg.Providers))
+	for name := range rt.cfg.Providers {
+		providers = append(providers, name)
+	}
+	sort.Strings(providers)
+	return providers
+}
+
+// ConfiguredModels 返回某个 provider 下已配置的模型列表。
+func (rt *Runtime) ConfiguredModels(provider string) []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	models := rt.cfg.CandidateModels(provider)
+	return append([]string(nil), models...)
+}
+
+// CurrentModelSelection 返回指定 role 当前生效的 provider/model。
+// role 为空或 "default" 时返回默认模型。
+func (rt *Runtime) CurrentModelSelection(role string) (provider, model string, explicit bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.models.CurrentSelection(role)
+}
+
+// SwitchModel 热切换默认模型或指定角色模型。
+// role 为空或 "default" 时更新默认模型；否则写入角色级会话覆盖。
+func (rt *Runtime) SwitchModel(role, provider, model string) error {
+	role = strings.TrimSpace(role)
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return fmt.Errorf("provider 不能为空")
+	}
+	if model == "" {
+		return fmt.Errorf("model 不能为空")
+	}
+	if role == "" {
+		role = "default"
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	if err := rt.models.Swap(role, provider, model); err != nil {
+		return err
+	}
+
+	if role == "default" {
+		rt.cfg.Provider = provider
+		rt.cfg.ModelName = model
+		if err := rt.store.InitRunMeta(rt.cfg.Style, provider, model); err != nil {
+			slog.Warn("更新运行元信息失败", "module", "runtime", "err", err)
+		}
+	} else {
+		if rt.cfg.Roles == nil {
+			rt.cfg.Roles = make(map[string]bootstrap.RoleConfig)
+		}
+		rt.cfg.Roles[role] = bootstrap.RoleConfig{
+			Provider: provider,
+			Model:    model,
+		}
+	}
+
+	// 持久化到全局配置文件（增量合并，不覆盖无关字段）
+	if err := persistModelChange(role, provider, model, rt.cfg); err != nil {
+		slog.Warn("持久化模型配置失败", "module", "runtime", "err", err)
+	}
+
+	summary := fmt.Sprintf("模型已切换：%s -> %s/%s", roleLabel(role), provider, model)
+	slog.Info("模型切换", "module", "runtime", "role", role, "provider", provider, "model", model)
+	rt.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "success"})
+	return nil
+}
+
+// persistModelChange 增量更新全局配置文件中的模型设置。
+// 从磁盘读取现有配置，仅覆盖 provider/model 或 roles 字段，再写回。
+func persistModelChange(role, provider, model string, baseline bootstrap.Config) error {
+	cfgPath := bootstrap.DefaultConfigPath()
+	if cfgPath == "" {
+		return fmt.Errorf("无法确定配置文件路径")
+	}
+	return persistModelChangeToPath(cfgPath, role, provider, model, baseline)
+}
+
+func persistModelChangeToPath(cfgPath, role, provider, model string, baseline bootstrap.Config) error {
+	cfg, err := bootstrap.LoadConfigFile(cfgPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("读取全局配置失败: %w", err)
+		}
+		cfg = baseline
+	}
+
+	if role == "default" {
+		cfg.Provider = provider
+		cfg.ModelName = model
+	} else {
+		if cfg.Roles == nil {
+			cfg.Roles = make(map[string]bootstrap.RoleConfig)
+		}
+		cfg.Roles[role] = bootstrap.RoleConfig{Provider: provider, Model: model}
+	}
+
+	// 确保目标 provider 的凭证配置存在。
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]bootstrap.ProviderConfig)
+	}
+	if _, ok := cfg.Providers[provider]; !ok {
+		if pc, exists := baseline.Providers[provider]; exists {
+			cfg.Providers[provider] = pc
+		}
+	}
+
+	return bootstrap.SaveConfig(cfgPath, cfg)
+}
+
+func roleLabel(role string) string {
+	switch role {
+	case "", "default":
+		return "默认"
+	case "coordinator":
+		return "Coordinator"
+	case "architect":
+		return "Architect"
+	case "writer":
+		return "Writer"
+	case "editor":
+		return "Editor"
+	default:
+		return role
+	}
 }
 
 // Events 返回只读事件通道。

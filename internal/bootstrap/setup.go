@@ -164,16 +164,20 @@ func saveExampleConfig() {
   "providers": {
     "openrouter": {
       "api_key": "your-key-here",
-      "base_url": "https://openrouter.ai/api/v1"
+      "base_url": "https://openrouter.ai/api/v1",
+      "models": ["google/gemini-2.5-flash", "google/gemini-2.5-pro"]
     },
     "anthropic": {
-      "api_key": ""
+      "api_key": "",
+      "models": ["claude-sonnet-4"]
     },
     "gemini": {
-      "api_key": ""
+      "api_key": "",
+      "models": ["gemini-2.5-flash", "gemini-2.5-pro"]
     },
     "ollama": {
-      "base_url": "http://localhost:11434"
+      "base_url": "http://localhost:11434",
+      "models": ["qwen3:14b"]
     },
     "bedrock": {
       "base_url": ""

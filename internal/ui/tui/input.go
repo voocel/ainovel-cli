@@ -24,7 +24,7 @@ func renderInputBox(inputView string, snap orchestrator.UISnapshot, outputDir st
 	if quitPending {
 		hints = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Press Ctrl+C again to exit")
 	} else {
-		hints = lipgloss.NewStyle().Foreground(colorDim).Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · ^L 清屏 · Esc 重置 · Enter 发送")
+		hints = lipgloss.NewStyle().Foreground(colorDim).Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · /model 切模型 · ^L 清屏 · Esc 重置 · Enter 发送")
 	}
 	info := buildRightInfo(snap, outputDir)
 

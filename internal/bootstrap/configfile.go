@@ -62,6 +62,12 @@ func LoadConfig(flagPath string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadConfigFile 读取单个 JSON 配置文件，支持 // 行注释。
+// 不做任何合并，仅返回该文件自身的配置。文件不存在时返回错误。
+func LoadConfigFile(path string) (Config, error) {
+	return loadJSONFile(path)
+}
+
 // loadJSONFile 读取 JSON 配置文件，支持 // 行注释。
 // 文件不存在时返回错误（由调用方决定是否忽略）。
 func loadJSONFile(path string) (Config, error) {
@@ -107,6 +113,9 @@ func mergeConfig(base, overlay Config) Config {
 			}
 			if v.BaseURL != "" {
 				existing.BaseURL = v.BaseURL
+			}
+			if len(v.Models) > 0 {
+				existing.Models = append([]string(nil), v.Models...)
 			}
 			base.Providers[k] = existing
 		}
