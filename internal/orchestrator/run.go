@@ -13,7 +13,6 @@ import (
 	"github.com/voocel/agentcore/memory"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -59,9 +58,10 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	// 3. 组装 Coordinator
 	coordinator, askUser := BuildCoordinator(cfg, store, models, bundle, nil)
 	askUser.SetHandler(cliAskUserHandler)
+	sess := newSession(coordinator, store, cfg.Provider, nil, nil, nil)
 
 	// 4. 确定性控制面：事件监听 + FollowUp 注入
-	registerSubscription(coordinator, store, cfg.Provider, nil, nil, nil)
+	sess.bind()
 
 	// 5. 初始化运行元信息（保留已有 SteerHistory）
 	if err := store.InitRunMeta(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -76,14 +76,12 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 			if text == "" {
 				continue
 			}
-			submitSteer(store, coordinator, text)
+			sess.submitSteer(text)
 		}
 	}()
 
 	// 7. 恢复或启动
-	progress, _ := store.LoadProgress()
-	runMeta, _ := store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta, store)
+	recovery := sess.recovery()
 
 	if recovery.IsNew {
 		if err := store.InitProgress(cfg.NovelName, 0); err != nil {
@@ -106,7 +104,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 
 	// 8. 等待完成
 	coordinator.WaitForIdle()
-	finalizeSteerIfIdle(store)
+	sess.finalizeSteerIfIdle()
 
 	// 9. 输出结果
 	finalProgress, _ := store.LoadProgress()
@@ -119,243 +117,91 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	return nil
 }
 
-// registerSubscription 注册 coordinator 事件订阅，包含确定性控制和可选的 UIEvent/Delta 转发。
-func registerSubscription(coordinator *agentcore.Agent, store *storepkg.Store, provider string, emit emitFn, onDelta deltaFn, onClear clearFn) {
-	var lastProgressSummary string
-	agentExt := newFieldExtractor("agent")  // Coordinator → subagent 目标 agent 名称
-	taskExt := newFieldExtractor("task")    // Coordinator → subagent 调度指令
-	subFilter := newStreamFilter("content") // SubAgent：文本透传 + JSON 提取 content
-
-	coordinator.Subscribe(func(ev agentcore.Event) {
-		switch ev.Type {
-		case agentcore.EventToolExecStart:
-			slog.Debug("工具开始", "module", "tool", "name", ev.Tool)
-			if emit != nil {
-				emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".start", Level: "info"})
-			}
-
-		case agentcore.EventToolExecUpdate:
-			if delta, ok := parseStreamDelta(ev); ok {
-				if onDelta != nil {
-					if text := subFilter.Feed(delta); text != "" {
-						onDelta(text)
-					}
-				}
-				return
-			}
-			// SubAgent 重试事件：独立处理，用 warn 级别
-			if retry, ok := parseSubAgentRetry(ev); ok {
-				slog.Warn("SubAgent 重试", "module", "tool", "summary", retry)
-				if emit != nil {
-					emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: retry, Level: "warn"})
-				}
-				return
-			}
-			summary := parseProgressSummary(ev)
-			if summary == "" {
-				return
-			}
-			if summary == lastProgressSummary {
-				return
-			}
-			lastProgressSummary = summary
-			slog.Debug("进度", "module", "tool", "summary", summary)
-			if emit != nil {
-				emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: summary, Level: "info"})
-			}
-
-		case agentcore.EventMessageStart:
-			agentExt.Reset()
-			taskExt.Reset()
-			subFilter.Reset()
-			if onClear != nil {
-				onClear()
-			}
-
-		case agentcore.EventMessageUpdate:
-			if ev.Delta != "" && onDelta != nil {
-				if name := agentExt.Feed(ev.Delta); name != "" {
-					onDelta("\n▸ " + agentLabel(name) + "\n")
-				}
-				if text := taskExt.Feed(ev.Delta); text != "" {
-					onDelta(text)
-				}
-			}
-
-		case agentcore.EventToolExecEnd:
-			lastProgressSummary = ""
-			if ev.IsError {
-				detail := extractToolErrorText(ev.Result)
-				slog.Error("工具执行失败", "module", "tool", "name", ev.Tool, "detail", truncateLog(detail, 120))
-				if emit != nil {
-					summary := ev.Tool + " 执行失败"
-					if detail != "" {
-						summary += ": " + truncateLog(detail, 80)
-					}
-					emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: summary, Level: "error"})
-				}
-				return
-			}
-
-			if ev.Tool == "subagent" {
-				logSubAgentResult(ev.Result, emit)
-				handleFoundationCheck(coordinator, store, emit)
-				committed := handleSubAgentDone(coordinator, store, emit)
-				if !committed {
-					handleUncommittedDraft(coordinator, store, emit)
-				}
-				handleEditorDone(coordinator, store, emit)
-				break
-			}
-
-			if ev.Tool == "novel_context" {
-				if summary := extractLoadingSummary(ev.Result); summary != "" {
-					slog.Info("上下文加载", "module", "tool", "summary", summary)
-					if emit != nil {
-						emit(UIEvent{Time: time.Now(), Category: "CONTEXT", Summary: summary, Level: "info"})
-					}
-				} else {
-					slog.Debug("上下文加载", "module", "tool", "result", truncateLog(string(ev.Result), 200))
-				}
-				if emit != nil {
-					emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: "novel_context.done", Level: "info"})
-				}
-				break
-			}
-
-			slog.Debug("工具完成", "module", "tool", "name", ev.Tool, "result", truncateLog(string(ev.Result), 200))
-			if emit != nil {
-				emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".done", Level: "info"})
-			}
-
-		case agentcore.EventMessageEnd:
-			if ev.Message != nil && ev.Message.GetRole() == agentcore.RoleAssistant {
-				slog.Debug("assistant", "module", "agent", "text", truncateLog(ev.Message.TextContent(), 100))
-				if emit != nil {
-					emit(UIEvent{Time: time.Now(), Category: "AGENT", Summary: truncateLog(ev.Message.TextContent(), 80), Level: "info"})
-				}
-			}
-
-		case agentcore.EventError:
-			slog.Error("provider 错误", "module", "agent", "provider", provider, "err", ev.Err)
-			if emit != nil {
-				emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: fmt.Sprintf("[%s] %v", provider, ev.Err), Level: "error"})
-			}
-
-		case agentcore.EventRetry:
-			if ev.RetryInfo != nil {
-				slog.Warn("重试", "module", "agent", "attempt", ev.RetryInfo.Attempt,
-					"max", ev.RetryInfo.MaxRetries, "err", ev.RetryInfo.Err)
-				if emit != nil {
-					emit(UIEvent{Time: time.Now(), Category: "SYSTEM",
-						Summary: fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err),
-						Level:   "warn"})
-				}
-			}
-		}
-	})
-}
-
-// persistSteer 将干预持久化到 store（不触发 coordinator）。
-func persistSteer(store *storepkg.Store, text string) {
-	slog.Info("用户干预", "module", "steer", "text", text)
-	if err := store.AppendSteerEntry(domain.SteerEntry{
-		Input:     text,
-		Timestamp: time.Now().Format(time.RFC3339),
-	}); err != nil {
-		slog.Error("追加干预记录失败", "module", "steer", "err", err)
-	}
-	if err := store.SetPendingSteer(text); err != nil {
-		slog.Error("设置待处理干预失败", "module", "steer", "err", err)
-	}
-	if err := store.SetFlow(domain.FlowSteering); err != nil {
-		slog.Error("设置流程状态失败", "module", "steer", "err", err)
-	}
-}
-
-// submitSteer 提交用户干预（CLI 和 Runtime 共用，仅在 agent 循环运行中时调用）。
-func submitSteer(store *storepkg.Store, coordinator *agentcore.Agent, text string) {
-	persistSteer(store, text)
-	runMeta, err := store.LoadRunMeta()
-	if err != nil {
-		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)
-	}
-	guidance := planningTierGuidance(runMeta)
-	message := fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
-	if guidance != "" {
-		message += "\n" + guidance
-	}
-	coordinator.Steer(agentcore.UserMsg(message))
-}
-
 // parseSubAgentRetry 从 EventToolExecUpdate 中提取 SubAgent 转发的重试信息。
 func parseSubAgentRetry(ev agentcore.Event) (string, bool) {
-	if len(ev.Result) == 0 {
+	if ev.Progress == nil || ev.Progress.Kind != agentcore.ProgressRetry {
 		return "", false
 	}
-	var data struct {
-		Agent      string `json:"agent"`
-		Retry      bool   `json:"retry"`
-		Attempt    int    `json:"attempt"`
-		MaxRetries int    `json:"max_retries"`
-		Error      string `json:"error"`
-	}
-	if err := json.Unmarshal(ev.Result, &data); err != nil || !data.Retry {
-		return "", false
-	}
-	msg := truncateLog(data.Error, 80)
-	return fmt.Sprintf("%s 重试 (%d/%d): %s", data.Agent, data.Attempt, data.MaxRetries, msg), true
+	msg := truncateLog(ev.Progress.Message, 80)
+	return fmt.Sprintf("%s 重试 (%d/%d): %s", ev.Progress.Agent, ev.Progress.Attempt, ev.Progress.MaxRetries, msg), true
 }
 
 // parseStreamDelta 从 EventToolExecUpdate 中提取流式 delta 文本。
 func parseStreamDelta(ev agentcore.Event) (string, bool) {
-	if len(ev.Result) == 0 {
+	if ev.Progress == nil || ev.Progress.Kind != agentcore.ProgressToolDelta || ev.Progress.Delta == "" {
 		return "", false
 	}
-	var data struct {
-		Delta string `json:"delta"`
-	}
-	if err := json.Unmarshal(ev.Result, &data); err != nil {
-		return "", false
-	}
-	if data.Delta != "" {
-		return data.Delta, true
-	}
-	return "", false
+	return ev.Progress.Delta, true
 }
 
 // parseProgressSummary 从 EventToolExecUpdate 中提取可读摘要。
 func parseProgressSummary(ev agentcore.Event) string {
-	if len(ev.Result) == 0 {
+	if ev.Progress == nil {
 		return "progress"
 	}
-	var data struct {
-		Agent    string `json:"agent"`
-		Tool     string `json:"tool"`
-		Turn     int    `json:"turn"`
-		Error    bool   `json:"error"`
-		Message  string `json:"message"`
-		Thinking string `json:"thinking"`
+	if summary := summarizeStructuredProgress(ev.Progress); summary != "" || ev.Progress.Kind == agentcore.ProgressThinking {
+		return summary
 	}
-	if err := json.Unmarshal(ev.Result, &data); err != nil {
-		return truncateLog(string(ev.Result), 60)
-	}
-	if data.Thinking != "" && data.Tool == "" {
+	return "progress"
+}
+
+func summarizeStructuredProgress(progress *agentcore.ProgressPayload) string {
+	if progress == nil {
 		return ""
 	}
-	if data.Tool != "" {
-		if data.Error {
-			if data.Message != "" {
-				return fmt.Sprintf("%s → %s (error: %s)", data.Agent, data.Tool, truncateLog(data.Message, 120))
-			}
-			return fmt.Sprintf("%s → %s (error)", data.Agent, data.Tool)
+	switch progress.Kind {
+	case agentcore.ProgressThinking:
+		return ""
+	case agentcore.ProgressToolStart:
+		if progress.Tool != "" {
+			return fmt.Sprintf("%s → %s", progress.Agent, progress.Tool)
 		}
-		return fmt.Sprintf("%s → %s", data.Agent, data.Tool)
+	case agentcore.ProgressToolError:
+		if progress.Tool != "" {
+			if progress.Message != "" {
+				return fmt.Sprintf("%s → %s (error: %s)", progress.Agent, progress.Tool, truncateLog(progress.Message, 120))
+			}
+			return fmt.Sprintf("%s → %s (error)", progress.Agent, progress.Tool)
+		}
+	case agentcore.ProgressTurnCounter:
+		if progress.Agent != "" && progress.Turn > 0 {
+			return fmt.Sprintf("%s turn %d", progress.Agent, progress.Turn)
+		}
+	case agentcore.ProgressSummary:
+		if progress.Summary != "" {
+			return progress.Summary
+		}
 	}
-	if data.Turn > 0 {
-		return fmt.Sprintf("%s turn %d", data.Agent, data.Turn)
+	return ""
+}
+
+func parseToolProgress(ev agentcore.Event) (toolProgress, bool) {
+	if ev.Progress == nil {
+		return toolProgress{}, false
 	}
-	return truncateLog(string(ev.Result), 60)
+	switch ev.Progress.Kind {
+	case agentcore.ProgressToolStart:
+		if ev.Progress.Tool == "" {
+			return toolProgress{}, false
+		}
+		return toolProgress{
+			Agent:   ev.Progress.Agent,
+			Tool:    ev.Progress.Tool,
+			Message: ev.Progress.Message,
+		}, true
+	case agentcore.ProgressToolError:
+		if ev.Progress.Tool == "" {
+			return toolProgress{}, false
+		}
+		return toolProgress{
+			Agent:   ev.Progress.Agent,
+			Tool:    ev.Progress.Tool,
+			Error:   true,
+			Message: ev.Progress.Message,
+		}, true
+	default:
+		return toolProgress{}, false
+	}
 }
 
 // extractLoadingSummary 从 novel_context 的返回 JSON 中提取 _loading_summary 字段。

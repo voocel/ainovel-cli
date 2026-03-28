@@ -77,6 +77,7 @@ type Runtime struct {
 	models      *bootstrap.ModelSet
 	store       *storepkg.Store
 	coordinator *agentcore.Agent
+	session     *session
 	askUser     *tools.AskUserTool
 	events      chan UIEvent
 	streamCh    chan string   // 流式 token channel（独立于 events，避免淹没事件日志）
@@ -140,9 +141,10 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 		done:        make(chan struct{}),
 	}
 	compactEmit = rt.emit
+	rt.session = newSession(coordinator, store, cfg.Provider, rt.emit, rt.emitDelta, rt.emitClear)
 
 	// 注册事件订阅：确定性控制 + UIEvent 转发 + 流式 delta 转发
-	registerSubscription(coordinator, store, cfg.Provider, rt.emit, rt.emitDelta, rt.emitClear)
+	rt.session.bind()
 
 	// 初始化运行元信息
 	if err := store.InitRunMeta(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -245,9 +247,7 @@ func (rt *Runtime) Resume() (string, error) {
 	}
 	rt.mu.Unlock()
 
-	progress, _ := rt.store.LoadProgress()
-	runMeta, _ := rt.store.LoadRunMeta()
-	recovery := determineRecovery(progress, runMeta, rt.store)
+	recovery := rt.session.recovery()
 
 	if recovery.IsNew {
 		return "", nil
@@ -274,13 +274,11 @@ func (rt *Runtime) Steer(text string) {
 	rt.mu.Unlock()
 
 	if wasRunning {
-		submitSteer(rt.store, rt.coordinator, text)
+		rt.session.submitSteer(text)
 	} else {
 		// agent 循环已停止，持久化干预后通过 Prompt 重启
-		persistSteer(rt.store, text)
-		progress, _ := rt.store.LoadProgress()
-		runMeta, _ := rt.store.LoadRunMeta()
-		recovery := determineRecovery(progress, runMeta, rt.store)
+		rt.session.persistSteer(text)
+		recovery := rt.session.recovery()
 		promptText := recovery.PromptText
 		if recovery.IsNew {
 			promptText = fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
@@ -340,7 +338,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
 
 	// 恢复标签
-	recovery := determineRecovery(progress, runMeta, rt.store)
+	recovery := rt.session.recovery()
 	if !recovery.IsNew {
 		snap.RecoveryLabel = recovery.Label
 	}
@@ -503,7 +501,7 @@ func (rt *Runtime) Done() <-chan struct{} {
 // Close 终止 coordinator 并关闭事件通道。
 func (rt *Runtime) Close() {
 	rt.coordinator.AbortSilent()
-	finalizeSteerIfIdle(rt.store)
+	rt.session.finalizeSteerIfIdle()
 	rt.closeOnce.Do(func() {
 		close(rt.events)
 		close(rt.streamCh)
@@ -513,7 +511,7 @@ func (rt *Runtime) Close() {
 
 func (rt *Runtime) waitDone() {
 	rt.coordinator.WaitForIdle()
-	finalizeSteerIfIdle(rt.store)
+	rt.session.finalizeSteerIfIdle()
 	rt.mu.Lock()
 	rt.running = false
 	rt.mu.Unlock()

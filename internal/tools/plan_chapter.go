@@ -34,6 +34,12 @@ func (t *PlanChapterTool) Schema() map[string]any {
 		schema.Property("hook", schema.String("章末钩子")).Required(),
 		schema.Property("emotion_arc", schema.String("情绪曲线")),
 		schema.Property("notes", schema.String("自由备忘（任何你觉得写作时需要记住的东西）")),
+		schema.Property("contract", schema.Object(
+			schema.Property("required_beats", schema.Array("本章必须完成的推进项", schema.String(""))),
+			schema.Property("forbidden_moves", schema.Array("本章明确不能发生的推进", schema.String(""))),
+			schema.Property("continuity_checks", schema.Array("本章需特别核对的连续性点", schema.String(""))),
+			schema.Property("evaluation_focus", schema.Array("Editor 重点检查项", schema.String(""))),
+		)),
 	)
 }
 

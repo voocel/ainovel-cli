@@ -44,6 +44,28 @@ func (s *Store) ClearLastCommit() error {
 	return s.removeFile("meta/last_commit.json")
 }
 
+// SavePendingCommit 保存待恢复的章节提交状态。
+func (s *Store) SavePendingCommit(pending domain.PendingCommit) error {
+	return s.writeJSON("meta/pending_commit.json", pending)
+}
+
+// LoadPendingCommit 读取待恢复的章节提交状态。
+func (s *Store) LoadPendingCommit() (*domain.PendingCommit, error) {
+	var pending domain.PendingCommit
+	if err := s.readJSON("meta/pending_commit.json", &pending); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &pending, nil
+}
+
+// ClearPendingCommit 清除待恢复的章节提交状态。
+func (s *Store) ClearPendingCommit() error {
+	return s.removeFile("meta/pending_commit.json")
+}
+
 // SaveLastReview 保存最近一次审阅结果到 meta/last_review.json，供宿主读取。
 func (s *Store) SaveLastReview(r domain.ReviewEntry) error {
 	return s.writeJSON("meta/last_review.json", r)
@@ -82,7 +104,8 @@ func (s *Store) LoadAndClearLastReview() (*domain.ReviewEntry, error) {
 }
 
 // ClearStaleSignals 清理残留的信号文件。
-// 在进程重启时调用，防止上次崩溃遗留的信号被误消费。
+// 在进程重启时调用，防止上次崩溃遗留的瞬时信号被误消费。
+// pending_commit 用于恢复，不在这里清理。
 func (s *Store) ClearStaleSignals() {
 	_ = s.removeFile("meta/last_commit.json")
 	_ = s.removeFile("meta/last_review.json")

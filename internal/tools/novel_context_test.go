@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -64,4 +65,231 @@ func containsWarning(warnings []string, key string) bool {
 		}
 	}
 	return false
+}
+
+func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.SavePremise("少年踏入修行世界"); err != nil {
+		t.Fatalf("SavePremise: %v", err)
+	}
+	if err := s.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "入门", CoreEvent: "主角进入宗门", Scenes: []string{"拜师", "立誓"}},
+		{Chapter: 2, Title: "试炼", CoreEvent: "参加外门试炼", Scenes: []string{"集合", "出发"}},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.SaveCharacters([]domain.Character{
+		{Name: "林砚", Role: "主角", Description: "少年修士", Arc: "成长", Traits: []string{"冷静"}},
+	}); err != nil {
+		t.Fatalf("SaveCharacters: %v", err)
+	}
+	if err := s.SaveWorldRules([]domain.WorldRule{
+		{Category: "magic", Rule: "灵气可以炼化", Boundary: "凡人不可直接驾驭"},
+	}); err != nil {
+		t.Fatalf("SaveWorldRules: %v", err)
+	}
+	if err := s.InitProgress("test", 2); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.SaveSummary(domain.ChapterSummary{
+		Chapter:    1,
+		Summary:    "主角拜入宗门，确立目标。",
+		Characters: []string{"林砚"},
+		KeyEvents:  []string{"拜师"},
+	}); err != nil {
+		t.Fatalf("SaveSummary: %v", err)
+	}
+	if err := s.SaveFinalChapter(1, "第一章正文结尾，留下试炼悬念。"); err != nil {
+		t.Fatalf("SaveFinalChapter: %v", err)
+	}
+	if err := s.SaveChapterPlan(domain.ChapterPlan{
+		Chapter: 2,
+		Title:   "试炼",
+		Goal:    "通过第一关",
+		Contract: domain.ChapterContract{
+			RequiredBeats:    []string{"必须让主角通过第一关", "必须埋下内门试炼邀请"},
+			ForbiddenMoves:   []string{"不能提前揭露师尊真实身份"},
+			ContinuityChecks: []string{"主角左臂旧伤仍未痊愈"},
+			EvaluationFocus:  []string{"重点检查试炼节奏是否拖沓"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveChapterPlan: %v", err)
+	}
+	if err := s.SaveStyleRules(domain.WritingStyleRules{
+		Volume: 1,
+		Arc:    1,
+		Prose:  []string{"叙述保持克制"},
+	}); err != nil {
+		t.Fatalf("SaveStyleRules: %v", err)
+	}
+	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+		t.Fatalf("SetPlanningTier: %v", err)
+	}
+
+	tool := NewContextTool(s, References{
+		Consistency:      "一致性检查",
+		HookTechniques:   "钩子技巧",
+		QualityChecklist: "质量清单",
+	}, "default")
+	args, err := json.Marshal(map[string]any{"chapter": 2})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, key := range []string{
+		"premise",
+		"outline",
+		"world_rules",
+		"memory_policy",
+		"planning_tier",
+		"working_memory",
+		"episodic_memory",
+		"reference_pack",
+		"current_chapter_outline",
+		"recent_summaries",
+		"chapter_plan",
+		"chapter_contract",
+		"previous_tail",
+		"style_rules",
+		"references",
+	} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("expected key %q in chapter context", key)
+		}
+	}
+}
+
+func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.SavePremise("群像长篇冒险"); err != nil {
+		t.Fatalf("SavePremise: %v", err)
+	}
+	if err := s.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "起点", CoreEvent: "旅途开始"},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.SaveCharacters([]domain.Character{
+		{Name: "沈曜", Role: "主角", Description: "流浪剑客", Arc: "寻找真相", Traits: []string{"敏锐"}},
+	}); err != nil {
+		t.Fatalf("SaveCharacters: %v", err)
+	}
+	if err := s.SaveWorldRules([]domain.WorldRule{
+		{Category: "society", Rule: "城邦林立", Boundary: "皇权不可直辖边地"},
+	}); err != nil {
+		t.Fatalf("SaveWorldRules: %v", err)
+	}
+	if err := s.SaveLayeredOutline([]domain.VolumeOutline{
+		{
+			Index: 1, Title: "第一卷", Theme: "踏上旅途",
+			Arcs: []domain.ArcOutline{
+				{Index: 1, Title: "启程", Goal: "建立队伍", Chapters: []domain.OutlineEntry{{Chapter: 1, Title: "起点"}}},
+				{Index: 2, Title: "迷雾", Goal: "逼近秘密", EstimatedChapters: 5},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveLayeredOutline: %v", err)
+	}
+	if err := s.SaveCompass(domain.StoryCompass{
+		EndingDirection: "揭开古老真相",
+		EstimatedScale:  "预计 3 卷",
+	}); err != nil {
+		t.Fatalf("SaveCompass: %v", err)
+	}
+	if err := s.SaveStyleRules(domain.WritingStyleRules{
+		Volume: 1,
+		Arc:    1,
+		Prose:  []string{"保持冷峻节制"},
+	}); err != nil {
+		t.Fatalf("SaveStyleRules: %v", err)
+	}
+	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+		t.Fatalf("SetPlanningTier: %v", err)
+	}
+
+	tool := NewContextTool(s, References{
+		OutlineTemplate:   "大纲模板",
+		CharacterTemplate: "角色模板",
+		LongformPlanning:  "长篇规划",
+	}, "default")
+	args, err := json.Marshal(map[string]any{})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, key := range []string{
+		"memory_policy",
+		"planning_tier",
+		"planning_memory",
+		"foundation_memory",
+		"reference_pack",
+		"characters",
+		"layered_outline",
+		"skeleton_arcs",
+		"compass",
+		"style_rules",
+		"references",
+		"foundation_status",
+	} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("expected key %q in architect context", key)
+		}
+	}
+}
+
+func TestTrimByBudgetRemovesMirroredMemoryKeys(t *testing.T) {
+	result := map[string]any{
+		"references": map[string]string{
+			"a": strings.Repeat("x", 200),
+			"b": strings.Repeat("y", 200),
+		},
+		"reference_pack": map[string]any{
+			"references": map[string]string{
+				"a": strings.Repeat("x", 200),
+				"b": strings.Repeat("y", 200),
+			},
+			"style_rules": []string{"克制"},
+		},
+	}
+
+	trimByBudget(result, 80)
+
+	if _, ok := result["references"]; ok {
+		t.Fatal("expected top-level references to be trimmed")
+	}
+	pack, ok := result["reference_pack"].(map[string]any)
+	if !ok {
+		t.Fatal("expected reference_pack to remain available")
+	}
+	if _, ok := pack["references"]; ok {
+		t.Fatal("expected mirrored references to be trimmed from reference_pack")
+	}
 }

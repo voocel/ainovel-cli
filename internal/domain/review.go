@@ -34,7 +34,7 @@ type RelationshipEntry struct {
 
 // ConsistencyIssue 一致性问题。
 type ConsistencyIssue struct {
-	Type        string `json:"type"`     // consistency / character / pacing / continuity / foreshadow / hook
+	Type        string `json:"type"`     // consistency / character / pacing / continuity / foreshadow / hook / aesthetic
 	Severity    string `json:"severity"` // critical / error / warning
 	Description string `json:"description"`
 	Suggestion  string `json:"suggestion,omitempty"`
@@ -42,10 +42,10 @@ type ConsistencyIssue struct {
 
 // DimensionScore 单维度评审评分。
 type DimensionScore struct {
-	Dimension string `json:"dimension"`          // consistency / character / pacing / continuity / foreshadow / hook
-	Score     int    `json:"score"`              // 0-100
-	Verdict   string `json:"verdict"`            // pass / warning / fail
-	Comment   string `json:"comment,omitempty"`  // 该维度的简要结论
+	Dimension string `json:"dimension"`         // consistency / character / pacing / continuity / foreshadow / hook / aesthetic
+	Score     int    `json:"score"`             // 0-100
+	Verdict   string `json:"verdict"`           // pass / warning / fail
+	Comment   string `json:"comment,omitempty"` // 该维度的简要结论
 }
 
 // ReviewEntry Editor 的审阅条目。
@@ -53,8 +53,11 @@ type ReviewEntry struct {
 	Chapter          int                `json:"chapter"`
 	Scope            string             `json:"scope"` // chapter / global / arc
 	Issues           []ConsistencyIssue `json:"issues"`
-	Dimensions       []DimensionScore   `json:"dimensions,omitempty"` // 分维度评分
-	Verdict          string             `json:"verdict"`              // accept / polish / rewrite
+	Dimensions       []DimensionScore   `json:"dimensions,omitempty"`      // 分维度评分
+	ContractStatus   string             `json:"contract_status,omitempty"` // met / partial / missed
+	ContractMisses   []string           `json:"contract_misses,omitempty"` // 未达成的 contract 条目
+	ContractNotes    string             `json:"contract_notes,omitempty"`  // 对 contract 履行情况的简述
+	Verdict          string             `json:"verdict"`                   // accept / polish / rewrite
 	Summary          string             `json:"summary"`
 	AffectedChapters []int              `json:"affected_chapters,omitempty"` // 需要重写/打磨的章节号
 }
@@ -79,4 +82,17 @@ func (r *ReviewEntry) ErrorCount() int {
 		}
 	}
 	return n
+}
+
+// Dimension 返回指定维度的评分；不存在则返回 nil。
+func (r *ReviewEntry) Dimension(name string) *DimensionScore {
+	if r == nil {
+		return nil
+	}
+	for i := range r.Dimensions {
+		if r.Dimensions[i].Dimension == name {
+			return &r.Dimensions[i]
+		}
+	}
+	return nil
 }

@@ -78,283 +78,15 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		warnings = append(warnings, msg)
 	}
 
-	// 加载基础设定
-	if premise, err := t.store.LoadPremise(); err == nil && premise != "" {
-		result["premise"] = premise
-	} else {
-		warn("premise", err)
-	}
-	if outline, err := t.store.LoadOutline(); err == nil && outline != nil {
-		result["outline"] = outline
-	} else {
-		warn("outline", err)
-	}
-	if rules, err := t.store.LoadWorldRules(); err == nil && len(rules) > 0 {
-		result["world_rules"] = rules
-	} else {
-		warn("world_rules", err)
-	}
+	t.buildBaseContext(result, warn)
 
 	if a.Chapter > 0 {
-		// 根据总章节数计算上下文策略
-		profile := domain.NewContextProfile(0)
-		progress, err := t.store.LoadProgress()
-		warn("progress", err)
-		runMeta, err := t.store.LoadRunMeta()
-		warn("run_meta", err)
-		if runMeta != nil && runMeta.PlanningTier != "" {
-			result["planning_tier"] = runMeta.PlanningTier
-		}
-		if progress != nil && progress.TotalChapters > 0 {
-			profile = domain.NewContextProfile(progress.TotalChapters)
-		}
-		// Layered 以 Progress 的显式标志为准，而非章节数推断
-		if progress == nil || !progress.Layered {
-			profile.Layered = false
-		}
-
-		// 角色加载：Layered 模式优先用快照，回退到原始设定
-		if profile.Layered {
-			t.loadLayeredCharacters(result, a.Chapter, warn)
-		} else {
-			t.loadFilteredCharacters(result, a.Chapter, warn)
-		}
-
-		// Writer/Editor 模式：加载章节相关上下文
-		currentEntry, currentEntryErr := t.store.GetChapterOutline(a.Chapter)
-		if currentEntryErr == nil {
-			result["current_chapter_outline"] = currentEntry
-		} else {
-			warn("current_chapter_outline", currentEntryErr)
-		}
-
-		// 下一章预告：让 Writer 知道后续走向，便于设计伏笔和章末钩子
-		if next, err := t.store.GetChapterOutline(a.Chapter + 1); err == nil && next != nil {
-			result["next_chapter_outline"] = next
-		}
-
-		// 状态数据统一加载（供 result 赋值和相关章节推荐共用，避免重复 IO）
-		foreshadow, foreshadowErr := t.store.LoadActiveForeshadow()
-		warn("foreshadow_ledger", foreshadowErr)
-		if len(foreshadow) > 0 {
-			result["foreshadow_ledger"] = foreshadow
-		}
-		relationships, relErr := t.store.LoadRelationships()
-		warn("relationship_state", relErr)
-		if len(relationships) > 0 {
-			result["relationship_state"] = relationships
-		}
-		allStateChanges, scErr := t.store.LoadStateChanges()
-		warn("recent_state_changes", scErr)
-		if len(allStateChanges) > 0 {
-			start := max(a.Chapter-2, 1)
-			var recent []domain.StateChange
-			for _, c := range allStateChanges {
-				if c.Chapter >= start && c.Chapter < a.Chapter {
-					recent = append(recent, c)
-				}
-			}
-			if len(recent) > 0 {
-				result["recent_state_changes"] = recent
-			}
-		}
-
-		// 相关章节推荐：长篇模式下根据结构化数据反查与当前章相关的历史章节
-		if progress != nil && progress.TotalChapters > 30 && currentEntry != nil {
-			if related := t.buildRelatedChapters(a.Chapter, currentEntry, foreshadow, relationships, allStateChanges); len(related) > 0 {
-				result["related_chapters"] = related
-			}
-		}
-
-		// 摘要加载：分层 vs 扁平窗口
-		if profile.Layered {
-			t.loadLayeredSummaries(result, a.Chapter, profile.SummaryWindow, warn)
-		} else {
-			if summaries, err := t.store.LoadRecentSummaries(a.Chapter, profile.SummaryWindow); err == nil && len(summaries) > 0 {
-				result["recent_summaries"] = summaries
-			} else {
-				warn("recent_summaries", err)
-			}
-		}
-
-		// 时间线：窗口加载
-		if timeline, err := t.store.LoadRecentTimeline(a.Chapter, profile.TimelineWindow); err == nil && len(timeline) > 0 {
-			result["timeline"] = timeline
-		} else {
-			warn("timeline", err)
-		}
-
-		// Layered 模式：注入当前卷弧位置 + 弧目标/卷主题 + 弧内进度
-		if profile.Layered && progress != nil {
-			pos := map[string]any{
-				"volume": progress.CurrentVolume,
-				"arc":    progress.CurrentArc,
-			}
-			if volumes, err := t.store.LoadLayeredOutline(); err == nil {
-				globalCh := 1
-				for _, v := range volumes {
-					if v.Index == progress.CurrentVolume {
-						pos["volume_title"] = v.Title
-						pos["volume_theme"] = v.Theme
-					}
-					for _, arc := range v.Arcs {
-						if v.Index == progress.CurrentVolume && arc.Index == progress.CurrentArc {
-							pos["arc_title"] = arc.Title
-							pos["arc_goal"] = arc.Goal
-							if n := len(arc.Chapters); n > 0 {
-								pos["arc_total_chapters"] = n
-								pos["arc_chapter_index"] = a.Chapter - globalCh + 1
-							}
-						}
-						globalCh += len(arc.Chapters)
-					}
-				}
-			} else {
-				warn("layered_outline", err)
-			}
-			result["position"] = pos
-		}
-
-		// 加载进度状态和节奏追踪
-		if progress != nil {
-			checkpoint := map[string]any{
-				"in_progress_chapter": progress.InProgressChapter,
-			}
-			if len(progress.StrandHistory) > 0 {
-				checkpoint["strand_history"] = progress.StrandHistory
-			}
-			if len(progress.HookHistory) > 0 {
-				checkpoint["hook_history"] = progress.HookHistory
-			}
-			result["checkpoint"] = checkpoint
-		}
-		// 加载已有的章节构思
-		if plan, err := t.store.LoadChapterPlan(a.Chapter); err == nil && plan != nil {
-			result["chapter_plan"] = plan
-		} else {
-			warn("chapter_plan", err)
-		}
-
-		// 前章尾部：嵌入前一章末尾 ~800 字，Writer 无需额外调用 read_chapter 获取衔接上文
-		if a.Chapter > 1 {
-			if prevText, err := t.store.LoadChapterText(a.Chapter - 1); err == nil && prevText != "" {
-				runes := []rune(prevText)
-				if len(runes) > 800 {
-					runes = runes[len(runes)-800:]
-				}
-				result["previous_tail"] = string(runes)
-			}
-		}
-
-		// 写作风格：规则优先，无规则时回退到原文片段
-		styleRules, styleErr := t.store.LoadStyleRules()
-		warn("style_rules", styleErr)
-		if styleRules != nil {
-			result["style_rules"] = styleRules
-		} else {
-			// 风格锚点：从前文提取代表性段落
-			if anchors := t.store.ExtractStyleAnchors(3); len(anchors) > 0 {
-				result["style_anchors"] = anchors
-			}
-
-			// 角色声纹：提取出场角色的对话原文片段
-			if currentEntry != nil {
-				var voiceSamples []map[string]any
-				chars, _ := t.store.LoadCharacters()
-				for _, c := range chars {
-					// 只为 core/important 角色提取声纹
-					if c.Tier == "secondary" || c.Tier == "decorative" {
-						continue
-					}
-					samples := t.store.ExtractDialogue(c.Name, c.Aliases, 3)
-					if len(samples) > 0 {
-						voiceSamples = append(voiceSamples, map[string]any{
-							"character": c.Name,
-							"samples":   samples,
-						})
-					}
-					if len(voiceSamples) >= 5 {
-						break
-					}
-				}
-				if len(voiceSamples) > 0 {
-					result["voice_samples"] = voiceSamples
-				}
-			}
-		}
-
-		// 写作参考资料分阶段加载
-		result["references"] = t.writerReferences(a.Chapter)
+		seed := newChapterContextEnvelope()
+		state := t.prepareChapterContext(a.Chapter, &seed, result, warn)
+		seed.apply(result)
+		t.buildChapterContext(result, state, warn)
 	} else {
-		runMeta, err := t.store.LoadRunMeta()
-		warn("run_meta", err)
-		if runMeta != nil && runMeta.PlanningTier != "" {
-			result["planning_tier"] = runMeta.PlanningTier
-		}
-		// Architect 模式：全量角色 + 模板
-		if chars, err := t.store.LoadCharacters(); err == nil && chars != nil {
-			result["characters"] = chars
-		} else {
-			warn("characters", err)
-		}
-		// Architect 模式下也加载分层大纲（弧级规划需要看全貌）
-		if layered, err := t.store.LoadLayeredOutline(); err == nil && len(layered) > 0 {
-			result["layered_outline"] = layered
-			// 标注骨架弧（未展开的弧）
-			var skeletonArcs []map[string]any
-			for _, v := range layered {
-				for _, a := range v.Arcs {
-					if !a.IsExpanded() {
-						skeletonArcs = append(skeletonArcs, map[string]any{
-							"volume":             v.Index,
-							"arc":                a.Index,
-							"title":              a.Title,
-							"goal":               a.Goal,
-							"estimated_chapters": a.EstimatedChapters,
-						})
-					}
-				}
-			}
-			if len(skeletonArcs) > 0 {
-				result["skeleton_arcs"] = skeletonArcs
-			}
-		} else {
-			warn("layered_outline", err)
-		}
-		// 加载终局方向指南针
-		if compass, err := t.store.LoadCompass(); err == nil && compass != nil {
-			result["compass"] = compass
-		} else {
-			warn("compass", err)
-		}
-		// 加载已有的弧摘要（弧级规划/展开时需要参考前续弧的内容）
-		if volSummaries, err := t.store.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
-			result["volume_summaries"] = volSummaries
-		} else {
-			warn("volume_summaries", err)
-		}
-		// 加载角色快照（展开下一弧时参考角色当前状态）
-		if snapshots, err := t.store.LoadLatestSnapshots(); err == nil && len(snapshots) > 0 {
-			result["character_snapshots"] = snapshots
-		} else {
-			warn("character_snapshots", err)
-		}
-		// 加载活跃伏笔（展开时安排回收时机）
-		if foreshadow, err := t.store.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
-			result["foreshadow_ledger"] = foreshadow
-		} else {
-			warn("foreshadow_ledger", err)
-		}
-		// 加载风格规则（展开时保持风格一致性）
-		if styleRules, err := t.store.LoadStyleRules(); err == nil && styleRules != nil {
-			result["style_rules"] = styleRules
-		} else {
-			warn("style_rules", err)
-		}
-		result["references"] = t.architectReferences()
-
-		// 基础设定完备性检查
-		result["foundation_status"] = t.foundationStatus()
+		t.buildArchitectContext(result, warn)
 	}
 
 	if len(warnings) > 0 {
@@ -407,6 +139,19 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 		items = append(items, fmt.Sprintf("角色:%d", n))
 	}
 
+	if working, ok := result["working_memory"].(map[string]any); ok && len(working) > 0 {
+		items = append(items, fmt.Sprintf("工作记忆:%d", len(working)))
+	}
+	if episodic, ok := result["episodic_memory"].(map[string]any); ok && len(episodic) > 0 {
+		items = append(items, fmt.Sprintf("情节记忆:%d", len(episodic)))
+	}
+	if planning, ok := result["planning_memory"].(map[string]any); ok && len(planning) > 0 {
+		items = append(items, fmt.Sprintf("规划记忆:%d", len(planning)))
+	}
+	if foundation, ok := result["foundation_memory"].(map[string]any); ok && len(foundation) > 0 {
+		items = append(items, fmt.Sprintf("基础记忆:%d", len(foundation)))
+	}
+
 	// 分层摘要
 	if n := countSlice("volume_summaries"); n > 0 {
 		items = append(items, fmt.Sprintf("卷摘要:%d", n))
@@ -449,6 +194,12 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 	// 参考资料
 	if refs, ok := result["references"].(map[string]string); ok && len(refs) > 0 {
 		items = append(items, fmt.Sprintf("参考:%d项", len(refs)))
+	}
+	if pack, ok := result["reference_pack"].(map[string]any); ok && len(pack) > 0 {
+		items = append(items, fmt.Sprintf("参考包:%d", len(pack)))
+	}
+	if _, ok := result["memory_policy"]; ok {
+		items = append(items, "记忆策略:ok")
 	}
 	if warnings, ok := result["_warnings"].([]string); ok && len(warnings) > 0 {
 		items = append(items, fmt.Sprintf("告警:%d", len(warnings)))
@@ -713,7 +464,7 @@ func trimByBudget(result map[string]any, budget int) {
 		if _, ok := result[key]; !ok {
 			continue
 		}
-		delete(result, key)
+		deleteContextKey(result, key)
 		trimmed = append(trimmed, key)
 		data, err = json.Marshal(result)
 		if err != nil || len(data) <= budget {
@@ -722,6 +473,23 @@ func trimByBudget(result map[string]any, budget int) {
 	}
 	if len(trimmed) > 0 {
 		result["_trimmed"] = trimmed
+	}
+}
+
+func deleteContextKey(result map[string]any, key string) {
+	delete(result, key)
+	for _, containerKey := range []string{
+		"working_memory",
+		"episodic_memory",
+		"planning_memory",
+		"foundation_memory",
+		"reference_pack",
+	} {
+		section, ok := result[containerKey].(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(section, key)
 	}
 }
 

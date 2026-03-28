@@ -3,13 +3,23 @@ package domain
 // ChapterPlan 章节写作构思，Writer 自主生成。
 // 不再强制场景拆分，Agent 自己决定如何组织内容。
 type ChapterPlan struct {
-	Chapter    int    `json:"chapter"`
-	Title      string `json:"title"`
-	Goal       string `json:"goal"`
-	Conflict   string `json:"conflict"`
-	Hook       string `json:"hook"`
-	EmotionArc string `json:"emotion_arc,omitempty"`
-	Notes      string `json:"notes,omitempty"` // Agent 的自由备忘
+	Chapter    int             `json:"chapter"`
+	Title      string          `json:"title"`
+	Goal       string          `json:"goal"`
+	Conflict   string          `json:"conflict"`
+	Hook       string          `json:"hook"`
+	EmotionArc string          `json:"emotion_arc,omitempty"`
+	Notes      string          `json:"notes,omitempty"` // Agent 的自由备忘
+	Contract   ChapterContract `json:"contract,omitempty"`
+}
+
+// ChapterContract 是 Writer 和 Editor 共享的章节验收契约。
+// 它定义本章必须完成的推进项、禁止越界项以及审阅关注点。
+type ChapterContract struct {
+	RequiredBeats    []string `json:"required_beats,omitempty"`    // 本章必须落地的推进项
+	ForbiddenMoves   []string `json:"forbidden_moves,omitempty"`   // 本章明确不能发生的推进
+	ContinuityChecks []string `json:"continuity_checks,omitempty"` // 本章需特别核对的连续性点
+	EvaluationFocus  []string `json:"evaluation_focus,omitempty"`  // Editor 需要重点检查的点
 }
 
 // ChapterSummary 章节摘要，供后续章节的上下文窗口使用。
@@ -94,7 +104,7 @@ type CommitResult struct {
 	VolumeEnd      bool `json:"volume_end,omitempty"`
 	Volume         int  `json:"volume,omitempty"`
 	Arc            int  `json:"arc,omitempty"`
-	NeedsExpansion bool `json:"needs_expansion,omitempty"` // 下一弧是骨架，需要展开章节
+	NeedsExpansion bool `json:"needs_expansion,omitempty"`  // 下一弧是骨架，需要展开章节
 	NeedsNewVolume bool `json:"needs_new_volume,omitempty"` // 需要 Architect 创建下一卷
 	NextVolume     int  `json:"next_volume,omitempty"`      // 下一弧/卷序号
 	NextArc        int  `json:"next_arc,omitempty"`         // 下一弧序号

@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,33 +14,18 @@ import (
 // SwappableModel 是可热切换的 ChatModel 包装器。
 // 已开始的请求继续使用旧实例；后续请求自动切到新实例。
 type SwappableModel struct {
+	*agentcore.SwappableModel
 	mu       sync.RWMutex
-	model    agentcore.ChatModel
 	provider string
 	name     string
 }
 
 func NewSwappableModel(provider, name string, model agentcore.ChatModel) *SwappableModel {
 	return &SwappableModel{
-		model:    model,
-		provider: provider,
-		name:     name,
+		SwappableModel: agentcore.NewSwappableModel(model),
+		provider:       provider,
+		name:           name,
 	}
-}
-
-func (m *SwappableModel) Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	current := m.current()
-	return current.Generate(ctx, messages, tools, opts...)
-}
-
-func (m *SwappableModel) GenerateStream(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	current := m.current()
-	return current.GenerateStream(ctx, messages, tools, opts...)
-}
-
-func (m *SwappableModel) SupportsTools() bool {
-	current := m.current()
-	return current.SupportsTools()
 }
 
 func (m *SwappableModel) ProviderName() string {
@@ -53,7 +37,7 @@ func (m *SwappableModel) ProviderName() string {
 func (m *SwappableModel) Info() llm.ModelInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if info, ok := m.model.(interface{ Info() llm.ModelInfo }); ok {
+	if info, ok := m.SwappableModel.Current().(interface{ Info() llm.ModelInfo }); ok {
 		modelInfo := info.Info()
 		if modelInfo.Name == "" {
 			modelInfo.Name = m.name
@@ -72,7 +56,7 @@ func (m *SwappableModel) Info() llm.ModelInfo {
 func (m *SwappableModel) Swap(provider, name string, model agentcore.ChatModel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.model = model
+	m.SwappableModel.Swap(model)
 	m.provider = provider
 	m.name = name
 }
@@ -81,12 +65,6 @@ func (m *SwappableModel) Current() (provider, name string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.provider, m.name
-}
-
-func (m *SwappableModel) current() agentcore.ChatModel {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.model
 }
 
 // ModelSet 持有按角色分配的模型实例，未配置的角色回退到默认模型。

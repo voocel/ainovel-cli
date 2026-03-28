@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -88,6 +89,13 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	if a.Chapter <= 0 {
 		return nil, fmt.Errorf("chapter must be > 0")
 	}
+	existingPending, err := t.store.LoadPendingCommit()
+	if err != nil {
+		return nil, fmt.Errorf("load pending commit: %w", err)
+	}
+	if existingPending != nil && existingPending.Chapter != a.Chapter {
+		return nil, fmt.Errorf("存在未恢复的章节提交：第 %d 章（阶段 %s），请先恢复或重新提交该章", existingPending.Chapter, existingPending.Stage)
+	}
 	if err := t.store.ValidateChapterCommit(a.Chapter); err != nil {
 		return nil, err
 	}
@@ -99,6 +107,20 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 	if content == "" {
 		return nil, fmt.Errorf("no content found for chapter %d", a.Chapter)
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	pending := domain.PendingCommit{
+		Chapter:        a.Chapter,
+		Stage:          domain.CommitStageStarted,
+		Summary:        a.Summary,
+		HookType:       a.HookType,
+		DominantStrand: a.DominantStrand,
+		StartedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := t.store.SavePendingCommit(pending); err != nil {
+		return nil, fmt.Errorf("save pending commit: %w", err)
 	}
 
 	// 2. 保存终稿
@@ -146,6 +168,11 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		if err := t.store.AppendStateChanges(a.StateChanges); err != nil {
 			return nil, fmt.Errorf("append state changes: %w", err)
 		}
+	}
+	pending.Stage = domain.CommitStageStateApplied
+	pending.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := t.store.SavePendingCommit(pending); err != nil {
+		return nil, fmt.Errorf("update pending commit stage: %w", err)
 	}
 
 	// 5. 更新进度
@@ -211,15 +238,29 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		NextVolume:     nextVol,
 		NextArc:        nextArc,
 	}
+	pending.Stage = domain.CommitStageProgressMarked
+	pending.Result = &result
+	pending.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := t.store.SavePendingCommit(pending); err != nil {
+		return nil, fmt.Errorf("update pending commit result: %w", err)
+	}
 
 	// 8. 写入信号文件
 	if err := t.store.SaveLastCommit(result); err != nil {
 		return nil, fmt.Errorf("save commit signal: %w", err)
 	}
+	pending.Stage = domain.CommitStageSignalSaved
+	pending.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := t.store.SavePendingCommit(pending); err != nil {
+		return nil, fmt.Errorf("update pending commit signal stage: %w", err)
+	}
 
 	// 9. 清除进度中间状态
 	if err := t.store.ClearInProgress(); err != nil {
 		return nil, fmt.Errorf("clear in-progress: %w", err)
+	}
+	if err := t.store.ClearPendingCommit(); err != nil {
+		return nil, fmt.Errorf("clear pending commit: %w", err)
 	}
 
 	return json.Marshal(result)

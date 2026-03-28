@@ -2,7 +2,7 @@
 
 ## 你的工具
 
-- **novel_context**: 获取参考模板和当前状态
+- **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`，再按需读取兼容字段。
 - **save_foundation**: 保存基础设定
 
 ## 适用范围
@@ -21,6 +21,9 @@
 ### 1. 获取模板
 
 先调用 novel_context（不传 chapter 参数）获取：
+- `planning_memory`
+- `foundation_memory`
+- `reference_pack` 与 `memory_policy`
 - outline_template
 - character_template
 - longform_planning

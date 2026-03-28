@@ -107,4 +107,11 @@ func TestCommitChapterAllowsPendingRewrite(t *testing.T) {
 	if len(progress.CompletedChapters) != 1 || progress.CompletedChapters[0] != 2 {
 		t.Fatalf("unexpected completed chapters: %v", progress.CompletedChapters)
 	}
+	pending, err := store.LoadPendingCommit()
+	if err != nil {
+		t.Fatalf("LoadPendingCommit: %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("expected pending commit cleared, got %+v", pending)
+	}
 }

@@ -79,6 +79,29 @@ type ContextProfile struct {
 	Layered        bool // true = 启用分层摘要加载（卷摘要+弧摘要+章摘要）
 }
 
+// MemoryPolicy 表示运行时共享的记忆使用策略。
+// 它既用于上下文输出，也用于宿主层的 handoff / reminder 决策。
+type MemoryPolicy struct {
+	Mode                string `json:"mode,omitempty"`
+	SummaryWindow       int    `json:"summary_window,omitempty"`
+	TimelineWindow      int    `json:"timeline_window,omitempty"`
+	LayeredSummaries    bool   `json:"layered_summaries,omitempty"`
+	SummaryStrategy     string `json:"summary_strategy,omitempty"`
+	WorkingRefresh      string `json:"working_refresh,omitempty"`
+	EpisodicRefresh     string `json:"episodic_refresh,omitempty"`
+	PlanningRefresh     string `json:"planning_refresh,omitempty"`
+	FoundationRefresh   string `json:"foundation_refresh,omitempty"`
+	PlanningFocus       string `json:"planning_focus,omitempty"`
+	FoundationFocus     string `json:"foundation_focus,omitempty"`
+	PreviousTailChars   int    `json:"previous_tail_chars,omitempty"`
+	ChapterPlanEnabled  bool   `json:"chapter_plan_enabled,omitempty"`
+	RelatedLookup       bool   `json:"related_chapter_lookup,omitempty"`
+	CurrentOutlineBound bool   `json:"current_outline_bound,omitempty"`
+	TotalChapters       int    `json:"total_chapters,omitempty"`
+	HandoffPreferred    bool   `json:"handoff_preferred,omitempty"`
+	ReadOnlyThreshold   int    `json:"read_only_threshold,omitempty"`
+}
+
 // NewContextProfile 根据总章节数计算上下文策略。
 func NewContextProfile(totalChapters int) ContextProfile {
 	switch {
@@ -88,6 +111,63 @@ func NewContextProfile(totalChapters int) ContextProfile {
 		return ContextProfile{SummaryWindow: 5, TimelineWindow: 8}
 	default:
 		return ContextProfile{SummaryWindow: 3, TimelineWindow: 5, Layered: true}
+	}
+}
+
+// NewChapterMemoryPolicy 根据进度与上下文策略生成章节运行时记忆策略。
+func NewChapterMemoryPolicy(progress *Progress, profile ContextProfile, currentOutlineBound bool) MemoryPolicy {
+	policy := MemoryPolicy{
+		Mode:                "chapter",
+		SummaryWindow:       profile.SummaryWindow,
+		TimelineWindow:      profile.TimelineWindow,
+		LayeredSummaries:    profile.Layered,
+		WorkingRefresh:      "每次按章节加载时刷新",
+		EpisodicRefresh:     "随章节提交、评审和长篇状态变更刷新",
+		PreviousTailChars:   800,
+		ChapterPlanEnabled:  true,
+		CurrentOutlineBound: currentOutlineBound,
+		ReadOnlyThreshold:   5,
+	}
+	if profile.Layered {
+		policy.SummaryStrategy = "卷摘要+弧摘要+最近章节摘要"
+	} else {
+		policy.SummaryStrategy = "最近章节摘要"
+	}
+	if progress != nil {
+		policy.TotalChapters = progress.TotalChapters
+		if progress.TotalChapters > 30 {
+			policy.RelatedLookup = true
+		}
+		if progress.Flow == FlowReviewing || progress.Flow == FlowRewriting || progress.Flow == FlowPolishing {
+			policy.HandoffPreferred = true
+		}
+		if progress.Layered && len(progress.CompletedChapters) >= 6 {
+			policy.HandoffPreferred = true
+		}
+		if len(progress.CompletedChapters) >= 12 {
+			policy.HandoffPreferred = true
+		}
+		if progress.Layered && len(progress.CompletedChapters) >= 6 {
+			policy.ReadOnlyThreshold = 4
+		}
+		if len(progress.CompletedChapters) >= 12 {
+			policy.ReadOnlyThreshold = 4
+		}
+	}
+	return policy
+}
+
+// NewArchitectMemoryPolicy 返回规划阶段使用的记忆策略。
+func NewArchitectMemoryPolicy() MemoryPolicy {
+	return MemoryPolicy{
+		Mode:               "architect",
+		PlanningRefresh:    "卷弧结构、指南针或摘要更新时刷新",
+		FoundationRefresh:  "角色、伏笔、设定变更时刷新",
+		PlanningFocus:      "分层大纲、指南针、卷摘要",
+		FoundationFocus:    "角色设定、角色快照、伏笔台账",
+		HandoffPreferred:   true,
+		ChapterPlanEnabled: false,
+		ReadOnlyThreshold:  4,
 	}
 }
 
