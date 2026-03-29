@@ -54,7 +54,7 @@ func (t *SaveVolumeSummaryTool) Execute(_ context.Context, args json.RawMessage)
 		Summary:   a.Summary,
 		KeyEvents: a.KeyEvents,
 	}
-	if err := t.store.SaveVolumeSummary(volSummary); err != nil {
+	if err := t.store.Summaries.SaveVolumeSummary(volSummary); err != nil {
 		return nil, fmt.Errorf("save volume summary: %w", err)
 	}
 

@@ -12,13 +12,13 @@ func setupLayered(t *testing.T, volumes []domain.VolumeOutline) *Store {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.InitProgress("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := s.SaveLayeredOutline(volumes); err != nil {
+	if err := s.Outline.SaveLayeredOutline(volumes); err != nil {
 		t.Fatalf("SaveLayeredOutline: %v", err)
 	}
-	if err := s.SetLayered(true); err != nil {
+	if err := s.Progress.SetLayered(true); err != nil {
 		t.Fatalf("SetLayered: %v", err)
 	}
 	return s
@@ -34,7 +34,7 @@ func TestCheckArcBoundaryNeedsNewVolume(t *testing.T) {
 		}},
 	}})
 
-	b, err := s.CheckArcBoundary(1) // 第 1 章 = 弧/卷最后一章
+	b, err := s.Outline.CheckArcBoundary(1) // 第 1 章 = 弧/卷最后一章
 	if err != nil {
 		t.Fatalf("CheckArcBoundary: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestCheckArcBoundaryFinalVolume(t *testing.T) {
 		}},
 	}})
 
-	b, err := s.CheckArcBoundary(1)
+	b, err := s.Outline.CheckArcBoundary(1)
 	if err != nil {
 		t.Fatalf("CheckArcBoundary: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCheckArcBoundaryNextArcInSameVolume(t *testing.T) {
 		},
 	}})
 
-	b, err := s.CheckArcBoundary(1)
+	b, err := s.Outline.CheckArcBoundary(1)
 	if err != nil {
 		t.Fatalf("CheckArcBoundary: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestSaveAndLoadCompass(t *testing.T) {
 	}
 
 	// 空 direction 应失败
-	if err := s.SaveCompass(domain.StoryCompass{EstimatedScale: "3 卷"}); err == nil {
+	if err := s.Outline.SaveCompass(domain.StoryCompass{EstimatedScale: "3 卷"}); err == nil {
 		t.Fatal("expected error for empty ending_direction")
 	}
 
@@ -185,11 +185,11 @@ func TestSaveAndLoadCompass(t *testing.T) {
 		EstimatedScale:  "预计 4-6 卷",
 		LastUpdated:     12,
 	}
-	if err := s.SaveCompass(compass); err != nil {
+	if err := s.Outline.SaveCompass(compass); err != nil {
 		t.Fatalf("SaveCompass: %v", err)
 	}
 
-	loaded, err := s.LoadCompass()
+	loaded, err := s.Outline.LoadCompass()
 	if err != nil {
 		t.Fatalf("LoadCompass: %v", err)
 	}

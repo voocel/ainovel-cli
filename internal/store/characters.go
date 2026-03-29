@@ -8,18 +8,30 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// SaveCharacters 同时保存 characters.json 和 characters.md。
-func (s *Store) SaveCharacters(chars []domain.Character) error {
-	if err := s.writeJSON("characters.json", chars); err != nil {
-		return err
-	}
-	return s.writeMarkdown("characters.md", renderCharacters(chars))
+// CharacterStore 管理角色档案和状态快照。
+type CharacterStore struct {
+	io      *IO
+	outline *OutlineStore // 只读依赖，用于快照遍历
 }
 
-// LoadCharacters 从 characters.json 读取角色档案。
-func (s *Store) LoadCharacters() ([]domain.Character, error) {
+func NewCharacterStore(io *IO, outline *OutlineStore) *CharacterStore {
+	return &CharacterStore{io: io, outline: outline}
+}
+
+// Save 同时保存 characters.json 和 characters.md（原子写入）。
+func (s *CharacterStore) Save(chars []domain.Character) error {
+	return s.io.WithWriteLock(func() error {
+		if err := s.io.WriteJSONUnlocked("characters.json", chars); err != nil {
+			return err
+		}
+		return s.io.WriteMarkdownUnlocked("characters.md", renderCharacters(chars))
+	})
+}
+
+// Load 从 characters.json 读取角色档案。
+func (s *CharacterStore) Load() ([]domain.Character, error) {
 	var chars []domain.Character
-	if err := s.readJSON("characters.json", &chars); err != nil {
+	if err := s.io.ReadJSON("characters.json", &chars); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -28,15 +40,15 @@ func (s *Store) LoadCharacters() ([]domain.Character, error) {
 	return chars, nil
 }
 
-// SaveCharacterSnapshots 保存角色状态快照到 meta/snapshots/v{vol}a{arc}.json。
-func (s *Store) SaveCharacterSnapshots(volume, arc int, snapshots []domain.CharacterSnapshot) error {
-	return s.writeJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), snapshots)
+// SaveSnapshots 保存角色状态快照到 meta/snapshots/v{vol}a{arc}.json。
+func (s *CharacterStore) SaveSnapshots(volume, arc int, snapshots []domain.CharacterSnapshot) error {
+	return s.io.WriteJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), snapshots)
 }
 
 // LoadSnapshots 读取指定卷弧的角色快照。
-func (s *Store) LoadSnapshots(volume, arc int) ([]domain.CharacterSnapshot, error) {
+func (s *CharacterStore) LoadSnapshots(volume, arc int) ([]domain.CharacterSnapshot, error) {
 	var snapshots []domain.CharacterSnapshot
-	if err := s.readJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), &snapshots); err != nil {
+	if err := s.io.ReadJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), &snapshots); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -46,9 +58,8 @@ func (s *Store) LoadSnapshots(volume, arc int) ([]domain.CharacterSnapshot, erro
 }
 
 // LoadLatestSnapshots 加载最近一次角色快照（按卷弧倒序查找）。
-// 从分层大纲获取实际卷弧数量，避免盲扫。
-func (s *Store) LoadLatestSnapshots() ([]domain.CharacterSnapshot, error) {
-	volumes, _ := s.LoadLayeredOutline()
+func (s *CharacterStore) LoadLatestSnapshots() ([]domain.CharacterSnapshot, error) {
+	volumes, _ := s.outline.LoadLayeredOutline()
 	if len(volumes) == 0 {
 		return nil, nil
 	}

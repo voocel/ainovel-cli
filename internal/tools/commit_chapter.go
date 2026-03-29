@@ -89,19 +89,19 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	if a.Chapter <= 0 {
 		return nil, fmt.Errorf("chapter must be > 0")
 	}
-	existingPending, err := t.store.LoadPendingCommit()
+	existingPending, err := t.store.Signals.LoadPendingCommit()
 	if err != nil {
 		return nil, fmt.Errorf("load pending commit: %w", err)
 	}
 	if existingPending != nil && existingPending.Chapter != a.Chapter {
 		return nil, fmt.Errorf("存在未恢复的章节提交：第 %d 章（阶段 %s），请先恢复或重新提交该章", existingPending.Chapter, existingPending.Stage)
 	}
-	if err := t.store.ValidateChapterCommit(a.Chapter); err != nil {
+	if err := t.store.Progress.ValidateChapterCommit(a.Chapter); err != nil {
 		return nil, err
 	}
 
 	// 1. 加载章节正文
-	content, wordCount, err := t.store.LoadChapterContent(a.Chapter)
+	content, wordCount, err := t.store.Drafts.LoadChapterContent(a.Chapter)
 	if err != nil {
 		return nil, fmt.Errorf("load chapter content: %w", err)
 	}
@@ -119,12 +119,12 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		StartedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := t.store.SavePendingCommit(pending); err != nil {
+	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
 		return nil, fmt.Errorf("save pending commit: %w", err)
 	}
 
 	// 2. 保存终稿
-	if err := t.store.SaveFinalChapter(a.Chapter, content); err != nil {
+	if err := t.store.Drafts.SaveFinalChapter(a.Chapter, content); err != nil {
 		return nil, fmt.Errorf("save final chapter: %w", err)
 	}
 
@@ -135,7 +135,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		Characters: a.Characters,
 		KeyEvents:  a.KeyEvents,
 	}
-	if err := t.store.SaveSummary(summary); err != nil {
+	if err := t.store.Summaries.SaveSummary(summary); err != nil {
 		return nil, fmt.Errorf("save summary: %w", err)
 	}
 
@@ -144,12 +144,12 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		for i := range a.TimelineEvents {
 			a.TimelineEvents[i].Chapter = a.Chapter
 		}
-		if err := t.store.AppendTimelineEvents(a.TimelineEvents); err != nil {
+		if err := t.store.World.AppendTimelineEvents(a.TimelineEvents); err != nil {
 			return nil, fmt.Errorf("append timeline: %w", err)
 		}
 	}
 	if len(a.ForeshadowUpdates) > 0 {
-		if err := t.store.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates); err != nil {
+		if err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates); err != nil {
 			return nil, fmt.Errorf("update foreshadow: %w", err)
 		}
 	}
@@ -157,7 +157,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		for i := range a.RelationshipChanges {
 			a.RelationshipChanges[i].Chapter = a.Chapter
 		}
-		if err := t.store.UpdateRelationships(a.RelationshipChanges); err != nil {
+		if err := t.store.World.UpdateRelationships(a.RelationshipChanges); err != nil {
 			return nil, fmt.Errorf("update relationships: %w", err)
 		}
 	}
@@ -165,23 +165,23 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		for i := range a.StateChanges {
 			a.StateChanges[i].Chapter = a.Chapter
 		}
-		if err := t.store.AppendStateChanges(a.StateChanges); err != nil {
+		if err := t.store.World.AppendStateChanges(a.StateChanges); err != nil {
 			return nil, fmt.Errorf("append state changes: %w", err)
 		}
 	}
 	pending.Stage = domain.CommitStageStateApplied
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
-	if err := t.store.SavePendingCommit(pending); err != nil {
+	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
 		return nil, fmt.Errorf("update pending commit stage: %w", err)
 	}
 
 	// 5. 更新进度
-	if err := t.store.MarkChapterComplete(a.Chapter, wordCount, a.HookType, a.DominantStrand); err != nil {
+	if err := t.store.Progress.MarkChapterComplete(a.Chapter, wordCount, a.HookType, a.DominantStrand); err != nil {
 		return nil, fmt.Errorf("mark chapter complete: %w", err)
 	}
 
 	// 6. 判断是否需要审阅
-	progress, err := t.store.LoadProgress()
+	progress, err := t.store.Progress.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load progress: %w", err)
 	}
@@ -194,7 +194,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	var arcEnd, volumeEnd, needsExpansion, needsNewVolume bool
 	var vol, arc, nextVol, nextArc int
 	if progress != nil && progress.Layered {
-		boundary, bErr := t.store.CheckArcBoundary(a.Chapter)
+		boundary, bErr := t.store.Outline.CheckArcBoundary(a.Chapter)
 		if bErr != nil {
 			slog.Warn("弧边界检测失败", "module", "commit", "chapter", a.Chapter, "err", bErr)
 		} else if boundary != nil {
@@ -206,7 +206,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			needsNewVolume = boundary.NeedsNewVolume
 			nextVol = boundary.NextVolume
 			nextArc = boundary.NextArc
-			_ = t.store.UpdateVolumeArc(vol, arc)
+			_ = t.store.Progress.UpdateVolumeArc(vol, arc)
 		}
 	}
 
@@ -241,25 +241,25 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	pending.Stage = domain.CommitStageProgressMarked
 	pending.Result = &result
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
-	if err := t.store.SavePendingCommit(pending); err != nil {
+	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
 		return nil, fmt.Errorf("update pending commit result: %w", err)
 	}
 
 	// 8. 写入信号文件
-	if err := t.store.SaveLastCommit(result); err != nil {
+	if err := t.store.Signals.SaveLastCommit(result); err != nil {
 		return nil, fmt.Errorf("save commit signal: %w", err)
 	}
 	pending.Stage = domain.CommitStageSignalSaved
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
-	if err := t.store.SavePendingCommit(pending); err != nil {
+	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
 		return nil, fmt.Errorf("update pending commit signal stage: %w", err)
 	}
 
 	// 9. 清除进度中间状态
-	if err := t.store.ClearInProgress(); err != nil {
+	if err := t.store.Progress.ClearInProgress(); err != nil {
 		return nil, fmt.Errorf("clear in-progress: %w", err)
 	}
-	if err := t.store.ClearPendingCommit(); err != nil {
+	if err := t.store.Signals.ClearPendingCommit(); err != nil {
 		return nil, fmt.Errorf("clear pending commit: %w", err)
 	}
 

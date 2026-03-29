@@ -68,13 +68,13 @@ func TestReminderEngineFoundationIncompleteReminder(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SaveProgress(&domain.Progress{Phase: domain.PhasePremise}); err != nil {
+	if err := s.Progress.Save(&domain.Progress{Phase: domain.PhasePremise}); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.InitRunMeta("default", "openrouter", "gpt-5.4"); err != nil {
+	if err := s.RunMeta.Init("default", "openrouter", "gpt-5.4"); err != nil {
 		t.Fatalf("InitRunMeta: %v", err)
 	}
-	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+	if err := s.RunMeta.SetPlanningTier(domain.PlanningTierLong); err != nil {
 		t.Fatalf("SetPlanningTier: %v", err)
 	}
 
@@ -97,7 +97,7 @@ func TestReminderEngineUncommittedDraftReminder(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SaveProgress(&domain.Progress{
+	if err := s.Progress.Save(&domain.Progress{
 		Phase:             domain.PhaseWriting,
 		CurrentChapter:    2,
 		CompletedChapters: []int{1},
@@ -105,7 +105,7 @@ func TestReminderEngineUncommittedDraftReminder(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.SaveDraft(2, "第2章草稿"); err != nil {
+	if err := s.Drafts.SaveDraft(2, "第2章草稿"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestReminderEngineCommittedSubAgentSkipsUncommittedDraftReminder(t *testing
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SaveProgress(&domain.Progress{
+	if err := s.Progress.Save(&domain.Progress{
 		Phase:             domain.PhaseWriting,
 		CurrentChapter:    2,
 		CompletedChapters: []int{1},
@@ -136,7 +136,7 @@ func TestReminderEngineCommittedSubAgentSkipsUncommittedDraftReminder(t *testing
 	}); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.SaveDraft(2, "第2章草稿"); err != nil {
+	if err := s.Drafts.SaveDraft(2, "第2章草稿"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestReminderEngineUsesMemoryPolicyThreshold(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SaveProgress(&domain.Progress{
+	if err := s.Progress.Save(&domain.Progress{
 		Phase:             domain.PhaseWriting,
 		Flow:              domain.FlowWriting,
 		Layered:           true,

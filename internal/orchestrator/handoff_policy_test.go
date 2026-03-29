@@ -31,10 +31,10 @@ func TestBuildHandoffPack(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.InitProgress("测试小说", 20); err != nil {
+	if err := s.Progress.Init("测试小说", 20); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	progress, err := s.LoadProgress()
+	progress, err := s.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
@@ -43,22 +43,22 @@ func TestBuildHandoffPack(t *testing.T) {
 	progress.CompletedChapters = []int{1, 2, 3, 4, 5, 6}
 	progress.TotalWordCount = 18000
 	progress.ChapterWordCounts = map[int]int{6: 3200}
-	if err := s.SaveProgress(progress); err != nil {
+	if err := s.Progress.Save(progress); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.InitRunMeta("default", "openrouter", "gpt-5.4"); err != nil {
+	if err := s.RunMeta.Init("default", "openrouter", "gpt-5.4"); err != nil {
 		t.Fatalf("InitRunMeta: %v", err)
 	}
-	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+	if err := s.RunMeta.SetPlanningTier(domain.PlanningTierLong); err != nil {
 		t.Fatalf("SetPlanningTier: %v", err)
 	}
-	if err := s.SaveSummary(domain.ChapterSummary{Chapter: 4, Summary: "第四章摘要"}); err != nil {
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 4, Summary: "第四章摘要"}); err != nil {
 		t.Fatalf("SaveSummary 4: %v", err)
 	}
-	if err := s.SaveSummary(domain.ChapterSummary{Chapter: 5, Summary: "第五章摘要"}); err != nil {
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 5, Summary: "第五章摘要"}); err != nil {
 		t.Fatalf("SaveSummary 5: %v", err)
 	}
-	if err := s.SaveSummary(domain.ChapterSummary{Chapter: 6, Summary: "第六章摘要"}); err != nil {
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 6, Summary: "第六章摘要"}); err != nil {
 		t.Fatalf("SaveSummary 6: %v", err)
 	}
 
@@ -95,10 +95,10 @@ func TestSessionRecoveryAppliesHandoff(t *testing.T) {
 		TotalChapters:     20,
 		ChapterWordCounts: map[int]int{6: 3200},
 	}
-	if err := s.SaveProgress(progress); err != nil {
+	if err := s.Progress.Save(progress); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.SaveHandoffPack(domain.HandoffPack{
+	if err := s.World.SaveHandoffPack(domain.HandoffPack{
 		Reason:         "review-ch06-accept",
 		NovelName:      "测试小说",
 		Phase:          "writing",

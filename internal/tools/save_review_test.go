@@ -36,7 +36,7 @@ func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	review, err := s.LoadReview(3)
+	review, err := s.World.LoadReview(3)
 	if err != nil {
 		t.Fatalf("LoadReview: %v", err)
 	}

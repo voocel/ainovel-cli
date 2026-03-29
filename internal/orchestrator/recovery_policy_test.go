@@ -83,10 +83,10 @@ func TestDetermineRecoveryReconcilesPendingCommit(t *testing.T) {
 		TotalWordCount:    4200,
 		TotalChapters:     8,
 	}
-	if err := s.SaveProgress(progress); err != nil {
+	if err := s.Progress.Save(progress); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.SavePendingCommit(domain.PendingCommit{
+	if err := s.Signals.SavePendingCommit(domain.PendingCommit{
 		Chapter: 2,
 		Stage:   domain.CommitStageProgressMarked,
 		Result: &domain.CommitResult{
@@ -109,14 +109,14 @@ func TestDetermineRecoveryReconcilesPendingCommit(t *testing.T) {
 		t.Fatalf("expected editor follow-up prompt, got %q", recovery.PromptText)
 	}
 
-	updated, err := s.LoadProgress()
+	updated, err := s.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
 	if updated.Flow != domain.FlowReviewing {
 		t.Fatalf("expected flow reviewing after reconcile, got %s", updated.Flow)
 	}
-	pending, err := s.LoadPendingCommit()
+	pending, err := s.Signals.LoadPendingCommit()
 	if err != nil {
 		t.Fatalf("LoadPendingCommit: %v", err)
 	}
@@ -138,10 +138,10 @@ func TestDetermineRecoveryKeepsManualPendingCommit(t *testing.T) {
 		TotalWordCount:    4200,
 		TotalChapters:     8,
 	}
-	if err := s.SaveProgress(progress); err != nil {
+	if err := s.Progress.Save(progress); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
-	if err := s.SavePendingCommit(domain.PendingCommit{
+	if err := s.Signals.SavePendingCommit(domain.PendingCommit{
 		Chapter: 2,
 		Stage:   domain.CommitStageStateApplied,
 		Summary: "第2章摘要",
@@ -157,7 +157,7 @@ func TestDetermineRecoveryKeepsManualPendingCommit(t *testing.T) {
 		t.Fatalf("expected manual recovery prompt, got %q", recovery.PromptText)
 	}
 
-	pending, err := s.LoadPendingCommit()
+	pending, err := s.Signals.LoadPendingCommit()
 	if err != nil {
 		t.Fatalf("LoadPendingCommit: %v", err)
 	}

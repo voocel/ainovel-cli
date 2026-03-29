@@ -19,11 +19,11 @@ func TestSaveAndLoadRunMeta(t *testing.T) {
 		Style:     "fantasy",
 		Model:     "gpt-4o",
 	}
-	if err := store.SaveRunMeta(meta); err != nil {
+	if err := store.RunMeta.Save(meta); err != nil {
 		t.Fatalf("SaveRunMeta: %v", err)
 	}
 
-	loaded, err := store.LoadRunMeta()
+	loaded, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestLoadRunMeta_Empty(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	meta, err := store.LoadRunMeta()
+	meta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta on empty: %v", err)
 	}
@@ -57,11 +57,11 @@ func TestAppendSteerEntry(t *testing.T) {
 
 	// 首次追加（meta/run.json 不存在）
 	e1 := domain.SteerEntry{Input: "主角改成女性", Timestamp: "2026-03-07T10:01:00+08:00"}
-	if err := store.AppendSteerEntry(e1); err != nil {
+	if err := store.RunMeta.AppendSteerEntry(e1); err != nil {
 		t.Fatalf("AppendSteerEntry 1: %v", err)
 	}
 
-	meta, _ := store.LoadRunMeta()
+	meta, _ := store.RunMeta.Load()
 	if len(meta.SteerHistory) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(meta.SteerHistory))
 	}
@@ -71,9 +71,9 @@ func TestAppendSteerEntry(t *testing.T) {
 
 	// 追加第二条
 	e2 := domain.SteerEntry{Input: "加入反转", Timestamp: "2026-03-07T10:02:00+08:00"}
-	_ = store.AppendSteerEntry(e2)
+	_ = store.RunMeta.AppendSteerEntry(e2)
 
-	meta, _ = store.LoadRunMeta()
+	meta, _ = store.RunMeta.Load()
 	if len(meta.SteerHistory) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(meta.SteerHistory))
 	}
@@ -96,7 +96,7 @@ func TestAppendSteerEntryConcurrent(t *testing.T) {
 				Input:     fmt.Sprintf("steer-%02d", i),
 				Timestamp: fmt.Sprintf("ts-%02d", i),
 			}
-			if err := store.AppendSteerEntry(entry); err != nil {
+			if err := store.RunMeta.AppendSteerEntry(entry); err != nil {
 				t.Errorf("AppendSteerEntry(%d): %v", i, err)
 			}
 		}(i)
@@ -105,7 +105,7 @@ func TestAppendSteerEntryConcurrent(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	meta, err := store.LoadRunMeta()
+	meta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAppendSteerEntry_PreservesExistingMeta(t *testing.T) {
 	store := NewStore(dir)
 
 	// 先保存 RunMeta
-	_ = store.SaveRunMeta(domain.RunMeta{
+	_ = store.RunMeta.Save(domain.RunMeta{
 		StartedAt: "2026-03-07T10:00:00+08:00",
 		Provider:  "openrouter",
 		Style:     "suspense",
@@ -138,9 +138,9 @@ func TestAppendSteerEntry_PreservesExistingMeta(t *testing.T) {
 	})
 
 	// 追加 Steer 不应覆盖其他字段
-	_ = store.AppendSteerEntry(domain.SteerEntry{Input: "test", Timestamp: "now"})
+	_ = store.RunMeta.AppendSteerEntry(domain.SteerEntry{Input: "test", Timestamp: "now"})
 
-	meta, _ := store.LoadRunMeta()
+	meta, _ := store.RunMeta.Load()
 	if meta.Style != "suspense" {
 		t.Errorf("style should be preserved, got %s", meta.Style)
 	}
@@ -160,7 +160,7 @@ func TestInitRunMeta_PreservesHistory(t *testing.T) {
 	store := NewStore(dir)
 
 	// 先建立带历史的 RunMeta
-	_ = store.SaveRunMeta(domain.RunMeta{
+	_ = store.RunMeta.Save(domain.RunMeta{
 		StartedAt:    "old",
 		Provider:     "openai",
 		Style:        "fantasy",
@@ -170,9 +170,9 @@ func TestInitRunMeta_PreservesHistory(t *testing.T) {
 	})
 
 	// InitRunMeta 应保留 SteerHistory 和 PendingSteer
-	_ = store.InitRunMeta("suspense", "openrouter", "new-model")
+	_ = store.RunMeta.Init("suspense", "openrouter", "new-model")
 
-	meta, _ := store.LoadRunMeta()
+	meta, _ := store.RunMeta.Load()
 	if meta.Style != "suspense" {
 		t.Errorf("style should be updated, got %s", meta.Style)
 	}
@@ -195,19 +195,19 @@ func TestSetAndClearPendingSteer(t *testing.T) {
 	store := NewStore(dir)
 
 	// 设置 PendingSteer
-	if err := store.SetPendingSteer("主角改成女性"); err != nil {
+	if err := store.RunMeta.SetPendingSteer("主角改成女性"); err != nil {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
-	meta, _ := store.LoadRunMeta()
+	meta, _ := store.RunMeta.Load()
 	if meta.PendingSteer != "主角改成女性" {
 		t.Errorf("expected pending steer, got %s", meta.PendingSteer)
 	}
 
 	// 清除
-	if err := store.ClearPendingSteer(); err != nil {
+	if err := store.RunMeta.ClearPendingSteer(); err != nil {
 		t.Fatalf("ClearPendingSteer: %v", err)
 	}
-	meta, _ = store.LoadRunMeta()
+	meta, _ = store.RunMeta.Load()
 	if meta.PendingSteer != "" {
 		t.Errorf("expected empty pending steer, got %s", meta.PendingSteer)
 	}
@@ -217,11 +217,11 @@ func TestSetPlanningTier(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.SetPlanningTier(domain.PlanningTierLong); err != nil {
+	if err := store.RunMeta.SetPlanningTier(domain.PlanningTierLong); err != nil {
 		t.Fatalf("SetPlanningTier: %v", err)
 	}
 
-	meta, err := store.LoadRunMeta()
+	meta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestClearPendingSteer_Noop(t *testing.T) {
 	store := NewStore(dir)
 
 	// 空 meta 上调用不报错
-	if err := store.ClearPendingSteer(); err != nil {
+	if err := store.RunMeta.ClearPendingSteer(); err != nil {
 		t.Fatalf("ClearPendingSteer on empty: %v", err)
 	}
 }
@@ -246,9 +246,10 @@ func TestClearPendingSteer_Noop(t *testing.T) {
 func TestSaveCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
-	_ = store.InitProgress("test", 10)
+	_ = store.Progress.Init("test", 10)
 
-	if err := store.SaveCheckpoint("ch01-commit"); err != nil {
+	progress, _ := store.Progress.Load()
+	if err := store.RunMeta.SaveCheckpoint("ch01-commit", progress); err != nil {
 		t.Fatalf("SaveCheckpoint: %v", err)
 	}
 

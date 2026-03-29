@@ -127,7 +127,7 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 	})
 
 	// 清理上次崩溃可能遗留的信号文件
-	store.ClearStaleSignals()
+	store.Signals.ClearStaleSignals()
 
 	rt := &Runtime{
 		cfg:         cfg,
@@ -147,7 +147,7 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 	rt.session.bind()
 
 	// 初始化运行元信息
-	if err := store.InitRunMeta(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
+	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
 	}
 
@@ -217,7 +217,7 @@ func (rt *Runtime) Start(prompt string) error {
 	}
 	rt.mu.Unlock()
 
-	if err := rt.store.InitProgress(rt.cfg.NovelName, 0); err != nil {
+	if err := rt.store.Progress.Init(rt.cfg.NovelName, 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
@@ -316,7 +316,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	}
 	rt.mu.Unlock()
 
-	progress, _ := rt.store.LoadProgress()
+	progress, _ := rt.store.Progress.Load()
 	if progress != nil {
 		snap.Phase = string(progress.Phase)
 		snap.Flow = string(progress.Flow)
@@ -329,7 +329,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 		snap.RewriteReason = progress.RewriteReason
 	}
 
-	runMeta, _ := rt.store.LoadRunMeta()
+	runMeta, _ := rt.store.RunMeta.Load()
 	if runMeta != nil {
 		snap.PendingSteer = runMeta.PendingSteer
 	}
@@ -405,7 +405,7 @@ func (rt *Runtime) SwitchModel(role, provider, model string) error {
 	if role == "default" {
 		rt.cfg.Provider = provider
 		rt.cfg.ModelName = model
-		if err := rt.store.InitRunMeta(rt.cfg.Style, provider, model); err != nil {
+		if err := rt.store.RunMeta.Init(rt.cfg.Style, provider, model); err != nil {
 			slog.Warn("更新运行元信息失败", "module", "runtime", "err", err)
 		}
 	} else {
@@ -542,10 +542,10 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 
 func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 	// 基础设定
-	if premise, _ := rt.store.LoadPremise(); premise != "" {
+	if premise, _ := rt.store.Outline.LoadPremise(); premise != "" {
 		snap.Premise = truncateLog(premise, 80)
 	}
-	if outline, _ := rt.store.LoadOutline(); len(outline) > 0 {
+	if outline, _ := rt.store.Outline.LoadOutline(); len(outline) > 0 {
 		for _, e := range outline {
 			snap.Outline = append(snap.Outline, OutlineSnapshot{
 				Chapter: e.Chapter, Title: e.Title, CoreEvent: e.CoreEvent,
@@ -556,11 +556,11 @@ func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 	if progress != nil && progress.Layered {
 		snap.Layered = true
 		snap.CurrentVolumeArc = fmt.Sprintf("第%d卷·第%d弧", progress.CurrentVolume, progress.CurrentArc)
-		if compass, _ := rt.store.LoadCompass(); compass != nil {
+		if compass, _ := rt.store.Outline.LoadCompass(); compass != nil {
 			snap.CompassDirection = compass.EndingDirection
 			snap.CompassScale = compass.EstimatedScale
 		}
-		if volumes, _ := rt.store.LoadLayeredOutline(); len(volumes) > 0 {
+		if volumes, _ := rt.store.Outline.LoadLayeredOutline(); len(volumes) > 0 {
 			for _, v := range volumes {
 				if v.Index > progress.CurrentVolume {
 					snap.NextVolumeTitle = v.Title
@@ -569,7 +569,7 @@ func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 			}
 		}
 	}
-	if chars, _ := rt.store.LoadCharacters(); len(chars) > 0 {
+	if chars, _ := rt.store.Characters.Load(); len(chars) > 0 {
 		for _, c := range chars {
 			label := c.Name
 			if c.Role != "" {
@@ -591,7 +591,7 @@ func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 	if progress != nil && len(progress.CompletedChapters) > 0 {
 		currentCh = progress.CompletedChapters[len(progress.CompletedChapters)-1]
 	}
-	if review, err := rt.store.LoadLastReview(currentCh); err == nil && review != nil {
+	if review, err := rt.store.World.LoadLastReview(currentCh); err == nil && review != nil {
 		snap.LastReviewSummary = fmt.Sprintf("verdict=%s %d个问题", review.Verdict, len(review.Issues))
 		if len(review.AffectedChapters) > 0 {
 			snap.LastReviewSummary += fmt.Sprintf(" 影响%v", review.AffectedChapters)
@@ -605,7 +605,7 @@ func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 	if progress != nil {
 		for i := len(progress.CompletedChapters) - 1; i >= 0 && len(snap.RecentSummaries) < 2; i-- {
 			ch := progress.CompletedChapters[i]
-			if summary, err := rt.store.LoadSummary(ch); err == nil && summary != nil {
+			if summary, err := rt.store.Summaries.LoadSummary(ch); err == nil && summary != nil {
 				snap.RecentSummaries = append(snap.RecentSummaries,
 					fmt.Sprintf("第%d章: %s", ch, truncateLog(summary.Summary, 50)))
 			}

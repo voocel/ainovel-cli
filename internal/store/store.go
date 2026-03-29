@@ -1,22 +1,42 @@
 package store
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
+
+	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// Store 封装小说输出目录，提供所有状态读写操作。
+// Store 是状态管理的组合根，持有所有子存储。
 type Store struct {
 	dir string
-	mu  sync.RWMutex
+
+	Progress   *ProgressStore
+	Outline    *OutlineStore
+	Drafts     *DraftStore
+	Summaries  *SummaryStore
+	RunMeta    *RunMetaStore
+	Signals    *SignalStore
+	Characters *CharacterStore
+	World      *WorldStore
+
+	crossMu sync.Mutex // 保护跨域原子操作
 }
 
 // NewStore 创建状态管理器，dir 为小说输出根目录。
 func NewStore(dir string) *Store {
-	return &Store{dir: dir}
+	outline := NewOutlineStore(newIO(dir))
+	return &Store{
+		dir:        dir,
+		Progress:   NewProgressStore(newIO(dir)),
+		Outline:    outline,
+		Drafts:     NewDraftStore(newIO(dir)),
+		Summaries:  NewSummaryStore(newIO(dir), outline),
+		RunMeta:    NewRunMetaStore(newIO(dir)),
+		Signals:    NewSignalStore(newIO(dir)),
+		Characters: NewCharacterStore(newIO(dir), outline),
+		World:      NewWorldStore(newIO(dir)),
+	}
 }
 
 // Dir 返回输出根目录。
@@ -24,111 +44,102 @@ func (s *Store) Dir() string { return s.dir }
 
 // Init 创建所需的子目录结构。
 func (s *Store) Init() error {
-	dirs := []string{"chapters", "summaries", "drafts", "reviews", "meta"}
-	for _, d := range dirs {
-		if err := os.MkdirAll(filepath.Join(s.dir, d), 0o755); err != nil {
-			return fmt.Errorf("create dir %s: %w", d, err)
+	return s.Progress.io.EnsureDirs([]string{
+		"chapters", "summaries", "drafts", "reviews", "meta",
+	})
+}
+
+// ── 跨域协调方法 ──
+
+// ExpandArc 将骨架弧展开为详细章节（Outline + Progress 联动）。
+func (s *Store) ExpandArc(volumeIdx, arcIdx int, chapters []domain.OutlineEntry) error {
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+
+	s.Outline.io.mu.Lock()
+	defer s.Outline.io.mu.Unlock()
+
+	volumes, err := s.Outline.expandArcUnlocked(volumeIdx, arcIdx, chapters)
+	if err != nil {
+		return err
+	}
+
+	s.Progress.io.mu.Lock()
+	defer s.Progress.io.mu.Unlock()
+
+	p, err := s.Progress.loadUnlocked()
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		p = &domain.Progress{}
+	}
+	p.TotalChapters = domain.TotalChapters(volumes)
+	return s.Progress.saveUnlocked(p)
+}
+
+// AppendVolume 追加新卷到分层大纲末尾（Outline + Progress 联动）。
+func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+
+	s.Outline.io.mu.Lock()
+	defer s.Outline.io.mu.Unlock()
+
+	volumes, err := s.Outline.appendVolumeUnlocked(vol)
+	if err != nil {
+		return err
+	}
+
+	s.Progress.io.mu.Lock()
+	defer s.Progress.io.mu.Unlock()
+
+	p, err := s.Progress.loadUnlocked()
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		p = &domain.Progress{}
+	}
+	p.TotalChapters = domain.TotalChapters(volumes)
+	return s.Progress.saveUnlocked(p)
+}
+
+// ClearHandledSteer 原子性清除 PendingSteer 并重置 FlowSteering 状态
+// （RunMeta + Progress 联动）。
+func (s *Store) ClearHandledSteer() error {
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+
+	s.RunMeta.io.mu.Lock()
+	defer s.RunMeta.io.mu.Unlock()
+
+	meta, err := s.RunMeta.loadUnlocked()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if meta != nil && meta.PendingSteer != "" {
+		meta.PendingSteer = ""
+		if err := s.RunMeta.saveUnlocked(*meta); err != nil {
+			return err
+		}
+	}
+
+	s.Progress.io.mu.Lock()
+	defer s.Progress.io.mu.Unlock()
+
+	p, err := s.Progress.loadUnlocked()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if p != nil && p.Flow == domain.FlowSteering {
+		if err := domain.ValidateFlowTransition(p.Flow, domain.FlowWriting); err != nil {
+			return err
+		}
+		p.Flow = domain.FlowWriting
+		if err := s.Progress.saveUnlocked(p); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-func (s *Store) path(rel string) string {
-	return filepath.Join(s.dir, rel)
-}
-
-func (s *Store) readFile(rel string) ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.readFileUnlocked(rel)
-}
-
-func (s *Store) readFileUnlocked(rel string) ([]byte, error) {
-	return os.ReadFile(s.path(rel))
-}
-
-func (s *Store) writeFileUnlocked(rel string, data []byte) error {
-	p := s.path(rel)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		_ = os.Remove(tmpPath)
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, p)
-}
-
-func (s *Store) readJSON(rel string, v any) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.readJSONUnlocked(rel, v)
-}
-
-func (s *Store) readJSONUnlocked(rel string, v any) error {
-	data, err := s.readFileUnlocked(rel)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func (s *Store) writeJSON(rel string, v any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.writeJSONUnlocked(rel, v)
-}
-
-func (s *Store) writeJSONUnlocked(rel string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return s.writeFileUnlocked(rel, data)
-}
-
-func (s *Store) writeMarkdown(rel string, content string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.writeFileUnlocked(rel, []byte(content))
-}
-
-func (s *Store) removeFile(rel string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.removeFileUnlocked(rel)
-}
-
-func (s *Store) removeFileUnlocked(rel string) error {
-	err := os.Remove(s.path(rel))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
-
-func (s *Store) withWriteLock(fn func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return fn()
 }

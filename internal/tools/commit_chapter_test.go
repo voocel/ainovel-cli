@@ -16,16 +16,16 @@ func TestCommitChapterRejectsNonPendingRewrite(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.InitProgress("test", 10); err != nil {
+	if err := store.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := store.SetPendingRewrites([]int{2}, "测试重写"); err != nil {
+	if err := store.Progress.SetPendingRewrites([]int{2}, "测试重写"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
-	if err := store.SetFlow(domain.FlowRewriting); err != nil {
+	if err := store.Progress.SetFlow(domain.FlowRewriting); err != nil {
 		t.Fatalf("SetFlow: %v", err)
 	}
-	if err := store.SaveDraft(3, "这是错误章节的正文。"); err != nil {
+	if err := store.Drafts.SaveDraft(3, "这是错误章节的正文。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -49,7 +49,7 @@ func TestCommitChapterRejectsNonPendingRewrite(t *testing.T) {
 		t.Fatalf("chapter should not be persisted, stat err=%v", err)
 	}
 
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
@@ -67,16 +67,16 @@ func TestCommitChapterAllowsPendingRewrite(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.InitProgress("test", 10); err != nil {
+	if err := store.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := store.SetPendingRewrites([]int{2}, "测试重写"); err != nil {
+	if err := store.Progress.SetPendingRewrites([]int{2}, "测试重写"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
-	if err := store.SetFlow(domain.FlowRewriting); err != nil {
+	if err := store.Progress.SetFlow(domain.FlowRewriting); err != nil {
 		t.Fatalf("SetFlow: %v", err)
 	}
-	if err := store.SaveDraft(2, "这是正确待重写章节的正文。"); err != nil {
+	if err := store.Drafts.SaveDraft(2, "这是正确待重写章节的正文。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -100,14 +100,14 @@ func TestCommitChapterAllowsPendingRewrite(t *testing.T) {
 		t.Fatalf("chapter should be persisted: %v", err)
 	}
 
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
 	if len(progress.CompletedChapters) != 1 || progress.CompletedChapters[0] != 2 {
 		t.Fatalf("unexpected completed chapters: %v", progress.CompletedChapters)
 	}
-	pending, err := store.LoadPendingCommit()
+	pending, err := store.Signals.LoadPendingCommit()
 	if err != nil {
 		t.Fatalf("LoadPendingCommit: %v", err)
 	}

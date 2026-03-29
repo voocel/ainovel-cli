@@ -45,7 +45,7 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	result := map[string]any{"chapter": a.Chapter}
 
 	// 章节内容
-	content, wordCount, err := t.store.LoadChapterContent(a.Chapter)
+	content, wordCount, err := t.store.Drafts.LoadChapterContent(a.Chapter)
 	if err != nil {
 		return nil, fmt.Errorf("load chapter content: %w", err)
 	}
@@ -56,16 +56,16 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	result["word_count"] = wordCount
 
 	// 对照数据：保留全局性的一致性检查数据，避免重复加载 novel_context 已有的窗口数据
-	if rules, _ := t.store.LoadWorldRules(); len(rules) > 0 {
+	if rules, _ := t.store.World.LoadWorldRules(); len(rules) > 0 {
 		result["world_rules"] = rules
 	}
-	if foreshadow, _ := t.store.LoadActiveForeshadow(); len(foreshadow) > 0 {
+	if foreshadow, _ := t.store.World.LoadActiveForeshadow(); len(foreshadow) > 0 {
 		result["foreshadow_ledger"] = foreshadow
 	}
-	if relationships, _ := t.store.LoadRelationships(); len(relationships) > 0 {
+	if relationships, _ := t.store.World.LoadRelationships(); len(relationships) > 0 {
 		result["relationships"] = relationships
 	}
-	if chars, _ := t.store.LoadCharacters(); len(chars) > 0 {
+	if chars, _ := t.store.Characters.Load(); len(chars) > 0 {
 		aliasMap := make(map[string]string)
 		for _, c := range chars {
 			for _, alias := range c.Aliases {
@@ -76,7 +76,7 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 			result["alias_map"] = aliasMap
 		}
 	}
-	if summaries, _ := t.store.LoadRecentSummaries(a.Chapter, 2); len(summaries) > 0 {
+	if summaries, _ := t.store.Summaries.LoadRecentSummaries(a.Chapter, 2); len(summaries) > 0 {
 		result["recent_summaries"] = summaries
 	}
 

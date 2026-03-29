@@ -73,29 +73,29 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SavePremise("少年踏入修行世界"); err != nil {
+	if err := s.Outline.SavePremise("少年踏入修行世界"); err != nil {
 		t.Fatalf("SavePremise: %v", err)
 	}
-	if err := s.SaveOutline([]domain.OutlineEntry{
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 1, Title: "入门", CoreEvent: "主角进入宗门", Scenes: []string{"拜师", "立誓"}},
 		{Chapter: 2, Title: "试炼", CoreEvent: "参加外门试炼", Scenes: []string{"集合", "出发"}},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.SaveCharacters([]domain.Character{
+	if err := s.Characters.Save([]domain.Character{
 		{Name: "林砚", Role: "主角", Description: "少年修士", Arc: "成长", Traits: []string{"冷静"}},
 	}); err != nil {
 		t.Fatalf("SaveCharacters: %v", err)
 	}
-	if err := s.SaveWorldRules([]domain.WorldRule{
+	if err := s.World.SaveWorldRules([]domain.WorldRule{
 		{Category: "magic", Rule: "灵气可以炼化", Boundary: "凡人不可直接驾驭"},
 	}); err != nil {
 		t.Fatalf("SaveWorldRules: %v", err)
 	}
-	if err := s.InitProgress("test", 2); err != nil {
+	if err := s.Progress.Init("test", 2); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := s.SaveSummary(domain.ChapterSummary{
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{
 		Chapter:    1,
 		Summary:    "主角拜入宗门，确立目标。",
 		Characters: []string{"林砚"},
@@ -103,10 +103,10 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveSummary: %v", err)
 	}
-	if err := s.SaveFinalChapter(1, "第一章正文结尾，留下试炼悬念。"); err != nil {
+	if err := s.Drafts.SaveFinalChapter(1, "第一章正文结尾，留下试炼悬念。"); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
 	}
-	if err := s.SaveChapterPlan(domain.ChapterPlan{
+	if err := s.Drafts.SaveChapterPlan(domain.ChapterPlan{
 		Chapter: 2,
 		Title:   "试炼",
 		Goal:    "通过第一关",
@@ -119,14 +119,14 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveChapterPlan: %v", err)
 	}
-	if err := s.SaveStyleRules(domain.WritingStyleRules{
+	if err := s.World.SaveStyleRules(domain.WritingStyleRules{
 		Volume: 1,
 		Arc:    1,
 		Prose:  []string{"叙述保持克制"},
 	}); err != nil {
 		t.Fatalf("SaveStyleRules: %v", err)
 	}
-	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+	if err := s.RunMeta.SetPlanningTier(domain.PlanningTierLong); err != nil {
 		t.Fatalf("SetPlanningTier: %v", err)
 	}
 
@@ -179,25 +179,25 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.SavePremise("群像长篇冒险"); err != nil {
+	if err := s.Outline.SavePremise("群像长篇冒险"); err != nil {
 		t.Fatalf("SavePremise: %v", err)
 	}
-	if err := s.SaveOutline([]domain.OutlineEntry{
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 1, Title: "起点", CoreEvent: "旅途开始"},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.SaveCharacters([]domain.Character{
+	if err := s.Characters.Save([]domain.Character{
 		{Name: "沈曜", Role: "主角", Description: "流浪剑客", Arc: "寻找真相", Traits: []string{"敏锐"}},
 	}); err != nil {
 		t.Fatalf("SaveCharacters: %v", err)
 	}
-	if err := s.SaveWorldRules([]domain.WorldRule{
+	if err := s.World.SaveWorldRules([]domain.WorldRule{
 		{Category: "society", Rule: "城邦林立", Boundary: "皇权不可直辖边地"},
 	}); err != nil {
 		t.Fatalf("SaveWorldRules: %v", err)
 	}
-	if err := s.SaveLayeredOutline([]domain.VolumeOutline{
+	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{
 		{
 			Index: 1, Title: "第一卷", Theme: "踏上旅途",
 			Arcs: []domain.ArcOutline{
@@ -208,20 +208,20 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveLayeredOutline: %v", err)
 	}
-	if err := s.SaveCompass(domain.StoryCompass{
+	if err := s.Outline.SaveCompass(domain.StoryCompass{
 		EndingDirection: "揭开古老真相",
 		EstimatedScale:  "预计 3 卷",
 	}); err != nil {
 		t.Fatalf("SaveCompass: %v", err)
 	}
-	if err := s.SaveStyleRules(domain.WritingStyleRules{
+	if err := s.World.SaveStyleRules(domain.WritingStyleRules{
 		Volume: 1,
 		Arc:    1,
 		Prose:  []string{"保持冷峻节制"},
 	}); err != nil {
 		t.Fatalf("SaveStyleRules: %v", err)
 	}
-	if err := s.SetPlanningTier(domain.PlanningTierLong); err != nil {
+	if err := s.RunMeta.SetPlanningTier(domain.PlanningTierLong); err != nil {
 		t.Fatalf("SetPlanningTier: %v", err)
 	}
 

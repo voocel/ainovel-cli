@@ -22,18 +22,18 @@ func saveHandoffSnapshot(store *storepkg.Store, reason string) error {
 	if err != nil || pack == nil {
 		return err
 	}
-	return store.SaveHandoffPack(*pack)
+	return store.World.SaveHandoffPack(*pack)
 }
 
 func buildHandoffPack(store *storepkg.Store, reason string) (*domain.HandoffPack, error) {
 	if store == nil {
 		return nil, nil
 	}
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil || progress == nil {
 		return nil, err
 	}
-	runMeta, err := store.LoadRunMeta()
+	runMeta, err := store.RunMeta.Load()
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +63,11 @@ func buildHandoffPack(store *storepkg.Store, reason string) (*domain.HandoffPack
 		lastCh := progress.CompletedChapters[len(progress.CompletedChapters)-1]
 		wordCount := progress.ChapterWordCounts[lastCh]
 		pack.LastCommit = fmt.Sprintf("第%d章已完成，约%d字。下一章=%d。", lastCh, wordCount, progress.NextChapter())
-		if review, reviewErr := store.LoadLastReview(lastCh); reviewErr == nil && review != nil {
+		if review, reviewErr := store.World.LoadLastReview(lastCh); reviewErr == nil && review != nil {
 			pack.LastReview = fmt.Sprintf("最近审阅 verdict=%s，summary=%s", review.Verdict, truncateLog(review.Summary, 80))
 		}
 	}
-	if summaries, err := store.LoadRecentSummaries(progress.NextChapter(), 3); err == nil {
+	if summaries, err := store.Summaries.LoadRecentSummaries(progress.NextChapter(), 3); err == nil {
 		for _, summary := range summaries {
 			pack.RecentSummaries = append(pack.RecentSummaries,
 				fmt.Sprintf("第%d章：%s", summary.Chapter, truncateLog(summary.Summary, 80)))
@@ -105,11 +105,11 @@ func applyHandoffToRecovery(store *storepkg.Store, recovery recoveryResult) reco
 	if store == nil || recovery.IsNew {
 		return recovery
 	}
-	progress, _ := store.LoadProgress()
+	progress, _ := store.Progress.Load()
 	if !shouldUseHandoff(progress) {
 		return recovery
 	}
-	pack, err := store.LoadHandoffPack()
+	pack, err := store.World.LoadHandoffPack()
 	if err != nil || pack == nil {
 		pack, _ = buildHandoffPack(store, "recovery")
 	}

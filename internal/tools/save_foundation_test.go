@@ -30,7 +30,7 @@ func TestSaveFoundationPersistsPlanningTier(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	meta, err := store.LoadRunMeta()
+	meta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.InitProgress("test", 0); err != nil {
+	if err := store.Progress.Init("test", 0); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 		t.Fatalf("Execute outline: %v", err)
 	}
 
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 		t.Fatalf("expected volume/arc reset, got volume=%d arc=%d", progress.CurrentVolume, progress.CurrentArc)
 	}
 
-	volumes, err := store.LoadLayeredOutline()
+	volumes, err := store.Outline.LoadLayeredOutline()
 	if err != nil {
 		t.Fatalf("LoadLayeredOutline: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 		t.Fatalf("expected layered outline cleared, got %d volumes", len(volumes))
 	}
 
-	meta, err := store.LoadRunMeta()
+	meta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.InitProgress("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 	}
 
 	// 验证大纲有 2 卷
-	volumes, _ := s.LoadLayeredOutline()
+	volumes, _ := s.Outline.LoadLayeredOutline()
 	if len(volumes) != 2 {
 		t.Fatalf("expected 2 volumes, got %d", len(volumes))
 	}
@@ -177,7 +177,7 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.InitProgress("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestSaveFoundationUpdateCompass(t *testing.T) {
 		t.Fatalf("Execute update_compass: %v", err)
 	}
 
-	compass, err := s.LoadCompass()
+	compass, err := s.Outline.LoadCompass()
 	if err != nil {
 		t.Fatalf("LoadCompass: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestSaveFoundationAcceptsDirectJSONArrayContent(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	outline, err := store.LoadOutline()
+	outline, err := store.Outline.LoadOutline()
 	if err != nil {
 		t.Fatalf("LoadOutline: %v", err)
 	}

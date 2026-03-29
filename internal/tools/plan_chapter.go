@@ -52,7 +52,7 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 		return nil, fmt.Errorf("chapter must be > 0")
 	}
 
-	if err := t.store.SaveChapterPlan(plan); err != nil {
+	if err := t.store.Drafts.SaveChapterPlan(plan); err != nil {
 		return nil, fmt.Errorf("save chapter plan: %w", err)
 	}
 

@@ -12,19 +12,19 @@ import (
 func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 	dir := t.TempDir()
 	store := storepkg.NewStore(dir)
-	if err := store.InitProgress("test", 3); err != nil {
+	if err := store.Progress.Init("test", 3); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := store.SetFlow(domain.FlowSteering); err != nil {
+	if err := store.Progress.SetFlow(domain.FlowSteering); err != nil {
 		t.Fatalf("SetFlow: %v", err)
 	}
-	if err := store.SetPendingSteer("主角改成女性"); err != nil {
+	if err := store.RunMeta.SetPendingSteer("主角改成女性"); err != nil {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
 	newSession(nil, store, "", nil, nil, nil).finalizeSteerIfIdle()
 
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 		t.Fatalf("expected flow writing, got %s", progress.Flow)
 	}
 
-	runMeta, err := store.LoadRunMeta()
+	runMeta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
@@ -44,19 +44,19 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 func TestFinalizeSteerIfIdleKeepsActiveFlow(t *testing.T) {
 	dir := t.TempDir()
 	store := storepkg.NewStore(dir)
-	if err := store.InitProgress("test", 3); err != nil {
+	if err := store.Progress.Init("test", 3); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	if err := store.SetFlow(domain.FlowRewriting); err != nil {
+	if err := store.Progress.SetFlow(domain.FlowRewriting); err != nil {
 		t.Fatalf("SetFlow: %v", err)
 	}
-	if err := store.SetPendingSteer("加入反转"); err != nil {
+	if err := store.RunMeta.SetPendingSteer("加入反转"); err != nil {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
 	newSession(nil, store, "", nil, nil, nil).finalizeSteerIfIdle()
 
-	progress, err := store.LoadProgress()
+	progress, err := store.Progress.Load()
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestFinalizeSteerIfIdleKeepsActiveFlow(t *testing.T) {
 		t.Fatalf("expected flow rewriting, got %s", progress.Flow)
 	}
 
-	runMeta, err := store.LoadRunMeta()
+	runMeta, err := store.RunMeta.Load()
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}

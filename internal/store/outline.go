@@ -8,32 +8,39 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
+// OutlineStore 管理故事前提、大纲（扁平/分层）和指南针。
+type OutlineStore struct{ io *IO }
+
+func NewOutlineStore(io *IO) *OutlineStore { return &OutlineStore{io: io} }
+
 // SavePremise 保存故事前提到 premise.md。
-func (s *Store) SavePremise(content string) error {
-	return s.writeMarkdown("premise.md", content)
+func (s *OutlineStore) SavePremise(content string) error {
+	return s.io.WriteMarkdown("premise.md", content)
 }
 
 // LoadPremise 读取 premise.md。不存在时返回空字符串。
-func (s *Store) LoadPremise() (string, error) {
-	data, err := s.readFile("premise.md")
+func (s *OutlineStore) LoadPremise() (string, error) {
+	data, err := s.io.ReadFile("premise.md")
 	if os.IsNotExist(err) {
 		return "", nil
 	}
 	return string(data), err
 }
 
-// SaveOutline 同时保存 outline.json（机器读）和 outline.md（人读）。
-func (s *Store) SaveOutline(entries []domain.OutlineEntry) error {
-	if err := s.writeJSON("outline.json", entries); err != nil {
-		return err
-	}
-	return s.writeMarkdown("outline.md", renderOutline(entries))
+// SaveOutline 同时保存 outline.json 和 outline.md（原子写入）。
+func (s *OutlineStore) SaveOutline(entries []domain.OutlineEntry) error {
+	return s.io.WithWriteLock(func() error {
+		if err := s.io.WriteJSONUnlocked("outline.json", entries); err != nil {
+			return err
+		}
+		return s.io.WriteMarkdownUnlocked("outline.md", renderOutline(entries))
+	})
 }
 
 // LoadOutline 从 outline.json 读取结构化大纲。
-func (s *Store) LoadOutline() ([]domain.OutlineEntry, error) {
+func (s *OutlineStore) LoadOutline() ([]domain.OutlineEntry, error) {
 	var entries []domain.OutlineEntry
-	if err := s.readJSON("outline.json", &entries); err != nil {
+	if err := s.io.ReadJSON("outline.json", &entries); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -43,7 +50,7 @@ func (s *Store) LoadOutline() ([]domain.OutlineEntry, error) {
 }
 
 // GetChapterOutline 获取指定章节的大纲条目。
-func (s *Store) GetChapterOutline(chapter int) (*domain.OutlineEntry, error) {
+func (s *OutlineStore) GetChapterOutline(chapter int) (*domain.OutlineEntry, error) {
 	entries, err := s.LoadOutline()
 	if err != nil {
 		return nil, err
@@ -56,19 +63,20 @@ func (s *Store) GetChapterOutline(chapter int) (*domain.OutlineEntry, error) {
 	return nil, fmt.Errorf("chapter %d not found in outline", chapter)
 }
 
-// SaveLayeredOutline 保存分层大纲（长篇模式）。
-// 同时保存 layered_outline.json（机器读）和 layered_outline.md（人读）。
-func (s *Store) SaveLayeredOutline(volumes []domain.VolumeOutline) error {
-	if err := s.writeJSON("layered_outline.json", volumes); err != nil {
-		return err
-	}
-	return s.writeMarkdown("layered_outline.md", renderLayeredOutline(volumes))
+// SaveLayeredOutline 保存分层大纲（长篇模式，原子写入）。
+func (s *OutlineStore) SaveLayeredOutline(volumes []domain.VolumeOutline) error {
+	return s.io.WithWriteLock(func() error {
+		if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
+			return err
+		}
+		return s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes))
+	})
 }
 
 // LoadLayeredOutline 读取分层大纲。
-func (s *Store) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
+func (s *OutlineStore) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	var volumes []domain.VolumeOutline
-	if err := s.readJSON("layered_outline.json", &volumes); err != nil {
+	if err := s.io.ReadJSON("layered_outline.json", &volumes); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -77,18 +85,18 @@ func (s *Store) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	return volumes, nil
 }
 
-// ClearLayeredOutline 清理分层大纲文件，供从长篇降级为普通大纲时使用。
-func (s *Store) ClearLayeredOutline() error {
-	return s.withWriteLock(func() error {
-		if err := s.removeFileUnlocked("layered_outline.json"); err != nil {
+// ClearLayeredOutline 清理分层大纲文件。
+func (s *OutlineStore) ClearLayeredOutline() error {
+	return s.io.WithWriteLock(func() error {
+		if err := s.io.RemoveFileUnlocked("layered_outline.json"); err != nil {
 			return err
 		}
-		return s.removeFileUnlocked("layered_outline.md")
+		return s.io.RemoveFileUnlocked("layered_outline.md")
 	})
 }
 
 // GetChapterFromLayered 从分层大纲中按全局章节号查找。
-func (s *Store) GetChapterFromLayered(chapter int) (*domain.OutlineEntry, error) {
+func (s *OutlineStore) GetChapterFromLayered(chapter int) (*domain.OutlineEntry, error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil {
 		return nil, err
@@ -110,7 +118,7 @@ func (s *Store) GetChapterFromLayered(chapter int) (*domain.OutlineEntry, error)
 }
 
 // LocateChapter 根据全局章节号定位所在的卷和弧。
-func (s *Store) LocateChapter(chapter int) (volume, arc int, err error) {
+func (s *OutlineStore) LocateChapter(chapter int) (volume, arc int, err error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil {
 		return 0, 0, err
@@ -131,36 +139,33 @@ func (s *Store) LocateChapter(chapter int) (volume, arc int, err error) {
 
 // ArcBoundary 弧边界信息。
 type ArcBoundary struct {
-	IsArcEnd    bool // 是否为弧内最后一章
-	IsVolumeEnd bool // 是否同时为卷内最后一章
-	Volume      int  // 当前章所在卷
-	Arc         int  // 当前章所在弧
-	NextVolume     int  // 下一弧所在卷（0 = 无后续）
-	NextArc        int  // 下一弧序号（0 = 无后续）
-	NeedsExpansion bool // 下一弧是骨架（需要展开章节后才能写作）
-	NeedsNewVolume bool // 当前卷结束且无后续卷，需要 Architect 创建下一卷
+	IsArcEnd       bool
+	IsVolumeEnd    bool
+	Volume         int
+	Arc            int
+	NextVolume     int
+	NextArc        int
+	NeedsExpansion bool
+	NeedsNewVolume bool
 }
 
-// HasNextArc 是否还有后续弧（含骨架弧）。
+// HasNextArc 是否还有后续弧。
 func (b *ArcBoundary) HasNextArc() bool {
 	return b.NextVolume > 0 || b.NextArc > 0
 }
 
 // CheckArcBoundary 检查某章是否为弧/卷的最后一章。
-// 能正确识别骨架弧（未展开的弧），在下一弧是骨架时设置 NeedsExpansion。
-// 非分层大纲或未找到章节时返回 nil。
-func (s *Store) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
+func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil || len(volumes) == 0 {
 		return nil, err
 	}
 
-	// 定位当前章所在的弧
 	type arcPos struct {
-		volIdx, arcIdx int // volumes/arcs 数组下标
-		volume, arc    int // 卷/弧逻辑序号（Index 字段）
-		chInArc        int // 当前章在弧内的位置
-		arcLen         int // 弧内章节数
+		volIdx, arcIdx int
+		volume, arc    int
+		chInArc        int
+		arcLen         int
 	}
 
 	ch := 1
@@ -201,7 +206,6 @@ func (s *Store) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		}
 	}
 
-	// 找下一个弧
 	found := false
 	for vi := cur.volIdx; vi < len(volumes); vi++ {
 		startArc := 0
@@ -220,7 +224,6 @@ func (s *Store) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		}
 	}
 
-	// 无后续弧且当前卷不是 Final → 需要 Architect 创建下一卷
 	if !found && b.IsVolumeEnd && !volumes[cur.volIdx].Final {
 		b.NeedsNewVolume = true
 	}
@@ -228,123 +231,90 @@ func (s *Store) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	return b, nil
 }
 
-// ExpandArc 将骨架弧展开为详细章节。
-// 替换目标弧的 Chapters，清空 EstimatedChapters，重新生成扁平大纲。
-func (s *Store) ExpandArc(volumeIdx, arcIdx int, chapters []domain.OutlineEntry) error {
-	return s.withWriteLock(func() error {
-		var volumes []domain.VolumeOutline
-		if err := s.readJSONUnlocked("layered_outline.json", &volumes); err != nil {
-			return fmt.Errorf("load layered_outline: %w", err)
+// expandArcUnlocked 内部方法，在 Store.ExpandArc 跨域协调中调用。
+func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, chapters []domain.OutlineEntry) ([]domain.VolumeOutline, error) {
+	var volumes []domain.VolumeOutline
+	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
+		return nil, fmt.Errorf("load layered_outline: %w", err)
+	}
+	found := false
+	for vi := range volumes {
+		if volumes[vi].Index != volumeIdx {
+			continue
 		}
-		// 按 Index 字段查找目标弧
-		found := false
-		for vi := range volumes {
-			if volumes[vi].Index != volumeIdx {
+		for ai := range volumes[vi].Arcs {
+			if volumes[vi].Arcs[ai].Index != arcIdx {
 				continue
 			}
-			for ai := range volumes[vi].Arcs {
-				if volumes[vi].Arcs[ai].Index != arcIdx {
-					continue
-				}
-				volumes[vi].Arcs[ai].Chapters = chapters
-				volumes[vi].Arcs[ai].EstimatedChapters = 0
-				found = true
-				break
-			}
-			if found {
-				break
-			}
+			volumes[vi].Arcs[ai].Chapters = chapters
+			volumes[vi].Arcs[ai].EstimatedChapters = 0
+			found = true
+			break
 		}
-		if !found {
-			return fmt.Errorf("arc not found: volume=%d, arc=%d", volumeIdx, arcIdx)
+		if found {
+			break
 		}
-		// 保存分层大纲
-		if err := s.writeJSONUnlocked("layered_outline.json", volumes); err != nil {
-			return err
-		}
-		if err := s.writeFileUnlocked("layered_outline.md", []byte(renderLayeredOutline(volumes))); err != nil {
-			return err
-		}
-		// 重新生成扁平大纲（全局章节号自动连续）
-		flat := domain.FlattenOutline(volumes)
-		if err := s.writeJSONUnlocked("outline.json", flat); err != nil {
-			return err
-		}
-		if err := s.writeFileUnlocked("outline.md", []byte(renderOutline(flat))); err != nil {
-			return err
-		}
-		// 更新总章节数
-		p, err := s.loadProgressUnlocked()
-		if err != nil {
-			return err
-		}
-		if p == nil {
-			p = &domain.Progress{}
-		}
-		p.TotalChapters = domain.TotalChapters(volumes)
-		return s.saveProgressUnlocked(p)
-	})
+	}
+	if !found {
+		return nil, fmt.Errorf("arc not found: volume=%d, arc=%d", volumeIdx, arcIdx)
+	}
+	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
+		return nil, err
+	}
+	if err := s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes)); err != nil {
+		return nil, err
+	}
+	flat := domain.FlattenOutline(volumes)
+	if err := s.io.WriteJSONUnlocked("outline.json", flat); err != nil {
+		return nil, err
+	}
+	if err := s.io.WriteMarkdownUnlocked("outline.md", renderOutline(flat)); err != nil {
+		return nil, err
+	}
+	return volumes, nil
 }
 
-// AppendVolume 追加新卷到分层大纲末尾（滚动规划：Architect 自主创建下一卷）。
-func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
-	return s.withWriteLock(func() error {
-		var volumes []domain.VolumeOutline
-		if err := s.readJSONUnlocked("layered_outline.json", &volumes); err != nil {
-			return fmt.Errorf("load layered_outline: %w", err)
-		}
-		if err := validateAppendVolume(volumes, vol); err != nil {
-			return err
-		}
-		volumes = append(volumes, vol)
-		// 保存分层大纲
-		if err := s.writeJSONUnlocked("layered_outline.json", volumes); err != nil {
-			return err
-		}
-		if err := s.writeFileUnlocked("layered_outline.md", []byte(renderLayeredOutline(volumes))); err != nil {
-			return err
-		}
-		// 重新生成扁平大纲
-		flat := domain.FlattenOutline(volumes)
-		if err := s.writeJSONUnlocked("outline.json", flat); err != nil {
-			return err
-		}
-		if err := s.writeFileUnlocked("outline.md", []byte(renderOutline(flat))); err != nil {
-			return err
-		}
-		// 更新总章节数
-		p, err := s.loadProgressUnlocked()
-		if err != nil {
-			return err
-		}
-		if p == nil {
-			p = &domain.Progress{}
-		}
-		p.TotalChapters = domain.TotalChapters(volumes)
-		return s.saveProgressUnlocked(p)
-	})
+// appendVolumeUnlocked 内部方法，在 Store.AppendVolume 跨域协调中调用。
+func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.VolumeOutline, error) {
+	var volumes []domain.VolumeOutline
+	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
+		return nil, fmt.Errorf("load layered_outline: %w", err)
+	}
+	if err := validateAppendVolume(volumes, vol); err != nil {
+		return nil, err
+	}
+	volumes = append(volumes, vol)
+	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
+		return nil, err
+	}
+	if err := s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes)); err != nil {
+		return nil, err
+	}
+	flat := domain.FlattenOutline(volumes)
+	if err := s.io.WriteJSONUnlocked("outline.json", flat); err != nil {
+		return nil, err
+	}
+	if err := s.io.WriteMarkdownUnlocked("outline.md", renderOutline(flat)); err != nil {
+		return nil, err
+	}
+	return volumes, nil
 }
 
-// validateAppendVolume 校验追加卷的结构合法性。
 func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutline) error {
-	// 已有 Final 卷时不允许继续追加
 	for _, v := range existing {
 		if v.Final {
 			return fmt.Errorf("已有最终卷（第 %d 卷），不允许继续追加", v.Index)
 		}
 	}
-	// 卷 Index 必须大于现有最大值
 	if len(existing) > 0 {
 		maxIdx := existing[len(existing)-1].Index
 		if vol.Index <= maxIdx {
 			return fmt.Errorf("卷 Index %d 必须大于现有最大值 %d", vol.Index, maxIdx)
 		}
 	}
-	// 至少有一个弧
 	if len(vol.Arcs) == 0 {
 		return fmt.Errorf("新卷必须至少包含一个弧")
 	}
-	// 首弧必须有章节（展开状态）
 	if !vol.Arcs[0].IsExpanded() {
 		return fmt.Errorf("新卷的首弧必须包含详细章节")
 	}
@@ -352,17 +322,17 @@ func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutl
 }
 
 // SaveCompass 保存终局方向指南针。
-func (s *Store) SaveCompass(compass domain.StoryCompass) error {
+func (s *OutlineStore) SaveCompass(compass domain.StoryCompass) error {
 	if compass.EndingDirection == "" {
 		return fmt.Errorf("ending_direction 不能为空")
 	}
-	return s.writeJSON("meta/compass.json", compass)
+	return s.io.WriteJSON("meta/compass.json", compass)
 }
 
-// LoadCompass 读取终局方向指南针。不存在时返回 nil。
-func (s *Store) LoadCompass() (*domain.StoryCompass, error) {
+// LoadCompass 读取终局方向指南针。
+func (s *OutlineStore) LoadCompass() (*domain.StoryCompass, error) {
 	var c domain.StoryCompass
-	if err := s.readJSON("meta/compass.json", &c); err != nil {
+	if err := s.io.ReadJSON("meta/compass.json", &c); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}

@@ -55,8 +55,8 @@ func (e *reminderEngine) observeSubAgentDone(store *storepkg.Store, committed bo
 	if store == nil {
 		return
 	}
-	progress, _ := store.LoadProgress()
-	runMeta, _ := store.LoadRunMeta()
+	progress, _ := store.Progress.Load()
+	runMeta, _ := store.RunMeta.Load()
 	snapshot := reminderSnapshot{
 		Progress:  progress,
 		RunMeta:   runMeta,
@@ -129,7 +129,7 @@ func (e *reminderEngine) readOnlyThreshold() int {
 	if e == nil || e.store == nil {
 		return readOnlyReminderThreshold
 	}
-	progress, err := e.store.LoadProgress()
+	progress, err := e.store.Progress.Load()
 	if err != nil {
 		return readOnlyReminderThreshold
 	}
@@ -217,13 +217,13 @@ func foundationIncompleteReminderRule(snapshot reminderSnapshot) (bool, []policy
 	}
 
 	var missing []string
-	if outline, _ := snapshot.Store.LoadOutline(); len(outline) == 0 {
+	if outline, _ := snapshot.Store.Outline.LoadOutline(); len(outline) == 0 {
 		missing = append(missing, "outline")
 	}
-	if chars, _ := snapshot.Store.LoadCharacters(); len(chars) == 0 {
+	if chars, _ := snapshot.Store.Characters.Load(); len(chars) == 0 {
 		missing = append(missing, "characters")
 	}
-	if rules, _ := snapshot.Store.LoadWorldRules(); len(rules) == 0 {
+	if rules, _ := snapshot.Store.World.LoadWorldRules(); len(rules) == 0 {
 		missing = append(missing, "world_rules")
 	}
 	if len(missing) == 0 {
@@ -255,7 +255,7 @@ func uncommittedDraftReminderRule(snapshot reminderSnapshot) (bool, []policyActi
 	} else if len(progress.CompletedChapters) > 0 {
 		chapter = progress.NextChapter()
 	}
-	draft, _ := snapshot.Store.LoadDraft(chapter)
+	draft, _ := snapshot.Store.Drafts.LoadDraft(chapter)
 	if draft == "" {
 		return false, nil
 	}

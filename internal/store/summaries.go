@@ -7,15 +7,25 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
+// SummaryStore 管理章节、弧、卷摘要。
+type SummaryStore struct {
+	io      *IO
+	outline *OutlineStore // 只读依赖，用于获取弧/卷数量
+}
+
+func NewSummaryStore(io *IO, outline *OutlineStore) *SummaryStore {
+	return &SummaryStore{io: io, outline: outline}
+}
+
 // SaveSummary 保存章节摘要到 summaries/{ch}.json。
-func (s *Store) SaveSummary(sum domain.ChapterSummary) error {
-	return s.writeJSON(fmt.Sprintf("summaries/%02d.json", sum.Chapter), sum)
+func (s *SummaryStore) SaveSummary(sum domain.ChapterSummary) error {
+	return s.io.WriteJSON(fmt.Sprintf("summaries/%02d.json", sum.Chapter), sum)
 }
 
 // LoadSummary 读取指定章节的摘要。
-func (s *Store) LoadSummary(chapter int) (*domain.ChapterSummary, error) {
+func (s *SummaryStore) LoadSummary(chapter int) (*domain.ChapterSummary, error) {
 	var sum domain.ChapterSummary
-	if err := s.readJSON(fmt.Sprintf("summaries/%02d.json", chapter), &sum); err != nil {
+	if err := s.io.ReadJSON(fmt.Sprintf("summaries/%02d.json", chapter), &sum); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -25,7 +35,7 @@ func (s *Store) LoadSummary(chapter int) (*domain.ChapterSummary, error) {
 }
 
 // LoadRecentSummaries 加载 current 章之前最近 count 章的摘要。
-func (s *Store) LoadRecentSummaries(current, count int) ([]domain.ChapterSummary, error) {
+func (s *SummaryStore) LoadRecentSummaries(current, count int) ([]domain.ChapterSummary, error) {
 	var result []domain.ChapterSummary
 	start := max(current-count, 1)
 	for ch := start; ch < current; ch++ {
@@ -40,20 +50,20 @@ func (s *Store) LoadRecentSummaries(current, count int) ([]domain.ChapterSummary
 	return result, nil
 }
 
-// LoadAllSummaries 加载 current 章之前的所有摘要（短篇全量模式）。
-func (s *Store) LoadAllSummaries(current int) ([]domain.ChapterSummary, error) {
+// LoadAllSummaries 加载 current 章之前的所有摘要。
+func (s *SummaryStore) LoadAllSummaries(current int) ([]domain.ChapterSummary, error) {
 	return s.LoadRecentSummaries(current, current)
 }
 
-// SaveArcSummary 保存弧级摘要到 summaries/arc-v{vol}a{arc}.json。
-func (s *Store) SaveArcSummary(sum domain.ArcSummary) error {
-	return s.writeJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", sum.Volume, sum.Arc), sum)
+// SaveArcSummary 保存弧级摘要。
+func (s *SummaryStore) SaveArcSummary(sum domain.ArcSummary) error {
+	return s.io.WriteJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", sum.Volume, sum.Arc), sum)
 }
 
 // LoadArcSummary 读取指定弧的摘要。
-func (s *Store) LoadArcSummary(volume, arc int) (*domain.ArcSummary, error) {
+func (s *SummaryStore) LoadArcSummary(volume, arc int) (*domain.ArcSummary, error) {
 	var sum domain.ArcSummary
-	if err := s.readJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", volume, arc), &sum); err != nil {
+	if err := s.io.ReadJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", volume, arc), &sum); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -63,8 +73,7 @@ func (s *Store) LoadArcSummary(volume, arc int) (*domain.ArcSummary, error) {
 }
 
 // LoadArcSummaries 加载一卷内所有已有弧摘要。
-// 从分层大纲获取实际弧数，无分层大纲时扫描到首个缺失为止。
-func (s *Store) LoadArcSummaries(volume int) ([]domain.ArcSummary, error) {
+func (s *SummaryStore) LoadArcSummaries(volume int) ([]domain.ArcSummary, error) {
 	maxArc := s.arcCountForVolume(volume)
 	var result []domain.ArcSummary
 	for arc := 1; arc <= maxArc; arc++ {
@@ -79,15 +88,15 @@ func (s *Store) LoadArcSummaries(volume int) ([]domain.ArcSummary, error) {
 	return result, nil
 }
 
-// SaveVolumeSummary 保存卷级摘要到 summaries/vol-v{vol}.json。
-func (s *Store) SaveVolumeSummary(sum domain.VolumeSummary) error {
-	return s.writeJSON(fmt.Sprintf("summaries/vol-v%02d.json", sum.Volume), sum)
+// SaveVolumeSummary 保存卷级摘要。
+func (s *SummaryStore) SaveVolumeSummary(sum domain.VolumeSummary) error {
+	return s.io.WriteJSON(fmt.Sprintf("summaries/vol-v%02d.json", sum.Volume), sum)
 }
 
 // LoadVolumeSummary 读取指定卷的摘要。
-func (s *Store) LoadVolumeSummary(volume int) (*domain.VolumeSummary, error) {
+func (s *SummaryStore) LoadVolumeSummary(volume int) (*domain.VolumeSummary, error) {
 	var sum domain.VolumeSummary
-	if err := s.readJSON(fmt.Sprintf("summaries/vol-v%02d.json", volume), &sum); err != nil {
+	if err := s.io.ReadJSON(fmt.Sprintf("summaries/vol-v%02d.json", volume), &sum); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -97,8 +106,7 @@ func (s *Store) LoadVolumeSummary(volume int) (*domain.VolumeSummary, error) {
 }
 
 // LoadAllVolumeSummaries 加载所有已有卷摘要。
-// 从分层大纲获取实际卷数，无分层大纲时扫描到首个缺失为止。
-func (s *Store) LoadAllVolumeSummaries() ([]domain.VolumeSummary, error) {
+func (s *SummaryStore) LoadAllVolumeSummaries() ([]domain.VolumeSummary, error) {
 	maxVol := s.volumeCount()
 	var result []domain.VolumeSummary
 	for vol := 1; vol <= maxVol; vol++ {
@@ -113,19 +121,8 @@ func (s *Store) LoadAllVolumeSummaries() ([]domain.VolumeSummary, error) {
 	return result, nil
 }
 
-// volumeCount 从分层大纲获取卷数，无大纲时返回安全上限。
-func (s *Store) volumeCount() int {
-	volumes, err := s.LoadLayeredOutline()
-	if err == nil && len(volumes) > 0 {
-		return len(volumes)
-	}
-	return 20
-}
-
 // FindCharacterAppearances 批量查找多个角色的最后出场章节号。
-// 从 endChapter-recentWindow 向前单次遍历，找到即标记；全部找到或遍历结束后返回。
-// 相比逐角色逐章扫描，IO 次数从 O(角色数×章节数) 降为 O(章节数)。
-func (s *Store) FindCharacterAppearances(names []string, endChapter, recentWindow int) map[string]int {
+func (s *SummaryStore) FindCharacterAppearances(names []string, endChapter, recentWindow int) map[string]int {
 	result := make(map[string]int, len(names))
 	remaining := make(map[string]struct{}, len(names))
 	for _, n := range names {
@@ -149,9 +146,16 @@ func (s *Store) FindCharacterAppearances(names []string, endChapter, recentWindo
 	return result
 }
 
-// arcCountForVolume 从分层大纲获取指定卷的弧数，无大纲时返回安全上限。
-func (s *Store) arcCountForVolume(volume int) int {
-	volumes, err := s.LoadLayeredOutline()
+func (s *SummaryStore) volumeCount() int {
+	volumes, err := s.outline.LoadLayeredOutline()
+	if err == nil && len(volumes) > 0 {
+		return len(volumes)
+	}
+	return 20
+}
+
+func (s *SummaryStore) arcCountForVolume(volume int) int {
+	volumes, err := s.outline.LoadLayeredOutline()
 	if err == nil {
 		for _, v := range volumes {
 			if v.Index == volume {
@@ -161,3 +165,4 @@ func (s *Store) arcCountForVolume(volume int) int {
 	}
 	return 20
 }
+

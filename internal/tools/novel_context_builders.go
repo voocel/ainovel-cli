@@ -67,17 +67,17 @@ func mergeContextSection(result map[string]any, section map[string]any) {
 }
 
 func (t *ContextTool) buildBaseContext(result map[string]any, warn func(string, error)) {
-	if premise, err := t.store.LoadPremise(); err == nil && premise != "" {
+	if premise, err := t.store.Outline.LoadPremise(); err == nil && premise != "" {
 		result["premise"] = premise
 	} else {
 		warn("premise", err)
 	}
-	if outline, err := t.store.LoadOutline(); err == nil && outline != nil {
+	if outline, err := t.store.Outline.LoadOutline(); err == nil && outline != nil {
 		result["outline"] = outline
 	} else {
 		warn("outline", err)
 	}
-	if rules, err := t.store.LoadWorldRules(); err == nil && len(rules) > 0 {
+	if rules, err := t.store.World.LoadWorldRules(); err == nil && len(rules) > 0 {
 		result["world_rules"] = rules
 	} else {
 		warn("world_rules", err)
@@ -90,9 +90,9 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		profile: domain.NewContextProfile(0),
 	}
 
-	progress, err := t.store.LoadProgress()
+	progress, err := t.store.Progress.Load()
 	warn("progress", err)
-	runMeta, err := t.store.LoadRunMeta()
+	runMeta, err := t.store.RunMeta.Load()
 	warn("run_meta", err)
 	state.progress = progress
 	state.runMeta = runMeta
@@ -107,7 +107,7 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		state.profile.Layered = false
 	}
 
-	currentEntry, currentEntryErr := t.store.GetChapterOutline(chapter)
+	currentEntry, currentEntryErr := t.store.Outline.GetChapterOutline(chapter)
 	if currentEntryErr == nil {
 		envelope.Working["current_chapter_outline"] = currentEntry
 	} else {
@@ -115,21 +115,21 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	}
 	state.currentEntry = currentEntry
 
-	foreshadow, foreshadowErr := t.store.LoadActiveForeshadow()
+	foreshadow, foreshadowErr := t.store.World.LoadActiveForeshadow()
 	warn("foreshadow_ledger", foreshadowErr)
 	if len(foreshadow) > 0 {
 		envelope.Episodic["foreshadow_ledger"] = foreshadow
 	}
 	state.foreshadow = foreshadow
 
-	relationships, relErr := t.store.LoadRelationships()
+	relationships, relErr := t.store.World.LoadRelationships()
 	warn("relationship_state", relErr)
 	if len(relationships) > 0 {
 		envelope.Episodic["relationship_state"] = relationships
 	}
 	state.relationships = relationships
 
-	allStateChanges, scErr := t.store.LoadStateChanges()
+	allStateChanges, scErr := t.store.World.LoadStateChanges()
 	warn("recent_state_changes", scErr)
 	state.allStateChanges = allStateChanges
 	if len(allStateChanges) > 0 {
@@ -145,7 +145,7 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		}
 	}
 
-	styleRules, styleErr := t.store.LoadStyleRules()
+	styleRules, styleErr := t.store.World.LoadStyleRules()
 	warn("style_rules", styleErr)
 	state.styleRules = styleRules
 
@@ -169,21 +169,21 @@ func (t *ContextTool) buildChapterContext(result map[string]any, state contextBu
 }
 
 func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope, state contextBuildState, warn func(string, error)) {
-	if next, err := t.store.GetChapterOutline(state.chapter + 1); err == nil && next != nil {
+	if next, err := t.store.Outline.GetChapterOutline(state.chapter + 1); err == nil && next != nil {
 		envelope.Working["next_chapter_outline"] = next
 	}
 
 	if state.profile.Layered {
 		t.loadLayeredSummaries(envelope.Working, state.chapter, state.profile.SummaryWindow, warn)
 	} else {
-		if summaries, err := t.store.LoadRecentSummaries(state.chapter, state.profile.SummaryWindow); err == nil && len(summaries) > 0 {
+		if summaries, err := t.store.Summaries.LoadRecentSummaries(state.chapter, state.profile.SummaryWindow); err == nil && len(summaries) > 0 {
 			envelope.Working["recent_summaries"] = summaries
 		} else {
 			warn("recent_summaries", err)
 		}
 	}
 
-	if timeline, err := t.store.LoadRecentTimeline(state.chapter, state.profile.TimelineWindow); err == nil && len(timeline) > 0 {
+	if timeline, err := t.store.World.LoadRecentTimeline(state.chapter, state.profile.TimelineWindow); err == nil && len(timeline) > 0 {
 		envelope.Working["timeline"] = timeline
 	} else {
 		warn("timeline", err)
@@ -202,7 +202,7 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 		envelope.Working["checkpoint"] = checkpoint
 	}
 
-	if plan, err := t.store.LoadChapterPlan(state.chapter); err == nil && plan != nil {
+	if plan, err := t.store.Drafts.LoadChapterPlan(state.chapter); err == nil && plan != nil {
 		envelope.Working["chapter_plan"] = plan
 		if len(plan.Contract.RequiredBeats) > 0 ||
 			len(plan.Contract.ForbiddenMoves) > 0 ||
@@ -215,7 +215,7 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 	}
 
 	if state.chapter > 1 {
-		if prevText, err := t.store.LoadChapterText(state.chapter - 1); err == nil && prevText != "" {
+		if prevText, err := t.store.Drafts.LoadChapterText(state.chapter - 1); err == nil && prevText != "" {
 			runes := []rune(prevText)
 			if len(runes) > 800 {
 				runes = runes[len(runes)-800:]
@@ -243,7 +243,7 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 			"volume": state.progress.CurrentVolume,
 			"arc":    state.progress.CurrentArc,
 		}
-		if volumes, err := t.store.LoadLayeredOutline(); err == nil {
+		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
 			globalCh := 1
 			for _, v := range volumes {
 				if v.Index == state.progress.CurrentVolume {
@@ -273,18 +273,22 @@ func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope
 	if state.styleRules != nil {
 		envelope.References["style_rules"] = state.styleRules
 	} else {
-		if anchors := t.store.ExtractStyleAnchors(3); len(anchors) > 0 {
+		var maxCompleted int
+		if state.progress != nil {
+			maxCompleted = maxCompletedChapter(state.progress.CompletedChapters)
+		}
+		if anchors := t.store.Drafts.ExtractStyleAnchors(3, maxCompleted); len(anchors) > 0 {
 			envelope.References["style_anchors"] = anchors
 		}
 
 		if state.currentEntry != nil {
 			var voiceSamples []map[string]any
-			chars, _ := t.store.LoadCharacters()
+			chars, _ := t.store.Characters.Load()
 			for _, c := range chars {
 				if c.Tier == "secondary" || c.Tier == "decorative" {
 					continue
 				}
-				samples := t.store.ExtractDialogue(c.Name, c.Aliases, 3)
+				samples := t.store.Drafts.ExtractDialogue(c.Name, c.Aliases, 3, maxCompleted)
 				if len(samples) > 0 {
 					voiceSamples = append(voiceSamples, map[string]any{
 						"character": c.Name,
@@ -314,13 +318,13 @@ func (t *ContextTool) buildArchitectContext(result map[string]any, warn func(str
 }
 
 func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope, warn func(string, error)) {
-	runMeta, err := t.store.LoadRunMeta()
+	runMeta, err := t.store.RunMeta.Load()
 	warn("run_meta", err)
 	if runMeta != nil && runMeta.PlanningTier != "" {
 		envelope.Planning["planning_tier"] = runMeta.PlanningTier
 	}
 
-	if layered, err := t.store.LoadLayeredOutline(); err == nil && len(layered) > 0 {
+	if layered, err := t.store.Outline.LoadLayeredOutline(); err == nil && len(layered) > 0 {
 		envelope.Planning["layered_outline"] = layered
 		var skeletonArcs []map[string]any
 		for _, v := range layered {
@@ -343,12 +347,12 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 		warn("layered_outline", err)
 	}
 
-	if compass, err := t.store.LoadCompass(); err == nil && compass != nil {
+	if compass, err := t.store.Outline.LoadCompass(); err == nil && compass != nil {
 		envelope.Planning["compass"] = compass
 	} else {
 		warn("compass", err)
 	}
-	if volSummaries, err := t.store.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
+	if volSummaries, err := t.store.Summaries.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
 		envelope.Planning["volume_summaries"] = volSummaries
 	} else {
 		warn("volume_summaries", err)
@@ -356,18 +360,18 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 }
 
 func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelope, warn func(string, error)) {
-	if chars, err := t.store.LoadCharacters(); err == nil && chars != nil {
+	if chars, err := t.store.Characters.Load(); err == nil && chars != nil {
 		envelope.Foundation["characters"] = chars
 	} else {
 		warn("characters", err)
 	}
 
-	if snapshots, err := t.store.LoadLatestSnapshots(); err == nil && len(snapshots) > 0 {
+	if snapshots, err := t.store.Characters.LoadLatestSnapshots(); err == nil && len(snapshots) > 0 {
 		envelope.Foundation["character_snapshots"] = snapshots
 	} else {
 		warn("character_snapshots", err)
 	}
-	if foreshadow, err := t.store.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
+	if foreshadow, err := t.store.World.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
 		envelope.Foundation["foreshadow_ledger"] = foreshadow
 	} else {
 		warn("foreshadow_ledger", err)
@@ -376,7 +380,7 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 }
 
 func (t *ContextTool) buildArchitectReferences(envelope *architectContextEnvelope, warn func(string, error)) {
-	if styleRules, err := t.store.LoadStyleRules(); err == nil && styleRules != nil {
+	if styleRules, err := t.store.World.LoadStyleRules(); err == nil && styleRules != nil {
 		envelope.References["style_rules"] = styleRules
 	} else {
 		warn("style_rules", err)

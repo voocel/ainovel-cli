@@ -8,23 +8,28 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// SaveRunMeta 保存运行元信息到 meta/run.json。
-func (s *Store) SaveRunMeta(meta domain.RunMeta) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveRunMetaUnlocked(meta)
+// RunMetaStore 管理运行元信息（模型、干预历史、规划级别等）。
+type RunMetaStore struct{ io *IO }
+
+func NewRunMetaStore(io *IO) *RunMetaStore { return &RunMetaStore{io: io} }
+
+// Save 保存运行元信息到 meta/run.json。
+func (s *RunMetaStore) Save(meta domain.RunMeta) error {
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	return s.saveUnlocked(meta)
 }
 
-// LoadRunMeta 读取运行元信息。
-func (s *Store) LoadRunMeta() (*domain.RunMeta, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.loadRunMetaUnlocked()
+// Load 读取运行元信息。
+func (s *RunMetaStore) Load() (*domain.RunMeta, error) {
+	s.io.mu.RLock()
+	defer s.io.mu.RUnlock()
+	return s.loadUnlocked()
 }
 
-func (s *Store) loadRunMetaUnlocked() (*domain.RunMeta, error) {
+func (s *RunMetaStore) loadUnlocked() (*domain.RunMeta, error) {
 	var meta domain.RunMeta
-	if err := s.readJSONUnlocked("meta/run.json", &meta); err != nil {
+	if err := s.io.ReadJSONUnlocked("meta/run.json", &meta); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -33,14 +38,14 @@ func (s *Store) loadRunMetaUnlocked() (*domain.RunMeta, error) {
 	return &meta, nil
 }
 
-func (s *Store) saveRunMetaUnlocked(meta domain.RunMeta) error {
-	return s.writeJSONUnlocked("meta/run.json", meta)
+func (s *RunMetaStore) saveUnlocked(meta domain.RunMeta) error {
+	return s.io.WriteJSONUnlocked("meta/run.json", meta)
 }
 
-// InitRunMeta 初始化或更新运行元信息，保留已有的 SteerHistory。
-func (s *Store) InitRunMeta(style, provider, model string) error {
-	return s.withWriteLock(func() error {
-		existing, err := s.loadRunMetaUnlocked()
+// Init 初始化或更新运行元信息，保留已有的 SteerHistory。
+func (s *RunMetaStore) Init(style, provider, model string) error {
+	return s.io.WithWriteLock(func() error {
+		existing, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -55,14 +60,14 @@ func (s *Store) InitRunMeta(style, provider, model string) error {
 			meta.PendingSteer = existing.PendingSteer
 			meta.PlanningTier = existing.PlanningTier
 		}
-		return s.saveRunMetaUnlocked(meta)
+		return s.saveUnlocked(meta)
 	})
 }
 
-// AppendSteerEntry 追加用户干预记录到 meta/run.json。
-func (s *Store) AppendSteerEntry(entry domain.SteerEntry) error {
-	return s.withWriteLock(func() error {
-		meta, err := s.loadRunMetaUnlocked()
+// AppendSteerEntry 追加用户干预记录。
+func (s *RunMetaStore) AppendSteerEntry(entry domain.SteerEntry) error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -70,14 +75,14 @@ func (s *Store) AppendSteerEntry(entry domain.SteerEntry) error {
 			meta = &domain.RunMeta{}
 		}
 		meta.SteerHistory = append(meta.SteerHistory, entry)
-		return s.saveRunMetaUnlocked(*meta)
+		return s.saveUnlocked(*meta)
 	})
 }
 
-// SetPendingSteer 记录未完成的 Steer 指令，用于中断恢复。
-func (s *Store) SetPendingSteer(input string) error {
-	return s.withWriteLock(func() error {
-		meta, err := s.loadRunMetaUnlocked()
+// SetPendingSteer 记录未完成的 Steer 指令。
+func (s *RunMetaStore) SetPendingSteer(input string) error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -85,14 +90,14 @@ func (s *Store) SetPendingSteer(input string) error {
 			meta = &domain.RunMeta{}
 		}
 		meta.PendingSteer = input
-		return s.saveRunMetaUnlocked(*meta)
+		return s.saveUnlocked(*meta)
 	})
 }
 
 // ClearPendingSteer 清除已处理的 Steer 指令。
-func (s *Store) ClearPendingSteer() error {
-	return s.withWriteLock(func() error {
-		meta, err := s.loadRunMetaUnlocked()
+func (s *RunMetaStore) ClearPendingSteer() error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -100,45 +105,14 @@ func (s *Store) ClearPendingSteer() error {
 			return nil
 		}
 		meta.PendingSteer = ""
-		return s.saveRunMetaUnlocked(*meta)
+		return s.saveUnlocked(*meta)
 	})
 }
 
-// ClearHandledSteer 原子性地清除 PendingSteer 并重置 FlowSteering 状态。
-// 同时操作 run.json 和 progress.json，在同一个写锁内完成，避免崩溃导致不一致。
-func (s *Store) ClearHandledSteer() error {
-	return s.withWriteLock(func() error {
-		meta, err := s.loadRunMetaUnlocked()
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if meta != nil && meta.PendingSteer != "" {
-			meta.PendingSteer = ""
-			if err := s.saveRunMetaUnlocked(*meta); err != nil {
-				return err
-			}
-		}
-		p, err := s.loadProgressUnlocked()
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if p != nil && p.Flow == domain.FlowSteering {
-			if err := domain.ValidateFlowTransition(p.Flow, domain.FlowWriting); err != nil {
-				return err
-			}
-			p.Flow = domain.FlowWriting
-			if err := s.saveProgressUnlocked(p); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// SetPlanningTier 记录当前作品采用的规划级别。
-func (s *Store) SetPlanningTier(tier domain.PlanningTier) error {
-	return s.withWriteLock(func() error {
-		meta, err := s.loadRunMetaUnlocked()
+// SetPlanningTier 记录当前作品的规划级别。
+func (s *RunMetaStore) SetPlanningTier(tier domain.PlanningTier) error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -146,17 +120,17 @@ func (s *Store) SetPlanningTier(tier domain.PlanningTier) error {
 			meta = &domain.RunMeta{}
 		}
 		meta.PlanningTier = tier
-		return s.saveRunMetaUnlocked(*meta)
+		return s.saveUnlocked(*meta)
 	})
 }
 
 // SaveCheckpoint 保存当前进度快照到 meta/checkpoints/。
-func (s *Store) SaveCheckpoint(label string) error {
-	p, err := s.LoadProgress()
-	if err != nil || p == nil {
-		return err
+// progress 由调用方传入，避免跨域依赖。
+func (s *RunMetaStore) SaveCheckpoint(label string, progress *domain.Progress) error {
+	if progress == nil {
+		return nil
 	}
 	ts := time.Now().Format("20060102-150405")
 	rel := fmt.Sprintf("meta/checkpoints/%s-%s.json", ts, label)
-	return s.writeJSON(rel, p)
+	return s.io.WriteJSON(rel, progress)
 }

@@ -82,7 +82,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 		Summary:   a.Summary,
 		KeyEvents: a.KeyEvents,
 	}
-	if err := t.store.SaveArcSummary(arcSummary); err != nil {
+	if err := t.store.Summaries.SaveArcSummary(arcSummary); err != nil {
 		return nil, fmt.Errorf("save arc summary: %w", err)
 	}
 
@@ -91,7 +91,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 			a.CharacterSnapshots[i].Volume = a.Volume
 			a.CharacterSnapshots[i].Arc = a.Arc
 		}
-		if err := t.store.SaveCharacterSnapshots(a.Volume, a.Arc, a.CharacterSnapshots); err != nil {
+		if err := t.store.Characters.SaveSnapshots(a.Volume, a.Arc, a.CharacterSnapshots); err != nil {
 			return nil, fmt.Errorf("save character snapshots: %w", err)
 		}
 	}
@@ -106,7 +106,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 			Taboos:    a.StyleRules.Taboos,
 			UpdatedAt: time.Now().Format(time.RFC3339),
 		}
-		if err := t.store.SaveStyleRules(rules); err != nil {
+		if err := t.store.World.SaveStyleRules(rules); err != nil {
 			return nil, fmt.Errorf("save style rules: %w", err)
 		}
 		styleRulesSaved = true

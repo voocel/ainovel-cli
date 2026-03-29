@@ -25,11 +25,11 @@ func TestPendingCommitLifecycle(t *testing.T) {
 			NextChapter: 4,
 		},
 	}
-	if err := s.SavePendingCommit(pending); err != nil {
+	if err := s.Signals.SavePendingCommit(pending); err != nil {
 		t.Fatalf("SavePendingCommit: %v", err)
 	}
 
-	got, err := s.LoadPendingCommit()
+	got, err := s.Signals.LoadPendingCommit()
 	if err != nil {
 		t.Fatalf("LoadPendingCommit: %v", err)
 	}
@@ -43,10 +43,10 @@ func TestPendingCommitLifecycle(t *testing.T) {
 		t.Fatalf("unexpected pending result: %+v", got.Result)
 	}
 
-	if err := s.ClearPendingCommit(); err != nil {
+	if err := s.Signals.ClearPendingCommit(); err != nil {
 		t.Fatalf("ClearPendingCommit: %v", err)
 	}
-	got, err = s.LoadPendingCommit()
+	got, err = s.Signals.LoadPendingCommit()
 	if err != nil {
 		t.Fatalf("LoadPendingCommit after clear: %v", err)
 	}

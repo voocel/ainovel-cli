@@ -50,7 +50,7 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 
 	// 模式 1：提取角色对话
 	if a.Character != "" {
-		chars, _ := t.store.LoadCharacters()
+		chars, _ := t.store.Characters.Load()
 		var aliases []string
 		for _, c := range chars {
 			if c.Name == a.Character {
@@ -58,7 +58,11 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 				break
 			}
 		}
-		samples := t.store.ExtractDialogue(a.Character, aliases, 8)
+		var maxCompleted int
+		if p, _ := t.store.Progress.Load(); p != nil {
+			maxCompleted = maxCompletedChapter(p.CompletedChapters)
+		}
+		samples := t.store.Drafts.ExtractDialogue(a.Character, aliases, 8, maxCompleted)
 		return json.Marshal(map[string]any{
 			"character": a.Character,
 			"samples":   samples,
@@ -71,7 +75,7 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 		if maxRunes <= 0 {
 			maxRunes = 2000
 		}
-		texts, err := t.store.LoadChapterRange(a.From, a.To, maxRunes)
+		texts, err := t.store.Drafts.LoadChapterRange(a.From, a.To, maxRunes)
 		if err != nil {
 			return nil, fmt.Errorf("load chapter range: %w", err)
 		}
@@ -91,12 +95,12 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	var err error
 	switch a.Source {
 	case "draft":
-		content, err = t.store.LoadDraft(a.Chapter)
+		content, err = t.store.Drafts.LoadDraft(a.Chapter)
 	default: // final
-		content, err = t.store.LoadChapterText(a.Chapter)
+		content, err = t.store.Drafts.LoadChapterText(a.Chapter)
 		if err == nil && content == "" {
 			// 回退到草稿
-			content, err = t.store.LoadDraft(a.Chapter)
+			content, err = t.store.Drafts.LoadDraft(a.Chapter)
 		}
 	}
 	if err != nil {
@@ -115,4 +119,15 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 		"content":    content,
 		"word_count": len([]rune(content)),
 	})
+}
+
+// maxCompletedChapter 返回已完成章节列表中的最大章节号。
+func maxCompletedChapter(completed []int) int {
+	m := 0
+	for _, ch := range completed {
+		if ch > m {
+			m = ch
+		}
+	}
+	return m
 }

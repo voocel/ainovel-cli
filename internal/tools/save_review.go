@@ -65,12 +65,12 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		return nil, err
 	}
 
-	if err := t.store.SaveReview(r); err != nil {
+	if err := t.store.World.SaveReview(r); err != nil {
 		return nil, fmt.Errorf("save review: %w", err)
 	}
 
 	// 写入信号文件供宿主读取
-	if err := t.store.SaveLastReview(r); err != nil {
+	if err := t.store.Signals.SaveLastReview(r); err != nil {
 		return nil, fmt.Errorf("save review signal: %w", err)
 	}
 

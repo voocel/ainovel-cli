@@ -52,11 +52,11 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 
 	switch a.Mode {
 	case "append":
-		if err := t.store.AppendDraft(a.Chapter, a.Content); err != nil {
+		if err := t.store.Drafts.AppendDraft(a.Chapter, a.Content); err != nil {
 			return nil, fmt.Errorf("append draft: %w", err)
 		}
 		// 读取合并后的完整内容计算字数
-		full, err := t.store.LoadDraft(a.Chapter)
+		full, err := t.store.Drafts.LoadDraft(a.Chapter)
 		if err != nil {
 			return nil, fmt.Errorf("load draft after append: %w", err)
 		}
@@ -68,7 +68,7 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 			"next_step":  "自审后调用 commit_chapter 提交",
 		})
 	default: // write
-		if err := t.store.SaveDraft(a.Chapter, a.Content); err != nil {
+		if err := t.store.Drafts.SaveDraft(a.Chapter, a.Content); err != nil {
 			return nil, fmt.Errorf("save draft: %w", err)
 		}
 		return json.Marshal(map[string]any{

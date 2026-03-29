@@ -57,7 +57,7 @@ func recoveryPendingCommitRule(snapshot recoverySnapshot) (bool, recoveryResult)
 	if snapshot.Store == nil {
 		return false, recoveryResult{}
 	}
-	pending, err := snapshot.Store.LoadPendingCommit()
+	pending, err := snapshot.Store.Signals.LoadPendingCommit()
 	if err != nil {
 		slog.Error("读取 pending_commit 失败", "module", "recovery", "err", err)
 		return false, recoveryResult{}
@@ -195,7 +195,7 @@ func recoveryLayeredPlanningRule(snapshot recoverySnapshot) (bool, recoveryResul
 	}
 
 	next := progress.NextChapter()
-	if _, err := snapshot.Store.GetChapterOutline(next); err == nil {
+	if _, err := snapshot.Store.Outline.GetChapterOutline(next); err == nil {
 		return false, recoveryResult{}
 	}
 
@@ -244,7 +244,7 @@ func recoveryResumableRule(snapshot recoverySnapshot) (bool, recoveryResult) {
 }
 
 func mustLoadLayered(s *storepkg.Store) []domain.VolumeOutline {
-	v, err := s.LoadLayeredOutline()
+	v, err := s.Outline.LoadLayeredOutline()
 	if err != nil {
 		slog.Warn("加载分层大纲失败", "module", "recovery", "err", err)
 	}
@@ -260,13 +260,13 @@ func reconcileCommittedChapter(snapshot recoverySnapshot, pending *domain.Pendin
 	if err := applyRecoveryCommitActions(actions, snapshot.Store); err != nil {
 		return recoveryResult{}, err
 	}
-	if err := snapshot.Store.ClearLastCommit(); err != nil {
+	if err := snapshot.Store.Signals.ClearLastCommit(); err != nil {
 		return recoveryResult{}, err
 	}
-	if err := snapshot.Store.ClearInProgress(); err != nil {
+	if err := snapshot.Store.Progress.ClearInProgress(); err != nil {
 		return recoveryResult{}, err
 	}
-	if err := snapshot.Store.ClearPendingCommit(); err != nil {
+	if err := snapshot.Store.Signals.ClearPendingCommit(); err != nil {
 		return recoveryResult{}, err
 	}
 
@@ -281,19 +281,20 @@ func applyRecoveryCommitActions(actions []policyAction, store *storepkg.Store) e
 	for _, action := range actions {
 		switch action.Kind {
 		case actionSetFlow:
-			if err := store.SetFlow(action.Flow); err != nil {
+			if err := store.Progress.SetFlow(action.Flow); err != nil {
 				return err
 			}
 		case actionSetPendingRewrites:
-			if err := store.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
+			if err := store.Progress.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
 				return err
 			}
 		case actionCompleteRewrite:
-			if err := store.CompleteRewrite(action.Chapter); err != nil {
+			if err := store.Progress.CompleteRewrite(action.Chapter); err != nil {
 				return err
 			}
 		case actionSaveCheckpoint:
-			if err := store.SaveCheckpoint(action.Label); err != nil {
+			progress, _ := store.Progress.Load()
+			if err := store.RunMeta.SaveCheckpoint(action.Label, progress); err != nil {
 				return err
 			}
 		case actionSaveHandoff:
@@ -301,7 +302,7 @@ func applyRecoveryCommitActions(actions []policyAction, store *storepkg.Store) e
 				return err
 			}
 		case actionMarkComplete:
-			if err := store.MarkComplete(); err != nil {
+			if err := store.Progress.MarkComplete(); err != nil {
 				return err
 			}
 		}

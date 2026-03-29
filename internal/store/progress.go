@@ -8,16 +8,21 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// LoadProgress 读取 meta/progress.json。不存在时返回 nil。
-func (s *Store) LoadProgress() (*domain.Progress, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.loadProgressUnlocked()
+// ProgressStore 管理创作进度状态。
+type ProgressStore struct{ io *IO }
+
+func NewProgressStore(io *IO) *ProgressStore { return &ProgressStore{io: io} }
+
+// Load 读取 meta/progress.json。不存在时返回 nil。
+func (s *ProgressStore) Load() (*domain.Progress, error) {
+	s.io.mu.RLock()
+	defer s.io.mu.RUnlock()
+	return s.loadUnlocked()
 }
 
-func (s *Store) loadProgressUnlocked() (*domain.Progress, error) {
+func (s *ProgressStore) loadUnlocked() (*domain.Progress, error) {
 	var p domain.Progress
-	if err := s.readJSONUnlocked("meta/progress.json", &p); err != nil {
+	if err := s.io.ReadJSONUnlocked("meta/progress.json", &p); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -26,30 +31,30 @@ func (s *Store) loadProgressUnlocked() (*domain.Progress, error) {
 	return &p, nil
 }
 
-// SaveProgress 保存进度到 meta/progress.json。
-func (s *Store) SaveProgress(p *domain.Progress) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveProgressUnlocked(p)
+// Save 保存进度。
+func (s *ProgressStore) Save(p *domain.Progress) error {
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	return s.saveUnlocked(p)
 }
 
-func (s *Store) saveProgressUnlocked(p *domain.Progress) error {
-	return s.writeJSONUnlocked("meta/progress.json", p)
+func (s *ProgressStore) saveUnlocked(p *domain.Progress) error {
+	return s.io.WriteJSONUnlocked("meta/progress.json", p)
 }
 
-// InitProgress 创建初始进度。
-func (s *Store) InitProgress(novelName string, totalChapters int) error {
-	return s.SaveProgress(&domain.Progress{
+// Init 创建初始进度。
+func (s *ProgressStore) Init(novelName string, totalChapters int) error {
+	return s.Save(&domain.Progress{
 		NovelName:     novelName,
 		Phase:         domain.PhaseInit,
 		TotalChapters: totalChapters,
 	})
 }
 
-// SetTotalChapters 根据大纲长度设定总章节数。
-func (s *Store) SetTotalChapters(n int) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+// SetTotalChapters 设定总章节数。
+func (s *ProgressStore) SetTotalChapters(n int) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -57,14 +62,14 @@ func (s *Store) SetTotalChapters(n int) error {
 			p = &domain.Progress{}
 		}
 		p.TotalChapters = n
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // UpdatePhase 更新创作阶段。
-func (s *Store) UpdatePhase(phase domain.Phase) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) UpdatePhase(phase domain.Phase) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -75,26 +80,23 @@ func (s *Store) UpdatePhase(phase domain.Phase) error {
 			return err
 		}
 		p.Phase = phase
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // MarkChapterComplete 标记章节完成，原子性更新进度。
-// 支持重写场景：如果章节已完成，先减去旧字数再加新字数。
-// hookType 和 dominantStrand 用于节奏追踪，可为空。
-func (s *Store) MarkChapterComplete(chapter, wordCount int, hookType, dominantStrand string) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) MarkChapterComplete(chapter, wordCount int, hookType, dominantStrand string) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
 		if p == nil {
-			return fmt.Errorf("progress not initialized, call InitProgress first")
+			return fmt.Errorf("progress not initialized, call Init first")
 		}
 		if p.ChapterWordCounts == nil {
 			p.ChapterWordCounts = make(map[int]int)
 		}
-		// 重写场景：减去旧字数
 		if oldWC, ok := p.ChapterWordCounts[chapter]; ok {
 			p.TotalWordCount -= oldWC
 		}
@@ -103,7 +105,6 @@ func (s *Store) MarkChapterComplete(chapter, wordCount int, hookType, dominantSt
 		if !slices.Contains(p.CompletedChapters, chapter) {
 			p.CompletedChapters = append(p.CompletedChapters, chapter)
 		}
-		// 仅在正常推进时更新 CurrentChapter，重写旧章节不回退指针
 		if chapter+1 > p.CurrentChapter {
 			p.CurrentChapter = chapter + 1
 		}
@@ -114,7 +115,6 @@ func (s *Store) MarkChapterComplete(chapter, wordCount int, hookType, dominantSt
 		}
 		p.Phase = domain.PhaseWriting
 
-		// 节奏追踪：按章节顺序填充 history（确保索引对齐）
 		if dominantStrand != "" {
 			for len(p.StrandHistory) < chapter-1 {
 				p.StrandHistory = append(p.StrandHistory, "")
@@ -136,19 +136,19 @@ func (s *Store) MarkChapterComplete(chapter, wordCount int, hookType, dominantSt
 			}
 		}
 
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // MarkComplete 标记全书创作完成。
-func (s *Store) MarkComplete() error {
+func (s *ProgressStore) MarkComplete() error {
 	return s.UpdatePhase(domain.PhaseComplete)
 }
 
-// ClearInProgress 清除进度中间状态（章节提交后调用）。
-func (s *Store) ClearInProgress() error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+// ClearInProgress 清除进度中间状态。
+func (s *ProgressStore) ClearInProgress() error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -157,14 +157,14 @@ func (s *Store) ClearInProgress() error {
 		}
 		p.InProgressChapter = 0
 		p.CompletedScenes = nil
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // UpdateVolumeArc 更新当前卷弧位置。
-func (s *Store) UpdateVolumeArc(volume, arc int) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) UpdateVolumeArc(volume, arc int) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -173,14 +173,14 @@ func (s *Store) UpdateVolumeArc(volume, arc int) error {
 		}
 		p.CurrentVolume = volume
 		p.CurrentArc = arc
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // SetLayered 设置分层模式标志。
-func (s *Store) SetLayered(layered bool) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) SetLayered(layered bool) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -188,14 +188,14 @@ func (s *Store) SetLayered(layered bool) error {
 			return nil
 		}
 		p.Layered = layered
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // SetFlow 更新当前流程状态。
-func (s *Store) SetFlow(flow domain.FlowState) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) SetFlow(flow domain.FlowState) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -206,14 +206,14 @@ func (s *Store) SetFlow(flow domain.FlowState) error {
 			return err
 		}
 		p.Flow = flow
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // SetPendingRewrites 设置待重写章节队列和原因。
-func (s *Store) SetPendingRewrites(chapters []int, reason string) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) SetPendingRewrites(chapters []int, reason string) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -222,15 +222,14 @@ func (s *Store) SetPendingRewrites(chapters []int, reason string) error {
 		}
 		p.PendingRewrites = chapters
 		p.RewriteReason = reason
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // CompleteRewrite 从待重写队列中移除已完成的章节。
-// 队列清空时自动将 Flow 重置为 writing 并清除 RewriteReason。
-func (s *Store) CompleteRewrite(chapter int) error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) CompleteRewrite(chapter int) error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -251,14 +250,14 @@ func (s *Store) CompleteRewrite(chapter int) error {
 			p.Flow = domain.FlowWriting
 			p.RewriteReason = ""
 		}
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // ClearPendingRewrites 强制清空重写队列。
-func (s *Store) ClearPendingRewrites() error {
-	return s.withWriteLock(func() error {
-		p, err := s.loadProgressUnlocked()
+func (s *ProgressStore) ClearPendingRewrites() error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
 		if err != nil {
 			return err
 		}
@@ -271,14 +270,13 @@ func (s *Store) ClearPendingRewrites() error {
 			return err
 		}
 		p.Flow = domain.FlowWriting
-		return s.saveProgressUnlocked(p)
+		return s.saveUnlocked(p)
 	})
 }
 
 // ValidateChapterCommit 校验当前章节是否允许提交。
-// 在重写/打磨流程中，只允许提交待处理队列中的章节。
-func (s *Store) ValidateChapterCommit(chapter int) error {
-	p, err := s.LoadProgress()
+func (s *ProgressStore) ValidateChapterCommit(chapter int) error {
+	p, err := s.Load()
 	if err != nil {
 		return err
 	}

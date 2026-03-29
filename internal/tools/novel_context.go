@@ -247,7 +247,7 @@ func sliceLen(v any) int {
 // loadFilteredCharacters 按 Tier 和场景出场过滤角色。
 // core/important 始终返回；secondary/decorative 只在当前章节大纲提及时返回。
 func (t *ContextTool) loadFilteredCharacters(result map[string]any, chapter int, warn func(string, error)) {
-	chars, err := t.store.LoadCharacters()
+	chars, err := t.store.Characters.Load()
 	if err != nil {
 		warn("characters", err)
 		return
@@ -257,7 +257,7 @@ func (t *ContextTool) loadFilteredCharacters(result map[string]any, chapter int,
 	}
 
 	// 获取当前章节大纲的场景描述，用于匹配次要角色
-	entry, err := t.store.GetChapterOutline(chapter)
+	entry, err := t.store.Outline.GetChapterOutline(chapter)
 	if err != nil {
 		warn("current_chapter_outline", err)
 		result["characters"] = chars
@@ -294,11 +294,11 @@ func matchCharacter(text string, c domain.Character) bool {
 
 // loadLayeredSummaries 分层摘要加载：卷摘要 + 当前卷弧摘要 + 弧内章摘要。
 func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summaryWindow int, warn func(string, error)) {
-	vol, arc, err := t.store.LocateChapter(chapter)
+	vol, arc, err := t.store.Outline.LocateChapter(chapter)
 	if err != nil {
 		warn("layered_outline_position", err)
 		// 回退到扁平模式
-		if summaries, err := t.store.LoadRecentSummaries(chapter, summaryWindow); err == nil && len(summaries) > 0 {
+		if summaries, err := t.store.Summaries.LoadRecentSummaries(chapter, summaryWindow); err == nil && len(summaries) > 0 {
 			result["recent_summaries"] = summaries
 		} else {
 			warn("recent_summaries", err)
@@ -307,14 +307,14 @@ func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summa
 	}
 
 	// 1. 已完成卷的卷摘要
-	if volSummaries, err := t.store.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
+	if volSummaries, err := t.store.Summaries.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
 		result["volume_summaries"] = volSummaries
 	} else {
 		warn("volume_summaries", err)
 	}
 
 	// 2. 当前卷内已完成弧的弧摘要（不含当前弧）
-	if arcSummaries, err := t.store.LoadArcSummaries(vol); err == nil && len(arcSummaries) > 0 {
+	if arcSummaries, err := t.store.Summaries.LoadArcSummaries(vol); err == nil && len(arcSummaries) > 0 {
 		var prior []domain.ArcSummary
 		for _, s := range arcSummaries {
 			if s.Arc < arc {
@@ -329,7 +329,7 @@ func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summa
 	}
 
 	// 3. 当前弧内最近 N 章的章摘要
-	if summaries, err := t.store.LoadRecentSummaries(chapter, summaryWindow); err == nil && len(summaries) > 0 {
+	if summaries, err := t.store.Summaries.LoadRecentSummaries(chapter, summaryWindow); err == nil && len(summaries) > 0 {
 		result["recent_summaries"] = summaries
 	} else {
 		warn("recent_summaries", err)
@@ -338,7 +338,7 @@ func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summa
 
 // loadLayeredCharacters Layered 模式下的角色加载：优先用最近快照，回退到原始设定 + Tier 过滤。
 func (t *ContextTool) loadLayeredCharacters(result map[string]any, chapter int, warn func(string, error)) {
-	snapshots, err := t.store.LoadLatestSnapshots()
+	snapshots, err := t.store.Characters.LoadLatestSnapshots()
 	if err == nil && len(snapshots) > 0 {
 		result["character_snapshots"] = snapshots
 		// 同时保留原始设定中的 core/important 角色（快照可能不含新登场角色）
@@ -396,16 +396,16 @@ func (t *ContextTool) architectReferences() map[string]string {
 func (t *ContextTool) foundationStatus() map[string]any {
 	status := map[string]any{"ready": true}
 	var missing []string
-	if p, _ := t.store.LoadPremise(); p == "" {
+	if p, _ := t.store.Outline.LoadPremise(); p == "" {
 		missing = append(missing, "premise")
 	}
-	if o, _ := t.store.LoadOutline(); len(o) == 0 {
+	if o, _ := t.store.Outline.LoadOutline(); len(o) == 0 {
 		missing = append(missing, "outline")
 	}
-	if c, _ := t.store.LoadCharacters(); len(c) == 0 {
+	if c, _ := t.store.Characters.Load(); len(c) == 0 {
 		missing = append(missing, "characters")
 	}
-	if r, _ := t.store.LoadWorldRules(); len(r) == 0 {
+	if r, _ := t.store.World.LoadWorldRules(); len(r) == 0 {
 		missing = append(missing, "world_rules")
 	}
 	if len(missing) > 0 {
@@ -418,13 +418,13 @@ func (t *ContextTool) foundationStatus() map[string]any {
 // ContextSummary 返回当前状态的简要摘要（供日志使用）。
 func (t *ContextTool) ContextSummary() string {
 	var parts []string
-	if p, _ := t.store.LoadPremise(); p != "" {
+	if p, _ := t.store.Outline.LoadPremise(); p != "" {
 		parts = append(parts, "premise:ok")
 	}
-	if o, _ := t.store.LoadOutline(); o != nil {
+	if o, _ := t.store.Outline.LoadOutline(); o != nil {
 		parts = append(parts, fmt.Sprintf("outline:%d chapters", len(o)))
 	}
-	if c, _ := t.store.LoadCharacters(); c != nil {
+	if c, _ := t.store.Characters.Load(); c != nil {
 		parts = append(parts, fmt.Sprintf("characters:%d", len(c)))
 	}
 	if len(parts) == 0 {
@@ -540,10 +540,10 @@ func (t *ContextTool) buildRelatedChapters(
 	}
 
 	// 2. 角色出场反查：批量单次遍历，IO 从 O(角色数×章节数) 降为 O(章节数)
-	chars, _ := t.store.LoadCharacters()
+	chars, _ := t.store.Characters.Load()
 	outlineChars := matchOutlineCharacters(outlineText, chars)
 	if len(outlineChars) > 0 {
-		appearances := t.store.FindCharacterAppearances(outlineChars, chapter, recentWindow)
+		appearances := t.store.Summaries.FindCharacterAppearances(outlineChars, chapter, recentWindow)
 		for _, name := range outlineChars {
 			if len(results) >= maxResults {
 				break

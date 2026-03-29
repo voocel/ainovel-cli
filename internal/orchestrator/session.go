@@ -68,30 +68,30 @@ func (s *session) handleEvent(ev agentcore.Event) {
 }
 
 func (s *session) recovery() recoveryResult {
-	progress, _ := s.store.LoadProgress()
-	runMeta, _ := s.store.LoadRunMeta()
+	progress, _ := s.store.Progress.Load()
+	runMeta, _ := s.store.RunMeta.Load()
 	return applyHandoffToRecovery(s.store, determineRecovery(progress, runMeta, s.store))
 }
 
 func (s *session) persistSteer(text string) {
 	slog.Info("用户干预", "module", "steer", "text", text)
-	if err := s.store.AppendSteerEntry(domain.SteerEntry{
+	if err := s.store.RunMeta.AppendSteerEntry(domain.SteerEntry{
 		Input:     text,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}); err != nil {
 		slog.Error("追加干预记录失败", "module", "steer", "err", err)
 	}
-	if err := s.store.SetPendingSteer(text); err != nil {
+	if err := s.store.RunMeta.SetPendingSteer(text); err != nil {
 		slog.Error("设置待处理干预失败", "module", "steer", "err", err)
 	}
-	if err := s.store.SetFlow(domain.FlowSteering); err != nil {
+	if err := s.store.Progress.SetFlow(domain.FlowSteering); err != nil {
 		slog.Error("设置流程状态失败", "module", "steer", "err", err)
 	}
 }
 
 func (s *session) submitSteer(text string) {
 	s.persistSteer(text)
-	runMeta, err := s.store.LoadRunMeta()
+	runMeta, err := s.store.RunMeta.Load()
 	if err != nil {
 		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)
 	}
@@ -104,8 +104,8 @@ func (s *session) submitSteer(text string) {
 }
 
 func (s *session) finalizeSteerIfIdle() {
-	runMeta, _ := s.store.LoadRunMeta()
-	progress, _ := s.store.LoadProgress()
+	runMeta, _ := s.store.RunMeta.Load()
+	progress, _ := s.store.Progress.Load()
 	if runMeta == nil || runMeta.PendingSteer == "" || progress == nil {
 		return
 	}
@@ -134,19 +134,19 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 		case actionFollowUp:
 			s.coordinator.FollowUp(agentcore.UserMsg(action.Message))
 		case actionSetFlow:
-			if err := s.store.SetFlow(action.Flow); err != nil {
+			if err := s.store.Progress.SetFlow(action.Flow); err != nil {
 				slog.Error("设置流程状态失败", "module", "host", "flow", action.Flow, "err", err)
 			}
 		case actionSetPendingRewrites:
-			if err := s.store.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
+			if err := s.store.Progress.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
 				slog.Error("设置待处理章节失败", "module", "host", "chapters", action.Chapters, "err", err)
 			}
 		case actionCompleteRewrite:
-			if err := s.store.CompleteRewrite(action.Chapter); err != nil {
+			if err := s.store.Progress.CompleteRewrite(action.Chapter); err != nil {
 				slog.Error("完成重写标记失败", "module", "host", "chapter", action.Chapter, "err", err)
 				continue
 			}
-			updated, _ := s.store.LoadProgress()
+			updated, _ := s.store.Progress.Load()
 			if updated != nil && len(updated.PendingRewrites) == 0 {
 				s.saveCheckpoint("rewrite-done")
 				if emit != nil {
@@ -167,7 +167,7 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 				slog.Error("保存交接包失败", "module", "host", "label", action.Label, "err", err)
 			}
 		case actionMarkComplete:
-			if err := s.store.MarkComplete(); err != nil {
+			if err := s.store.Progress.MarkComplete(); err != nil {
 				slog.Error("标记完成失败", "module", "host", "err", err)
 			}
 		}
@@ -177,7 +177,7 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 // handleSubAgentDone 在每次 SubAgent 调用完成后读取文件系统信号，注入确定性任务。
 // 返回 true 表示检测到 commit 信号（Writer 正常完成）。
 func (s *session) handleSubAgentDone(emit emitFn) bool {
-	result, err := s.store.LoadAndClearLastCommit()
+	result, err := s.store.Signals.LoadAndClearLastCommit()
 	if err != nil || result == nil {
 		return false
 	}
@@ -192,8 +192,8 @@ func (s *session) handleSubAgentDone(emit emitFn) bool {
 		})
 	}
 
-	progress, _ := s.store.LoadProgress()
-	runMeta, _ := s.store.LoadRunMeta()
+	progress, _ := s.store.Progress.Load()
+	runMeta, _ := s.store.RunMeta.Load()
 	actions := evaluateCommitPolicy(progress, runMeta, result)
 	s.executePolicyActions(actions, emit)
 	return true
@@ -201,7 +201,7 @@ func (s *session) handleSubAgentDone(emit emitFn) bool {
 
 // handleEditorDone 在 Editor SubAgent 完成后读取审阅信号。
 func (s *session) handleEditorDone(emit emitFn) {
-	review, err := s.store.LoadAndClearLastReview()
+	review, err := s.store.Signals.LoadAndClearLastReview()
 	if err != nil {
 		slog.Error("加载审阅信号失败", "module", "host", "err", err)
 		return
@@ -219,7 +219,7 @@ func (s *session) handleEditorDone(emit emitFn) {
 		slog.Warn("critical 问题但 verdict=accept，强制升级为 rewrite", "module", "host", "critical", criticalN)
 		review.Verdict = "rewrite"
 	}
-	runMeta, _ := s.store.LoadRunMeta()
+	runMeta, _ := s.store.RunMeta.Load()
 	actions := evaluateReviewPolicy(runMeta, review)
 	s.executePolicyActions(actions, emit)
 }
@@ -231,7 +231,8 @@ func (s *session) clearHandledSteer() {
 }
 
 func (s *session) saveCheckpoint(label string) {
-	if err := s.store.SaveCheckpoint(label); err != nil {
+	progress, _ := s.store.Progress.Load()
+	if err := s.store.RunMeta.SaveCheckpoint(label, progress); err != nil {
 		slog.Error("保存检查点失败", "module", "host", "label", label, "err", err)
 	}
 }

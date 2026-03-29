@@ -58,7 +58,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		default:
 			return nil, fmt.Errorf("invalid scale %q, expected short/mid/long", a.Scale)
 		}
-		if err := t.store.SetPlanningTier(domain.PlanningTier(a.Scale)); err != nil {
+		if err := t.store.RunMeta.SetPlanningTier(domain.PlanningTier(a.Scale)); err != nil {
 			return nil, fmt.Errorf("save planning tier: %w", err)
 		}
 	}
@@ -73,25 +73,25 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	switch a.Type {
 	case "premise":
-		if err := t.store.SavePremise(content); err != nil {
+		if err := t.store.Outline.SavePremise(content); err != nil {
 			return nil, fmt.Errorf("save premise: %w", err)
 		}
-		_ = t.store.UpdatePhase(domain.PhasePremise)
+		_ = t.store.Progress.UpdatePhase(domain.PhasePremise)
 
 	case "outline":
 		var entries []domain.OutlineEntry
 		if err := json.Unmarshal([]byte(content), &entries); err != nil {
 			return nil, fmt.Errorf("parse outline JSON: %w", err)
 		}
-		if err := t.store.SaveOutline(entries); err != nil {
+		if err := t.store.Outline.SaveOutline(entries); err != nil {
 			return nil, fmt.Errorf("save outline: %w", err)
 		}
-		_ = t.store.UpdatePhase(domain.PhaseOutline)
-		_ = t.store.SetTotalChapters(len(entries))
+		_ = t.store.Progress.UpdatePhase(domain.PhaseOutline)
+		_ = t.store.Progress.SetTotalChapters(len(entries))
 		if domain.PlanningTier(a.Scale) != domain.PlanningTierLong {
-			_ = t.store.SetLayered(false)
-			_ = t.store.UpdateVolumeArc(0, 0)
-			_ = t.store.ClearLayeredOutline()
+			_ = t.store.Progress.SetLayered(false)
+			_ = t.store.Progress.UpdateVolumeArc(0, 0)
+			_ = t.store.Outline.ClearLayeredOutline()
 		}
 		result["chapters"] = len(entries)
 
@@ -100,19 +100,19 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err := json.Unmarshal([]byte(content), &volumes); err != nil {
 			return nil, fmt.Errorf("parse layered_outline JSON: %w", err)
 		}
-		if err := t.store.SaveLayeredOutline(volumes); err != nil {
+		if err := t.store.Outline.SaveLayeredOutline(volumes); err != nil {
 			return nil, fmt.Errorf("save layered_outline: %w", err)
 		}
 		flat := domain.FlattenOutline(volumes)
-		if err := t.store.SaveOutline(flat); err != nil {
+		if err := t.store.Outline.SaveOutline(flat); err != nil {
 			return nil, fmt.Errorf("save flattened outline: %w", err)
 		}
 		total := domain.TotalChapters(volumes)
-		_ = t.store.UpdatePhase(domain.PhaseOutline)
-		_ = t.store.SetTotalChapters(total)
-		_ = t.store.SetLayered(true)
+		_ = t.store.Progress.UpdatePhase(domain.PhaseOutline)
+		_ = t.store.Progress.SetTotalChapters(total)
+		_ = t.store.Progress.SetLayered(true)
 		if len(volumes) > 0 && len(volumes[0].Arcs) > 0 {
-			_ = t.store.UpdateVolumeArc(volumes[0].Index, volumes[0].Arcs[0].Index)
+			_ = t.store.Progress.UpdateVolumeArc(volumes[0].Index, volumes[0].Arcs[0].Index)
 		}
 		result["volumes"] = len(volumes)
 		result["chapters"] = total
@@ -122,7 +122,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err := json.Unmarshal([]byte(content), &chars); err != nil {
 			return nil, fmt.Errorf("parse characters JSON: %w", err)
 		}
-		if err := t.store.SaveCharacters(chars); err != nil {
+		if err := t.store.Characters.Save(chars); err != nil {
 			return nil, fmt.Errorf("save characters: %w", err)
 		}
 		result["count"] = len(chars)
@@ -132,7 +132,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err := json.Unmarshal([]byte(content), &rules); err != nil {
 			return nil, fmt.Errorf("parse world_rules JSON: %w", err)
 		}
-		if err := t.store.SaveWorldRules(rules); err != nil {
+		if err := t.store.World.SaveWorldRules(rules); err != nil {
 			return nil, fmt.Errorf("save world_rules: %w", err)
 		}
 		result["count"] = len(rules)
@@ -175,7 +175,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err := json.Unmarshal([]byte(content), &compass); err != nil {
 			return nil, fmt.Errorf("parse compass JSON: %w", err)
 		}
-		if err := t.store.SaveCompass(compass); err != nil {
+		if err := t.store.Outline.SaveCompass(compass); err != nil {
 			return nil, fmt.Errorf("save compass: %w", err)
 		}
 		result["ending_direction"] = compass.EndingDirection
@@ -206,29 +206,29 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 }
 
 func (t *SaveFoundationTool) isWriting() bool {
-	p, _ := t.store.LoadProgress()
+	p, _ := t.store.Progress.Load()
 	return p != nil && p.Phase == domain.PhaseWriting
 }
 
 // remaining 检查基础设定中还缺少哪些必要项。
 func (t *SaveFoundationTool) remaining() []string {
 	var missing []string
-	if p, _ := t.store.LoadPremise(); p == "" {
+	if p, _ := t.store.Outline.LoadPremise(); p == "" {
 		missing = append(missing, "premise")
 	}
-	if o, _ := t.store.LoadOutline(); len(o) == 0 {
+	if o, _ := t.store.Outline.LoadOutline(); len(o) == 0 {
 		missing = append(missing, "outline")
 	}
 	// 长篇模式下 compass 也是必须项
-	if layered, _ := t.store.LoadLayeredOutline(); len(layered) > 0 {
-		if c, _ := t.store.LoadCompass(); c == nil {
+	if layered, _ := t.store.Outline.LoadLayeredOutline(); len(layered) > 0 {
+		if c, _ := t.store.Outline.LoadCompass(); c == nil {
 			missing = append(missing, "compass")
 		}
 	}
-	if c, _ := t.store.LoadCharacters(); len(c) == 0 {
+	if c, _ := t.store.Characters.Load(); len(c) == 0 {
 		missing = append(missing, "characters")
 	}
-	if r, _ := t.store.LoadWorldRules(); len(r) == 0 {
+	if r, _ := t.store.World.LoadWorldRules(); len(r) == 0 {
 		missing = append(missing, "world_rules")
 	}
 	return missing

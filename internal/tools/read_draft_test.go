@@ -15,7 +15,7 @@ func TestReadChapterFinal(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.SaveFinalChapter(1, "第一章的终稿正文。"); err != nil {
+	if err := store.Drafts.SaveFinalChapter(1, "第一章的终稿正文。"); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
 	}
 
@@ -48,7 +48,7 @@ func TestReadChapterDraft(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.SaveDraft(3, "第三章的草稿内容。"); err != nil {
+	if err := store.Drafts.SaveDraft(3, "第三章的草稿内容。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -76,12 +76,12 @@ func TestReadChapterDialogue(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.SaveCharacters([]domain.Character{
+	if err := store.Characters.Save([]domain.Character{
 		{Name: "张三", Aliases: []string{"老张"}},
 	}); err != nil {
 		t.Fatalf("SaveCharacters: %v", err)
 	}
-	if err := store.SaveFinalChapter(1, "张三站起身来。\u201c我不同意这个方案，\u201d张三冷冷地说。"); err != nil {
+	if err := store.Drafts.SaveFinalChapter(1, "张三站起身来。\u201c我不同意这个方案，\u201d张三冷冷地说。"); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestReadChapterRange(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	for i := 1; i <= 3; i++ {
-		if err := store.SaveFinalChapter(i, "这是一段正文内容。"); err != nil {
+		if err := store.Drafts.SaveFinalChapter(i, "这是一段正文内容。"); err != nil {
 			t.Fatalf("SaveFinalChapter(%d): %v", i, err)
 		}
 	}
@@ -167,7 +167,7 @@ func TestDraftChapterWrite(t *testing.T) {
 	}
 
 	// 验证能读回来
-	content, err := store.LoadDraft(1)
+	content, err := store.Drafts.LoadDraft(1)
 	if err != nil {
 		t.Fatalf("LoadDraft: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestDraftChapterAppend(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.SaveDraft(2, "前半部分。"); err != nil {
+	if err := store.Drafts.SaveDraft(2, "前半部分。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestDraftChapterAppend(t *testing.T) {
 		t.Fatalf("expected mode=append, got %s", payload.Mode)
 	}
 
-	content, _ := store.LoadDraft(2)
+	content, _ := store.Drafts.LoadDraft(2)
 	if content == "" || content == "前半部分。" {
 		t.Fatal("expected appended content")
 	}

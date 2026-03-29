@@ -46,7 +46,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	}
 
 	// 1.6 清理上次崩溃可能遗留的信号文件
-	store.ClearStaleSignals()
+	store.Signals.ClearStaleSignals()
 
 	// 2. 创建模型集合
 	models, err := bootstrap.NewModelSet(cfg)
@@ -64,7 +64,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	sess.bind()
 
 	// 5. 初始化运行元信息（保留已有 SteerHistory）
-	if err := store.InitRunMeta(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
+	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
 	}
 
@@ -84,7 +84,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	recovery := sess.recovery()
 
 	if recovery.IsNew {
-		if err := store.InitProgress(cfg.NovelName, 0); err != nil {
+		if err := store.Progress.Init(cfg.NovelName, 0); err != nil {
 			return fmt.Errorf("init progress: %w", err)
 		}
 		slog.Info("新建模式", "module", "boot", "novel", cfg.NovelName)
@@ -107,7 +107,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	sess.finalizeSteerIfIdle()
 
 	// 9. 输出结果
-	finalProgress, _ := store.LoadProgress()
+	finalProgress, _ := store.Progress.Load()
 	if finalProgress != nil {
 		slog.Info("创作完成", "module", "boot",
 			"chapters", len(finalProgress.CompletedChapters),
