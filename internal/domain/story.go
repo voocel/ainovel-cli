@@ -59,16 +59,15 @@ type ArcOutline struct {
 // IsExpanded 判断弧是否已展开（有详细章节）。
 func (a *ArcOutline) IsExpanded() bool { return len(a.Chapters) > 0 }
 
-// TotalChapters 计算分层大纲的总章节数。
-// 展开弧用实际章节数，骨架弧用弧级 EstimatedChapters。
+// TotalChapters 计算分层大纲中已展开的实际章节数。
+// 骨架弧（未展开）不计入，因为其 EstimatedChapters 只是预估值，
+// 会随弧展开和新卷创建不断变化。
 func TotalChapters(volumes []VolumeOutline) int {
 	n := 0
 	for _, v := range volumes {
 		for _, a := range v.Arcs {
 			if a.IsExpanded() {
 				n += len(a.Chapters)
-			} else {
-				n += a.EstimatedChapters
 			}
 		}
 	}

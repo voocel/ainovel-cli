@@ -590,7 +590,7 @@ func renderDetailPanel(vp viewport.Model, width, height int, focused bool) strin
 }
 
 // renderWelcome 渲染新建态首屏。
-func renderWelcome(width, height int, errMsg string) string {
+func renderWelcome(width, height int, errMsg string, mode startupMode) string {
 	// 简洁标题
 	title := lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -634,6 +634,10 @@ func renderWelcome(width, height int, errMsg string) string {
 	prompt := lipgloss.NewStyle().Foreground(colorText).
 		Render("在下方输入你的小说需求开始创作")
 
+	modeLine := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render("当前模式：" + mode.label() + " · " + mode.subtitle())
+
 	// 示例
 	examples := []string{
 		"写一部 12 章都市悬疑小说，主角是一名女法医",
@@ -661,9 +665,14 @@ func renderWelcome(width, height int, errMsg string) string {
 	b.WriteString("\n\n")
 	b.WriteString(divider)
 	b.WriteString("\n\n")
+	b.WriteString(modeLine)
+	b.WriteString("\n\n")
 	b.WriteString(prompt)
 	b.WriteString("\n\n")
 	b.WriteString(exBlock)
+	b.WriteString("\n\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Italic(true).
+		Render("Tab 切换模式 · 快速开始下 Enter 直接创作 · 共创规划下 Enter 进入对话"))
 
 	if errMsg != "" {
 		b.WriteString("\n\n")

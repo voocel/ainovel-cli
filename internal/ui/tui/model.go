@@ -40,6 +40,7 @@ type Model struct {
 	runtime      *orchestrator.Runtime
 	askBridge    *askUserBridge
 	askState     *askUserState
+	cocreate     *cocreateState
 	modelSwitch  *modelSwitchState
 	snapshot     orchestrator.UISnapshot
 	events       []orchestrator.UIEvent
@@ -57,6 +58,8 @@ type Model struct {
 	hoverPane    focusPane
 	hoverActive  bool
 	mode         appMode
+	startupMode  startupMode
+	cocreateSeq  int
 	err          error
 	spinnerIdx   int
 	streamRound  int  // 流式输出轮次计数
@@ -66,7 +69,7 @@ type Model struct {
 // NewModel 创建 TUI Model。
 func NewModel(rt *orchestrator.Runtime, bridge *askUserBridge) Model {
 	ta := textarea.New()
-	ta.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
+	ta.Placeholder = placeholderForNewMode(startupModeQuick)
 	ta.CharLimit = 500
 	ta.SetHeight(1)
 	ta.MaxHeight = 1
@@ -91,6 +94,7 @@ func NewModel(rt *orchestrator.Runtime, bridge *askUserBridge) Model {
 		autoScroll:   true,
 		streamScroll: true,
 		mode:         modeNew,
+		startupMode:  startupModeQuick,
 		textarea:     ta,
 		viewport:     vp,
 		streamVP:     svp,
@@ -120,7 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.textarea.SetWidth(m.inputWidth())
+		m.textarea.SetWidth(m.currentInputWidth())
 		m.updateViewportSize()
 		m.refreshDetailViewport()
 		return m, nil
@@ -136,6 +140,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.quitPending = false
 			return m.handleAskUserKey(msg)
+		}
+		if m.cocreate != nil {
+			if msg.Type == tea.KeyCtrlC {
+				if m.quitPending {
+					return m, tea.Quit
+				}
+				m.quitPending = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+			}
+			m.quitPending = false
+			return m.handleCoCreateKey(msg)
 		}
 		if m.modelSwitch != nil {
 			if msg.Type == tea.KeyCtrlC {
@@ -172,6 +187,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamRound = 0
 			return m, nil
 		case tea.KeyTab:
+			if m.mode == modeNew {
+				if m.cocreate != nil {
+					return m, nil
+				}
+				if m.startupMode == startupModeQuick {
+					m.startupMode = startupModeCoCreate
+				} else {
+					m.startupMode = startupModeQuick
+				}
+				m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+				return m, nil
+			}
 			m.focusPane = (m.focusPane + 1) % 3
 			return m, nil
 		case tea.KeyEnter:
@@ -186,9 +213,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.Reset()
 			switch m.mode {
 			case modeNew:
-				m.mode = modeRunning
-				m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
-				return m, startRuntime(m.runtime, text)
+				m.err = nil
+				if m.startupMode == startupModeQuick {
+					return m, startRuntime(m.runtime, text)
+				}
+				m.cocreate = newCoCreateState(text)
+				cmd := m.sendCoCreate()
+				return m, cmd
 			case modeRunning:
 				return m, steerRuntime(m.runtime, text)
 			}
@@ -250,6 +281,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
+		if m.cocreate != nil {
+			var cmd tea.Cmd
+			m.cocreate.promptVP, cmd = m.cocreate.promptVP.Update(msg)
+			return m, cmd
+		}
 		// 弹窗打开时屏蔽鼠标，避免底层面板高亮乱跳
 		if m.modelSwitch != nil || m.askState != nil {
 			return m, nil
@@ -316,18 +352,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case startResultMsg:
 		if msg.err != nil {
 			m.err = msg.err
-			m.events = append(m.events, orchestrator.UIEvent{
-				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
-			})
-			m.refreshEventViewport()
+			if m.mode != modeNew {
+				m.events = append(m.events, orchestrator.UIEvent{
+					Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
+				})
+				m.refreshEventViewport()
+			}
+			if m.cocreate != nil {
+				m.cocreate.awaiting = false
+				m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+				return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
+			}
 			if m.mode == modeNew {
-				m.textarea.Placeholder = "输入小说需求，例如：写一部12章都市悬疑小说"
+				m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+				return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
 			}
 		} else if m.mode == modeNew {
+			m.cocreate = nil
 			m.mode = modeRunning
+			m.textarea.SetWidth(m.currentInputWidth())
 			m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
+			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
 		}
 		return m, fetchSnapshot(m.runtime)
+
+	case cocreateDeltaMsg:
+		if m.cocreate == nil || msg.reqID != m.cocreate.reqID {
+			return m, nil
+		}
+		m.cocreate.applyDelta(msg.text)
+		return m, listenCoCreateDelta(m.cocreate)
+
+	case cocreateDoneMsg:
+		if m.cocreate == nil || msg.reqID != m.cocreate.reqID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.err = msg.err
+			m.cocreate.awaiting = false
+			m.cocreate.streamReply = ""
+			m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+			return m, m.textarea.Focus()
+		}
+		m.err = nil
+		m.cocreate.apply(msg.reply)
+		m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+		return m, m.textarea.Focus()
 
 	case steerResultMsg:
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime))
@@ -383,7 +453,7 @@ func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
 	}
 
 	topH := lipgloss.Height(renderTopBar(m.snapshot, m.width, ""))
-	inputH := lipgloss.Height(renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width, m.quitPending))
+	inputH := lipgloss.Height(renderInputBox(m.textarea.View(), m.inputHints(), m.snapshot, m.runtime.Dir(), m.width))
 	bodyH := m.height - topH - inputH
 	if bodyH < 1 {
 		return focusEvents, false
@@ -476,6 +546,38 @@ func (m *Model) inputWidth() int {
 	return m.width - 6 // border + padding + 提示符 "❯ "
 }
 
+func (m *Model) currentInputWidth() int {
+	if m.cocreate != nil {
+		return coCreateInputWidth(m.width, m.height)
+	}
+	return m.inputWidth()
+}
+
+// inputHints 根据当前状态生成底部提示文本。
+func (m *Model) inputHints() string {
+	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
+	if m.quitPending {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Press Ctrl+C again to exit")
+	}
+	if m.cocreate != nil {
+		switch {
+		case m.cocreate.awaiting:
+			return dimStyle.Render("等待 AI 回复 · Esc 退出共创")
+		case m.cocreate.canStart():
+			return dimStyle.Render("Enter 发送 · Ctrl+S 开始创作 · Esc 退出共创")
+		default:
+			return dimStyle.Render("Enter 发送 · Esc 退出共创")
+		}
+	}
+	if m.mode == modeNew {
+		if m.startupMode == startupModeQuick {
+			return dimStyle.Render("Tab 切换启动模式 · Enter 直接开始创作 · Esc 清空输入")
+		}
+		return dimStyle.Render("Tab 切换启动模式 · Enter 开始共创对话 · Esc 清空输入")
+	}
+	return dimStyle.Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · /model 切模型 · ^L 清屏 · Esc 重置 · Enter 发送")
+}
+
 func (m *Model) eventFlowWidth() int {
 	if m.width == 0 {
 		return 80
@@ -516,6 +618,12 @@ func (m Model) View() string {
 			AlignVertical(lipgloss.Center).
 			Render("终端宽度不足，请至少扩展到 100 列")
 	}
+	if m.askState != nil {
+		return renderAskUserModal(m.width, m.height, m.askState)
+	}
+	if m.cocreate != nil {
+		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View())
+	}
 
 	spinnerFrame := ""
 	if m.snapshot.IsRunning {
@@ -523,7 +631,10 @@ func (m Model) View() string {
 	}
 
 	topBar := renderTopBar(m.snapshot, m.width, spinnerFrame)
-	inputBox := renderInputBox(m.textarea.View(), m.snapshot, m.runtime.Dir(), m.width, m.quitPending)
+	inputBox := renderInputBox(m.textarea.View(), m.inputHints(), m.snapshot, m.runtime.Dir(), m.width)
+	if m.mode == modeNew && m.cocreate == nil {
+		inputBox = renderStartupModeBar(m.width, m.startupMode) + "\n" + inputBox
+	}
 
 	topH := lipgloss.Height(topBar)
 	inputH := lipgloss.Height(inputBox)
@@ -538,7 +649,7 @@ func (m Model) View() string {
 		if m.err != nil {
 			errMsg = m.err.Error()
 		}
-		body = renderWelcome(m.width, bodyH, errMsg)
+		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode)
 	} else {
 		leftW := m.width * 25 / 100
 		rightW := m.detailWidth()
@@ -570,10 +681,88 @@ func (m Model) View() string {
 		commandBar := renderModelSwitchBar(m.width, m.modelSwitch)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
-	if m.askState != nil {
-		return renderAskUserModal(m.width, m.height, m.askState)
-	}
 	return view
+}
+
+// sendCoCreate 发起一轮共创请求，统一处理 reqID、textarea、placeholder。
+func (m *Model) sendCoCreate() tea.Cmd {
+	m.cocreateSeq++
+	m.cocreate.reqID = m.cocreateSeq
+	m.cocreate.awaiting = true
+	m.cocreate.streamReply = ""
+	m.textarea.SetWidth(m.currentInputWidth())
+	m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+	m.textarea.Blur()
+	return runCoCreate(m.runtime, m.cocreate)
+}
+
+func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.cocreate == nil {
+		return m, nil
+	}
+	state := m.cocreate
+
+	// 右侧指令面板滚动
+	switch msg.Type {
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+		var cmd tea.Cmd
+		state.promptVP, cmd = state.promptVP.Update(msg)
+		return m, cmd
+	case tea.KeyHome:
+		state.promptVP.GotoTop()
+		return m, nil
+	case tea.KeyEnd:
+		state.promptVP.GotoBottom()
+		return m, nil
+	case tea.KeyEsc:
+		return m.exitCoCreate()
+	}
+
+	// 等待 AI 回复时只允许 Esc 退出（上面已处理）
+	if state.awaiting {
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.KeyCtrlS:
+		if state.canStart() {
+			state.awaiting = true
+			m.textarea.Blur()
+			return m, startRuntime(m.runtime, state.draftPrompt)
+		}
+		return m, nil
+	case tea.KeyEnter:
+		text := strings.TrimSpace(m.textarea.Value())
+		if text == "" {
+			return m, nil
+		}
+		m.err = nil
+		state.appendUser(text)
+		m.textarea.Reset()
+		cmd := m.sendCoCreate()
+		return m, cmd
+	}
+
+	// 常规输入转发给 textarea
+	if msg.Type == tea.KeyRunes && (containsSGRFragment(string(msg.Runes)) || isCSILeak(msg.Runes)) {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, cmd
+}
+
+// exitCoCreate 退出共创模式，取消进行中的 LLM 请求，恢复输入框状态。
+func (m Model) exitCoCreate() (tea.Model, tea.Cmd) {
+	if m.cocreate.cancel != nil {
+		m.cocreate.cancel()
+	}
+	initial := m.cocreate.initialInput()
+	m.cocreate = nil
+	m.textarea.SetWidth(m.currentInputWidth())
+	m.textarea.SetValue(initial)
+	m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+	return m, m.textarea.Focus()
 }
 
 func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

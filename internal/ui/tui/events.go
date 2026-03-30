@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -9,11 +10,20 @@ import (
 
 // 消息类型
 type (
-	eventMsg       orchestrator.UIEvent
-	snapshotMsg    orchestrator.UISnapshot
-	doneMsg        struct{ complete bool } // complete=true 全书完成，false 出错停止
-	askUserMsg     askUserRequest
-	startResultMsg struct{ err error }
+	eventMsg         orchestrator.UIEvent
+	snapshotMsg      orchestrator.UISnapshot
+	doneMsg          struct{ complete bool } // complete=true 全书完成，false 出错停止
+	askUserMsg       askUserRequest
+	startResultMsg   struct{ err error }
+	cocreateDeltaMsg struct {
+		reqID int
+		text  string
+	}
+	cocreateDoneMsg struct {
+		reqID int
+		reply orchestrator.CoCreateReply
+		err   error
+	}
 	steerResultMsg struct{}
 	spinnerTickMsg time.Time
 	streamDeltaMsg string   // 流式 token 增量
@@ -70,6 +80,59 @@ func startRuntime(rt *orchestrator.Runtime, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		err := rt.Start(prompt)
 		return startResultMsg{err: err}
+	}
+}
+
+func runCoCreate(rt *orchestrator.Runtime, state *cocreateState) tea.Cmd {
+	history := append([]orchestrator.CoCreateMessage(nil), state.history...)
+	ctx, cancel := context.WithCancel(context.Background())
+	state.cancel = cancel
+	state.streamReply = ""
+	state.deltaCh = make(chan string, 64)
+	state.doneCh = make(chan cocreateDoneMsg, 1)
+	start := func() tea.Msg {
+		go func() {
+			reply, err := rt.CoCreateStream(ctx, history, func(text string) {
+				select {
+				case state.deltaCh <- text:
+				default:
+				}
+			})
+			state.doneCh <- cocreateDoneMsg{reply: reply, err: err}
+			close(state.deltaCh)
+			close(state.doneCh)
+		}()
+		return nil
+	}
+	return tea.Batch(start, listenCoCreateDelta(state), listenCoCreateDone(state))
+}
+
+func listenCoCreateDelta(state *cocreateState) tea.Cmd {
+	if state == nil || state.deltaCh == nil {
+		return nil
+	}
+	reqID := state.reqID
+	return func() tea.Msg {
+		delta, ok := <-state.deltaCh
+		if !ok {
+			return nil
+		}
+		return cocreateDeltaMsg{reqID: reqID, text: delta}
+	}
+}
+
+func listenCoCreateDone(state *cocreateState) tea.Cmd {
+	if state == nil || state.doneCh == nil {
+		return nil
+	}
+	reqID := state.reqID
+	return func() tea.Msg {
+		result, ok := <-state.doneCh
+		if !ok {
+			return nil
+		}
+		result.reqID = reqID
+		return result
 	}
 }
 

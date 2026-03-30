@@ -217,14 +217,15 @@ func (rt *Runtime) Start(prompt string) error {
 	}
 	rt.mu.Unlock()
 
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("prompt is required")
+	}
 	if err := rt.store.Progress.Init(rt.cfg.NovelName, 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
-	promptText := fmt.Sprintf(
-		"请创作一部小说，章节数量由你根据故事需要自行决定。若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。要求如下：\n\n%s",
-		prompt,
-	)
+	promptText := buildStartPrompt(prompt)
 	if err := rt.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
@@ -427,6 +428,13 @@ func (rt *Runtime) SwitchModel(role, provider, model string) error {
 	slog.Info("模型切换", "module", "runtime", "role", role, "provider", provider, "model", model)
 	rt.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "success"})
 	return nil
+}
+
+func buildStartPrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	return "请根据以下创作要求开始创作一部小说。章节数量由你根据故事需要自行决定；若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。\n\n[创作要求]\n" +
+		prompt +
+		"\n\n若某些细节未明确，请在不违背用户方向的前提下自行补全。"
 }
 
 // persistModelChange 增量更新全局配置文件中的模型设置。
