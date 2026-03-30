@@ -24,7 +24,7 @@ func Setup(w io.Writer, level slog.Level) {
 }
 
 // SetupFile 初始化日志到文件，返回清理函数。
-// CLI 模式同时输出到 stderr 和文件，TUI 模式只输出到文件。
+// alsoStderr=true 时同时输出到 stderr。
 func SetupFile(outputDir, filename string, alsoStderr bool) func() {
 	logPath := filepath.Join(outputDir, "logs", filename)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {

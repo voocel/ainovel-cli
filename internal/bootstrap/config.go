@@ -73,7 +73,6 @@ var knownRoles = map[string]bool{
 // Config 小说应用配置。
 type Config struct {
 	// 运行时字段（不序列化到 JSON）
-	Prompt    string `json:"-"` // 用户的小说需求
 	NovelName string `json:"-"` // 小说名（用作输出目录名）
 	OutputDir string `json:"-"` // 输出根目录
 
@@ -90,14 +89,6 @@ type Config struct {
 	// 创作参数
 	Style         string `json:"style,omitempty"`
 	ContextWindow int    `json:"context_window,omitempty"`
-}
-
-// Validate 校验配置（CLI 模式，要求 Prompt 非空）。
-func (c *Config) Validate() error {
-	if c.Prompt == "" {
-		return fmt.Errorf("prompt is required")
-	}
-	return c.ValidateBase()
 }
 
 // ValidateBase 校验基础配置。

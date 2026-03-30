@@ -8,7 +8,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
 
-// Run 启动 TUI 模式。
+// Run 启动 TUI。
 func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
 	rt, err := orchestrator.NewRuntime(cfg, bundle)
 	if err != nil {

@@ -3,11 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
 	"github.com/voocel/ainovel-cli/internal/ui/tui"
 )
 
@@ -43,19 +41,12 @@ func main() {
 }
 
 func runWithConfig(cfg bootstrap.Config, args []string) {
-	bundle := assets.Load(cfg.Style)
-	prompt := strings.Join(args, " ")
-	if prompt != "" {
-		// CLI 模式：有命令行参数，直接运行
-		cfg.Prompt = prompt
-		if err := orchestrator.Run(cfg, bundle); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "error: 不再支持命令行直接传入小说需求，请启动后在 TUI 输入框中输入")
+		os.Exit(1)
 	}
 
-	// TUI 模式：无命令行参数，启动交互界面
+	bundle := assets.Load(cfg.Style)
 	if err := tui.Run(cfg, bundle); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

@@ -108,7 +108,7 @@ func (m Model) Init() tea.Cmd {
 		listenStream(m.runtime),
 		listenStreamClear(m.runtime),
 		tickSnapshot(m.runtime),
-		checkResume(m.runtime),
+		bootstrapRuntime(m.runtime),
 		tickSpinner(),
 	)
 }

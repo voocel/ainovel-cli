@@ -53,7 +53,7 @@ func fetchSnapshot(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func checkResume(rt *orchestrator.Runtime) tea.Cmd {
+func bootstrapRuntime(rt *orchestrator.Runtime) tea.Cmd {
 	return func() tea.Msg {
 		label, err := rt.Resume()
 		if err != nil {

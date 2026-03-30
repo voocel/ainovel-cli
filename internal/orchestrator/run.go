@@ -1,23 +1,16 @@
 package orchestrator
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/memory"
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-// emitFn 是可选的 UIEvent 发射回调，用于向 TUI 转发结构化事件。
-// CLI 模式下为 nil，Runtime 模式下指向 events channel。
+// emitFn 是可选的 UIEvent 发射回调，用于向 UI 转发结构化事件。
 type emitFn func(UIEvent)
 
 // deltaFn 是可选的流式 token 回调，用于向 TUI 转发 LLM 生成的文字。
@@ -25,97 +18,6 @@ type deltaFn func(delta string)
 
 // clearFn 是可选的流式缓冲清空回调，在新一轮 LLM 输出开始时触发。
 type clearFn func()
-
-// Run 启动小说创作流程（CLI 模式，阻塞直到完成）。
-func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
-	cfg.FillDefaults()
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	slog.Info("启动", "module", "boot", "provider", cfg.Provider, "model", cfg.ModelName, "output", cfg.OutputDir)
-
-	// 1. 初始化状态
-	store := storepkg.NewStore(cfg.OutputDir)
-	if err := store.Init(); err != nil {
-		return fmt.Errorf("init store: %w", err)
-	}
-
-	// 1.5 日志写入文件（CLI 模式同时输出到 stderr 和日志文件）
-	if cleanup := setupFileLogger(store.Dir()); cleanup != nil {
-		defer cleanup()
-	}
-
-	// 1.6 清理上次崩溃可能遗留的信号文件
-	store.Signals.ClearStaleSignals()
-
-	// 2. 创建模型集合
-	models, err := bootstrap.NewModelSet(cfg)
-	if err != nil {
-		return fmt.Errorf("create models: %w", err)
-	}
-	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
-
-	// 3. 组装 Coordinator
-	coordinator, askUser := BuildCoordinator(cfg, store, models, bundle, nil)
-	askUser.SetHandler(cliAskUserHandler)
-	sess := newSession(coordinator, store, cfg.Provider, nil, nil, nil)
-
-	// 4. 确定性控制面：事件监听 + FollowUp 注入
-	sess.bind()
-
-	// 5. 初始化运行元信息（保留已有 SteerHistory）
-	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
-		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
-	}
-
-	// 6. Steer 协程：stdin 读取用户干预
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			text := strings.TrimSpace(scanner.Text())
-			if text == "" {
-				continue
-			}
-			sess.submitSteer(text)
-		}
-	}()
-
-	// 7. 恢复或启动
-	recovery := sess.recovery()
-
-	if recovery.IsNew {
-		if err := store.Progress.Init(cfg.NovelName, 0); err != nil {
-			return fmt.Errorf("init progress: %w", err)
-		}
-		slog.Info("新建模式", "module", "boot", "novel", cfg.NovelName)
-		promptText := fmt.Sprintf(
-			"请创作一部小说，章节数量由你根据故事需要自行决定。若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。要求如下：\n\n%s",
-			cfg.Prompt,
-		)
-		if err := coordinator.Prompt(promptText); err != nil {
-			return fmt.Errorf("prompt: %w", err)
-		}
-	} else {
-		slog.Info("恢复模式", "module", "boot", "label", recovery.Label)
-		if err := coordinator.Prompt(recovery.PromptText); err != nil {
-			return fmt.Errorf("prompt: %w", err)
-		}
-	}
-
-	// 8. 等待完成
-	coordinator.WaitForIdle()
-	sess.finalizeSteerIfIdle()
-
-	// 9. 输出结果
-	finalProgress, _ := store.Progress.Load()
-	if finalProgress != nil {
-		slog.Info("创作完成", "module", "boot",
-			"chapters", len(finalProgress.CompletedChapters),
-			"words", finalProgress.TotalWordCount,
-			"output", store.Dir())
-	}
-	return nil
-}
 
 // parseSubAgentRetry 从 EventToolExecUpdate 中提取 SubAgent 转发的重试信息。
 func parseSubAgentRetry(ev agentcore.Event) (string, bool) {
