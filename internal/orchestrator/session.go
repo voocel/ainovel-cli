@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -366,6 +368,10 @@ func (s *session) handleMessageEnd(ev agentcore.Event) {
 }
 
 func (s *session) handleProviderError(ev agentcore.Event) {
+	if ev.Err != nil && errors.Is(ev.Err, context.Canceled) {
+		slog.Info("agent 已取消", "module", "agent", "provider", s.provider)
+		return
+	}
 	slog.Error("provider 错误", "module", "agent", "provider", s.provider, "err", ev.Err)
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: fmt.Sprintf("[%s] %v", s.provider, ev.Err), Level: "error"})

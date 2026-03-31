@@ -13,6 +13,7 @@ type (
 	eventMsg         orchestrator.UIEvent
 	snapshotMsg      orchestrator.UISnapshot
 	doneMsg          struct{ complete bool } // complete=true 全书完成，false 出错停止
+	abortResultMsg   struct{ stopped bool }
 	askUserMsg       askUserRequest
 	startResultMsg   struct{ err error }
 	cocreateDeltaMsg struct {
@@ -45,7 +46,10 @@ func listenEvents(rt *orchestrator.Runtime) tea.Cmd {
 
 func listenDone(rt *orchestrator.Runtime) tea.Cmd {
 	return func() tea.Msg {
-		<-rt.Done()
+		_, ok := <-rt.Done()
+		if !ok {
+			return nil
+		}
 		snap := rt.Snapshot()
 		return doneMsg{complete: snap.Phase == "complete"}
 	}
@@ -140,6 +144,12 @@ func steerRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
 	return func() tea.Msg {
 		rt.Steer(text)
 		return steerResultMsg{}
+	}
+}
+
+func abortRuntime(rt *orchestrator.Runtime) tea.Cmd {
+	return func() tea.Msg {
+		return abortResultMsg{stopped: rt.Abort()}
 	}
 }
 

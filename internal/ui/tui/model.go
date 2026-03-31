@@ -41,8 +41,12 @@ type Model struct {
 	askBridge    *askUserBridge
 	askState     *askUserState
 	cocreate     *cocreateState
+	help         *helpState
 	modelSwitch  *modelSwitchState
 	report       *reportState
+	compItems    []commandPaletteItem
+	compIdx      int
+	compActive   bool
 	snapshot     orchestrator.UISnapshot
 	events       []orchestrator.UIEvent
 	viewport     viewport.Model   // 事件流 viewport
@@ -65,6 +69,7 @@ type Model struct {
 	spinnerIdx   int
 	streamRound  int  // 流式输出轮次计数
 	quitPending  bool // 双次 Ctrl+C 退出确认
+	abortPending bool // 等待 Done 回来的手动暂停
 }
 
 // NewModel 创建 TUI Model。
@@ -153,6 +158,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitPending = false
 			return m.handleCoCreateKey(msg)
 		}
+		if m.help != nil {
+			if msg.Type == tea.KeyCtrlC {
+				if m.quitPending {
+					return m, tea.Quit
+				}
+				m.quitPending = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+			}
+			m.quitPending = false
+			return m.handleHelpKey(msg)
+		}
 		if m.modelSwitch != nil {
 			if msg.Type == tea.KeyCtrlC {
 				if m.quitPending {
@@ -184,9 +200,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
 		}
 		m.quitPending = false
+		if m.compActive {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.clearCommandPalette()
+				return m, nil
+			case tea.KeyUp:
+				if m.compIdx > 0 {
+					m.compIdx--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.compIdx < len(m.compItems)-1 {
+					m.compIdx++
+				}
+				return m, nil
+			case tea.KeyTab:
+				m.acceptCommandCompletion()
+				return m, nil
+			case tea.KeyEnter:
+				text := strings.TrimSpace(m.textarea.Value())
+				itemCount := len(m.compItems)
+				item, ok := m.acceptCommandCompletion()
+				if !ok {
+					return m, nil
+				}
+				if item.AutoExecute && (itemCount == 1 || strings.EqualFold(text, "/"+item.Name)) {
+					m.textarea.Reset()
+					return m.handleSlashCommand(slashCommand{name: item.Name})
+				}
+				return m, nil
+			}
+		}
 		switch msg.Type {
 		case tea.KeyEscape:
+			if m.mode == modeRunning && m.snapshot.IsRunning {
+				return m, abortRuntime(m.runtime)
+			}
 			m.textarea.Reset()
+			m.clearCommandPalette()
 			return m, nil
 		case tea.KeyCtrlL:
 			m.events = nil
@@ -218,6 +270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
+			m.clearCommandPalette()
 			if cmd, ok := parseSlashCommand(text); ok {
 				m.textarea.Reset()
 				return m.handleSlashCommand(cmd)
@@ -290,6 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
+		m.updateCommandPalette()
 		return m, cmd
 
 	case tea.MouseMsg:
@@ -352,14 +406,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doneMsg:
 		if msg.complete {
+			m.abortPending = false
 			m.mode = modeDone
 			m.textarea.Placeholder = "创作已完成"
 			m.textarea.Blur()
 		} else {
-			// 出错停止，保持 modeRunning，用户输入任意内容 Steer 即可恢复 agent 循环
-			m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+			if m.abortPending {
+				m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
+				m.abortPending = false
+			} else {
+				// 出错停止，保持 modeRunning，用户输入任意内容 Steer 即可恢复 agent 循环
+				m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+			}
 		}
-		return m, fetchSnapshot(m.runtime)
+		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime))
+
+	case abortResultMsg:
+		if msg.stopped {
+			m.abortPending = true
+			m.textarea.Placeholder = "正在暂停创作..."
+		}
+		return m, nil
 
 	case startResultMsg:
 		if msg.err != nil {
@@ -454,6 +521,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 非键盘消息（光标闪烁等 textarea 内部消息）转发
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
+	m.updateCommandPalette()
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
@@ -583,11 +651,11 @@ func (m *Model) inputHints() string {
 	}
 	if m.mode == modeNew {
 		if m.startupMode == startupModeQuick {
-			return dimStyle.Render("Tab 切换启动模式 · Enter 直接开始创作 · Esc 清空输入")
+			return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 直接开始创作 · Esc 清空输入")
 		}
-		return dimStyle.Render("Tab 切换启动模式 · Enter 开始共创对话 · Esc 清空输入")
+		return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 开始共创对话 · Esc 清空输入")
 	}
-	return dimStyle.Render("点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · /model 切模型 · ^L 清屏 · Esc 重置 · Enter 发送")
+	return dimStyle.Render("输入 / 搜索命令 · 点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · ^L 清屏 · Esc 暂停 · Enter 发送")
 }
 
 func (m *Model) eventFlowWidth() int {
@@ -635,6 +703,9 @@ func (m Model) View() string {
 	}
 	if m.cocreate != nil {
 		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View())
+	}
+	if m.help != nil {
+		return renderHelpModal(m.width, m.height, m.help)
 	}
 	if m.report != nil {
 		return renderReportModal(m.width, m.height, m.report)
@@ -694,6 +765,9 @@ func (m Model) View() string {
 	// 弹窗覆盖叠加：浮在 body 底部上方，不影响布局
 	if m.modelSwitch != nil {
 		commandBar := renderModelSwitchBar(m.width, m.modelSwitch)
+		view = overlayAboveInput(view, commandBar, inputH)
+	} else if m.compActive {
+		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
 	return view
@@ -862,76 +936,6 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
-	switch cmd.name {
-	case "model":
-		roleHint := ""
-		if len(cmd.args) > 0 {
-			roleHint = cmd.args[0]
-			if normalizeRoleKey(roleHint) == "" {
-				m.events = append(m.events, orchestrator.UIEvent{
-					Time: time.Now(), Category: "ERROR", Summary: "未知角色：" + roleHint, Level: "error",
-				})
-				m.refreshEventViewport()
-				return m, nil
-			}
-		}
-		m.modelSwitch = newModelSwitchState(m.runtime, roleHint)
-		m.textarea.Blur()
-		return m, nil
-	case "report":
-		m.report = newReportState(m.runtime.Dir(), m.width, m.height)
-		m.textarea.Blur()
-		return m, nil
-	default:
-		m.events = append(m.events, orchestrator.UIEvent{
-			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
-		})
-		m.refreshEventViewport()
-		return m, nil
-	}
-}
-
-func (m Model) handleModelSwitchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.modelSwitch == nil {
-		return m, nil
-	}
-	state := m.modelSwitch
-
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.modelSwitch = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
-	case tea.KeyTab, tea.KeyDown:
-		state.moveFocus(1)
-		return m, nil
-	case tea.KeyShiftTab, tea.KeyUp:
-		state.moveFocus(-1)
-		return m, nil
-	case tea.KeyLeft:
-		state.cycle(-1, m.runtime)
-		return m, nil
-	case tea.KeyRight:
-		state.cycle(1, m.runtime)
-		return m, nil
-	case tea.KeyEnter:
-		if err := state.apply(m.runtime); err != nil {
-			state.message = err.Error()
-			return m, nil
-		}
-		m.modelSwitch = nil
-		if m.mode != modeDone {
-			return m, tea.Batch(m.textarea.Focus(), fetchSnapshot(m.runtime))
-		}
-		return m, fetchSnapshot(m.runtime)
-	default:
-		return m, nil
-	}
 }
 
 // overlayAboveInput 将 overlay 浮动叠加在 base 视图的底部（inputBox 上方），

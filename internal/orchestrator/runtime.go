@@ -82,11 +82,10 @@ type Runtime struct {
 	events      chan UIEvent
 	streamCh    chan string   // 流式 token channel（独立于 events，避免淹没事件日志）
 	clearCh     chan struct{} // 流式缓冲清空信号
-	done        chan struct{}
+	done        chan struct{} // 每次运行结束发送一个完成信号；channel 在 Runtime 生命周期内保持稳定
 	mu          sync.Mutex
 	running     bool
 	closeOnce   sync.Once
-	doneOnce    sync.Once
 }
 
 // Dir 返回当前运行时的输出目录。
@@ -138,7 +137,7 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 		events:      make(chan UIEvent, 100),
 		streamCh:    make(chan string, 256),
 		clearCh:     make(chan struct{}, 4),
-		done:        make(chan struct{}),
+		done:        make(chan struct{}, 4),
 	}
 	compactEmit = rt.emit
 	rt.session = newSession(coordinator, store, cfg.Provider, rt.emit, rt.emitDelta, rt.emitClear)
@@ -232,8 +231,6 @@ func (rt *Runtime) Start(prompt string) error {
 
 	rt.mu.Lock()
 	rt.running = true
-	rt.done = make(chan struct{})
-	rt.doneOnce = sync.Once{}
 	rt.mu.Unlock()
 
 	go rt.waitDone()
@@ -262,8 +259,6 @@ func (rt *Runtime) Resume() (string, error) {
 
 	rt.mu.Lock()
 	rt.running = true
-	rt.done = make(chan struct{})
-	rt.doneOnce = sync.Once{}
 	rt.mu.Unlock()
 
 	go rt.waitDone()
@@ -289,12 +284,30 @@ func (rt *Runtime) Continue(promptText string) error {
 
 	rt.mu.Lock()
 	rt.running = true
-	rt.done = make(chan struct{})
-	rt.doneOnce = sync.Once{}
 	rt.mu.Unlock()
 
 	go rt.waitDone()
 	return nil
+}
+
+// Abort 停止当前 coordinator 运行。
+// 底层调用 agentcore 的 Abort，会注入“用户手动中断”的标记消息供后续上下文感知。
+func (rt *Runtime) Abort() bool {
+	rt.mu.Lock()
+	running := rt.running
+	rt.mu.Unlock()
+	if !running {
+		return false
+	}
+
+	rt.coordinator.Abort()
+	rt.emit(UIEvent{
+		Time:     time.Now(),
+		Category: "SYSTEM",
+		Summary:  "用户手动暂停当前创作",
+		Level:    "warn",
+	})
+	return true
 }
 
 // Steer 提交用户干预。
@@ -328,8 +341,6 @@ func (rt *Runtime) Steer(text string) {
 	rt.mu.Lock()
 	if !rt.running {
 		rt.running = true
-		rt.done = make(chan struct{})
-		rt.doneOnce = sync.Once{}
 		go rt.waitDone()
 	}
 	rt.mu.Unlock()
@@ -542,6 +553,7 @@ func (rt *Runtime) Close() {
 	rt.coordinator.AbortSilent()
 	rt.session.finalizeSteerIfIdle()
 	rt.closeOnce.Do(func() {
+		close(rt.done)
 		close(rt.events)
 		close(rt.streamCh)
 		close(rt.clearCh)
@@ -554,9 +566,10 @@ func (rt *Runtime) waitDone() {
 	rt.mu.Lock()
 	rt.running = false
 	rt.mu.Unlock()
-	rt.doneOnce.Do(func() {
-		close(rt.done)
-	})
+	select {
+	case rt.done <- struct{}{}:
+	default:
+	}
 }
 
 func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) string {

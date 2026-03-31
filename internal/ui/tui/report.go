@@ -226,7 +226,7 @@ func renderReportModal(width, height int, state *reportState) string {
 	titleText := lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("诊断报告")
 	hint := lineStyle.Render("  ↑↓ 滚动 · Esc 关闭")
 
-	innerW := boxW - 2 // border left + right
+	innerW := boxW - 2     // border left + right
 	contentW := innerW - 4 // padding 2*2
 
 	// 如果 viewport 尺寸变化了，更新
@@ -238,8 +238,8 @@ func renderReportModal(width, height int, state *reportState) string {
 	vpContent := state.viewport.View()
 
 	// 手动绘制边框
-	titleLine := lineStyle.Render("┌─ ") + titleText + lineStyle.Render(" " + strings.Repeat("─", max(0, innerW-lipgloss.Width(titleText)-4)) + "┐")
-	bottomLine := lineStyle.Render("└") + hint + lineStyle.Render(strings.Repeat("─", max(0, innerW-lipgloss.Width(hint)-1)) + "┘")
+	titleLine := lineStyle.Render("┌─ ") + titleText + lineStyle.Render(" "+strings.Repeat("─", max(0, innerW-lipgloss.Width(titleText)-3))+"┐")
+	bottomLine := lineStyle.Render("└") + hint + lineStyle.Render(strings.Repeat("─", max(0, innerW-lipgloss.Width(hint)-1))+"┘")
 
 	bodyLines := strings.Split(vpContent, "\n")
 	var body []string
