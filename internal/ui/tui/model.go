@@ -42,6 +42,7 @@ type Model struct {
 	askState     *askUserState
 	cocreate     *cocreateState
 	modelSwitch  *modelSwitchState
+	report       *reportState
 	snapshot     orchestrator.UISnapshot
 	events       []orchestrator.UIEvent
 	viewport     viewport.Model   // 事件流 viewport
@@ -162,6 +163,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.quitPending = false
 			return m.handleModelSwitchKey(msg)
+		}
+		if m.report != nil {
+			if msg.Type == tea.KeyCtrlC {
+				if m.quitPending {
+					return m, tea.Quit
+				}
+				m.quitPending = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return quitResetMsg{} })
+			}
+			m.quitPending = false
+			return m.handleReportKey(msg)
 		}
 		// 双次 Ctrl+C 退出
 		if msg.Type == tea.KeyCtrlC {
@@ -624,6 +636,9 @@ func (m Model) View() string {
 	if m.cocreate != nil {
 		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View())
 	}
+	if m.report != nil {
+		return renderReportModal(m.width, m.height, m.report)
+	}
 
 	spinnerFrame := ""
 	if m.snapshot.IsRunning {
@@ -864,6 +879,10 @@ func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.modelSwitch = newModelSwitchState(m.runtime, roleHint)
+		m.textarea.Blur()
+		return m, nil
+	case "report":
+		m.report = newReportState(m.runtime.Dir(), m.width, m.height)
 		m.textarea.Blur()
 		return m, nil
 	default:

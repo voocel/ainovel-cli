@@ -232,6 +232,8 @@ func (rt *Runtime) Start(prompt string) error {
 
 	rt.mu.Lock()
 	rt.running = true
+	rt.done = make(chan struct{})
+	rt.doneOnce = sync.Once{}
 	rt.mu.Unlock()
 
 	go rt.waitDone()
@@ -260,10 +262,39 @@ func (rt *Runtime) Resume() (string, error) {
 
 	rt.mu.Lock()
 	rt.running = true
+	rt.done = make(chan struct{})
+	rt.doneOnce = sync.Once{}
 	rt.mu.Unlock()
 
 	go rt.waitDone()
 	return recovery.Label, nil
+}
+
+// Continue 使用指定 prompt 继续驱动 coordinator，适合无界面场景的后续动作。
+func (rt *Runtime) Continue(promptText string) error {
+	rt.mu.Lock()
+	if rt.running {
+		rt.mu.Unlock()
+		return fmt.Errorf("already running")
+	}
+	rt.mu.Unlock()
+
+	promptText = strings.TrimSpace(promptText)
+	if promptText == "" {
+		return fmt.Errorf("prompt is required")
+	}
+	if err := rt.coordinator.Prompt(promptText); err != nil {
+		return fmt.Errorf("prompt: %w", err)
+	}
+
+	rt.mu.Lock()
+	rt.running = true
+	rt.done = make(chan struct{})
+	rt.doneOnce = sync.Once{}
+	rt.mu.Unlock()
+
+	go rt.waitDone()
+	return nil
 }
 
 // Steer 提交用户干预。
