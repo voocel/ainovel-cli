@@ -322,6 +322,14 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 
 func (s *session) handleToolExecError(ev agentcore.Event) {
 	detail := extractToolErrorText(ev.Result)
+	if ev.Tool == "subagent" && isUserCanceledText(detail) {
+		slog.Info("subagent 工具已取消",
+			"module", "tool",
+			"name", ev.Tool,
+			"raw_detail", detail,
+			"raw_result", string(ev.Result))
+		return
+	}
 	slog.Error("工具执行失败", "module", "tool", "name", ev.Tool, "detail", truncateLog(detail, 120))
 	if ev.Tool != "subagent" {
 		s.reminders.observeToolFailure(ev.Tool, detail)
@@ -360,9 +368,16 @@ func (s *session) handleNovelContextEnd(ev agentcore.Event) {
 
 func (s *session) handleMessageEnd(ev agentcore.Event) {
 	if ev.Message != nil && ev.Message.GetRole() == agentcore.RoleAssistant {
-		slog.Debug("assistant", "module", "agent", "text", truncateLog(ev.Message.TextContent(), 100))
+		text := ev.Message.TextContent()
+		if isUserCanceledText(text) {
+			slog.Info("assistant 输出已取消提示",
+				"module", "agent",
+				"raw_text", text)
+			return
+		}
+		slog.Debug("assistant", "module", "agent", "text", truncateLog(text, 100))
 		if s.emit != nil {
-			s.emit(UIEvent{Time: time.Now(), Category: "AGENT", Summary: truncateLog(ev.Message.TextContent(), 80), Level: "info"})
+			s.emit(UIEvent{Time: time.Now(), Category: "AGENT", Summary: truncateLog(text, 80), Level: "info"})
 		}
 	}
 }

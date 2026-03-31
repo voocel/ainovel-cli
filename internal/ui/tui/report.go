@@ -3,35 +3,55 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/voocel/ainovel-cli/internal/diag"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 type reportState struct {
-	report   diag.Report
-	viewport viewport.Model
+	reqID      int
+	report     *diag.Report
+	loading    bool
+	renderW    int
+	startedAt  time.Time
+	finishedAt time.Time
+	viewport   viewport.Model
 }
 
-func newReportState(dir string, width, height int) *reportState {
-	s := store.NewStore(dir)
-	report := diag.Analyze(s)
-
+func newReportState(width, height int, reqID int, startedAt time.Time) *reportState {
 	boxW, boxH := reportModalSize(width, height)
-	contentW := boxW - 6 // padding 2*2 + border 2
-
-	text := renderReportText(report, contentW)
-
+	contentW := paddedModalContentWidth(boxW)
 	vp := viewport.New(contentW, boxH-4) // border 2 + padding 2
-	vp.SetContent(text)
+	state := &reportState{
+		reqID:     reqID,
+		loading:   true,
+		startedAt: startedAt,
+		viewport:  vp,
+	}
+	state.setContent(contentW)
+	return state
+}
 
-	return &reportState{
-		report:   report,
-		viewport: vp,
+func (s *reportState) load(report diag.Report, contentW int, finishedAt time.Time) {
+	s.loading = false
+	s.report = &report
+	s.finishedAt = finishedAt
+	s.setContent(contentW)
+}
+
+func (s *reportState) setContent(contentW int) {
+	s.renderW = contentW
+	switch {
+	case s.loading:
+		s.viewport.SetContent(renderReportLoadingText(contentW, s.startedAt))
+	case s.report != nil:
+		s.viewport.SetContent(renderReportText(*s.report, contentW, s.startedAt, s.finishedAt))
+	default:
+		s.viewport.SetContent("诊断报告不可用")
 	}
 }
 
@@ -50,7 +70,7 @@ func reportModalSize(termW, termH int) (int, int) {
 	return w, h
 }
 
-func renderReportText(report diag.Report, width int) string {
+func renderReportText(report diag.Report, width int, startedAt, finishedAt time.Time) string {
 	var b strings.Builder
 	st := report.Stats
 
@@ -60,6 +80,13 @@ func renderReportText(report diag.Report, width int) string {
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
 
 	b.WriteString(titleStyle.Render("概览"))
+	b.WriteString("\n\n")
+	b.WriteString(dimStyle.Render("开始 "))
+	b.WriteString(formatReportTime(startedAt))
+	if !finishedAt.IsZero() {
+		b.WriteString(dimStyle.Render("  完成 "))
+		b.WriteString(formatReportTime(finishedAt))
+	}
 	b.WriteString("\n\n")
 
 	// 第一行：章节 + 字数
@@ -126,6 +153,29 @@ func renderReportText(report diag.Report, width int) string {
 		renderFinding(&b, f, width)
 	}
 	return b.String()
+}
+
+func renderReportLoadingText(width int, startedAt time.Time) string {
+	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	bodyStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	hintStyle := lipgloss.NewStyle().Foreground(colorDim)
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("正在生成诊断报告"))
+	b.WriteString("\n\n")
+	b.WriteString(hintStyle.Render("开始时间 " + formatReportTime(startedAt)))
+	b.WriteString("\n\n")
+	b.WriteString(bodyStyle.Render(wrapText("正在读取当前小说 output 产物并分析流程、质量、规划和上下文问题。项目较大时可能需要几秒。", width)))
+	b.WriteString("\n\n")
+	b.WriteString(hintStyle.Render("Esc 可先关闭面板，后台分析完成后下次打开会重新生成。"))
+	return b.String()
+}
+
+func formatReportTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("2006-01-02 15:04:05")
 }
 
 func renderFinding(b *strings.Builder, f diag.Finding, width int) {
@@ -222,45 +272,27 @@ func renderReportModal(width, height int, state *reportState) string {
 
 	boxW, boxH := reportModalSize(width, height)
 
-	lineStyle := lipgloss.NewStyle().Foreground(colorDim)
-	titleText := lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("诊断报告")
-	hint := lineStyle.Render("  ↑↓ 滚动 · Esc 关闭")
-
-	innerW := boxW - 2     // border left + right
-	contentW := innerW - 4 // padding 2*2
+	contentW := paddedModalContentWidth(boxW)
 
 	// 如果 viewport 尺寸变化了，更新
 	if state.viewport.Width != contentW {
 		state.viewport.Width = contentW
 		state.viewport.Height = boxH - 4
 	}
-
-	vpContent := state.viewport.View()
-
-	// 手动绘制边框
-	titleLine := lineStyle.Render("┌─ ") + titleText + lineStyle.Render(" "+strings.Repeat("─", max(0, innerW-lipgloss.Width(titleText)-3))+"┐")
-	bottomLine := lineStyle.Render("└") + hint + lineStyle.Render(strings.Repeat("─", max(0, innerW-lipgloss.Width(hint)-1))+"┘")
-
-	bodyLines := strings.Split(vpContent, "\n")
-	var body []string
-	for _, line := range bodyLines {
-		padding := contentW - lipgloss.Width(line)
-		if padding < 0 {
-			padding = 0
-		}
-		body = append(body, lineStyle.Render("│ ")+line+strings.Repeat(" ", padding)+lineStyle.Render(" │"))
+	if state.viewport.Height != boxH-4 {
+		state.viewport.Height = boxH - 4
+	}
+	if state.renderW != contentW {
+		state.setContent(contentW)
 	}
 
-	// 补齐高度
-	emptyLine := lineStyle.Render("│ ") + strings.Repeat(" ", contentW) + lineStyle.Render(" │")
-	for len(body) < boxH-2 {
-		body = append(body, emptyLine)
-	}
-
-	all := append([]string{titleLine}, body...)
-	all = append(all, bottomLine)
-
-	modal := strings.Join(all, "\n")
+	modal := renderPaddedModalFrame(
+		boxW,
+		boxH,
+		"诊断报告",
+		"  ↑↓ 滚动 · Esc 关闭",
+		strings.Split(state.viewport.View(), "\n"),
+	)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 

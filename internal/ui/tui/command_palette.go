@@ -10,22 +10,14 @@ import (
 
 type commandPaletteItem struct {
 	Name        string
+	Aliases     []string
 	Usage       string
 	Description string
 	AutoExecute bool
 }
 
 func builtinCommandItems() []commandPaletteItem {
-	var items []commandPaletteItem
-	for _, spec := range commandSpecs() {
-		items = append(items, commandPaletteItem{
-			Name:        spec.Name,
-			Usage:       spec.Usage,
-			Description: spec.Description,
-			AutoExecute: spec.AutoExecute,
-		})
-	}
-	return items
+	return commandRegistryInstance().PaletteItems()
 }
 
 func scoreCommandItem(item commandPaletteItem, query string) int {
@@ -36,12 +28,17 @@ func scoreCommandItem(item commandPaletteItem, query string) int {
 	name := strings.ToLower(item.Name)
 	desc := strings.ToLower(item.Description)
 	usage := strings.ToLower(item.Usage)
+	aliases := strings.ToLower(strings.Join(item.Aliases, " "))
 
 	switch {
 	case name == query:
 		return 1200
+	case slices.ContainsFunc(item.Aliases, func(alias string) bool { return strings.EqualFold(alias, query) }):
+		return 1100
 	case strings.HasPrefix(name, query):
 		return 900 - min(len(name)-len(query), 40)
+	case aliases != "" && strings.Contains(aliases, query):
+		return 700
 	case strings.Contains(name, query):
 		return 650
 	case strings.Contains(desc, query):
@@ -136,16 +133,10 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 	if boxW < 48 {
 		boxW = 48
 	}
-	innerW := boxW - 2
-	contentW := innerW - 4
+	contentW := paddedModalContentWidth(boxW)
 	if contentW < 20 {
 		contentW = 20
 	}
-
-	title := lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("命令")
-	lineStyle := lipgloss.NewStyle().Foreground(colorDim)
-	titleLine := lineStyle.Render("┌─ ") + title + lineStyle.Render(" "+strings.Repeat("─", max(0, innerW-lipgloss.Width(title)-3))+"┐")
-
 	start, end := commandPaletteWindow(len(items), cursor, 5)
 	visible := items[start:end]
 	remaining := len(items) - end
@@ -176,7 +167,7 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 		if gap < 1 {
 			gap = 1
 		}
-		body = append(body, lineStyle.Render("│ ")+line+strings.Repeat(" ", gap)+descText+lineStyle.Render(" │"))
+		body = append(body, line+strings.Repeat(" ", gap)+descText)
 	}
 
 	if selectedIdx < 0 || selectedIdx >= len(visible) {
@@ -187,11 +178,11 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 	if remaining > 0 {
 		usage = usage + " · 还有 " + strconv.Itoa(remaining) + " 个命令"
 	}
-	body = append(body, lineStyle.Render("│ ")+mutedStyle.Render(truncate(usage, contentW))+strings.Repeat(" ", max(0, contentW-lipgloss.Width(truncate(usage, contentW))))+lineStyle.Render(" │"))
-	body = append(body, lineStyle.Render("│ ")+hint+strings.Repeat(" ", max(0, contentW-lipgloss.Width(hint)))+lineStyle.Render(" │"))
+	usageLine := mutedStyle.Render(truncate(usage, contentW))
+	body = append(body, usageLine+strings.Repeat(" ", max(0, contentW-lipgloss.Width(usageLine))))
+	body = append(body, hint+strings.Repeat(" ", max(0, contentW-lipgloss.Width(hint))))
 
-	bottomLine := lineStyle.Render("└" + strings.Repeat("─", innerW) + "┘")
-	return strings.Join(append(append([]string{titleLine}, body...), bottomLine), "\n")
+	return renderPaddedModalFrame(boxW, len(body)+2, "命令", "", body)
 }
 
 func commandPaletteWindow(total, cursor, limit int) (start, end int) {

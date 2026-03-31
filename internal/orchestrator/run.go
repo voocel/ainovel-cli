@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/voocel/agentcore"
@@ -150,6 +151,13 @@ func logSubAgentResult(result json.RawMessage, emit emitFn) {
 		"cache_read", u.CacheRead, "turns", u.Turns, "tools", u.Tools)
 
 	if data.Error != "" {
+		if isUserCanceledText(data.Error) {
+			slog.Info("subagent 已取消",
+				"module", "tool",
+				"raw_error", data.Error,
+				"raw_result", string(result))
+			return
+		}
 		slog.Error("subagent 错误", "module", "tool", "err", data.Error)
 		if emit != nil {
 			emit(UIEvent{Time: time.Now(), Category: "ERROR",
@@ -188,6 +196,15 @@ func extractToolErrorText(result json.RawMessage) string {
 		}
 	}
 	return truncateLog(string(result), 160)
+}
+
+func isUserCanceledText(text string) bool {
+	text = strings.TrimSpace(strings.ToLower(text))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "context canceled") ||
+		strings.Contains(text, "request interrupted by user")
 }
 
 func agentLabel(name string) string {

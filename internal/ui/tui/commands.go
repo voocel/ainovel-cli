@@ -10,9 +10,13 @@ import (
 
 type slashCommandSpec struct {
 	Name        string
+	Aliases     []string
+	Group       string
 	Usage       string
 	Description string
 	AutoExecute bool
+	Hidden      bool
+	NeedsIdle   bool
 	Run         func(m Model, args []string) (tea.Model, tea.Cmd)
 }
 
@@ -33,10 +37,23 @@ func parseSlashCommand(text string) (slashCommand, bool) {
 	return slashCommand{name: strings.ToLower(fields[0]), args: fields[1:]}, true
 }
 
-func commandSpecs() []slashCommandSpec {
-	return []slashCommandSpec{
+func (s slashCommandSpec) matches(name string) bool {
+	if s.Name == name {
+		return true
+	}
+	for _, alias := range s.Aliases {
+		if strings.EqualFold(alias, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandRegistryInstance() commandRegistry {
+	return newCommandRegistry([]slashCommandSpec{
 		{
 			Name:        "help",
+			Group:       "system",
 			Usage:       "/help",
 			Description: "显示可用命令及其用法",
 			AutoExecute: true,
@@ -48,6 +65,7 @@ func commandSpecs() []slashCommandSpec {
 		},
 		{
 			Name:        "model",
+			Group:       "system",
 			Usage:       "/model [role]",
 			Description: "切换默认模型或指定角色模型",
 			AutoExecute: true,
@@ -70,32 +88,36 @@ func commandSpecs() []slashCommandSpec {
 		},
 		{
 			Name:        "report",
+			Group:       "analysis",
 			Usage:       "/report",
 			Description: "分析当前小说 output 产物并显示诊断报告",
 			AutoExecute: true,
 			Run: func(m Model, _ []string) (tea.Model, tea.Cmd) {
-				m.report = newReportState(m.runtime.Dir(), m.width, m.height)
+				m.reportSeq++
+				m.report = newReportState(m.width, m.height, m.reportSeq, time.Now())
 				m.textarea.Blur()
-				return m, nil
+				return m, loadReport(m.runtime.Dir(), m.reportSeq)
 			},
 		},
-	}
+	})
 }
 
-func findCommandSpec(name string) (slashCommandSpec, bool) {
-	for _, spec := range commandSpecs() {
-		if spec.Name == strings.ToLower(strings.TrimSpace(name)) {
-			return spec, true
-		}
-	}
-	return slashCommandSpec{}, false
+func commandSpecs() []slashCommandSpec {
+	return commandRegistryInstance().Visible()
 }
 
 func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
-	spec, ok := findCommandSpec(cmd.name)
+	spec, ok := commandRegistryInstance().Find(cmd.name)
 	if !ok {
 		m.events = append(m.events, orchestrator.UIEvent{
 			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
+		})
+		m.refreshEventViewport()
+		return m, nil
+	}
+	if spec.NeedsIdle && m.snapshot.IsRunning {
+		m.events = append(m.events, orchestrator.UIEvent{
+			Time: time.Now(), Category: "ERROR", Summary: "命令仅可在空闲状态执行：/" + spec.Name, Level: "error",
 		})
 		m.refreshEventViewport()
 		return m, nil

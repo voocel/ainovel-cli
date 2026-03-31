@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -167,5 +168,46 @@ func TestExtractToolErrorText(t *testing.T) {
 				t.Fatalf("unexpected error text: %q", text)
 			}
 		})
+	}
+}
+
+func TestIsUserCanceledText(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "context canceled", want: true},
+		{text: "Agent \"writer\" failed: context canceled", want: true},
+		{text: "[Request interrupted by user for tool use]", want: true},
+		{text: "permission denied", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := isUserCanceledText(tt.text); got != tt.want {
+			t.Fatalf("isUserCanceledText(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestLogSubAgentResultSkipsCanceledError(t *testing.T) {
+	result, err := json.Marshal(map[string]any{
+		"error": "Agent \"writer\" failed: context canceled",
+		"usage": map[string]any{
+			"input":  10,
+			"output": 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var emitted []UIEvent
+	logSubAgentResult(result, func(ev UIEvent) {
+		ev.Time = time.Time{}
+		emitted = append(emitted, ev)
+	})
+
+	if len(emitted) != 0 {
+		t.Fatalf("expected no UI events, got %+v", emitted)
 	}
 }

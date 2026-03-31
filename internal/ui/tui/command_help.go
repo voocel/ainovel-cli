@@ -14,7 +14,7 @@ type helpState struct {
 
 func newHelpState(width, height int) *helpState {
 	boxW, boxH := reportModalSize(width, height)
-	contentW := boxW - 6
+	contentW := paddedModalContentWidth(boxW)
 	text := renderHelpText(contentW)
 
 	vp := viewport.New(contentW, boxH-4)
@@ -38,6 +38,9 @@ func renderHelpText(width int) string {
 			b.WriteString("\n")
 		}
 		b.WriteString(nameStyle.Render("/" + spec.Name))
+		if len(spec.Aliases) > 0 {
+			b.WriteString(usageStyle.Render("  alias: /" + strings.Join(spec.Aliases, " /")))
+		}
 		b.WriteString("\n")
 		b.WriteString(usageStyle.Render("Usage: " + spec.Usage))
 		b.WriteString("\n")
@@ -66,40 +69,23 @@ func renderHelpModal(width, height int, state *helpState) string {
 	}
 
 	boxW, boxH := reportModalSize(width, height)
-	lineStyle := lipgloss.NewStyle().Foreground(colorDim)
-	titleText := lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("命令帮助")
-	hint := lineStyle.Render("  ↑↓ 滚动 · Esc 关闭")
-
-	innerW := boxW - 2
-	contentW := innerW - 4
+	contentW := paddedModalContentWidth(boxW)
 
 	if state.viewport.Width != contentW {
 		state.viewport.Width = contentW
+	}
+	if state.viewport.Height != boxH-4 {
 		state.viewport.Height = boxH - 4
 	}
 
-	vpContent := state.viewport.View()
-	titleLine := lineStyle.Render("┌─ ") + titleText + lineStyle.Render(" "+strings.Repeat("─", max(0, innerW-lipgloss.Width(titleText)-3))+"┐")
-	bottomLine := lineStyle.Render("└") + hint + lineStyle.Render(strings.Repeat("─", max(0, innerW-lipgloss.Width(hint)-1))+"┘")
-
-	bodyLines := strings.Split(vpContent, "\n")
-	var body []string
-	for _, line := range bodyLines {
-		padding := contentW - lipgloss.Width(line)
-		if padding < 0 {
-			padding = 0
-		}
-		body = append(body, lineStyle.Render("│ ")+line+strings.Repeat(" ", padding)+lineStyle.Render(" │"))
-	}
-
-	emptyLine := lineStyle.Render("│ ") + strings.Repeat(" ", contentW) + lineStyle.Render(" │")
-	for len(body) < boxH-2 {
-		body = append(body, emptyLine)
-	}
-
-	all := append([]string{titleLine}, body...)
-	all = append(all, bottomLine)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, strings.Join(all, "\n"))
+	modal := renderPaddedModalFrame(
+		boxW,
+		boxH,
+		"命令帮助",
+		"  ↑↓ 滚动 · Esc 关闭",
+		strings.Split(state.viewport.View(), "\n"),
+	)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

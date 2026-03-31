@@ -5,15 +5,22 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/voocel/ainovel-cli/internal/diag"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // 消息类型
 type (
-	eventMsg         orchestrator.UIEvent
-	snapshotMsg      orchestrator.UISnapshot
-	doneMsg          struct{ complete bool } // complete=true 全书完成，false 出错停止
-	abortResultMsg   struct{ stopped bool }
+	eventMsg        orchestrator.UIEvent
+	snapshotMsg     orchestrator.UISnapshot
+	doneMsg         struct{ complete bool } // complete=true 全书完成，false 出错停止
+	abortResultMsg  struct{ stopped bool }
+	reportLoadedMsg struct {
+		reqID      int
+		report     diag.Report
+		finishedAt time.Time
+	}
 	askUserMsg       askUserRequest
 	startResultMsg   struct{ err error }
 	cocreateDeltaMsg struct {
@@ -150,6 +157,17 @@ func steerRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
 func abortRuntime(rt *orchestrator.Runtime) tea.Cmd {
 	return func() tea.Msg {
 		return abortResultMsg{stopped: rt.Abort()}
+	}
+}
+
+func loadReport(dir string, reqID int) tea.Cmd {
+	return func() tea.Msg {
+		s := store.NewStore(dir)
+		return reportLoadedMsg{
+			reqID:      reqID,
+			report:     diag.Analyze(s),
+			finishedAt: time.Now(),
+		}
 	}
 }
 
