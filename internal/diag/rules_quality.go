@@ -3,6 +3,7 @@ package diag
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -75,6 +76,85 @@ func ContractMissPattern(snap *Snapshot) []Finding {
 	}}
 }
 
+// HookWeakChain 检测章节 hook 评分连续偏弱。
+func HookWeakChain(snap *Snapshot) []Finding {
+	if len(snap.Reviews) < ThresholdHookWeakChain {
+		return nil
+	}
+
+	chapters := sortedChapterReviews(snap)
+	var weakChain []int
+	for _, ch := range chapters {
+		review := snap.Reviews[ch]
+		if review == nil || review.Scope != "chapter" {
+			continue
+		}
+		hook := review.Dimension("hook")
+		if hook == nil || hook.Score >= ThresholdHookWeakScore {
+			if len(weakChain) >= ThresholdHookWeakChain {
+				break
+			}
+			weakChain = weakChain[:0]
+			continue
+		}
+		weakChain = append(weakChain, ch)
+	}
+	if len(weakChain) < ThresholdHookWeakChain {
+		return nil
+	}
+
+	var parts []string
+	for _, ch := range weakChain {
+		if hook := snap.Reviews[ch].Dimension("hook"); hook != nil {
+			parts = append(parts, fmt.Sprintf("ch%d(%d)", ch, hook.Score))
+		}
+	}
+	return []Finding{{
+		Rule:       "HookWeakChain",
+		Category:   CatQuality,
+		Severity:   SevWarning,
+		Title:      fmt.Sprintf("章末钩子连续偏弱（连续 %d 章）", len(weakChain)),
+		Evidence:   strings.Join(parts, ", "),
+		Suggestion: "检查 writer.md 中 hook_goal 的执行是否清晰，必要时在 plan_chapter 中明确本章追读欲望，并校准 Editor 对 hook 的举证标准。",
+	}}
+}
+
+// PayoffMissPattern 检测带 payoff_points 的章节长期未兑现。
+func PayoffMissPattern(snap *Snapshot) []Finding {
+	var total, missed int
+	var details []string
+	for ch, plan := range snap.Plans {
+		if plan == nil || len(plan.Contract.PayoffPoints) == 0 {
+			continue
+		}
+		review := snap.Reviews[ch]
+		if review == nil {
+			continue
+		}
+		total++
+		if review.ContractStatus == "partial" || review.ContractStatus == "missed" {
+			missed++
+			details = append(details, fmt.Sprintf("ch%d(%d项 payoff)", ch, len(plan.Contract.PayoffPoints)))
+		}
+	}
+	if total < 2 {
+		return nil
+	}
+	rate := float64(missed) / float64(total)
+	if rate <= ThresholdPayoffMissRate {
+		return nil
+	}
+	sort.Strings(details)
+	return []Finding{{
+		Rule:       "PayoffMissPattern",
+		Category:   CatQuality,
+		Severity:   SevWarning,
+		Title:      fmt.Sprintf("爽点/情节点兑现率偏低 (%.0f%% 未达成)", rate*100),
+		Evidence:   fmt.Sprintf("未兑现章节: [%s]，共 %d/%d", strings.Join(details, ", "), missed, total),
+		Suggestion: "检查 plan_chapter 的 payoff_points 是否过多或过空，确保 Writer 在正文里明确兑现，而不是只做铺垫。",
+	}}
+}
+
 // ExcessiveRewrites 检测改写率过高。
 func ExcessiveRewrites(snap *Snapshot) []Finding {
 	if len(snap.Reviews) < 2 {
@@ -141,4 +221,13 @@ func WordCountAnomaly(snap *Snapshot) []Finding {
 		Evidence:   strings.Join(anomalies, "; "),
 		Suggestion: "极短章节可能是输出截断（token 限制），极长章节可能消耗过多上下文窗口。检查模型 max_tokens 配置。",
 	}}
+}
+
+func sortedChapterReviews(snap *Snapshot) []int {
+	chapters := make([]int, 0, len(snap.Reviews))
+	for ch := range snap.Reviews {
+		chapters = append(chapters, ch)
+	}
+	sort.Ints(chapters)
+	return chapters
 }

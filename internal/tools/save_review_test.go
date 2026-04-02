@@ -141,3 +141,38 @@ func TestSaveReviewRejectsMissingAffectedChaptersForRewrite(t *testing.T) {
 		t.Fatalf("expected affected_chapters validation error, got %v", err)
 	}
 }
+
+func TestSaveReviewRejectsIssueWithoutEvidence(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	tool := NewSaveReviewTool(s)
+	args, err := json.Marshal(map[string]any{
+		"chapter": 3,
+		"scope":   "chapter",
+		"dimensions": []map[string]any{
+			{"dimension": "consistency", "score": 85, "verdict": "pass", "comment": "基本一致"},
+			{"dimension": "character", "score": 82, "verdict": "pass", "comment": "人设稳定"},
+			{"dimension": "pacing", "score": 78, "verdict": "warning", "comment": "略慢"},
+			{"dimension": "continuity", "score": 84, "verdict": "pass", "comment": "连贯"},
+			{"dimension": "foreshadow", "score": 80, "verdict": "pass", "comment": "正常"},
+			{"dimension": "hook", "score": 76, "verdict": "warning", "comment": "钩子一般"},
+			{"dimension": "aesthetic", "score": 81, "verdict": "pass", "comment": "语言基本成立"},
+		},
+		"issues": []map[string]any{
+			{"type": "hook", "severity": "warning", "description": "章末钩子偏弱"},
+		},
+		"verdict":           "polish",
+		"summary":           "需要补强钩子。",
+		"affected_chapters": []int{3},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "issue evidence is required") {
+		t.Fatalf("expected issue evidence validation error, got %v", err)
+	}
+}

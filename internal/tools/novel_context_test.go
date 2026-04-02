@@ -73,7 +73,39 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Outline.SavePremise("少年踏入修行世界"); err != nil {
+	if err := s.Outline.SavePremise(`## 题材和基调
+少年成长，偏紧张压迫。
+
+## 题材定位
+少年升级流
+
+## 核心冲突
+主角必须在宗门竞争中活下来。
+
+## 主角目标
+进入内门。
+
+## 终局方向
+成为真正的执棋者。
+
+## 写作禁区
+不提前揭露师尊真相。
+
+## 差异化卖点
+弱者逆袭。
+
+## 差异化钩子
+每阶段都要用更高代价换成长。
+
+## 核心兑现承诺
+持续兑现危机与突破。
+
+## 故事引擎
+试炼、资源争夺与身份升级共同推进。
+
+## 中段转折
+主角被迫转向另一条修行路线。
+`); err != nil {
 		t.Fatalf("SavePremise: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
@@ -152,6 +184,8 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 
 	for _, key := range []string{
 		"premise",
+		"premise_sections",
+		"premise_structure",
 		"outline",
 		"world_rules",
 		"memory_policy",
@@ -179,7 +213,48 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Outline.SavePremise("群像长篇冒险"); err != nil {
+	if err := s.Outline.SavePremise(`## 题材和基调
+群像冒险，偏冷峻史诗。
+
+## 题材定位
+群像长篇冒险
+
+## 核心冲突
+众人必须在不断失控的旧秩序中寻找新秩序。
+
+## 主角目标
+抵达真相核心。
+
+## 终局方向
+揭开古老真相并重建秩序。
+
+## 写作禁区
+不靠天降设定收尾。
+
+## 差异化卖点
+群像关系推进。
+
+## 差异化钩子
+每卷都改变队伍关系结构。
+
+## 核心兑现承诺
+持续提供发现、牺牲与选择。
+
+## 故事引擎
+旅途推进、真相调查与队伍关系共同驱动。
+
+## 关系/成长主线
+队伍从互不信任走向分裂再重组。
+
+## 升级路径
+从地方事件走向世界级危机。
+
+## 中期转向
+真相并非敌人，而是秩序本身有问题。
+
+## 终局命题
+秩序应由谁定义。
+`); err != nil {
 		t.Fatalf("SavePremise: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
@@ -251,6 +326,8 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 		"planning_memory",
 		"foundation_memory",
 		"reference_pack",
+		"premise_sections",
+		"premise_structure",
 		"characters",
 		"layered_outline",
 		"skeleton_arcs",

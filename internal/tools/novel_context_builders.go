@@ -69,6 +69,14 @@ func mergeContextSection(result map[string]any, section map[string]any) {
 func (t *ContextTool) buildBaseContext(result map[string]any, warn func(string, error)) {
 	if premise, err := t.store.Outline.LoadPremise(); err == nil && premise != "" {
 		result["premise"] = premise
+		if sections := parsePremiseSections(premise); len(sections) > 0 {
+			result["premise_sections"] = sections
+		}
+		tier := domain.PlanningTier("")
+		if meta, err := t.store.RunMeta.Load(); err == nil && meta != nil {
+			tier = meta.PlanningTier
+		}
+		result["premise_structure"] = premiseStructure(premise, tier)
 	} else {
 		warn("premise", err)
 	}
@@ -207,7 +215,10 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 		if len(plan.Contract.RequiredBeats) > 0 ||
 			len(plan.Contract.ForbiddenMoves) > 0 ||
 			len(plan.Contract.ContinuityChecks) > 0 ||
-			len(plan.Contract.EvaluationFocus) > 0 {
+			len(plan.Contract.EvaluationFocus) > 0 ||
+			plan.Contract.EmotionTarget != "" ||
+			len(plan.Contract.PayoffPoints) > 0 ||
+			plan.Contract.HookGoal != "" {
 			envelope.Working["chapter_contract"] = plan.Contract
 		}
 	} else {
@@ -360,6 +371,19 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 }
 
 func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelope, warn func(string, error)) {
+	if premise, err := t.store.Outline.LoadPremise(); err == nil && premise != "" {
+		if sections := parsePremiseSections(premise); len(sections) > 0 {
+			envelope.Foundation["premise_sections"] = sections
+		}
+		tier := domain.PlanningTier("")
+		if meta, err := t.store.RunMeta.Load(); err == nil && meta != nil {
+			tier = meta.PlanningTier
+		}
+		envelope.Foundation["premise_structure"] = premiseStructure(premise, tier)
+	} else {
+		warn("premise", err)
+	}
+
 	if chars, err := t.store.Characters.Load(); err == nil && chars != nil {
 		envelope.Foundation["characters"] = chars
 	} else {

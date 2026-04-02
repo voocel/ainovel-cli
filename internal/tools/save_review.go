@@ -31,6 +31,7 @@ func (t *SaveReviewTool) Schema() map[string]any {
 		schema.Property("type", schema.Enum("问题维度", "consistency", "character", "pacing", "continuity", "foreshadow", "hook", "aesthetic")).Required(),
 		schema.Property("severity", schema.Enum("严重程度", "critical", "error", "warning")).Required(),
 		schema.Property("description", schema.String("问题描述")).Required(),
+		schema.Property("evidence", schema.String("证据：原文片段、具体情节或状态数据")).Required(),
 		schema.Property("suggestion", schema.String("修改建议")),
 	)
 	dimensionSchema := schema.Object(
@@ -99,6 +100,14 @@ func validateReviewEntry(r domain.ReviewEntry) error {
 	}
 	if strings.TrimSpace(r.Summary) == "" {
 		return fmt.Errorf("summary is required")
+	}
+	for _, issue := range r.Issues {
+		if strings.TrimSpace(issue.Description) == "" {
+			return fmt.Errorf("issue description is required")
+		}
+		if strings.TrimSpace(issue.Evidence) == "" {
+			return fmt.Errorf("issue evidence is required")
+		}
 	}
 	if err := validateDimensions(r.Dimensions); err != nil {
 		return err

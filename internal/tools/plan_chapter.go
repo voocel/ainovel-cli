@@ -39,6 +39,9 @@ func (t *PlanChapterTool) Schema() map[string]any {
 			schema.Property("forbidden_moves", schema.Array("本章明确不能发生的推进", schema.String(""))),
 			schema.Property("continuity_checks", schema.Array("本章需特别核对的连续性点", schema.String(""))),
 			schema.Property("evaluation_focus", schema.Array("Editor 重点检查项", schema.String(""))),
+			schema.Property("emotion_target", schema.String("可选：本章希望读者主要感受到的情绪")),
+			schema.Property("payoff_points", schema.Array("可选：关键章希望回应的情节点或兑现点", schema.String(""))),
+			schema.Property("hook_goal", schema.String("可选：章末希望驱动的追读欲望或悬念目标")),
 		)),
 	)
 }

@@ -20,6 +20,9 @@ type ChapterContract struct {
 	ForbiddenMoves   []string `json:"forbidden_moves,omitempty"`   // 本章明确不能发生的推进
 	ContinuityChecks []string `json:"continuity_checks,omitempty"` // 本章需特别核对的连续性点
 	EvaluationFocus  []string `json:"evaluation_focus,omitempty"`  // Editor 需要重点检查的点
+	EmotionTarget    string   `json:"emotion_target,omitempty"`    // 可选：本章希望读者主要感受到的情绪
+	PayoffPoints     []string `json:"payoff_points,omitempty"`     // 可选：关键章希望回应的情节点/兑现点
+	HookGoal         string   `json:"hook_goal,omitempty"`         // 可选：章末钩子希望驱动的追读欲望
 }
 
 // ChapterSummary 章节摘要，供后续章节的上下文窗口使用。
