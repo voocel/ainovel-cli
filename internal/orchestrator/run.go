@@ -37,6 +37,14 @@ func parseStreamDelta(ev agentcore.Event) (string, bool) {
 	return ev.Progress.Delta, true
 }
 
+// parseThinkingDelta 从 EventToolExecUpdate 中提取思考文本。
+func parseThinkingDelta(ev agentcore.Event) (string, bool) {
+	if ev.Progress == nil || ev.Progress.Kind != agentcore.ProgressThinking || ev.Progress.Thinking == "" {
+		return "", false
+	}
+	return ev.Progress.Thinking, true
+}
+
 // parseProgressSummary 从 EventToolExecUpdate 中提取可读摘要。
 func parseProgressSummary(ev agentcore.Event) string {
 	if ev.Progress == nil {
@@ -57,14 +65,15 @@ func summarizeStructuredProgress(progress *agentcore.ProgressPayload) string {
 		return ""
 	case agentcore.ProgressToolStart:
 		if progress.Tool != "" {
-			return fmt.Sprintf("%s → %s", progress.Agent, progress.Tool)
+			return fmt.Sprintf("%s → %s", progress.Agent, toolDisplayName(progress.Tool, progress.Args))
 		}
 	case agentcore.ProgressToolError:
 		if progress.Tool != "" {
+			toolName := toolDisplayName(progress.Tool, progress.Args)
 			if progress.Message != "" {
-				return fmt.Sprintf("%s → %s (error: %s)", progress.Agent, progress.Tool, truncateLog(progress.Message, 120))
+				return fmt.Sprintf("%s → %s (error: %s)", progress.Agent, toolName, truncateLog(progress.Message, 120))
 			}
-			return fmt.Sprintf("%s → %s (error)", progress.Agent, progress.Tool)
+			return fmt.Sprintf("%s → %s (error)", progress.Agent, toolName)
 		}
 	case agentcore.ProgressTurnCounter:
 		if progress.Agent != "" && progress.Turn > 0 {
@@ -76,6 +85,16 @@ func summarizeStructuredProgress(progress *agentcore.ProgressPayload) string {
 		}
 	}
 	return ""
+}
+
+func toolDisplayName(tool string, args json.RawMessage) string {
+	switch tool {
+	case "save_foundation":
+		if typ := foundationTypeFromArgs(args); typ != "" {
+			return fmt.Sprintf("%s[%s]", tool, typ)
+		}
+	}
+	return tool
 }
 
 func parseToolProgress(ev agentcore.Event) (toolProgress, bool) {
@@ -105,6 +124,187 @@ func parseToolProgress(ev agentcore.Event) (toolProgress, bool) {
 	default:
 		return toolProgress{}, false
 	}
+}
+
+func foundationTypeFromArgs(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(args, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Type)
+}
+
+func foundationTypeFromResult(result json.RawMessage) string {
+	if len(result) == 0 {
+		return ""
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Type)
+}
+
+func foundationStepLabel(typ string) string {
+	switch typ {
+	case "premise":
+		return "故事前提"
+	case "outline":
+		return "章节大纲"
+	case "layered_outline":
+		return "卷弧大纲"
+	case "characters":
+		return "角色档案"
+	case "world_rules":
+		return "世界规则"
+	case "expand_arc":
+		return "弧章节展开"
+	case "append_volume":
+		return "下一卷规划"
+	case "update_compass":
+		return "故事指南针"
+	default:
+		return "基础设定"
+	}
+}
+
+func toolStartPreview(tool string, args json.RawMessage) string {
+	switch tool {
+	case "save_foundation":
+		return foundationPreview(args)
+	default:
+		return ""
+	}
+}
+
+func foundationPreview(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var payload struct {
+		Type    string          `json:"type"`
+		Volume  int             `json:"volume"`
+		Arc     int             `json:"arc"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(args, &payload); err != nil {
+		return ""
+	}
+
+	label := foundationStepLabel(payload.Type)
+	switch payload.Type {
+	case "layered_outline":
+		if n := jsonArrayLen(payload.Content); n > 0 {
+			return fmt.Sprintf("正在保存%s，当前包含 %d 卷。", label, n)
+		}
+	case "outline", "characters", "world_rules":
+		if n := jsonArrayLen(payload.Content); n > 0 {
+			return fmt.Sprintf("正在保存%s，当前包含 %d 项。", label, n)
+		}
+	case "expand_arc":
+		if n := jsonArrayLen(payload.Content); n > 0 && payload.Volume > 0 && payload.Arc > 0 {
+			return fmt.Sprintf("正在保存%s：第 %d 卷第 %d 弧，共 %d 章。", label, payload.Volume, payload.Arc, n)
+		}
+		if payload.Volume > 0 && payload.Arc > 0 {
+			return fmt.Sprintf("正在保存%s：第 %d 卷第 %d 弧。", label, payload.Volume, payload.Arc)
+		}
+	case "append_volume":
+		if idx := jsonObjectIntField(payload.Content, "index"); idx > 0 {
+			return fmt.Sprintf("正在保存%s：第 %d 卷。", label, idx)
+		}
+	case "update_compass":
+		if direction := jsonObjectStringField(payload.Content, "ending_direction"); direction != "" {
+			return fmt.Sprintf("正在保存%s：%s", label, truncateLog(direction, 48))
+		}
+	}
+
+	if label == "" {
+		return ""
+	}
+	return fmt.Sprintf("正在保存%s。", label)
+}
+
+func foundationResultSummary(result json.RawMessage) string {
+	if len(result) == 0 {
+		return "save_foundation.done"
+	}
+	var payload struct {
+		Type      string   `json:"type"`
+		Remaining []string `json:"remaining"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return "save_foundation.done"
+	}
+
+	name := toolDisplayName("save_foundation", mustMarshalJSON(map[string]any{"type": payload.Type}))
+	if len(payload.Remaining) == 0 {
+		return name + ".done"
+	}
+	return fmt.Sprintf("%s.done (remaining: %s)", name, strings.Join(payload.Remaining, ", "))
+}
+
+func jsonArrayLen(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return 0
+	}
+	return len(arr)
+}
+
+func jsonObjectIntField(raw json.RawMessage, field string) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return 0
+	}
+	value, ok := obj[field]
+	if !ok {
+		return 0
+	}
+	switch n := value.(type) {
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func jsonObjectStringField(raw json.RawMessage, field string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	value, ok := obj[field]
+	if !ok {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+func mustMarshalJSON(v any) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // extractLoadingSummary 从 novel_context 的返回 JSON 中提取 _loading_summary 字段。

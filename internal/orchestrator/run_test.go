@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,27 @@ func TestParseProgressSummaryKeepsToolProgress(t *testing.T) {
 		},
 	})
 	if summary != "writer → plan_chapter" {
+		t.Fatalf("unexpected summary: %q", summary)
+	}
+}
+
+func TestParseProgressSummaryFormatsSaveFoundationType(t *testing.T) {
+	args, err := json.Marshal(map[string]any{
+		"type": "characters",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	summary := parseProgressSummary(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolStart,
+			Agent: "architect_long",
+			Tool:  "save_foundation",
+			Args:  args,
+		},
+	})
+	if summary != "architect_long → save_foundation[characters]" {
 		t.Fatalf("unexpected summary: %q", summary)
 	}
 }
@@ -209,5 +231,155 @@ func TestLogSubAgentResultSkipsCanceledError(t *testing.T) {
 
 	if len(emitted) != 0 {
 		t.Fatalf("expected no UI events, got %+v", emitted)
+	}
+}
+
+func TestSessionDelaysStreamClearUntilFirstVisibleDelta(t *testing.T) {
+	var seq []string
+	sess := newSession(nil, nil, "", nil,
+		func(delta string) { seq = append(seq, "delta:"+delta) },
+		func() { seq = append(seq, "clear") },
+	)
+
+	sess.handleMessageStart()
+	if len(seq) != 0 {
+		t.Fatalf("expected no clear on message start, got %v", seq)
+	}
+
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:    agentcore.ProgressSummary,
+			Summary: "writer → draft_chapter",
+		},
+	})
+	if len(seq) != 0 {
+		t.Fatalf("expected non-display progress to not clear stream, got %v", seq)
+	}
+
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolDelta,
+			Delta: `{"content":"正文第一句"}`,
+		},
+	})
+
+	want := []string{"clear", "delta:正文第一句"}
+	if len(seq) != len(want) {
+		t.Fatalf("unexpected sequence length: got %v want %v", seq, want)
+	}
+	for i := range want {
+		if seq[i] != want[i] {
+			t.Fatalf("unexpected sequence at %d: got %q want %q", i, seq[i], want[i])
+		}
+	}
+}
+
+func TestSessionClearsOnlyOncePerVisibleRound(t *testing.T) {
+	var seq []string
+	sess := newSession(nil, nil, "", nil,
+		func(delta string) { seq = append(seq, "delta:"+delta) },
+		func() { seq = append(seq, "clear") },
+	)
+
+	sess.handleMessageStart()
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolDelta,
+			Delta: `{"content":"第一段"}`,
+		},
+	})
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolDelta,
+			Delta: `{"content":"第二段"}`,
+		},
+	})
+
+	clearCount := 0
+	for _, item := range seq {
+		if item == "clear" {
+			clearCount++
+		}
+	}
+	if clearCount != 1 {
+		t.Fatalf("expected one clear in first round, got %d sequence=%v", clearCount, seq)
+	}
+
+	sess.handleMessageStart()
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolDelta,
+			Delta: `{"content":"新一轮"}`,
+		},
+	})
+
+	joined := strings.Join(seq, "|")
+	if !strings.Contains(joined, "clear|delta:第一段|delta:第二段|clear|delta:新一轮") {
+		t.Fatalf("unexpected round transition sequence: %v", seq)
+	}
+}
+
+func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
+	var seq []string
+	sess := newSession(nil, nil, "", nil,
+		func(delta string) { seq = append(seq, "delta:"+delta) },
+		func() { seq = append(seq, "clear") },
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"type": "layered_outline",
+		"content": []map[string]any{
+			{"index": 1, "title": "第一卷"},
+			{"index": 2, "title": "第二卷"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	sess.handleMessageStart()
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressToolStart,
+			Tool:  "save_foundation",
+			Args:  args,
+			Agent: "architect_long",
+		},
+	})
+
+	if len(seq) != 2 {
+		t.Fatalf("unexpected sequence: %v", seq)
+	}
+	if seq[0] != "clear" {
+		t.Fatalf("expected first event to clear stream, got %v", seq)
+	}
+	if !strings.Contains(seq[1], "正在保存卷弧大纲") || !strings.Contains(seq[1], "2 卷") {
+		t.Fatalf("unexpected preview delta: %q", seq[1])
+	}
+}
+
+func TestSessionDisplaysThinkingProgress(t *testing.T) {
+	var seq []string
+	sess := newSession(nil, nil, "", nil,
+		func(delta string) { seq = append(seq, "delta:"+delta) },
+		func() { seq = append(seq, "clear") },
+	)
+
+	sess.handleMessageStart()
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:     agentcore.ProgressThinking,
+			Thinking: "正在推演冲突升级路径。",
+		},
+	})
+
+	if len(seq) != 2 {
+		t.Fatalf("unexpected sequence: %v", seq)
+	}
+	if seq[0] != "clear" {
+		t.Fatalf("expected first event to clear stream, got %v", seq)
+	}
+	if !strings.Contains(seq[1], "正在推演冲突升级路径。") {
+		t.Fatalf("unexpected thinking delta: %q", seq[1])
 	}
 }

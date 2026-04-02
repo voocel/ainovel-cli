@@ -27,6 +27,7 @@ type session struct {
 	taskExt             *jsonFieldExtractor
 	subFilter           *streamFilter
 	reminders           *reminderEngine
+	pendingClear        bool
 }
 
 func newSession(coordinator *agentcore.Agent, store *storepkg.Store, provider string, emit emitFn, onDelta deltaFn, onClear clearFn) *session {
@@ -250,10 +251,25 @@ func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	if delta, ok := parseStreamDelta(ev); ok {
 		if s.onDelta != nil {
 			if text := s.subFilter.Feed(delta); text != "" {
-				s.onDelta(text)
+				s.emitDisplayDelta(text)
 			}
 		}
 		return
+	}
+	if thinking, ok := parseThinkingDelta(ev); ok {
+		if s.onDelta != nil {
+			if text := s.subFilter.Feed(thinking); text != "" {
+				s.emitDisplayDelta(text)
+			}
+		}
+		return
+	}
+	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressToolStart {
+		if preview := toolStartPreview(ev.Progress.Tool, ev.Progress.Args); preview != "" && s.onDelta != nil {
+			if text := s.subFilter.Feed(preview); text != "" {
+				s.emitDisplayDelta(text)
+			}
+		}
 	}
 	if retry, ok := parseSubAgentRetry(ev); ok {
 		slog.Warn("SubAgent 重试", "module", "tool", "summary", retry)
@@ -282,9 +298,7 @@ func (s *session) handleMessageStart() {
 	s.agentExt.Reset()
 	s.taskExt.Reset()
 	s.subFilter.Reset()
-	if s.onClear != nil {
-		s.onClear()
-	}
+	s.pendingClear = true
 }
 
 func (s *session) handleMessageUpdate(ev agentcore.Event) {
@@ -292,11 +306,24 @@ func (s *session) handleMessageUpdate(ev agentcore.Event) {
 		return
 	}
 	if name := s.agentExt.Feed(ev.Delta); name != "" {
-		s.onDelta("\n▸ " + agentLabel(name) + "\n")
+		s.emitDisplayDelta("\n▸ " + agentLabel(name) + "\n")
 	}
 	if text := s.taskExt.Feed(ev.Delta); text != "" {
-		s.onDelta(text)
+		s.emitDisplayDelta(text)
 	}
+}
+
+func (s *session) emitDisplayDelta(text string) {
+	if text == "" || s.onDelta == nil {
+		return
+	}
+	if s.pendingClear {
+		if s.onClear != nil {
+			s.onClear()
+		}
+		s.pendingClear = false
+	}
+	s.onDelta(text)
 }
 
 func (s *session) handleToolExecEnd(ev agentcore.Event) {
@@ -311,6 +338,13 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 	}
 	if ev.Tool == "novel_context" {
 		s.handleNovelContextEnd(ev)
+		return
+	}
+	if ev.Tool == "save_foundation" {
+		slog.Debug("工具完成", "module", "tool", "name", ev.Tool, "result", truncateLog(string(ev.Result), 200))
+		if s.emit != nil {
+			s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: foundationResultSummary(ev.Result), Level: "info"})
+		}
 		return
 	}
 
