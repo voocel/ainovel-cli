@@ -477,7 +477,7 @@ func renderDetailContent(snap orchestrator.UISnapshot, contentW int) string {
 	if len(snap.Outline) > 0 {
 		outlineHeader := ":: 大纲"
 		if snap.Layered {
-			outlineHeader = fmt.Sprintf(":: 大纲（%s · 动态续写）", snap.CurrentVolumeArc)
+			outlineHeader = fmt.Sprintf(":: 大纲（%s · 动态规划大纲）", snap.CurrentVolumeArc)
 		}
 		b.WriteString(panelTitleStyle.Render(outlineHeader))
 		b.WriteString("\n")

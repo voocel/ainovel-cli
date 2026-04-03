@@ -8,15 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
-	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // UIEvent 是 TUI 消费的结构化事件。
@@ -71,279 +67,19 @@ type OutlineSnapshot struct {
 	CoreEvent string
 }
 
-// Runtime 封装协调器生命周期，提供 TUI 所需的非阻塞接口。
+// Runtime 是面向 TUI 的适配壳。
+// 核心会话主循环位于 Engine；Runtime 只补充快照聚合和模型切换等界面能力。
 type Runtime struct {
-	cfg         bootstrap.Config
-	models      *bootstrap.ModelSet
-	store       *storepkg.Store
-	coordinator *agentcore.Agent
-	session     *session
-	askUser     *tools.AskUserTool
-	events      chan UIEvent
-	streamCh    chan string   // 流式 token channel（独立于 events，避免淹没事件日志）
-	clearCh     chan struct{} // 流式缓冲清空信号
-	done        chan struct{} // 每次运行结束发送一个完成信号；channel 在 Runtime 生命周期内保持稳定
-	mu          sync.Mutex
-	running     bool
-	closeOnce   sync.Once
+	*Engine
 }
 
-// Dir 返回当前运行时的输出目录。
-func (rt *Runtime) Dir() string {
-	return rt.store.Dir()
-}
-
-// AskUser 返回 ask_user 工具实例，供 TUI 注入交互 handler。
-func (rt *Runtime) AskUser() *tools.AskUserTool {
-	return rt.askUser
-}
-
-// NewRuntime 创建 Runtime：初始化 store/model/coordinator，注册事件订阅，但不启动 Prompt。
+// NewRuntime 创建面向 TUI 的运行时适配器。
 func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
-	cfg.FillDefaults()
-	if err := cfg.ValidateBase(); err != nil {
+	engine, err := NewEngine(cfg, bundle)
+	if err != nil {
 		return nil, err
 	}
-	slog.Info("启动", "module", "boot", "provider", cfg.Provider, "model", cfg.ModelName, "output", cfg.OutputDir)
-
-	store := storepkg.NewStore(cfg.OutputDir)
-	if err := store.Init(); err != nil {
-		return nil, fmt.Errorf("init store: %w", err)
-	}
-
-	models, err := bootstrap.NewModelSet(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create models: %w", err)
-	}
-	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
-
-	// 压缩回调需要 emit，但 rt 尚未创建，用闭包延迟绑定
-	var compactEmit emitFn
-	coordinator, askUser := BuildCoordinator(cfg, store, models, bundle, func(ev UIEvent) {
-		if compactEmit != nil {
-			compactEmit(ev)
-		}
-	})
-
-	// 清理上次崩溃可能遗留的信号文件
-	store.Signals.ClearStaleSignals()
-
-	rt := &Runtime{
-		cfg:         cfg,
-		models:      models,
-		store:       store,
-		coordinator: coordinator,
-		askUser:     askUser,
-		events:      make(chan UIEvent, 100),
-		streamCh:    make(chan string, 256),
-		clearCh:     make(chan struct{}, 4),
-		done:        make(chan struct{}, 4),
-	}
-	compactEmit = rt.emit
-	rt.session = newSession(coordinator, store, cfg.Provider, rt.emit, rt.emitDelta, rt.emitClear)
-
-	// 注册事件订阅：确定性控制 + UIEvent 转发 + 流式 delta 转发
-	rt.session.bind()
-
-	// 初始化运行元信息
-	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
-		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
-	}
-
-	return rt, nil
-}
-
-// Stream 返回只读流式 token 通道。
-func (rt *Runtime) Stream() <-chan string {
-	return rt.streamCh
-}
-
-// StreamClear 返回只读流式清空信号通道。
-func (rt *Runtime) StreamClear() <-chan struct{} {
-	return rt.clearCh
-}
-
-// emitClear 发送流式缓冲清空信号，非阻塞。
-func (rt *Runtime) emitClear() {
-	defer func() { recover() }()
-	select {
-	case rt.clearCh <- struct{}{}:
-	default:
-	}
-}
-
-// emitDelta 向流式通道发送 token，非阻塞（满时丢弃旧数据）。
-func (rt *Runtime) emitDelta(delta string) {
-	defer func() { recover() }()
-	select {
-	case rt.streamCh <- delta:
-	default:
-		// 满了就丢弃最旧的再写入
-		select {
-		case <-rt.streamCh:
-		default:
-		}
-		select {
-		case rt.streamCh <- delta:
-		default:
-		}
-	}
-}
-
-// emit 向事件通道发送事件，非阻塞（满时丢弃最旧事件）。
-func (rt *Runtime) emit(ev UIEvent) {
-	defer func() { recover() }() // 防止 channel 关闭后写入 panic
-	select {
-	case rt.events <- ev:
-	default:
-		select {
-		case <-rt.events:
-		default:
-		}
-		select {
-		case rt.events <- ev:
-		default:
-		}
-	}
-}
-
-// Start 新建模式：初始化进度并启动 coordinator。
-func (rt *Runtime) Start(prompt string) error {
-	rt.mu.Lock()
-	if rt.running {
-		rt.mu.Unlock()
-		return fmt.Errorf("already running")
-	}
-	rt.mu.Unlock()
-
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return fmt.Errorf("prompt is required")
-	}
-	if err := rt.store.Progress.Init(rt.cfg.NovelName, 0); err != nil {
-		return fmt.Errorf("init progress: %w", err)
-	}
-
-	promptText := buildStartPrompt(prompt)
-	if err := rt.coordinator.Prompt(promptText); err != nil {
-		return fmt.Errorf("prompt: %w", err)
-	}
-
-	rt.mu.Lock()
-	rt.running = true
-	rt.mu.Unlock()
-
-	go rt.waitDone()
-	return nil
-}
-
-// Resume 恢复模式：根据 Progress/RunMeta 自动判断恢复类型并启动。
-// 返回恢复标签（空字符串表示无法恢复，应走新建模式）。
-func (rt *Runtime) Resume() (string, error) {
-	rt.mu.Lock()
-	if rt.running {
-		rt.mu.Unlock()
-		return "", fmt.Errorf("already running")
-	}
-	rt.mu.Unlock()
-
-	recovery := rt.session.recovery()
-
-	if recovery.IsNew {
-		return "", nil
-	}
-
-	if err := rt.coordinator.Prompt(recovery.PromptText); err != nil {
-		return "", fmt.Errorf("prompt: %w", err)
-	}
-
-	rt.mu.Lock()
-	rt.running = true
-	rt.mu.Unlock()
-
-	go rt.waitDone()
-	return recovery.Label, nil
-}
-
-// Continue 使用指定 prompt 继续驱动 coordinator，适合无界面场景的后续动作。
-func (rt *Runtime) Continue(promptText string) error {
-	rt.mu.Lock()
-	if rt.running {
-		rt.mu.Unlock()
-		return fmt.Errorf("already running")
-	}
-	rt.mu.Unlock()
-
-	promptText = strings.TrimSpace(promptText)
-	if promptText == "" {
-		return fmt.Errorf("prompt is required")
-	}
-	if err := rt.coordinator.Prompt(promptText); err != nil {
-		return fmt.Errorf("prompt: %w", err)
-	}
-
-	rt.mu.Lock()
-	rt.running = true
-	rt.mu.Unlock()
-
-	go rt.waitDone()
-	return nil
-}
-
-// Abort 停止当前 coordinator 运行。
-// 底层调用 agentcore 的 Abort，会注入“用户手动中断”的标记消息供后续上下文感知。
-func (rt *Runtime) Abort() bool {
-	rt.mu.Lock()
-	running := rt.running
-	rt.mu.Unlock()
-	if !running {
-		return false
-	}
-
-	rt.coordinator.Abort()
-	rt.emit(UIEvent{
-		Time:     time.Now(),
-		Category: "SYSTEM",
-		Summary:  "用户手动暂停当前创作",
-		Level:    "warn",
-	})
-	return true
-}
-
-// Steer 提交用户干预。
-// 如果 coordinator 正在运行，通过 Steer 注入消息。
-// 如果 coordinator 已停止（出错），通过 Prompt 重启 agent 循环。
-func (rt *Runtime) Steer(text string) {
-	rt.mu.Lock()
-	wasRunning := rt.running
-	rt.mu.Unlock()
-
-	if wasRunning {
-		rt.session.submitSteer(text)
-	} else {
-		// agent 循环已停止，持久化干预后通过 Prompt 重启
-		rt.session.persistSteer(text)
-		recovery := rt.session.recovery()
-		promptText := recovery.PromptText
-		if recovery.IsNew {
-			promptText = fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
-		}
-		slog.Info("agent 已停止，通过 Prompt 重启", "module", "steer", "recovery", recovery.Label)
-		if err := rt.coordinator.Prompt(promptText); err != nil {
-			slog.Error("重启 Prompt 失败", "module", "steer", "err", err)
-			rt.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "恢复失败: " + err.Error(), Level: "error"})
-			return
-		}
-	}
-
-	rt.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: "干预已提交: " + truncateLog(text, 40), Level: "info"})
-
-	rt.mu.Lock()
-	if !rt.running {
-		rt.running = true
-		go rt.waitDone()
-	}
-	rt.mu.Unlock()
+	return &Runtime{Engine: engine}, nil
 }
 
 // Snapshot 读取 store 聚合为状态快照。
@@ -535,40 +271,6 @@ func roleLabel(role string) string {
 		return "Editor"
 	default:
 		return role
-	}
-}
-
-// Events 返回只读事件通道。
-func (rt *Runtime) Events() <-chan UIEvent {
-	return rt.events
-}
-
-// Done 返回完成信号通道。
-func (rt *Runtime) Done() <-chan struct{} {
-	return rt.done
-}
-
-// Close 终止 coordinator 并关闭事件通道。
-func (rt *Runtime) Close() {
-	rt.coordinator.AbortSilent()
-	rt.session.finalizeSteerIfIdle()
-	rt.closeOnce.Do(func() {
-		close(rt.done)
-		close(rt.events)
-		close(rt.streamCh)
-		close(rt.clearCh)
-	})
-}
-
-func (rt *Runtime) waitDone() {
-	rt.coordinator.WaitForIdle()
-	rt.session.finalizeSteerIfIdle()
-	rt.mu.Lock()
-	rt.running = false
-	rt.mu.Unlock()
-	select {
-	case rt.done <- struct{}{}:
-	default:
 	}
 }
 

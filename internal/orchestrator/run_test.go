@@ -383,3 +383,35 @@ func TestSessionDisplaysThinkingProgress(t *testing.T) {
 		t.Fatalf("unexpected thinking delta: %q", seq[1])
 	}
 }
+
+func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
+	var seq []string
+	sess := newSession(nil, nil, "", nil,
+		func(delta string) { seq = append(seq, delta) },
+		func() { seq = append(seq, "clear") },
+	)
+
+	sess.handleMessageStart()
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:     agentcore.ProgressThinking,
+			Thinking: "Refining character",
+		},
+	})
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:     agentcore.ProgressThinking,
+			Thinking: "Refining character details",
+		},
+	})
+
+	if len(seq) != 3 {
+		t.Fatalf("unexpected sequence: %v", seq)
+	}
+	if seq[1] == seq[2] {
+		t.Fatalf("expected incremental thinking delta, got duplicated chunks: %v", seq)
+	}
+	if got, want := seq[2], " details"; got != want {
+		t.Fatalf("unexpected incremental suffix: got %q want %q", got, want)
+	}
+}

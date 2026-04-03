@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/voocel/agentcore"
@@ -23,6 +24,7 @@ type session struct {
 	onClear     clearFn
 
 	lastProgressSummary string
+	lastThinkingText    string
 	agentExt            *jsonFieldExtractor
 	taskExt             *jsonFieldExtractor
 	subFilter           *streamFilter
@@ -258,10 +260,11 @@ func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	}
 	if thinking, ok := parseThinkingDelta(ev); ok {
 		if s.onDelta != nil {
-			if text := s.subFilter.Feed(thinking); text != "" {
+			if text := s.subFilter.Feed(incrementalThinkingDelta(s.lastThinkingText, thinking)); text != "" {
 				s.emitDisplayDelta(text)
 			}
 		}
+		s.lastThinkingText = thinking
 		return
 	}
 	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressToolStart {
@@ -298,6 +301,7 @@ func (s *session) handleMessageStart() {
 	s.agentExt.Reset()
 	s.taskExt.Reset()
 	s.subFilter.Reset()
+	s.lastThinkingText = ""
 	s.pendingClear = true
 }
 
@@ -438,4 +442,20 @@ func (s *session) handleRetry(ev agentcore.Event) {
 			Summary: fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err),
 			Level:   "warn"})
 	}
+}
+
+func incrementalThinkingDelta(previous, current string) string {
+	if current == "" {
+		return ""
+	}
+	if previous == "" {
+		return current
+	}
+	if current == previous {
+		return ""
+	}
+	if strings.HasPrefix(current, previous) {
+		return current[len(previous):]
+	}
+	return current
 }
