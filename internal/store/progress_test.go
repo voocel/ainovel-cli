@@ -21,6 +21,21 @@ func TestSetFlow(t *testing.T) {
 	}
 }
 
+func TestSetNovelName(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	_ = store.Progress.Init("test", 10)
+
+	if err := store.Progress.SetNovelName("长夜燃灯"); err != nil {
+		t.Fatalf("SetNovelName: %v", err)
+	}
+
+	p, _ := store.Progress.Load()
+	if p.NovelName != "长夜燃灯" {
+		t.Fatalf("expected novel name updated, got %q", p.NovelName)
+	}
+}
+
 func TestSetFlowRejectsInvalidTransition(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

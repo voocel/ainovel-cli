@@ -42,6 +42,44 @@ func TestSaveFoundationPersistsPlanningTier(t *testing.T) {
 	}
 }
 
+func TestSaveFoundationPremiseSetsNovelName(t *testing.T) {
+	dir := t.TempDir()
+	store := store.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("novel", 0); err != nil {
+		t.Fatalf("Init progress: %v", err)
+	}
+
+	tool := NewSaveFoundationTool(store)
+	args, err := json.Marshal(map[string]any{
+		"type": "premise",
+		"content": `# 长夜燃灯
+
+## 题材和基调
+东方玄幻，冷硬求生。`,
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	progress, err := store.Progress.Load()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if progress == nil {
+		t.Fatal("expected progress")
+	}
+	if progress.NovelName != "长夜燃灯" {
+		t.Fatalf("expected novel name set, got %q", progress.NovelName)
+	}
+}
+
 func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 	dir := t.TempDir()
 	store := store.NewStore(dir)

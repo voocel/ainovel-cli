@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -75,6 +76,10 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 	case "premise":
 		if err := t.store.Outline.SavePremise(content); err != nil {
 			return nil, fmt.Errorf("save premise: %w", err)
+		}
+		if name := extractPlannedNovelName(content); name != "" {
+			_ = t.store.Progress.SetNovelName(name)
+			result["novel_name"] = name
 		}
 		_ = t.store.Progress.UpdatePhase(domain.PhasePremise)
 
@@ -232,4 +237,42 @@ func (t *SaveFoundationTool) remaining() []string {
 		missing = append(missing, "world_rules")
 	}
 	return missing
+}
+
+func extractPlannedNovelName(premise string) string {
+	lines := strings.Split(strings.ReplaceAll(premise, "\r\n", "\n"), "\n")
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		for _, prefix := range []string{"书名：", "书名:", "作品名：", "作品名:", "小说名：", "小说名:", "标题：", "标题:"} {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+
+		if strings.HasPrefix(line, "#") {
+			title := strings.TrimSpace(strings.TrimLeft(line, "#"))
+			if isGenericPremiseTitle(title) {
+				continue
+			}
+			return title
+		}
+	}
+	return ""
+}
+
+func isGenericPremiseTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	switch strings.ToLower(title) {
+	case "", "premise", "story premise", "前提", "故事前提", "基础设定", "小说前提", "作品前提":
+		return true
+	}
+	if _, ok := premiseHeadingAliases[title]; ok {
+		return true
+	}
+	return false
 }

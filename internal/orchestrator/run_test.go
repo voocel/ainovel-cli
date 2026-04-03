@@ -24,7 +24,7 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, "", nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -56,7 +56,7 @@ func TestFinalizeSteerIfIdleKeepsActiveFlow(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, "", nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -236,7 +236,7 @@ func TestLogSubAgentResultSkipsCanceledError(t *testing.T) {
 
 func TestSessionDelaysStreamClearUntilFirstVisibleDelta(t *testing.T) {
 	var seq []string
-	sess := newSession(nil, nil, "", nil,
+	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
 	)
@@ -276,7 +276,7 @@ func TestSessionDelaysStreamClearUntilFirstVisibleDelta(t *testing.T) {
 
 func TestSessionClearsOnlyOncePerVisibleRound(t *testing.T) {
 	var seq []string
-	sess := newSession(nil, nil, "", nil,
+	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
 	)
@@ -321,7 +321,7 @@ func TestSessionClearsOnlyOncePerVisibleRound(t *testing.T) {
 
 func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
 	var seq []string
-	sess := newSession(nil, nil, "", nil,
+	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
 	)
@@ -360,7 +360,7 @@ func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
 
 func TestSessionDisplaysThinkingProgress(t *testing.T) {
 	var seq []string
-	sess := newSession(nil, nil, "", nil,
+	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
 	)
@@ -386,7 +386,7 @@ func TestSessionDisplaysThinkingProgress(t *testing.T) {
 
 func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 	var seq []string
-	sess := newSession(nil, nil, "", nil,
+	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, delta) },
 		func() { seq = append(seq, "clear") },
 	)

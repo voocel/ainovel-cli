@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -20,6 +21,9 @@ type Engine struct {
 	cfg         bootstrap.Config
 	models      *bootstrap.ModelSet
 	store       *storepkg.Store
+	taskRT      *novelTaskRuntime
+	scheduler   *taskScheduler
+	agents      *agentBoard
 	coordinator *agentcore.Agent
 	session     *session
 	askUser     *tools.AskUserTool
@@ -32,6 +36,8 @@ type Engine struct {
 	closeOnce   sync.Once
 }
 
+const coordinatorRuntimeOwner = "runtime"
+
 // NewEngine 创建与 UI 无关的会话执行内核。
 func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 	cfg.FillDefaults()
@@ -43,6 +49,10 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 	store := storepkg.NewStore(cfg.OutputDir)
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
+	}
+	taskRT, err := newNovelTaskRuntime(store)
+	if err != nil {
+		return nil, fmt.Errorf("init task runtime: %w", err)
 	}
 
 	models, err := bootstrap.NewModelSet(cfg)
@@ -64,6 +74,9 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 		cfg:         cfg,
 		models:      models,
 		store:       store,
+		taskRT:      taskRT,
+		scheduler:   newTaskScheduler(taskRT),
+		agents:      newAgentBoard(),
 		coordinator: coordinator,
 		askUser:     askUser,
 		events:      make(chan UIEvent, 100),
@@ -72,7 +85,7 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 		done:        make(chan struct{}, 4),
 	}
 	compactEmit = eng.emit
-	eng.session = newSession(coordinator, store, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear)
+	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear)
 	eng.session.bind()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -160,6 +173,13 @@ func (eng *Engine) StartPrepared(promptText string) error {
 	if promptText == "" {
 		return fmt.Errorf("prompt is required")
 	}
+	if err := eng.taskRT.Reset(); err != nil {
+		return fmt.Errorf("reset tasks: %w", err)
+	}
+	eng.agents.ResetAll("待命")
+	if err := eng.scheduler.SeedStartup(promptText); err != nil {
+		return fmt.Errorf("seed foundation task: %w", err)
+	}
 	if err := eng.store.Progress.Init(eng.cfg.NovelName, 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
@@ -167,6 +187,10 @@ func (eng *Engine) StartPrepared(promptText string) error {
 	if err := eng.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
+	if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "协调整体创作", promptText, taskLocation{}); err != nil {
+		return fmt.Errorf("start coordinator task: %w", err)
+	}
+	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在协调整体创作")
 
 	eng.mu.Lock()
 	eng.running = true
@@ -190,9 +214,18 @@ func (eng *Engine) Resume() (string, error) {
 	if recovery.IsNew {
 		return "", nil
 	}
+	progress, _ := eng.store.Progress.Load()
+	runMeta, _ := eng.store.RunMeta.Load()
+	if err := eng.scheduler.SeedRecovery(progress, runMeta); err != nil {
+		return "", err
+	}
 	if err := eng.coordinator.Prompt(recovery.PromptText); err != nil {
 		return "", fmt.Errorf("prompt: %w", err)
 	}
+	if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "恢复创作任务", recovery.PromptText, taskLocation{}); err != nil {
+		return "", fmt.Errorf("start coordinator task: %w", err)
+	}
+	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在恢复创作任务")
 
 	eng.mu.Lock()
 	eng.running = true
@@ -218,6 +251,10 @@ func (eng *Engine) Continue(promptText string) error {
 	if err := eng.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
+	if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", promptText, taskLocation{}); err != nil {
+		return fmt.Errorf("start coordinator task: %w", err)
+	}
+	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在继续处理任务")
 
 	eng.mu.Lock()
 	eng.running = true
@@ -237,6 +274,8 @@ func (eng *Engine) Abort() bool {
 	}
 
 	eng.coordinator.Abort()
+	_ = eng.taskRT.CancelActive(coordinatorRuntimeOwner, "已暂停")
+	eng.agents.Fail("coordinator", "已暂停")
 	eng.emit(UIEvent{
 		Time:     time.Now(),
 		Category: "SYSTEM",
@@ -267,6 +306,10 @@ func (eng *Engine) Steer(text string) {
 			eng.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "恢复失败: " + err.Error(), Level: "error"})
 			return
 		}
+		if _, err := eng.taskRT.Start(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{}); err != nil {
+			slog.Error("启动干预任务失败", "module", "steer", "err", err)
+		}
+		eng.agents.Start("coordinator", "", domain.TaskSteerApply, "正在评估用户干预")
 	}
 
 	eng.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: "干预已提交: " + truncateLog(text, 40), Level: "info"})
@@ -304,9 +347,11 @@ func (eng *Engine) Close() {
 func (eng *Engine) waitDone() {
 	eng.coordinator.WaitForIdle()
 	eng.session.finalizeSteerIfIdle()
+	_ = eng.taskRT.CompleteActive(coordinatorRuntimeOwner)
 	eng.mu.Lock()
 	eng.running = false
 	eng.mu.Unlock()
+	eng.agents.Idle("coordinator", "待命")
 	select {
 	case eng.done <- struct{}{}:
 	default:

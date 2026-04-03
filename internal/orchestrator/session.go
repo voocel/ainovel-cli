@@ -18,6 +18,9 @@ import (
 type session struct {
 	coordinator *agentcore.Agent
 	store       *storepkg.Store
+	taskRT      *novelTaskRuntime
+	scheduler   *taskScheduler
+	agents      *agentBoard
 	provider    string
 	emit        emitFn
 	onDelta     deltaFn
@@ -32,10 +35,13 @@ type session struct {
 	pendingClear        bool
 }
 
-func newSession(coordinator *agentcore.Agent, store *storepkg.Store, provider string, emit emitFn, onDelta deltaFn, onClear clearFn) *session {
+func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn) *session {
 	return &session{
 		coordinator: coordinator,
 		store:       store,
+		taskRT:      taskRT,
+		scheduler:   newTaskScheduler(taskRT),
+		agents:      agents,
 		provider:    provider,
 		emit:        emit,
 		onDelta:     onDelta,
@@ -80,6 +86,9 @@ func (s *session) recovery() recoveryResult {
 
 func (s *session) persistSteer(text string) {
 	slog.Info("用户干预", "module", "steer", "text", text)
+	if s.taskRT != nil {
+		_, _ = s.taskRT.Queue(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{})
+	}
 	if err := s.store.RunMeta.AppendSteerEntry(domain.SteerEntry{
 		Input:     text,
 		Timestamp: time.Now().Format(time.RFC3339),
@@ -96,6 +105,14 @@ func (s *session) persistSteer(text string) {
 
 func (s *session) submitSteer(text string) {
 	s.persistSteer(text)
+	if s.taskRT != nil {
+		if _, err := s.taskRT.Start(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{}); err != nil {
+			slog.Error("启动干预任务失败", "module", "task", "err", err)
+		}
+	}
+	if s.agents != nil {
+		s.agents.Start("coordinator", "", domain.TaskSteerApply, "正在评估用户干预")
+	}
 	runMeta, err := s.store.RunMeta.Load()
 	if err != nil {
 		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)
@@ -142,6 +159,10 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 			if err := s.store.Progress.SetFlow(action.Flow); err != nil {
 				slog.Error("设置流程状态失败", "module", "host", "flow", action.Flow, "err", err)
 			}
+			progress, _ := s.store.Progress.Load()
+			if err := s.scheduler.SyncFlow(action.Flow, progress); err != nil {
+				slog.Error("同步任务队列失败", "module", "task", "flow", action.Flow, "err", err)
+			}
 		case actionSetPendingRewrites:
 			if err := s.store.Progress.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
 				slog.Error("设置待处理章节失败", "module", "host", "chapters", action.Chapters, "err", err)
@@ -151,8 +172,15 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 				slog.Error("完成重写标记失败", "module", "host", "chapter", action.Chapter, "err", err)
 				continue
 			}
+			if s.taskRT != nil {
+				_ = s.taskRT.ClearQueued(domain.TaskChapterRewrite, action.Chapter)
+				_ = s.taskRT.ClearQueued(domain.TaskChapterPolish, action.Chapter)
+			}
 			updated, _ := s.store.Progress.Load()
 			if updated != nil && len(updated.PendingRewrites) == 0 {
+				if err := s.scheduler.SyncFlow(domain.FlowWriting, updated); err != nil {
+					slog.Error("同步写作任务失败", "module", "task", "err", err)
+				}
 				s.saveCheckpoint("rewrite-done")
 				if emit != nil {
 					emit(UIEvent{
@@ -165,6 +193,21 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 			}
 		case actionClearHandledSteer:
 			s.clearHandledSteer()
+			if s.taskRT != nil {
+				_ = s.taskRT.CompleteActive("coordinator")
+				_ = s.taskRT.ClearQueued(domain.TaskSteerApply, 0)
+			}
+			if s.agents != nil {
+				s.agents.Idle("coordinator", "干预处理完成")
+			}
+			progress, _ := s.store.Progress.Load()
+			targetFlow := domain.FlowWriting
+			if progress != nil && progress.Flow != "" {
+				targetFlow = progress.Flow
+			}
+			if err := s.scheduler.SyncFlow(targetFlow, progress); err != nil {
+				slog.Error("恢复任务队列失败", "module", "task", "flow", targetFlow, "err", err)
+			}
 		case actionSaveCheckpoint:
 			s.saveCheckpoint(action.Label)
 		case actionSaveHandoff:
@@ -201,6 +244,10 @@ func (s *session) handleSubAgentDone(emit emitFn) bool {
 	runMeta, _ := s.store.RunMeta.Load()
 	actions := evaluateCommitPolicy(progress, runMeta, result)
 	s.executePolicyActions(actions, emit)
+	updated, _ := s.store.Progress.Load()
+	if err := s.scheduler.AfterCommit(updated, result, actions); err != nil {
+		slog.Error("提交后同步任务失败", "module", "task", "chapter", result.Chapter, "err", err)
+	}
 	return true
 }
 
@@ -244,12 +291,19 @@ func (s *session) saveCheckpoint(label string) {
 
 func (s *session) handleToolExecStart(ev agentcore.Event) {
 	slog.Debug("工具开始", "module", "tool", "name", ev.Tool)
+	s.trackTaskStart(ev)
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".start", Level: "info"})
 	}
 }
 
 func (s *session) handleToolExecUpdate(ev agentcore.Event) {
+	if progress, ok := parseToolProgress(ev); ok {
+		s.trackAgentProgress(progress)
+	}
+	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressTurnCounter {
+		s.trackAgentTurn(ev.Progress.Agent, ev.Progress.Turn)
+	}
 	if delta, ok := parseStreamDelta(ev); ok {
 		if s.onDelta != nil {
 			if text := s.subFilter.Feed(delta); text != "" {
@@ -331,6 +385,7 @@ func (s *session) emitDisplayDelta(text string) {
 }
 
 func (s *session) handleToolExecEnd(ev agentcore.Event) {
+	s.trackTaskEnd(ev)
 	s.lastProgressSummary = ""
 	if ev.IsError {
 		s.handleToolExecError(ev)
@@ -423,9 +478,21 @@ func (s *session) handleMessageEnd(ev agentcore.Event) {
 func (s *session) handleProviderError(ev agentcore.Event) {
 	if ev.Err != nil && errors.Is(ev.Err, context.Canceled) {
 		slog.Info("agent 已取消", "module", "agent", "provider", s.provider)
+		if s.taskRT != nil {
+			_ = s.taskRT.CancelActive(coordinatorRuntimeOwner, "已暂停")
+		}
+		if s.agents != nil {
+			s.agents.Idle("coordinator", "已暂停")
+		}
 		return
 	}
 	slog.Error("provider 错误", "module", "agent", "provider", s.provider, "err", ev.Err)
+	if s.taskRT != nil {
+		_ = s.taskRT.FailActive(coordinatorRuntimeOwner, fmt.Sprintf("[%s] %v", s.provider, ev.Err))
+	}
+	if s.agents != nil {
+		s.agents.Fail("coordinator", fmt.Sprintf("[%s] %v", s.provider, ev.Err))
+	}
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: fmt.Sprintf("[%s] %v", s.provider, ev.Err), Level: "error"})
 	}
@@ -441,6 +508,135 @@ func (s *session) handleRetry(ev agentcore.Event) {
 		s.emit(UIEvent{Time: time.Now(), Category: "SYSTEM",
 			Summary: fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err),
 			Level:   "warn"})
+	}
+}
+
+func (s *session) trackTaskStart(ev agentcore.Event) {
+	if s.taskRT == nil || ev.Tool != "subagent" {
+		return
+	}
+	inv, ok := parseSubagentInvocation(ev.Args)
+	if !ok {
+		return
+	}
+	owner := canonicalAgentName(inv.Agent)
+	progress, _ := s.store.Progress.Load()
+	kind := inferTaskKind(inv.Agent, progress, inv.Task)
+	loc := inferTaskLocation(kind, progress)
+	task, err := s.taskRT.Start(kind, owner, taskTitle(kind, loc), inv.Task, loc)
+	if err != nil {
+		slog.Error("启动任务失败", "module", "task", "agent", inv.Agent, "err", err)
+		return
+	}
+	if s.agents != nil {
+		s.agents.Start(owner, task.ID, kind, task.Title)
+	}
+}
+
+func (s *session) trackTaskEnd(ev agentcore.Event) {
+	if s.taskRT == nil || ev.Tool != "subagent" {
+		return
+	}
+	inv, ok := parseSubagentInvocation(ev.Args)
+	if !ok {
+		return
+	}
+	owner := canonicalAgentName(inv.Agent)
+	if ev.IsError {
+		_ = s.taskRT.FailActive(owner, extractToolErrorText(ev.Result))
+		if s.agents != nil {
+			s.agents.Fail(owner, "任务失败")
+		}
+		return
+	}
+	_ = s.taskRT.CompleteActive(owner)
+	if s.agents != nil {
+		s.agents.Idle(owner, "任务完成")
+	}
+}
+
+func (s *session) trackAgentProgress(progress toolProgress) {
+	owner := canonicalAgentName(progress.Agent)
+	if s.agents != nil {
+		s.agents.Update(owner, progress.Tool, progressSummaryLabel(progress), 0)
+	}
+	if s.taskRT != nil {
+		_ = s.taskRT.UpdateProgress(owner, func(task *domain.TaskRecord) {
+			task.Progress.Tool = progress.Tool
+			task.Progress.ToolSummary = progress.Message
+			task.Progress.Summary = progressSummaryLabel(progress)
+			if progress.Error {
+				task.Progress.Stage = "error"
+			} else {
+				task.Progress.Stage = "tool"
+			}
+		})
+	}
+}
+
+func (s *session) trackAgentTurn(agent string, turn int) {
+	if agent == "" {
+		return
+	}
+	owner := canonicalAgentName(agent)
+	if s.agents != nil {
+		s.agents.Update(owner, "", "", turn)
+	}
+	if s.taskRT != nil {
+		_ = s.taskRT.UpdateProgress(owner, func(task *domain.TaskRecord) {
+			task.Progress.Turn = turn
+		})
+	}
+}
+
+func taskTitle(kind domain.TaskKind, loc taskLocation) string {
+	switch kind {
+	case domain.TaskFoundationPlan:
+		return "规划故事基础设定"
+	case domain.TaskChapterWrite:
+		return fmt.Sprintf("创作第 %d 章", loc.Chapter)
+	case domain.TaskChapterReview:
+		if loc.Chapter > 0 {
+			return fmt.Sprintf("评审第 %d 章", loc.Chapter)
+		}
+		return "执行章节评审"
+	case domain.TaskChapterRewrite:
+		return fmt.Sprintf("重写第 %d 章", loc.Chapter)
+	case domain.TaskChapterPolish:
+		return fmt.Sprintf("打磨第 %d 章", loc.Chapter)
+	case domain.TaskArcExpand:
+		return fmt.Sprintf("展开第 %d 卷第 %d 弧", loc.Volume, loc.Arc)
+	case domain.TaskVolumeAppend:
+		return "规划下一卷"
+	case domain.TaskSteerApply:
+		return "处理用户干预"
+	default:
+		return "协调小说任务"
+	}
+}
+
+func progressSummaryLabel(progress toolProgress) string {
+	if progress.Message != "" {
+		return progress.Message
+	}
+	if progress.Tool != "" {
+		return progress.Tool
+	}
+	return "处理中"
+}
+
+func canonicalAgentName(name string) string {
+	switch {
+	case strings.HasPrefix(name, "architect"):
+		return "architect"
+	case name == "writer":
+		return "writer"
+	case name == "editor":
+		return "editor"
+	case name == "coordinator":
+		return "coordinator"
+	default:
+		return name
 	}
 }
 

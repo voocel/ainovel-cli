@@ -42,6 +42,8 @@ type UISnapshot struct {
 	PendingSteer      string
 	RecoveryLabel     string // 恢复类型描述，空表示新建
 	IsRunning         bool
+	Agents            []AgentSnapshot
+	Tasks             []TaskSnapshot
 
 	// 基础设定
 	Premise          string            // 前提概要
@@ -67,6 +69,21 @@ type OutlineSnapshot struct {
 	CoreEvent string
 }
 
+// TaskSnapshot 是任务列表的展示投影。
+type TaskSnapshot struct {
+	ID        string
+	Kind      string
+	Owner     string
+	Title     string
+	Status    string
+	Chapter   int
+	Volume    int
+	Arc       int
+	Summary   string
+	Tool      string
+	UpdatedAt time.Time
+}
+
 // Runtime 是面向 TUI 的适配壳。
 // 核心会话主循环位于 Engine；Runtime 只补充快照聚合和模型切换等界面能力。
 type Runtime struct {
@@ -87,7 +104,6 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	rt.mu.Lock()
 	currentProvider, currentModel, _ := rt.models.CurrentSelection("default")
 	snap := UISnapshot{
-		NovelName: rt.cfg.NovelName,
 		Provider:  currentProvider,
 		ModelName: currentModel,
 		Style:     rt.cfg.Style,
@@ -97,6 +113,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 
 	progress, _ := rt.store.Progress.Load()
 	if progress != nil {
+		snap.NovelName = strings.TrimSpace(progress.NovelName)
 		snap.Phase = string(progress.Phase)
 		snap.Flow = string(progress.Flow)
 		snap.CurrentChapter = progress.CurrentChapter
@@ -107,11 +124,17 @@ func (rt *Runtime) Snapshot() UISnapshot {
 		snap.PendingRewrites = progress.PendingRewrites
 		snap.RewriteReason = progress.RewriteReason
 	}
+	if snap.NovelName == "" {
+		snap.NovelName = strings.TrimSpace(rt.cfg.NovelName)
+	}
 
 	runMeta, _ := rt.store.RunMeta.Load()
 	if runMeta != nil {
 		snap.PendingSteer = runMeta.PendingSteer
 	}
+
+	snap.Agents = rt.agents.Snapshot()
+	snap.Tasks = rt.taskSnapshots()
 
 	// 状态标签映射
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
@@ -284,6 +307,17 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 	if !isRunning {
 		return "READY"
 	}
+	for _, task := range rt.taskSnapshots() {
+		if task.Status != string(domain.TaskRunning) && task.Status != string(domain.TaskQueued) {
+			continue
+		}
+		switch task.Kind {
+		case string(domain.TaskChapterReview):
+			return "REVIEW"
+		case string(domain.TaskChapterRewrite), string(domain.TaskChapterPolish):
+			return "REWRITE"
+		}
+	}
 	switch progress.Flow {
 	case domain.FlowReviewing:
 		return "REVIEW"
@@ -292,6 +326,40 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 	default:
 		return "RUNNING"
 	}
+}
+
+func (rt *Runtime) taskSnapshots() []TaskSnapshot {
+	if rt.taskRT == nil {
+		return nil
+	}
+	tasks := rt.taskRT.Snapshot()
+	if len(tasks) == 0 {
+		return nil
+	}
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
+	})
+	out := make([]TaskSnapshot, 0, len(tasks))
+	for _, task := range tasks {
+		summary := task.Progress.Summary
+		if summary == "" {
+			summary = task.Progress.ToolSummary
+		}
+		out = append(out, TaskSnapshot{
+			ID:        task.ID,
+			Kind:      string(task.Kind),
+			Owner:     task.Owner,
+			Title:     task.Title,
+			Status:    string(task.Status),
+			Chapter:   task.Chapter,
+			Volume:    task.Volume,
+			Arc:       task.Arc,
+			Summary:   summary,
+			Tool:      task.Progress.Tool,
+			UpdatedAt: task.UpdatedAt,
+		})
+	}
+	return out
 }
 
 func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {

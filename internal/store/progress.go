@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
@@ -62,6 +63,25 @@ func (s *ProgressStore) SetTotalChapters(n int) error {
 			p = &domain.Progress{}
 		}
 		p.TotalChapters = n
+		return s.saveUnlocked(p)
+	})
+}
+
+// SetNovelName 设置作品书名，空值会被忽略。
+func (s *ProgressStore) SetNovelName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			p = &domain.Progress{}
+		}
+		p.NovelName = name
 		return s.saveUnlocked(p)
 	})
 }

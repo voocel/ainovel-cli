@@ -141,7 +141,7 @@ func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
 		return focusEvents, false
 	}
 
-	leftW := m.width * 25 / 100
+	leftW := m.sidebarWidth()
 	rightW := m.detailWidth()
 	centerStartX := leftW
 	rightStartX := m.width - rightW
@@ -258,16 +258,23 @@ func (m *Model) eventFlowWidth() int {
 	if m.width == 0 {
 		return 80
 	}
-	leftW := m.width * 25 / 100
+	leftW := m.sidebarWidth()
 	rightW := m.detailWidth()
 	return m.width - leftW - rightW
+}
+
+func (m *Model) sidebarWidth() int {
+	if m.width == 0 {
+		return 32
+	}
+	return m.width * 23 / 100
 }
 
 func (m *Model) detailWidth() int {
 	if m.width == 0 {
 		return 40
 	}
-	return m.width * 30 / 100
+	return m.width * 27 / 100
 }
 
 func (m *Model) bodyHeight() int {
@@ -333,7 +340,7 @@ func (m Model) View() string {
 		}
 		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode)
 	} else {
-		leftW := m.width * 25 / 100
+		leftW := m.sidebarWidth()
 		rightW := m.detailWidth()
 		centerW := m.width - leftW - rightW
 		eventH, streamH := m.splitHeights(bodyH)

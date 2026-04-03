@@ -24,6 +24,7 @@ type recoveryEngine struct {
 var defaultRecoveryEngine = recoveryEngine{
 	rules: []recoveryRule{
 		recoveryPendingCommitRule,
+		recoveryTaskRule,
 		recoveryNewRule,
 		recoveryPlanningRule,
 		recoveryInProgressChapterRule,
@@ -90,6 +91,38 @@ func recoveryNewRule(snapshot recoverySnapshot) (bool, recoveryResult) {
 		return false, recoveryResult{}
 	}
 	return true, recoveryResult{IsNew: true}
+}
+
+func recoveryTaskRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+	if snapshot.Store == nil {
+		return false, recoveryResult{}
+	}
+	tasks, err := snapshot.Store.Tasks.Load()
+	if err != nil || len(tasks) == 0 {
+		return false, recoveryResult{}
+	}
+
+	var active *domain.TaskRecord
+	for i := len(tasks) - 1; i >= 0; i-- {
+		task := tasks[i]
+		if task.IsTerminal() {
+			continue
+		}
+		active = &task
+		break
+	}
+	if active == nil {
+		return false, recoveryResult{}
+	}
+
+	prompt, label := recoveryPromptFromTask(*active)
+	if prompt == "" {
+		return false, recoveryResult{}
+	}
+	return true, recoveryResult{
+		PromptText: snapshot.withGuidance(prompt),
+		Label:      label,
+	}
 }
 
 func recoveryPlanningRule(snapshot recoverySnapshot) (bool, recoveryResult) {
@@ -275,6 +308,44 @@ func reconcileCommittedChapter(snapshot recoverySnapshot, pending *domain.Pendin
 		PromptText: snapshot.withGuidance(recoveryPromptFromActions(actions, fallback)),
 		Label:      fmt.Sprintf("恢复：补齐第 %d 章提交", pending.Chapter),
 	}, nil
+}
+
+func recoveryPromptFromTask(task domain.TaskRecord) (prompt string, label string) {
+	switch task.Kind {
+	case domain.TaskFoundationPlan:
+		return "上次在基础规划阶段中断。请调用 novel_context 检查当前基础设定状态，补全缺失的设定项（premise/outline/characters/world_rules），然后开始写作。",
+			"任务恢复：基础规划"
+	case domain.TaskChapterWrite:
+		ch := task.Chapter
+		if ch <= 0 {
+			ch = 1
+		}
+		return fmt.Sprintf("上次在第 %d 章写作任务中断。请调用 writer 继续完成该章，必要时先用 read_chapter 读取已有草稿。", ch),
+			fmt.Sprintf("任务恢复：第 %d 章写作", ch)
+	case domain.TaskChapterReview:
+		if task.Chapter > 0 {
+			return fmt.Sprintf("上次在第 %d 章评审任务中断。请调用 editor 继续完成该章或当前批次的审阅。", task.Chapter),
+				fmt.Sprintf("任务恢复：第 %d 章评审", task.Chapter)
+		}
+		return "上次审阅任务中断。请调用 editor 继续完成当前审阅。", "任务恢复：章节评审"
+	case domain.TaskChapterRewrite:
+		return fmt.Sprintf("上次在第 %d 章重写任务中断。请调用 writer 继续重写该章。", task.Chapter),
+			fmt.Sprintf("任务恢复：第 %d 章重写", task.Chapter)
+	case domain.TaskChapterPolish:
+		return fmt.Sprintf("上次在第 %d 章打磨任务中断。请调用 writer 继续打磨该章。", task.Chapter),
+			fmt.Sprintf("任务恢复：第 %d 章打磨", task.Chapter)
+	case domain.TaskArcExpand:
+		return fmt.Sprintf("上次在第 %d 卷第 %d 弧展开任务中断。请调用 architect_long 为该弧展开详细章节规划。", task.Volume, task.Arc),
+			fmt.Sprintf("任务恢复：展开第 %d 卷第 %d 弧", task.Volume, task.Arc)
+	case domain.TaskVolumeAppend:
+		return "上次在下一卷规划任务中断。请调用 architect_long 规划下一卷并更新指南针。", "任务恢复：规划下一卷"
+	case domain.TaskSteerApply:
+		return "上次在用户干预处理任务中断。请优先评估干预影响范围，决定是否修改设定或重写章节。", "任务恢复：处理用户干预"
+	case domain.TaskCoordinatorDecision:
+		return "", ""
+	default:
+		return "", ""
+	}
 }
 
 func applyRecoveryCommitActions(actions []policyAction, store *storepkg.Store) error {

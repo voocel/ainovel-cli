@@ -63,6 +63,15 @@ func buildRightInfo(snap orchestrator.UISnapshot, outputDir string) string {
 	if snap.TotalWordCount > 0 {
 		parts = append(parts, formatNumber(snap.TotalWordCount)+"字")
 	}
+	runningTasks := 0
+	for _, task := range snap.Tasks {
+		if task.Status == "running" || task.Status == "queued" {
+			runningTasks++
+		}
+	}
+	if runningTasks > 0 {
+		parts = append(parts, fmt.Sprintf("Tasks %d", runningTasks))
+	}
 	if outputDir != "" {
 		parts = append(parts, "./"+filepath.Base(outputDir))
 	}

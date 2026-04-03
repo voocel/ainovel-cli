@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -10,23 +11,14 @@ import (
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
 
-// renderTopBar 渲染顶部状态栏（两行布局）。
-// 第一行：小说名居中
-// 第二行：左侧模型/风格信息，右侧状态胶囊
+// renderTopBar 渲染顶部状态栏。
+// 左侧：provider/model，中间：书名，右侧：状态胶囊。
 func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) string {
-	// 第一行：小说名居中
 	novelName := snap.NovelName
 	if novelName == "" {
 		novelName = "AiNovel"
 	}
-	line1 := lipgloss.NewStyle().
-		Width(width - 2).
-		AlignHorizontal(lipgloss.Center).
-		Foreground(colorText).
-		Bold(true).
-		Render("~ " + novelName + " ~")
 
-	// 第二行左侧：模型 + 风格
 	var infoParts []string
 	if snap.Provider != "" {
 		infoParts = append(infoParts, snap.Provider)
@@ -37,9 +29,8 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 	if snap.Style != "" && snap.Style != "default" {
 		infoParts = append(infoParts, snap.Style)
 	}
-	left := lipgloss.NewStyle().Foreground(colorDim).Render(strings.Join(infoParts, " · "))
+	leftText := strings.Join(infoParts, " · ")
 
-	// 第二行右侧：状态胶囊
 	label := snap.StatusLabel
 	if label == "" {
 		label = "READY"
@@ -54,13 +45,31 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 		capsule = lipgloss.NewStyle().Foreground(colorAccent).Render(spinnerFrame) + " " + capsule
 	}
 
-	gap := width - lipgloss.Width(left) - lipgloss.Width(capsule) - 2
-	if gap < 1 {
-		gap = 1
+	innerW := max(12, width-2)
+	rightW := max(14, lipgloss.Width(capsule)+1)
+	leftW := max(18, innerW*28/100)
+	if leftW+rightW >= innerW {
+		leftW = max(12, innerW-rightW-8)
 	}
-	line2 := left + strings.Repeat(" ", gap) + capsule
+	centerW := max(8, innerW-leftW-rightW)
 
-	content := line1 + "\n" + line2
+	leftCell := lipgloss.NewStyle().
+		Width(leftW).
+		AlignHorizontal(lipgloss.Left).
+		Foreground(colorDim).
+		Render(truncate(leftText, leftW))
+	centerCell := lipgloss.NewStyle().
+		Width(centerW).
+		AlignHorizontal(lipgloss.Center).
+		Foreground(colorText).
+		Bold(true).
+		Render(truncate(novelName, centerW))
+	rightCell := lipgloss.NewStyle().
+		Width(rightW).
+		AlignHorizontal(lipgloss.Right).
+		Render(capsule)
+
+	content := leftCell + centerCell + rightCell
 	return topBarStyle.Width(width).
 		Border(baseBorder, false, false, true, false).
 		BorderForeground(colorDim).
@@ -69,40 +78,68 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 
 // renderStatePanel 渲染左侧状态面板。
 func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
-	var b strings.Builder
+	contentW := max(12, width-4)
+	agents := sidebarAgents(snap.Agents)
+	tasks := sidebarTasks(snap.Tasks)
+	idleAgents := sidebarIdleAgents(snap.Agents)
+	var sections []string
 
 	if snap.RecoveryLabel != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Italic(true).
-			Render(truncate(snap.RecoveryLabel, width-4)))
-		b.WriteString("\n\n")
+		sections = append(sections, lipgloss.NewStyle().Foreground(colorMuted).Italic(true).
+			Render(truncate(snap.RecoveryLabel, contentW)))
 	}
 
-	b.WriteString(panelTitleStyle.Render(":: 状态"))
-	b.WriteString("\n")
-	b.WriteString(renderField("Phase", snap.Phase))
-	b.WriteString(renderFlowField(snap.Flow))
-	b.WriteString(renderField("Chapter", fmt.Sprintf("%d / %d", snap.CompletedCount, snap.TotalChapters)))
-	b.WriteString(renderField("Words", formatNumber(snap.TotalWordCount)))
-
+	var overview strings.Builder
+	overview.WriteString(renderField("阶段", snapshotPhaseLabel(snap.Phase)))
+	overview.WriteString(renderField("流程", snapshotFlowLabel(snap.Flow)))
+	overview.WriteString(renderField("进度", fmt.Sprintf("%d / %d 章", snap.CompletedCount, snap.TotalChapters)))
+	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
 	if snap.InProgressChapter > 0 {
-		b.WriteString(renderField("Writing", fmt.Sprintf("第%d章", snap.InProgressChapter)))
+		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
 	}
+	if headline := snapshotHeadline(tasks, snap); headline != "" {
+		overview.WriteString(renderHighlightField("当前", truncate(headline, contentW-10)))
+	}
+	sections = append(sections, renderSidebarSection("概览", overview.String(), contentW))
 
 	if len(snap.PendingRewrites) > 0 {
-		b.WriteString("\n")
-		b.WriteString(panelTitleStyle.Render(":: 返工"))
-		b.WriteString("\n")
-		b.WriteString(renderHighlightField("Pending", fmt.Sprintf("%v", snap.PendingRewrites)))
+		var rewrite strings.Builder
+		rewrite.WriteString(renderHighlightField("队列", fmt.Sprintf("%v", snap.PendingRewrites)))
 		if snap.RewriteReason != "" {
-			b.WriteString(renderField("Reason", truncate(snap.RewriteReason, width-12)))
+			rewrite.WriteString(renderField("原因", truncate(snap.RewriteReason, contentW-10)))
 		}
+		sections = append(sections, renderSidebarSection("返工", rewrite.String(), contentW))
 	}
 
 	if snap.PendingSteer != "" {
-		b.WriteString("\n")
-		b.WriteString(panelTitleStyle.Render(":: 干预"))
-		b.WriteString("\n")
-		b.WriteString(renderHighlightField("Steer", truncate(snap.PendingSteer, width-12)))
+		sections = append(sections, renderSidebarSection("干预",
+			renderHighlightField("待处理", truncate(snap.PendingSteer, contentW-10)), contentW))
+	}
+
+	if len(agents) > 0 {
+		var agentBody strings.Builder
+		for _, agent := range agents {
+			agentBody.WriteString(renderAgentLine(agent, contentW))
+			agentBody.WriteString("\n")
+		}
+		if len(idleAgents) > 0 {
+			agentBody.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("待命: " + truncate(strings.Join(idleAgents, " · "), max(8, contentW-2))))
+			agentBody.WriteString("\n")
+		}
+		sections = append(sections, renderSidebarSection("运行角色", agentBody.String(), contentW))
+	}
+
+	if len(tasks) > 0 {
+		var taskBody strings.Builder
+		limit := 4
+		if len(tasks) < limit {
+			limit = len(tasks)
+		}
+		for i := 0; i < limit; i++ {
+			taskBody.WriteString(renderTaskLine(tasks[i], contentW))
+			taskBody.WriteString("\n")
+		}
+		sections = append(sections, renderSidebarSection("任务队列", taskBody.String(), contentW))
 	}
 
 	style := lipgloss.NewStyle().
@@ -110,9 +147,375 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 		Height(height).
 		Border(baseBorder, false, true, false, false).
 		BorderForeground(colorDim).
-		Padding(0, 1)
+		Padding(1, 1)
 
-	return style.Render(b.String())
+	return style.Render(strings.Join(sections, "\n\n"))
+}
+
+func renderAgentLine(agent orchestrator.AgentSnapshot, width int) string {
+	stateColor := taskStatusColor(agent.State)
+	icon := lipgloss.NewStyle().Foreground(stateColor).Render(agentStateIcon(agent.State))
+	badge := lipgloss.NewStyle().Foreground(stateColor).Render(agentStateLabel(agent.State))
+	name := lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(agentDisplayName(agent.Name))
+	line := icon + " " + name + " " + badge
+
+	taskLine := agentTaskLine(agent)
+	if taskLine != "" {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Render("  "+truncate(taskLine, max(8, width-2)))
+	}
+
+	detail := agent.Summary
+	if agent.Tool != "" {
+		detail = agent.Tool
+	}
+	if agent.State == "idle" && detail == "待命" {
+		detail = ""
+	}
+	if detail != "" && detail != taskLine {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Render("  "+truncate(detail, max(8, width-2)))
+	}
+	return line
+}
+
+func renderTaskLine(task orchestrator.TaskSnapshot, width int) string {
+	color := taskStatusColor(task.Status)
+	icon := lipgloss.NewStyle().Foreground(color).Render(taskStateIcon(task.Status))
+	head := lipgloss.NewStyle().Foreground(color).Render(taskStatusLabel(task.Status))
+	title := truncate(taskListTitle(task), max(8, width-lipgloss.Width(head)-3))
+	line := icon + " " + head + " " + title
+	var meta []string
+	if task.Chapter > 0 {
+		meta = append(meta, fmt.Sprintf("第%d章", task.Chapter))
+	}
+	if task.Volume > 0 && task.Arc > 0 {
+		meta = append(meta, fmt.Sprintf("第%d卷·第%d弧", task.Volume, task.Arc))
+	}
+	if owner := taskOwnerLabel(task.Owner); owner != "" {
+		meta = append(meta, owner)
+	}
+	if len(meta) > 0 {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Render("  "+strings.Join(meta, " · "))
+	}
+	detail := task.Summary
+	if detail == "" {
+		detail = task.Tool
+	}
+	if detail != "" {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Render("  "+truncate(detail, max(8, width-2)))
+	}
+	return line
+}
+
+func renderSidebarSection(title, body string, width int) string {
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return ""
+	}
+	lineW := max(0, width-lipgloss.Width(title)-1)
+	header := panelTitleStyle.Render(title) + " " +
+		lipgloss.NewStyle().Foreground(colorDim).Render(strings.Repeat("─", lineW))
+	card := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorDim).
+		PaddingLeft(1).
+		Render(body)
+	return header + "\n" + card
+}
+
+func sidebarAgents(agents []orchestrator.AgentSnapshot) []orchestrator.AgentSnapshot {
+	var out []orchestrator.AgentSnapshot
+	for _, agent := range agents {
+		if agent.State == "idle" {
+			continue
+		}
+		out = append(out, agent)
+	}
+	if len(out) == 0 {
+		out = append(out, agents...)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		li, lj := out[i], out[j]
+		if agentStateRank(li.State) != agentStateRank(lj.State) {
+			return agentStateRank(li.State) < agentStateRank(lj.State)
+		}
+		return agentOrder(li.Name) < agentOrder(lj.Name)
+	})
+	return out
+}
+
+func sidebarIdleAgents(agents []orchestrator.AgentSnapshot) []string {
+	var names []string
+	hasActive := false
+	for _, agent := range agents {
+		if agent.State != "idle" {
+			hasActive = true
+			continue
+		}
+		names = append(names, agentDisplayName(agent.Name))
+	}
+	if !hasActive {
+		return nil
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sidebarTasks(tasks []orchestrator.TaskSnapshot) []orchestrator.TaskSnapshot {
+	var active []orchestrator.TaskSnapshot
+	for _, task := range tasks {
+		if task.Status != "running" && task.Status != "queued" {
+			continue
+		}
+		active = append(active, task)
+	}
+	if len(active) <= 1 {
+		return active
+	}
+
+	var concrete []orchestrator.TaskSnapshot
+	for _, task := range active {
+		if task.Kind == "coordinator_decision" {
+			continue
+		}
+		concrete = append(concrete, task)
+	}
+	if len(concrete) > 0 {
+		return concrete
+	}
+	return active
+}
+
+func snapshotHeadline(tasks []orchestrator.TaskSnapshot, snap orchestrator.UISnapshot) string {
+	if len(tasks) > 0 {
+		return taskListTitle(tasks[0])
+	}
+	if snap.PendingSteer != "" {
+		return "等待处理用户干预"
+	}
+	if len(snap.PendingRewrites) > 0 {
+		return "等待返工处理"
+	}
+	return ""
+}
+
+func snapshotPhaseLabel(phase string) string {
+	switch phase {
+	case "premise":
+		return "前提"
+	case "outline":
+		return "大纲"
+	case "writing":
+		return "写作"
+	case "complete":
+		return "完成"
+	case "init":
+		return "初始化"
+	default:
+		if phase == "" {
+			return "-"
+		}
+		return phase
+	}
+}
+
+func snapshotFlowLabel(flow string) string {
+	switch flow {
+	case "":
+		return "-"
+	case "writing":
+		return "写作"
+	case "reviewing":
+		return "评审"
+	case "rewriting":
+		return "重写"
+	case "polishing":
+		return "打磨"
+	case "steering":
+		return "干预"
+	default:
+		return flow
+	}
+}
+
+func agentDisplayName(name string) string {
+	switch name {
+	case "architect":
+		return "规划师"
+	case "coordinator":
+		return "协调器"
+	case "editor":
+		return "评审者"
+	case "writer":
+		return "写作者"
+	default:
+		return name
+	}
+}
+
+func agentTaskLine(agent orchestrator.AgentSnapshot) string {
+	if agent.TaskKind != "" {
+		return taskKindLabel(agent.TaskKind)
+	}
+	if agent.Summary != "" {
+		return agent.Summary
+	}
+	return ""
+}
+
+func agentStateRank(state string) int {
+	switch state {
+	case "running":
+		return 0
+	case "failed":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func agentOrder(name string) int {
+	switch name {
+	case "architect":
+		return 0
+	case "coordinator":
+		return 1
+	case "editor":
+		return 2
+	case "writer":
+		return 3
+	default:
+		return 9
+	}
+}
+
+func agentStateLabel(state string) string {
+	switch state {
+	case "running":
+		return "运行中"
+	case "failed":
+		return "异常"
+	case "idle":
+		return "待命"
+	default:
+		return state
+	}
+}
+
+func agentStateIcon(state string) string {
+	switch state {
+	case "running":
+		return "●"
+	case "failed":
+		return "×"
+	default:
+		return "·"
+	}
+}
+
+func taskStatusColor(status string) lipgloss.AdaptiveColor {
+	switch status {
+	case "running":
+		return colorSuccess
+	case "queued":
+		return colorMuted
+	case "failed", "canceled":
+		return colorError
+	case "succeeded":
+		return colorSuccess
+	default:
+		return colorDim
+	}
+}
+
+func taskStatusLabel(status string) string {
+	switch status {
+	case "running":
+		return "运行中"
+	case "queued":
+		return "排队中"
+	case "failed":
+		return "失败"
+	case "canceled":
+		return "取消"
+	case "succeeded":
+		return "完成"
+	default:
+		return status
+	}
+}
+
+func taskStateIcon(status string) string {
+	switch status {
+	case "running":
+		return "●"
+	case "queued":
+		return "○"
+	case "failed":
+		return "×"
+	case "canceled":
+		return "·"
+	case "succeeded":
+		return "✓"
+	default:
+		return "·"
+	}
+}
+
+func taskKindLabel(kind string) string {
+	switch kind {
+	case "foundation_plan":
+		return "基础规划"
+	case "chapter_write":
+		return "章节写作"
+	case "chapter_review":
+		return "章节评审"
+	case "chapter_rewrite":
+		return "章节重写"
+	case "chapter_polish":
+		return "章节打磨"
+	case "arc_expand":
+		return "弧展开"
+	case "volume_append":
+		return "下一卷规划"
+	case "steer_apply":
+		return "处理干预"
+	case "coordinator_decision":
+		return "协调推进"
+	default:
+		return kind
+	}
+}
+
+func taskOwnerLabel(owner string) string {
+	switch owner {
+	case "architect":
+		return "规划师"
+	case "editor":
+		return "评审者"
+	case "writer":
+		return "写作者"
+	case "coordinator":
+		return "协调器"
+	case "runtime":
+		return "系统"
+	default:
+		return owner
+	}
+}
+
+func taskListTitle(task orchestrator.TaskSnapshot) string {
+	switch task.Kind {
+	case "foundation_plan", "coordinator_decision", "steer_apply", "volume_append", "arc_expand":
+		return taskKindLabel(task.Kind)
+	case "chapter_write", "chapter_review", "chapter_rewrite", "chapter_polish":
+		if task.Chapter > 0 {
+			return fmt.Sprintf("%s · 第 %d 章", taskKindLabel(task.Kind), task.Chapter)
+		}
+	}
+	if task.Title != "" {
+		return task.Title
+	}
+	return taskKindLabel(task.Kind)
 }
 
 // 星光动画帧
@@ -546,7 +949,6 @@ func renderDetailContent(snap orchestrator.UISnapshot, contentW int) string {
 		b.WriteString("\n\n")
 	}
 
-	// 运行时信息
 	if snap.LastCommitSummary != "" {
 		b.WriteString(cardTitleStyle.Render("~ 最近提交 ~"))
 		b.WriteString("\n")
