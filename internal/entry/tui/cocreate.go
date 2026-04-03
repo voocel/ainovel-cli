@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
 
@@ -65,16 +66,13 @@ func errorText(err error) string {
 }
 
 type cocreateState struct {
-	history     []orchestrator.CoCreateMessage
-	draftPrompt string
-	ready       bool
-	awaiting    bool
-	reqID       int
-	streamReply string
-	cancel      context.CancelFunc // 取消当前 LLM 请求
-	deltaCh     chan string
-	doneCh      chan cocreateDoneMsg
-	promptVP    viewport.Model
+	session  *startup.CoCreateSession
+	awaiting bool
+	reqID    int
+	cancel   context.CancelFunc // 取消当前 LLM 请求
+	deltaCh  chan string
+	doneCh   chan cocreateDoneMsg
+	promptVP viewport.Model
 }
 
 func newCoCreateState(initial string) *cocreateState {
@@ -82,45 +80,47 @@ func newCoCreateState(initial string) *cocreateState {
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 3
 	return &cocreateState{
-		history: []orchestrator.CoCreateMessage{
-			{Role: "user", Content: strings.TrimSpace(initial)},
-		},
+		session:  startup.NewCoCreateSession(strings.TrimSpace(initial)),
 		awaiting: true,
 		promptVP: vp,
 	}
 }
 
 func (s *cocreateState) appendUser(text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	s.history = append(s.history, orchestrator.CoCreateMessage{Role: "user", Content: text})
+	s.session.AppendUser(text)
 }
 
 func (s *cocreateState) apply(reply orchestrator.CoCreateReply) {
 	s.awaiting = false
-	s.streamReply = ""
-	if text := strings.TrimSpace(reply.Message); text != "" {
-		s.history = append(s.history, orchestrator.CoCreateMessage{Role: "assistant", Content: text})
-	}
-	s.draftPrompt = strings.TrimSpace(reply.Prompt)
-	s.ready = reply.Ready
+	s.session.ApplyReply(reply)
 }
 
 func (s *cocreateState) applyDelta(text string) {
-	s.streamReply = strings.TrimSpace(text)
+	s.session.ApplyDelta(text)
 }
 
 func (s *cocreateState) canStart() bool {
-	return strings.TrimSpace(s.draftPrompt) != ""
+	return s.session.CanStart()
 }
 
 func (s *cocreateState) initialInput() string {
-	if len(s.history) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(s.history[0].Content)
+	return s.session.InitialInput()
+}
+
+func (s *cocreateState) streamReply() string {
+	return s.session.StreamReply()
+}
+
+func (s *cocreateState) draftPrompt() string {
+	return s.session.DraftPrompt()
+}
+
+func (s *cocreateState) ready() bool {
+	return s.session.Ready()
+}
+
+func (s *cocreateState) buildPlan() (startup.Plan, error) {
+	return s.session.BuildPlan()
 }
 
 func renderStartupModeBar(width int, mode startupMode) string {
@@ -248,7 +248,7 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 
 func renderCoCreateConversationPanel(width, height int, state *cocreateState, errMsg string) string {
 	var lines []string
-	for _, item := range state.history {
+	for _, item := range state.session.History() {
 		role := "你"
 		roleStyle := lipgloss.NewStyle().Foreground(colorAccent2).Bold(true)
 		if item.Role == "assistant" {
@@ -262,9 +262,9 @@ func renderCoCreateConversationPanel(width, height int, state *cocreateState, er
 		lines = append(lines, "")
 	}
 	if state.awaiting {
-		if state.streamReply != "" {
+		if state.streamReply() != "" {
 			lines = append(lines, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("AI"))
-			for _, line := range wrapStreamText(state.streamReply, max(12, width-6)) {
+			for _, line := range wrapStreamText(state.streamReply(), max(12, width-6)) {
 				lines = append(lines, "  "+lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render(line))
 			}
 			lines = append(lines, "")
@@ -293,14 +293,14 @@ func renderCoCreateConversationPanel(width, height int, state *cocreateState, er
 
 func renderCoCreatePromptPanel(width, height int, state *cocreateState) string {
 	status := lipgloss.NewStyle().Foreground(colorDim).Render("继续对话中")
-	if state.ready {
+	if state.ready() {
 		status = lipgloss.NewStyle().Foreground(colorAccent).Render("已可开始创作")
 	}
 	if state.awaiting {
 		status = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("AI 整理中")
 	}
 
-	text := strings.TrimSpace(state.draftPrompt)
+	text := strings.TrimSpace(state.draftPrompt())
 	if text == "" {
 		text = "AI 会在这里持续整理出一段可直接进入创作的最终指令。"
 		text = lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render(text)

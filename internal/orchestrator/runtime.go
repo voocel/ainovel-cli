@@ -208,7 +208,7 @@ func (rt *Runtime) SwitchModel(role, provider, model string) error {
 	return nil
 }
 
-func buildStartPrompt(prompt string) string {
+func BuildStartPrompt(prompt string) string {
 	prompt = strings.TrimSpace(prompt)
 	return "请根据以下创作要求开始创作一部小说。章节数量由你根据故事需要自行决定；若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。\n\n[创作要求]\n" +
 		prompt +

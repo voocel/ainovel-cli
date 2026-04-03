@@ -144,6 +144,11 @@ func (eng *Engine) emit(ev UIEvent) {
 
 // Start 新建模式：初始化进度并启动 coordinator。
 func (eng *Engine) Start(prompt string) error {
+	return eng.StartPrepared(BuildStartPrompt(prompt))
+}
+
+// StartPrepared 使用已编排完成的启动 prompt 开始创作。
+func (eng *Engine) StartPrepared(promptText string) error {
 	eng.mu.Lock()
 	if eng.running {
 		eng.mu.Unlock()
@@ -151,15 +156,14 @@ func (eng *Engine) Start(prompt string) error {
 	}
 	eng.mu.Unlock()
 
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	promptText = strings.TrimSpace(promptText)
+	if promptText == "" {
 		return fmt.Errorf("prompt is required")
 	}
 	if err := eng.store.Progress.Init(eng.cfg.NovelName, 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
-	promptText := buildStartPrompt(prompt)
 	if err := eng.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}

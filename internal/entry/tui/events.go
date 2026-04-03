@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/internal/diag"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -87,18 +88,17 @@ func bootstrapRuntime(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func startRuntime(rt *orchestrator.Runtime, prompt string) tea.Cmd {
+func startRuntime(rt *orchestrator.Runtime, plan startup.Plan) tea.Cmd {
 	return func() tea.Msg {
-		err := rt.Start(prompt)
+		err := rt.StartPrepared(plan.StartPrompt)
 		return startResultMsg{err: err}
 	}
 }
 
 func runCoCreate(rt *orchestrator.Runtime, state *cocreateState) tea.Cmd {
-	history := append([]orchestrator.CoCreateMessage(nil), state.history...)
+	history := state.session.History()
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel = cancel
-	state.streamReply = ""
 	state.deltaCh = make(chan string, 64)
 	state.doneCh = make(chan cocreateDoneMsg, 1)
 	start := func() tea.Msg {

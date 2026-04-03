@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
 
@@ -192,7 +193,17 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	case modeNew:
 		m.err = nil
 		if m.startupMode == startupModeQuick {
-			return m, startRuntime(m.runtime, text)
+			plan, err := startup.PrepareQuick(startup.Request{
+				Mode:        startup.ModeQuick,
+				UserPrompt:  text,
+				OutputDir:   m.runtime.Dir(),
+				Interactive: true,
+			})
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			return m, startRuntime(m.runtime, plan)
 		}
 		m.cocreate = newCoCreateState(text)
 		return m, m.sendCoCreate()
@@ -409,7 +420,6 @@ func (m Model) handleCoCreateDoneMsg(msg cocreateDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.err = msg.err
 		m.cocreate.awaiting = false
-		m.cocreate.streamReply = ""
 		m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
 		return m, m.textarea.Focus()
 	}

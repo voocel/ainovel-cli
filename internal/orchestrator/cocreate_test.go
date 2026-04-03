@@ -16,7 +16,7 @@ func TestParseCoCreateResponseSupportsCodeFence(t *testing.T) {
 }
 
 func TestBuildStartPromptWrapsUserPrompt(t *testing.T) {
-	prompt := buildStartPrompt("写一部都市悬疑小说，主角是一名女法医")
+	prompt := BuildStartPrompt("写一部都市悬疑小说，主角是一名女法医")
 	if prompt == "" {
 		t.Fatal("expected wrapped prompt")
 	}

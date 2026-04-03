@@ -8,6 +8,7 @@ import (
 
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/logger"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
@@ -20,6 +21,8 @@ type Options struct {
 }
 
 // Run 以无界面模式运行会话内核，直接消费 Engine 事件与流式输出。
+// 未来若新增“续写已有小说”等共享启动方式，不应直接堆到这里，
+// 而应先落到 internal/entry/startup，再由 headless 入口调用。
 func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	stdout := opts.Stdout
 	if stdout == nil {
@@ -45,8 +48,17 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 
 	prompt := strings.TrimSpace(opts.Prompt)
 	if prompt != "" {
+		plan, err := startup.PrepareQuick(startup.Request{
+			Mode:        startup.ModeQuick,
+			UserPrompt:  prompt,
+			OutputDir:   eng.Dir(),
+			Interactive: true,
+		})
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(stderr, "headless 启动: %s\n", eng.Dir())
-		if err := eng.Start(prompt); err != nil {
+		if err := eng.StartPrepared(plan.StartPrompt); err != nil {
 			return err
 		}
 	} else {

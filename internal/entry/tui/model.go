@@ -374,7 +374,6 @@ func (m *Model) sendCoCreate() tea.Cmd {
 	m.cocreateSeq++
 	m.cocreate.reqID = m.cocreateSeq
 	m.cocreate.awaiting = true
-	m.cocreate.streamReply = ""
 	m.textarea.SetWidth(m.currentInputWidth())
 	m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
 	m.textarea.Blur()
@@ -411,9 +410,14 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlS:
 		if state.canStart() {
+			plan, err := state.buildPlan()
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
 			state.awaiting = true
 			m.textarea.Blur()
-			return m, startRuntime(m.runtime, state.draftPrompt)
+			return m, startRuntime(m.runtime, plan)
 		}
 		return m, nil
 	case tea.KeyEnter:
