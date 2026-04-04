@@ -2,7 +2,7 @@ package orchestrator
 
 import (
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/memory"
+	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -93,14 +93,9 @@ func BuildCoordinator(
 		SystemPrompt: writerPrompt,
 		Tools:        writerTools,
 		MaxTurns:     20,
-		TransformContext: memory.NewCompaction(memory.CompactionConfig{
-			Model:            writerModel,
-			ContextWindow:    cfg.ContextWindow,
-			ReserveTokens:    16384,
-			KeepRecentTokens: 20000,
-			OnCompaction:     compactionCallback("writer", emit),
-		}),
-		ConvertToLLM: memory.CompactionConvertToLLM,
+		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
+			return newContextManager(model, cfg.ContextWindow, 16384, 20000, "writer", emit)
+		},
 	}
 
 	editor := agentcore.SubAgentConfig{
@@ -119,16 +114,26 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(200),
-		agentcore.WithContextPipeline(
-			memory.NewCompaction(memory.CompactionConfig{
-				Model:            coordinatorModel,
-				ContextWindow:    cfg.ContextWindow,
-				ReserveTokens:    32000,
-				KeepRecentTokens: 30000,
-				OnCompaction:     compactionCallback("coordinator", emit),
-			}),
-			memory.CompactionConvertToLLM,
-		),
+		agentcore.WithContextManager(newContextManager(coordinatorModel, cfg.ContextWindow, 32000, 30000, "coordinator", emit)),
 	)
 	return agent, askUser
+}
+
+func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn) agentcore.ContextManager {
+	engine := corecontext.NewEngine(corecontext.EngineConfig{
+		ContextWindow: contextWindow,
+		ReserveTokens: reserveTokens,
+		Strategies: []corecontext.Strategy{
+			corecontext.NewToolResultMicrocompact(corecontext.ToolResultMicrocompactConfig{}),
+			corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
+			corecontext.NewFullSummary(corecontext.FullSummaryConfig{
+				Model:            model,
+				KeepRecentTokens: keepRecentTokens,
+			}),
+		},
+	})
+	callback := contextRewriteCallback(agent, emit)
+	engine.SetProjectHook(callback)
+	engine.SetRecoverHook(callback)
+	return engine
 }

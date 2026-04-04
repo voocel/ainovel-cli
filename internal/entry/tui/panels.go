@@ -100,6 +100,9 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 	overview.WriteString(renderField("流程", snapshotFlowLabel(snap.Flow)))
 	overview.WriteString(renderField("进度", fmt.Sprintf("%d / %d 章", snap.CompletedCount, snap.TotalChapters)))
 	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
+	if ctx := contextUsageLabel(snap); ctx != "" {
+		overview.WriteString(renderField("上下文", ctx))
+	}
 	if snap.InProgressChapter > 0 {
 		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
 	}
@@ -133,6 +136,10 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 			agentBody.WriteString("\n")
 		}
 		sections = append(sections, renderSidebarSection("运行角色", agentBody.String(), contentW))
+	}
+
+	if body := renderContextSidebar(snap, contentW); body != "" {
+		sections = append(sections, renderSidebarSection("上下文", body, contentW))
 	}
 
 	if len(tasks) > 0 {
@@ -180,6 +187,9 @@ func renderAgentLine(agent orchestrator.AgentSnapshot, width int) string {
 	if detail != "" && detail != taskLine {
 		line += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Render("  "+truncate(detail, max(8, width-2)))
 	}
+	if ctx := agentContextLine(agent); ctx != "" {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render("  "+truncate(ctx, max(8, width-2)))
+	}
 	return line
 }
 
@@ -208,6 +218,9 @@ func renderTaskLine(task orchestrator.TaskSnapshot, width int) string {
 	}
 	if detail != "" {
 		line += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Render("  "+truncate(detail, max(8, width-2)))
+	}
+	if task.OutputRef != "" {
+		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render("  out: "+truncate(task.OutputRef, max(8, width-7)))
 	}
 	return line
 }
@@ -343,6 +356,73 @@ func snapshotFlowLabel(flow string) string {
 	}
 }
 
+func contextUsageLabel(snap orchestrator.UISnapshot) string {
+	if snap.ContextWindow <= 0 || snap.ContextTokens <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.0f%% %s/%s",
+		snap.ContextPercent,
+		formatNumber(snap.ContextTokens),
+		formatNumber(snap.ContextWindow),
+	)
+}
+
+func renderContextSidebar(snap orchestrator.UISnapshot, width int) string {
+	if snap.ContextWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
+		return ""
+	}
+	var b strings.Builder
+	if usage := contextUsageLabel(snap); usage != "" {
+		b.WriteString(renderHighlightField("占用", usage))
+	}
+	if scope := contextScopeLabel(snap.ContextScope); scope != "" {
+		b.WriteString(renderField("视图", scope))
+	}
+	if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
+		b.WriteString(renderField("策略", truncate(strategy, max(8, width-10))))
+	}
+	if snap.ContextSummaryCount > 0 {
+		b.WriteString(renderField("摘要", fmt.Sprintf("%d 条", snap.ContextSummaryCount)))
+	}
+	if snap.ContextActiveMessages > 0 {
+		b.WriteString(renderField("消息", fmt.Sprintf("%d 条", snap.ContextActiveMessages)))
+	}
+	if snap.ContextCompactedCount > 0 || snap.ContextKeptCount > 0 {
+		b.WriteString(renderField("重写", fmt.Sprintf("%d → %d", snap.ContextCompactedCount, snap.ContextKeptCount)))
+	}
+	return b.String()
+}
+
+func contextScopeLabel(scope string) string {
+	switch scope {
+	case "baseline":
+		return "基线"
+	case "projected":
+		return "投影"
+	case "recovered":
+		return "恢复"
+	case "committed":
+		return "已提交"
+	default:
+		return scope
+	}
+}
+
+func contextStrategyLabel(strategy string) string {
+	switch strategy {
+	case "":
+		return ""
+	case "tool_result_microcompact":
+		return "工具结果微压缩"
+	case "light_trim":
+		return "轻裁剪"
+	case "full_summary":
+		return "完整摘要"
+	default:
+		return strategy
+	}
+}
+
 func agentDisplayName(name string) string {
 	switch name {
 	case "architect":
@@ -366,6 +446,23 @@ func agentTaskLine(agent orchestrator.AgentSnapshot) string {
 		return agent.Summary
 	}
 	return ""
+}
+
+func agentContextLine(agent orchestrator.AgentSnapshot) string {
+	ctx := agent.Context
+	if ctx.ContextWindow <= 0 || ctx.Tokens <= 0 {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("ctx %.0f%%", ctx.Percent),
+	}
+	if scope := contextScopeLabel(ctx.Scope); scope != "" {
+		parts = append(parts, scope)
+	}
+	if strategy := contextStrategyLabel(ctx.Strategy); strategy != "" {
+		parts = append(parts, strategy)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func agentStateRank(state string) int {
@@ -573,8 +670,8 @@ func renderEventContent(events []orchestrator.UIEvent, width int) string {
 		catStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Width(7)
 		tsStyle := lipgloss.NewStyle().Foreground(colorDim)
 		sumStyle := lipgloss.NewStyle().Foreground(colorText)
-		// SYSTEM 和 ERROR 的摘要用自身颜色高亮
-		if cat == "SYSTEM" || cat == "ERROR" || cat == "REVIEW" {
+		// 关键系统类事件的摘要用自身颜色高亮
+		if cat == "SYSTEM" || cat == "ERROR" || cat == "REVIEW" || cat == "COMPACT" {
 			sumStyle = lipgloss.NewStyle().Foreground(color)
 		}
 

@@ -36,6 +36,7 @@ var categoryColors = map[string]lipgloss.AdaptiveColor{
 	"ERROR":   colorError,
 	"AGENT":   colorMuted,
 	"CONTEXT": colorContext,
+	"COMPACT": colorContext,
 }
 
 // 基础样式

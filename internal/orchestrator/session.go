@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -229,6 +230,9 @@ func (s *session) handleSubAgentDone(emit emitFn) bool {
 	if err != nil || result == nil {
 		return false
 	}
+	if s.taskRT != nil {
+		_ = s.taskRT.AttachOutputRef("writer", fmt.Sprintf("chapters/%02d.md", result.Chapter))
+	}
 
 	slog.Info("章节提交信号", "module", "host", "chapter", result.Chapter, "words", result.WordCount)
 	if emit != nil {
@@ -261,6 +265,9 @@ func (s *session) handleEditorDone(emit emitFn) {
 	if review == nil {
 		return
 	}
+	if s.taskRT != nil {
+		_ = s.taskRT.AttachOutputRef("editor", reviewOutputRef(*review))
+	}
 
 	criticalN := review.CriticalCount()
 	slog.Info("审阅信号", "module", "host",
@@ -274,6 +281,37 @@ func (s *session) handleEditorDone(emit emitFn) {
 	runMeta, _ := s.store.RunMeta.Load()
 	actions := evaluateReviewPolicy(runMeta, review)
 	s.executePolicyActions(actions, emit)
+}
+
+func reviewOutputRef(review domain.ReviewEntry) string {
+	switch review.Scope {
+	case "global":
+		return fmt.Sprintf("reviews/%02d-global.json", review.Chapter)
+	default:
+		return fmt.Sprintf("reviews/%02d.json", review.Chapter)
+	}
+}
+
+func foundationOutputRef(result json.RawMessage) string {
+	if len(result) == 0 {
+		return ""
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return ""
+	}
+	switch payload.Type {
+	case "premise":
+		return "premise.md"
+	case "outline":
+		return "outline.md"
+	case "layered_outline", "expand_arc", "append_volume":
+		return "layered_outline.md"
+	default:
+		return ""
+	}
 }
 
 func (s *session) clearHandledSteer() {
@@ -300,6 +338,9 @@ func (s *session) handleToolExecStart(ev agentcore.Event) {
 func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	if progress, ok := parseToolProgress(ev); ok {
 		s.trackAgentProgress(progress)
+	}
+	if progress, ok := parseContextProgress(ev); ok {
+		s.trackAgentContext(progress)
 	}
 	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressTurnCounter {
 		s.trackAgentTurn(ev.Progress.Agent, ev.Progress.Turn)
@@ -400,6 +441,9 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 		return
 	}
 	if ev.Tool == "save_foundation" {
+		if s.taskRT != nil {
+			_ = s.taskRT.AttachOutputRef("architect", foundationOutputRef(ev.Result))
+		}
 		slog.Debug("工具完成", "module", "tool", "name", ev.Tool, "result", truncateLog(string(ev.Result), 200))
 		if s.emit != nil {
 			s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: foundationResultSummary(ev.Result), Level: "info"})
@@ -587,6 +631,24 @@ func (s *session) trackAgentTurn(agent string, turn int) {
 			task.Progress.Turn = turn
 		})
 	}
+}
+
+func (s *session) trackAgentContext(progress contextProgress) {
+	if progress.Agent == "" || s.agents == nil {
+		return
+	}
+	owner := canonicalAgentName(progress.Agent)
+	s.agents.UpdateContext(owner, AgentContextSnapshot{
+		Tokens:          progress.Tokens,
+		ContextWindow:   progress.ContextWindow,
+		Percent:         progress.Percent,
+		Scope:           progress.Scope,
+		Strategy:        progress.Strategy,
+		ActiveMessages:  progress.ActiveMessages,
+		SummaryMessages: progress.SummaryMessages,
+		CompactedCount:  progress.CompactedCount,
+		KeptCount:       progress.KeptCount,
+	})
 }
 
 func taskTitle(kind domain.TaskKind, loc taskLocation) string {

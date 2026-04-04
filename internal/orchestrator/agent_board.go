@@ -17,7 +17,20 @@ type AgentSnapshot struct {
 	Summary   string
 	Tool      string
 	Turn      int
+	Context   AgentContextSnapshot
 	UpdatedAt time.Time
+}
+
+type AgentContextSnapshot struct {
+	Tokens          int
+	ContextWindow   int
+	Percent         float64
+	Scope           string
+	Strategy        string
+	ActiveMessages  int
+	SummaryMessages int
+	CompactedCount  int
+	KeptCount       int
 }
 
 type agentBoard struct {
@@ -96,6 +109,7 @@ func (b *agentBoard) Idle(name, summary string) {
 	entry.TaskKind = ""
 	entry.Tool = ""
 	entry.Turn = 0
+	entry.Context = AgentContextSnapshot{}
 	if summary != "" {
 		entry.Summary = summary
 	}
@@ -108,6 +122,7 @@ func (b *agentBoard) Fail(name, summary string) {
 	entry := b.ensure(name)
 	entry.State = "failed"
 	entry.Summary = summary
+	entry.Context = AgentContextSnapshot{}
 	entry.UpdatedAt = time.Now()
 }
 
@@ -120,9 +135,18 @@ func (b *agentBoard) ResetAll(summary string) {
 		entry.TaskKind = ""
 		entry.Tool = ""
 		entry.Turn = 0
+		entry.Context = AgentContextSnapshot{}
 		entry.Summary = summary
 		entry.UpdatedAt = time.Now()
 	}
+}
+
+func (b *agentBoard) UpdateContext(name string, ctx AgentContextSnapshot) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.ensure(name)
+	entry.Context = ctx
+	entry.UpdatedAt = time.Now()
 }
 
 func (b *agentBoard) ensure(name string) *AgentSnapshot {

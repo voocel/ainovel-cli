@@ -24,6 +24,11 @@ type novelTaskRuntime struct {
 	tasks []domain.TaskRecord
 }
 
+const (
+	maxRetainedTerminalTasks = 80
+	terminalPruneThreshold   = 120
+)
+
 func newNovelTaskRuntime(store *storepkg.Store) (*novelTaskRuntime, error) {
 	tasks, err := store.Tasks.Load()
 	if err != nil {
@@ -180,6 +185,10 @@ func (rt *novelTaskRuntime) CompleteActive(owner string) error {
 	return rt.finishActive(owner, domain.TaskSucceeded, "", "")
 }
 
+func (rt *novelTaskRuntime) CompleteActiveWithOutput(owner, outputRef string) error {
+	return rt.finishActive(owner, domain.TaskSucceeded, outputRef, "")
+}
+
 func (rt *novelTaskRuntime) FailActive(owner, message string) error {
 	return rt.finishActive(owner, domain.TaskFailed, "", message)
 }
@@ -198,6 +207,25 @@ func (rt *novelTaskRuntime) UpdateProgress(owner string, mutate func(*domain.Tas
 	mutate(task)
 	task.UpdatedAt = time.Now()
 	return rt.saveLocked()
+}
+
+func (rt *novelTaskRuntime) AttachOutputRef(owner, outputRef string) error {
+	outputRef = strings.TrimSpace(outputRef)
+	if outputRef == "" {
+		return nil
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for i := len(rt.tasks) - 1; i >= 0; i-- {
+		task := &rt.tasks[i]
+		if task.Owner != owner {
+			continue
+		}
+		task.OutputRef = outputRef
+		task.UpdatedAt = time.Now()
+		return rt.saveLocked()
+	}
+	return nil
 }
 
 func (rt *novelTaskRuntime) ClearQueued(kind domain.TaskKind, chapter int) error {
@@ -308,7 +336,47 @@ func (rt *novelTaskRuntime) requeueRunningLocked() {
 }
 
 func (rt *novelTaskRuntime) saveLocked() error {
+	rt.compactLocked()
 	return rt.store.Tasks.Save(rt.tasks)
+}
+
+func (rt *novelTaskRuntime) compactLocked() {
+	terminalCount := 0
+	for _, task := range rt.tasks {
+		if task.IsTerminal() {
+			terminalCount++
+		}
+	}
+	if terminalCount <= terminalPruneThreshold {
+		return
+	}
+
+	keepTerminal := terminalCount
+	if keepTerminal > maxRetainedTerminalTasks {
+		keepTerminal = maxRetainedTerminalTasks
+	}
+
+	keep := make([]bool, len(rt.tasks))
+	keptTerminal := 0
+	for i := len(rt.tasks) - 1; i >= 0; i-- {
+		task := rt.tasks[i]
+		if !task.IsTerminal() {
+			keep[i] = true
+			continue
+		}
+		if keptTerminal < keepTerminal {
+			keep[i] = true
+			keptTerminal++
+		}
+	}
+
+	filtered := rt.tasks[:0]
+	for i, ok := range keep {
+		if ok {
+			filtered = append(filtered, rt.tasks[i])
+		}
+	}
+	rt.tasks = append([]domain.TaskRecord(nil), filtered...)
 }
 
 func inferTaskKind(agentName string, progress *domain.Progress, taskText string) domain.TaskKind {

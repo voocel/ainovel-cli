@@ -45,6 +45,17 @@ type UISnapshot struct {
 	Agents            []AgentSnapshot
 	Tasks             []TaskSnapshot
 
+	// 上下文
+	ContextTokens         int
+	ContextWindow         int
+	ContextPercent        float64
+	ContextScope          string
+	ContextStrategy       string
+	ContextActiveMessages int
+	ContextSummaryCount   int
+	ContextCompactedCount int
+	ContextKeptCount      int
+
 	// 基础设定
 	Premise          string            // 前提概要
 	Outline          []OutlineSnapshot // 大纲（每章标题 + 核心事件）
@@ -81,6 +92,7 @@ type TaskSnapshot struct {
 	Arc       int
 	Summary   string
 	Tool      string
+	OutputRef string
 	UpdatedAt time.Time
 }
 
@@ -143,6 +155,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	if snap.InProgressChapter == 0 {
 		snap.InProgressChapter = activeChapterFromTasks(snap.Tasks)
 	}
+	rt.fillContextStatus(&snap)
 
 	// 状态标签映射
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
@@ -256,7 +269,7 @@ func (rt *Runtime) SwitchModel(role, provider, model string) error {
 
 func BuildStartPrompt(prompt string) string {
 	prompt = strings.TrimSpace(prompt)
-	return "请根据以下创作要求开始创作一部小说。章节数量由你根据故事需要自行决定；若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。\n\n[创作要求]\n" +
+	return "请根据以下创作要求开始创作一部小说。进入规划后，Premise 第一行必须输出 `# 书名`。章节数量由你根据故事需要自行决定；若题材与冲突天然适合长篇连载，请优先规划为分层长篇结构，而不是压缩成短篇式梗概。\n\n[创作要求]\n" +
 		prompt +
 		"\n\n若某些细节未明确，请在不违背用户方向的前提下自行补全。"
 }
@@ -379,10 +392,35 @@ func (rt *Runtime) taskSnapshots() []TaskSnapshot {
 			Arc:       task.Arc,
 			Summary:   summary,
 			Tool:      task.Progress.Tool,
+			OutputRef: task.OutputRef,
 			UpdatedAt: task.UpdatedAt,
 		})
 	}
 	return out
+}
+
+func (rt *Runtime) fillContextStatus(snap *UISnapshot) {
+	if rt.coordinator == nil || snap == nil {
+		return
+	}
+	if usage := rt.coordinator.ContextUsage(); usage != nil {
+		snap.ContextTokens = usage.Tokens
+		snap.ContextWindow = usage.ContextWindow
+		snap.ContextPercent = usage.Percent
+	}
+	if ctx := rt.coordinator.ContextSnapshot(); ctx != nil {
+		snap.ContextScope = ctx.Scope
+		snap.ContextStrategy = ctx.LastStrategy
+		snap.ContextActiveMessages = ctx.ActiveMessages
+		snap.ContextSummaryCount = ctx.SummaryMessages
+		snap.ContextCompactedCount = ctx.LastCompactedCount
+		snap.ContextKeptCount = ctx.LastKeptCount
+		if snap.ContextTokens == 0 && ctx.Usage != nil {
+			snap.ContextTokens = ctx.Usage.Tokens
+			snap.ContextWindow = ctx.Usage.ContextWindow
+			snap.ContextPercent = ctx.Usage.Percent
+		}
+	}
 }
 
 func (rt *Runtime) fillDetails(snap *UISnapshot, progress *domain.Progress) {

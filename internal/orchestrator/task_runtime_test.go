@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -254,5 +255,72 @@ func TestNovelTaskRuntimeReconcileClosesCompletedWritingTasks(t *testing.T) {
 	}
 	if got := statusByChapter[3]; got != domain.TaskRunning {
 		t.Fatalf("expected chapter 3 still running, got %s", got)
+	}
+}
+
+func TestNovelTaskRuntimeAttachOutputRefToLatestTask(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskChapterWrite, "writer", "创作第 2 章", "", taskLocation{Chapter: 2}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := rt.CompleteActive("writer"); err != nil {
+		t.Fatalf("CompleteActive: %v", err)
+	}
+	if err := rt.AttachOutputRef("writer", "chapters/02.md"); err != nil {
+		t.Fatalf("AttachOutputRef: %v", err)
+	}
+
+	tasks := rt.Snapshot()
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].OutputRef != "chapters/02.md" {
+		t.Fatalf("expected output ref saved, got %q", tasks[0].OutputRef)
+	}
+}
+
+func TestNovelTaskRuntimeCompactsOldTerminalTasks(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+
+	now := time.Now()
+	for i := 0; i < terminalPruneThreshold+10; i++ {
+		rt.tasks = append(rt.tasks, domain.TaskRecord{
+			ID:        fmt.Sprintf("task-%d", i),
+			Kind:      domain.TaskChapterWrite,
+			Owner:     "writer",
+			Title:     fmt.Sprintf("创作第 %d 章", i+1),
+			Status:    domain.TaskSucceeded,
+			Chapter:   i + 1,
+			CreatedAt: now.Add(time.Duration(i) * time.Second),
+			UpdatedAt: now.Add(time.Duration(i) * time.Second),
+			EndedAt:   now.Add(time.Duration(i) * time.Second),
+		})
+	}
+	if err := rt.saveLocked(); err != nil {
+		t.Fatalf("saveLocked: %v", err)
+	}
+
+	tasks := rt.Snapshot()
+	if len(tasks) != maxRetainedTerminalTasks {
+		t.Fatalf("expected %d retained tasks, got %d", maxRetainedTerminalTasks, len(tasks))
+	}
+	if tasks[0].Chapter != terminalPruneThreshold+10-maxRetainedTerminalTasks+1 {
+		t.Fatalf("expected oldest retained chapter compacted, got chapter %d", tasks[0].Chapter)
 	}
 }

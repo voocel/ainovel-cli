@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/memory"
+	corecontext "github.com/voocel/agentcore/context"
 )
 
 // emitFn 是可选的 UIEvent 发射回调，用于向 UI 转发结构化事件。
@@ -19,6 +19,19 @@ type deltaFn func(delta string)
 
 // clearFn 是可选的流式缓冲清空回调，在新一轮 LLM 输出开始时触发。
 type clearFn func()
+
+type contextProgress struct {
+	Agent           string
+	Tokens          int
+	ContextWindow   int
+	Percent         float64
+	Scope           string
+	Strategy        string
+	ActiveMessages  int
+	SummaryMessages int
+	CompactedCount  int
+	KeptCount       int
+}
 
 // parseSubAgentRetry 从 EventToolExecUpdate 中提取 SubAgent 转发的重试信息。
 func parseSubAgentRetry(ev agentcore.Event) (string, bool) {
@@ -124,6 +137,40 @@ func parseToolProgress(ev agentcore.Event) (toolProgress, bool) {
 	default:
 		return toolProgress{}, false
 	}
+}
+
+func parseContextProgress(ev agentcore.Event) (contextProgress, bool) {
+	if ev.Progress == nil || ev.Progress.Kind != agentcore.ProgressContext {
+		return contextProgress{}, false
+	}
+	var payload struct {
+		Tokens          int     `json:"tokens"`
+		ContextWindow   int     `json:"context_window"`
+		Percent         float64 `json:"percent"`
+		Scope           string  `json:"scope"`
+		Strategy        string  `json:"strategy"`
+		ActiveMessages  int     `json:"active_messages"`
+		SummaryMessages int     `json:"summary_messages"`
+		CompactedCount  int     `json:"compacted_count"`
+		KeptCount       int     `json:"kept_count"`
+	}
+	if len(ev.Progress.Meta) > 0 {
+		if err := json.Unmarshal(ev.Progress.Meta, &payload); err != nil {
+			return contextProgress{}, false
+		}
+	}
+	return contextProgress{
+		Agent:           ev.Progress.Agent,
+		Tokens:          payload.Tokens,
+		ContextWindow:   payload.ContextWindow,
+		Percent:         payload.Percent,
+		Scope:           payload.Scope,
+		Strategy:        payload.Strategy,
+		ActiveMessages:  payload.ActiveMessages,
+		SummaryMessages: payload.SummaryMessages,
+		CompactedCount:  payload.CompactedCount,
+		KeptCount:       payload.KeptCount,
+	}, true
 }
 
 func foundationTypeFromArgs(args json.RawMessage) string {
@@ -428,32 +475,50 @@ func truncateLog(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-// compactionCallback 创建上下文压缩的可观测回调，用于 slog 日志和 TUI 事件。
-func compactionCallback(agent string, emit emitFn) func(memory.CompactionInfo) {
-	return func(info memory.CompactionInfo) {
-		slog.Warn("上下文压缩", "module", "compaction", "agent", agent,
-			"tokens_before", info.TokensBefore, "tokens_after", info.TokensAfter,
-			"msgs_before", info.MessagesBefore, "msgs_after", info.MessagesAfter,
-			"compacted", info.CompactedCount, "kept", info.KeptCount,
-			"split_turn", info.IsSplitTurn, "incremental", info.IsIncremental,
-			"summary_runes", info.SummaryLen, "duration_ms", info.Duration.Milliseconds())
+// contextRewriteCallback 创建上下文重写的可观测回调，用于 slog 日志和 TUI 事件。
+func contextRewriteCallback(agent string, emit emitFn) func(corecontext.RewriteEvent) {
+	return func(ev corecontext.RewriteEvent) {
+		attrs := []any{
+			"module", "context",
+			"agent", agent,
+			"reason", ev.Reason,
+			"strategy", ev.Strategy,
+			"tokens_before", ev.TokensBefore,
+			"tokens_after", ev.TokensAfter,
+		}
+		if info := ev.Info; info != nil {
+			attrs = append(attrs,
+				"msgs_before", info.MessagesBefore,
+				"msgs_after", info.MessagesAfter,
+				"compacted", info.CompactedCount,
+				"kept", info.KeptCount,
+				"split_turn", info.IsSplitTurn,
+				"incremental", info.IsIncremental,
+				"summary_runes", info.SummaryLen,
+				"duration_ms", info.Duration.Milliseconds(),
+			)
+		}
+		slog.Warn("上下文重写", attrs...)
 
 		if emit == nil {
 			return
 		}
 		ratio := 0
-		if info.TokensBefore > 0 {
-			ratio = info.TokensAfter * 100 / info.TokensBefore
+		if ev.TokensBefore > 0 {
+			ratio = ev.TokensAfter * 100 / ev.TokensBefore
 		}
-		summary := fmt.Sprintf("%s 压缩: %d→%d tok (%d%%) %d→%d msgs 摘要%d字 耗时%s",
-			agent, info.TokensBefore, info.TokensAfter, ratio,
-			info.MessagesBefore, info.MessagesAfter,
-			info.SummaryLen, info.Duration.Round(time.Millisecond))
-		if info.IsSplitTurn {
-			summary += " [split]"
-		}
-		if info.IsIncremental {
-			summary += " [增量]"
+		summary := fmt.Sprintf("%s 上下文%s: %s %d→%d tok (%d%%)",
+			agent, ev.Reason, ev.Strategy, ev.TokensBefore, ev.TokensAfter, ratio)
+		if info := ev.Info; info != nil {
+			summary += fmt.Sprintf(" %d→%d msgs 摘要%d字 耗时%s",
+				info.MessagesBefore, info.MessagesAfter,
+				info.SummaryLen, info.Duration.Round(time.Millisecond))
+			if info.IsSplitTurn {
+				summary += " [split]"
+			}
+			if info.IsIncremental {
+				summary += " [增量]"
+			}
 		}
 		emit(UIEvent{Time: time.Now(), Category: "COMPACT", Summary: summary, Level: "warn"})
 	}

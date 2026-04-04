@@ -140,6 +140,40 @@ func TestParseToolProgressUsesStructuredPayload(t *testing.T) {
 	}
 }
 
+func TestParseContextProgressUsesStructuredPayload(t *testing.T) {
+	meta, err := json.Marshal(map[string]any{
+		"tokens":           24000,
+		"context_window":   128000,
+		"percent":          18.75,
+		"scope":            "projected",
+		"strategy":         "light_trim",
+		"active_messages":  14,
+		"summary_messages": 1,
+		"compacted_count":  22,
+		"kept_count":       8,
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	progress, ok := parseContextProgress(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressContext,
+			Agent: "writer",
+			Meta:  meta,
+		},
+	})
+	if !ok {
+		t.Fatal("expected structured context progress to be parsed")
+	}
+	if progress.Agent != "writer" || progress.Tokens != 24000 || progress.ContextWindow != 128000 {
+		t.Fatalf("unexpected context progress: %+v", progress)
+	}
+	if progress.Scope != "projected" || progress.Strategy != "light_trim" {
+		t.Fatalf("unexpected context labels: %+v", progress)
+	}
+}
+
 func TestParseSubAgentRetryUsesStructuredPayload(t *testing.T) {
 	msg, ok := parseSubAgentRetry(agentcore.Event{
 		Progress: &agentcore.ProgressPayload{
@@ -413,5 +447,44 @@ func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 	}
 	if got, want := seq[2], " details"; got != want {
 		t.Fatalf("unexpected incremental suffix: got %q want %q", got, want)
+	}
+}
+
+func TestSessionTracksAgentContextProgress(t *testing.T) {
+	board := newAgentBoard()
+	sess := newSession(nil, nil, nil, board, "", nil, nil, nil)
+
+	meta, err := json.Marshal(map[string]any{
+		"tokens":         18000,
+		"context_window": 128000,
+		"percent":        14.06,
+		"scope":          "projected",
+		"strategy":       "full_summary",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	sess.handleToolExecUpdate(agentcore.Event{
+		Progress: &agentcore.ProgressPayload{
+			Kind:  agentcore.ProgressContext,
+			Agent: "writer",
+			Meta:  meta,
+		},
+	})
+
+	snaps := board.Snapshot()
+	var writer AgentSnapshot
+	for _, snap := range snaps {
+		if snap.Name == "writer" {
+			writer = snap
+			break
+		}
+	}
+	if writer.Context.Tokens != 18000 || writer.Context.ContextWindow != 128000 {
+		t.Fatalf("unexpected writer context: %+v", writer.Context)
+	}
+	if writer.Context.Scope != "projected" || writer.Context.Strategy != "full_summary" {
+		t.Fatalf("unexpected writer context labels: %+v", writer.Context)
 	}
 }

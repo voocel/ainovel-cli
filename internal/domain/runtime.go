@@ -75,9 +75,7 @@ func (p *Progress) NextChapter() int {
 }
 
 // ExtractNovelNameFromPremise 只按第一条非空行提取书名。
-// 兼容两种格式：
-// 1. # 书名
-// 2. 书名：书名 / 书名:书名
+// 约定 premise 第一行固定为：# 书名
 func ExtractNovelNameFromPremise(premise string) string {
 	lines := strings.Split(strings.ReplaceAll(premise, "\r\n", "\n"), "\n")
 	for _, raw := range lines {
@@ -85,15 +83,10 @@ func ExtractNovelNameFromPremise(premise string) string {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		if !strings.HasPrefix(line, "# ") {
+			return ""
 		}
-		for _, prefix := range []string{"书名：", "书名:"} {
-			if strings.HasPrefix(line, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-			}
-		}
-		return ""
+		return strings.TrimSpace(strings.TrimPrefix(line, "# "))
 	}
 	return ""
 }

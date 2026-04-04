@@ -69,13 +69,13 @@ func TestInferNovelNameFromPremise(t *testing.T) {
 	}
 }
 
-func TestInferNovelNameFromPremiseIgnoresGenericHeading(t *testing.T) {
+func TestInferNovelNameFromPremiseRequiresFirstLineHeading(t *testing.T) {
 	premise := `书名：蜕壳窟求生录
 
 ## 核心冲突
 测试`
-	if got := domain.ExtractNovelNameFromPremise(premise); got != "蜕壳窟求生录" {
-		t.Fatalf("expected labeled novel name, got %q", got)
+	if got := domain.ExtractNovelNameFromPremise(premise); got != "" {
+		t.Fatalf("expected no novel name without first-line heading, got %q", got)
 	}
 }
 

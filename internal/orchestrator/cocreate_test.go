@@ -23,4 +23,7 @@ func TestBuildStartPromptWrapsUserPrompt(t *testing.T) {
 	if want := "[创作要求]"; !strings.Contains(prompt, want) {
 		t.Fatalf("prompt missing %q: %s", want, prompt)
 	}
+	if want := "`# 书名`"; !strings.Contains(prompt, want) {
+		t.Fatalf("prompt missing %q: %s", want, prompt)
+	}
 }
