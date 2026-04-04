@@ -190,7 +190,10 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 		return m, nil
 	}
 
-	providerType := pc.ProviderType(providerKey)
+	providerType, err := pc.ProviderType(providerKey)
+	if err != nil {
+		return nil, err
+	}
 	lcfg := litellm.ProviderConfig{APIKey: pc.APIKey}
 	if pc.BaseURL != "" {
 		lcfg.BaseURL = pc.BaseURL

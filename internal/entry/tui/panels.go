@@ -16,7 +16,7 @@ import (
 func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) string {
 	novelName := snap.NovelName
 	if novelName == "" {
-		novelName = "AiNovel"
+		novelName = "未定书名"
 	}
 
 	var infoParts []string
@@ -46,12 +46,18 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 	}
 
 	innerW := max(12, width-2)
-	rightW := max(14, lipgloss.Width(capsule)+1)
-	leftW := max(18, innerW*28/100)
-	if leftW+rightW >= innerW {
-		leftW = max(12, innerW-rightW-8)
+	titleText := truncate(novelName, max(8, innerW/3))
+	centerW := max(16, lipgloss.Width(titleText)+6)
+	if centerW > innerW-24 {
+		centerW = max(8, innerW-24)
 	}
-	centerW := max(8, innerW-leftW-rightW)
+	sideTotal := innerW - centerW
+	if sideTotal < 0 {
+		sideTotal = 0
+		centerW = innerW
+	}
+	leftW := sideTotal / 2
+	rightW := innerW - centerW - leftW
 
 	leftCell := lipgloss.NewStyle().
 		Width(leftW).
@@ -63,7 +69,7 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 		AlignHorizontal(lipgloss.Center).
 		Foreground(colorText).
 		Bold(true).
-		Render(truncate(novelName, centerW))
+		Render(titleText)
 	rightCell := lipgloss.NewStyle().
 		Width(rightW).
 		AlignHorizontal(lipgloss.Right).
@@ -887,6 +893,7 @@ func renderDetailContent(snap orchestrator.UISnapshot, contentW int) string {
 		for _, e := range snap.Outline {
 			ch := fmt.Sprintf("%2d", e.Chapter)
 			var marker, chStyle string
+			titleStyle := cardContentStyle
 			if snap.CompletedCount >= e.Chapter {
 				// 已完成：绿点 + 柔色章节号
 				marker = lipgloss.NewStyle().Foreground(colorSuccess).Render("●")
@@ -895,17 +902,19 @@ func renderDetailContent(snap orchestrator.UISnapshot, contentW int) string {
 				// 进行中：金色箭头 + 高亮章节号
 				marker = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▸")
 				chStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(ch)
+				titleStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 			} else {
 				// 未开始：暗圆 + 暗章节号
 				marker = lipgloss.NewStyle().Foreground(colorDim).Render("○")
 				chStyle = lipgloss.NewStyle().Foreground(colorDim).Render(ch)
-			}
-			title := truncate(e.Title, contentW-6)
-			titleStyle := cardContentStyle
-			if snap.CompletedCount < e.Chapter && snap.InProgressChapter != e.Chapter {
 				titleStyle = lipgloss.NewStyle().Foreground(colorMuted)
 			}
+			title := truncate(e.Title, contentW-6)
 			line := marker + chStyle + " " + titleStyle.Render(title)
+			if snap.InProgressChapter == e.Chapter {
+				badge := lipgloss.NewStyle().Foreground(colorAccent).Italic(true).Render(" 进行中")
+				line += badge
+			}
 			b.WriteString(line)
 			b.WriteString("\n")
 		}

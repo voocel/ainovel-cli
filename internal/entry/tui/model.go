@@ -128,9 +128,7 @@ func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
 		return focusEvents, false
 	}
 
-	topH := lipgloss.Height(renderTopBar(m.snapshot, m.width, ""))
-	inputH := lipgloss.Height(renderInputBox(m.textarea.View(), m.inputHints(), m.snapshot, m.runtime.Dir(), m.width))
-	bodyH := m.height - topH - inputH
+	topH, _, bodyH := m.layoutHeights()
 	if bodyH < 1 {
 		return focusEvents, false
 	}
@@ -278,16 +276,49 @@ func (m *Model) detailWidth() int {
 }
 
 func (m *Model) bodyHeight() int {
-	if m.height == 0 {
-		return 20
+	_, _, bodyH := m.layoutHeights()
+	return bodyH
+}
+
+func (m *Model) currentSpinnerFrame() string {
+	if !m.snapshot.IsRunning {
+		return ""
 	}
-	topH := 1
-	inputH := 6
-	bodyH := m.height - topH - inputH
+	return spinnerFrames[m.spinnerIdx%len(spinnerFrames)]
+}
+
+func (m *Model) outputDir() string {
+	if m.runtime == nil {
+		return ""
+	}
+	return m.runtime.Dir()
+}
+
+func (m *Model) renderBottomBar() string {
+	inputBox := renderInputBox(
+		m.textarea.View(),
+		m.inputHints(),
+		m.snapshot,
+		m.outputDir(),
+		m.width,
+	)
+	if m.mode != modeNew || m.cocreate != nil {
+		return inputBox
+	}
+	return renderStartupModeBar(m.width, m.startupMode) + "\n" + inputBox
+}
+
+func (m *Model) layoutHeights() (topH, inputH, bodyH int) {
+	if m.width == 0 || m.height == 0 {
+		return 1, 4, 20
+	}
+	topH = lipgloss.Height(renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame()))
+	inputH = lipgloss.Height(m.renderBottomBar())
+	bodyH = m.height - topH - inputH
 	if bodyH < 3 {
 		bodyH = 3
 	}
-	return bodyH
+	return
 }
 
 func (m Model) View() string {
@@ -314,23 +345,9 @@ func (m Model) View() string {
 		return renderReportModal(m.width, m.height, m.report)
 	}
 
-	spinnerFrame := ""
-	if m.snapshot.IsRunning {
-		spinnerFrame = spinnerFrames[m.spinnerIdx%len(spinnerFrames)]
-	}
-
-	topBar := renderTopBar(m.snapshot, m.width, spinnerFrame)
-	inputBox := renderInputBox(m.textarea.View(), m.inputHints(), m.snapshot, m.runtime.Dir(), m.width)
-	if m.mode == modeNew && m.cocreate == nil {
-		inputBox = renderStartupModeBar(m.width, m.startupMode) + "\n" + inputBox
-	}
-
-	topH := lipgloss.Height(topBar)
-	inputH := lipgloss.Height(inputBox)
-	bodyH := m.height - topH - inputH
-	if bodyH < 3 {
-		bodyH = 3
-	}
+	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame())
+	inputBox := m.renderBottomBar()
+	_, inputH, bodyH := m.layoutHeights()
 
 	var body string
 	if m.mode == modeNew && len(m.events) == 0 {

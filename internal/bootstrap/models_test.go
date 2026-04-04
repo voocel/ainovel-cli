@@ -19,3 +19,14 @@ func TestNewModelSetUsesOpenRouterProvider(t *testing.T) {
 		t.Fatalf("expected provider openrouter, got %q", provider)
 	}
 }
+
+func TestProviderTypeRejectsUnknownProviderWithoutExplicitType(t *testing.T) {
+	pc := ProviderConfig{APIKey: "test-key"}
+	typ, err := pc.ProviderType("custom-unknown")
+	if err == nil {
+		t.Fatal("expected unknown provider type error")
+	}
+	if typ != "" {
+		t.Fatalf("expected empty provider type, got %q", typ)
+	}
+}

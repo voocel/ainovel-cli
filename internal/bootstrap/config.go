@@ -31,15 +31,15 @@ func (pc ProviderConfig) RequiresAPIKey(name string) bool {
 }
 
 // ProviderType 返回有效的 API 协议类型。
-// 优先使用显式 Type，否则从 provider 名称推断，最终回退到 openai。
-func (pc ProviderConfig) ProviderType(name string) string {
+// 优先使用显式 Type，否则从 provider 名称推断。
+func (pc ProviderConfig) ProviderType(name string) (string, error) {
 	if pc.Type != "" {
-		return pc.Type
+		return pc.Type, nil
 	}
 	if _, ok := knownProviderTypes[name]; ok {
-		return name
+		return name, nil
 	}
-	return "openai"
+	return "", fmt.Errorf("provider %q 缺少 type，且不在已知 provider 列表中", name)
 }
 
 // knownProviderTypes 已知 provider 名称到 API 协议类型的映射。
@@ -73,7 +73,6 @@ var knownRoles = map[string]bool{
 // Config 小说应用配置。
 type Config struct {
 	// 运行时字段（不序列化到 JSON）
-	NovelName string `json:"-"` // 小说名（用作输出目录名）
 	OutputDir string `json:"-"` // 输出根目录
 
 	// 默认 LLM 配置
@@ -139,11 +138,8 @@ func (c *Config) DefaultProviderConfig() ProviderConfig {
 
 // FillDefaults 填充默认值。
 func (c *Config) FillDefaults() {
-	if c.NovelName == "" {
-		c.NovelName = "novel"
-	}
 	if c.OutputDir == "" {
-		c.OutputDir = filepath.Join("output", c.NovelName)
+		c.OutputDir = filepath.Join("output", "novel")
 	}
 	if c.Providers == nil {
 		c.Providers = make(map[string]ProviderConfig)

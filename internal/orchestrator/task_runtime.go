@@ -57,6 +57,53 @@ func (rt *novelTaskRuntime) Snapshot() []domain.TaskRecord {
 	return out
 }
 
+func (rt *novelTaskRuntime) Reconcile(progress *domain.Progress) error {
+	if progress == nil {
+		return nil
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	completed := make(map[int]struct{}, len(progress.CompletedChapters))
+	for _, ch := range progress.CompletedChapters {
+		if ch > 0 {
+			completed[ch] = struct{}{}
+		}
+	}
+
+	changed := false
+	now := time.Now()
+	for i := range rt.tasks {
+		task := &rt.tasks[i]
+		if task.IsTerminal() {
+			continue
+		}
+
+		switch task.Kind {
+		case domain.TaskFoundationPlan:
+			if progress.Phase == domain.PhaseWriting || progress.Phase == domain.PhaseComplete {
+				task.Status = domain.TaskSucceeded
+				task.UpdatedAt = now
+				task.EndedAt = now
+				changed = true
+			}
+		case domain.TaskChapterWrite, domain.TaskChapterRewrite, domain.TaskChapterPolish:
+			if _, ok := completed[task.Chapter]; ok {
+				task.Status = domain.TaskSucceeded
+				task.UpdatedAt = now
+				task.EndedAt = now
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return rt.saveLocked()
+}
+
 func (rt *novelTaskRuntime) Queue(kind domain.TaskKind, owner, title, input string, loc taskLocation) (domain.TaskRecord, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()

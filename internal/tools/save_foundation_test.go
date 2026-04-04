@@ -19,7 +19,7 @@ func TestSaveFoundationPersistsPlanningTier(t *testing.T) {
 	tool := NewSaveFoundationTool(store)
 	args, err := json.Marshal(map[string]any{
 		"type":    "premise",
-		"content": "# Premise\n\n测试",
+		"content": "# 测试书名\n\n## 题材和基调\n测试",
 		"scale":   "long",
 	})
 	if err != nil {

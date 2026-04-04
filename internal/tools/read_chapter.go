@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -99,7 +100,7 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	default: // final
 		content, err = t.store.Drafts.LoadChapterText(a.Chapter)
 		if err == nil && content == "" {
-			// 回退到草稿
+			slog.Warn("read_chapter 读取终稿为空，回退到草稿", "module", "tool", "chapter", a.Chapter)
 			content, err = t.store.Drafts.LoadDraft(a.Chapter)
 		}
 	}

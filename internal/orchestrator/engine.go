@@ -180,7 +180,7 @@ func (eng *Engine) StartPrepared(promptText string) error {
 	if err := eng.scheduler.SeedStartup(promptText); err != nil {
 		return fmt.Errorf("seed foundation task: %w", err)
 	}
-	if err := eng.store.Progress.Init(eng.cfg.NovelName, 0); err != nil {
+	if err := eng.store.Progress.Init("", 0); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 

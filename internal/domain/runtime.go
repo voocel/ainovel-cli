@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // Phase 表示小说创作阶段。
 type Phase string
 
@@ -70,6 +72,30 @@ func (p *Progress) NextChapter() int {
 		}
 	}
 	return max + 1
+}
+
+// ExtractNovelNameFromPremise 只按第一条非空行提取书名。
+// 兼容两种格式：
+// 1. # 书名
+// 2. 书名：书名 / 书名:书名
+func ExtractNovelNameFromPremise(premise string) string {
+	lines := strings.Split(strings.ReplaceAll(premise, "\r\n", "\n"), "\n")
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
+		for _, prefix := range []string{"书名：", "书名:"} {
+			if strings.HasPrefix(line, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // ContextProfile 上下文加载策略，根据总章节数自适应。

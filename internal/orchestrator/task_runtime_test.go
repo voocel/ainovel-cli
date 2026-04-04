@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
@@ -187,5 +188,71 @@ func TestExecutePolicyActionsClearHandledSteerDoesNotFinishRuntimeCoordinatorTas
 	}
 	if got := kindByOwner[coordinatorRuntimeOwner]; got != domain.TaskCoordinatorDecision {
 		t.Fatalf("expected runtime task kind coordinator_decision, got %s", got)
+	}
+}
+
+func TestNovelTaskRuntimeReconcileClosesCompletedWritingTasks(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("test", 12); err != nil {
+		t.Fatalf("Init progress: %v", err)
+	}
+	if err := store.Progress.MarkChapterComplete(1, 1200, "", ""); err != nil {
+		t.Fatalf("MarkChapterComplete 1: %v", err)
+	}
+	if err := store.Progress.MarkChapterComplete(2, 1200, "", ""); err != nil {
+		t.Fatalf("MarkChapterComplete 2: %v", err)
+	}
+	progress, err := store.Progress.Load()
+	if err != nil {
+		t.Fatalf("Load progress: %v", err)
+	}
+
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskFoundationPlan, "architect", "规划故事基础设定", "", taskLocation{}); err != nil {
+		t.Fatalf("Start foundation: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskChapterWrite, "writer", "创作第 1 章", "", taskLocation{Chapter: 1}); err != nil {
+		t.Fatalf("Start ch1: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskChapterWrite, "writer", "创作第 3 章", "", taskLocation{Chapter: 3}); err != nil {
+		t.Fatalf("Start ch3: %v", err)
+	}
+	for i := range rt.tasks {
+		if rt.tasks[i].Kind == domain.TaskChapterWrite && rt.tasks[i].Chapter == 1 {
+			rt.tasks[i].Status = domain.TaskRunning
+			rt.tasks[i].EndedAt = time.Time{}
+		}
+	}
+
+	if err := rt.Reconcile(progress); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	tasks := rt.Snapshot()
+	statusByChapter := map[int]domain.TaskStatus{}
+	var foundationStatus domain.TaskStatus
+	for _, task := range tasks {
+		if task.Kind == domain.TaskFoundationPlan {
+			foundationStatus = task.Status
+		}
+		if task.Kind == domain.TaskChapterWrite {
+			statusByChapter[task.Chapter] = task.Status
+		}
+	}
+	if foundationStatus != domain.TaskSucceeded {
+		t.Fatalf("expected foundation task succeeded, got %s", foundationStatus)
+	}
+	if got := statusByChapter[1]; got != domain.TaskSucceeded {
+		t.Fatalf("expected chapter 1 succeeded, got %s", got)
+	}
+	if got := statusByChapter[3]; got != domain.TaskRunning {
+		t.Fatalf("expected chapter 3 still running, got %s", got)
 	}
 }

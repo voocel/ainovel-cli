@@ -112,6 +112,9 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	rt.mu.Unlock()
 
 	progress, _ := rt.store.Progress.Load()
+	if rt.taskRT != nil {
+		_ = rt.taskRT.Reconcile(progress)
+	}
 	if progress != nil {
 		snap.NovelName = strings.TrimSpace(progress.NovelName)
 		snap.Phase = string(progress.Phase)
@@ -125,7 +128,9 @@ func (rt *Runtime) Snapshot() UISnapshot {
 		snap.RewriteReason = progress.RewriteReason
 	}
 	if snap.NovelName == "" {
-		snap.NovelName = strings.TrimSpace(rt.cfg.NovelName)
+		if premise, _ := rt.store.Outline.LoadPremise(); premise != "" {
+			snap.NovelName = domain.ExtractNovelNameFromPremise(premise)
+		}
 	}
 
 	runMeta, _ := rt.store.RunMeta.Load()
@@ -135,6 +140,9 @@ func (rt *Runtime) Snapshot() UISnapshot {
 
 	snap.Agents = rt.agents.Snapshot()
 	snap.Tasks = rt.taskSnapshots()
+	if snap.InProgressChapter == 0 {
+		snap.InProgressChapter = activeChapterFromTasks(snap.Tasks)
+	}
 
 	// 状态标签映射
 	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
@@ -149,6 +157,21 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	rt.fillDetails(&snap, progress)
 
 	return snap
+}
+
+func activeChapterFromTasks(tasks []TaskSnapshot) int {
+	for _, task := range tasks {
+		if task.Status != string(domain.TaskRunning) && task.Status != string(domain.TaskQueued) {
+			continue
+		}
+		switch task.Kind {
+		case string(domain.TaskChapterWrite), string(domain.TaskChapterRewrite), string(domain.TaskChapterPolish):
+			if task.Chapter > 0 {
+				return task.Chapter
+			}
+		}
+	}
+	return 0
 }
 
 // ConfiguredProviders 返回已配置的 provider 列表。

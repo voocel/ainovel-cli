@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 func TestPersistModelChangeToPathUsesBaselineWhenMissing(t *testing.T) {
@@ -55,5 +56,43 @@ func TestPersistModelChangeToPathReturnsErrorOnBrokenConfig(t *testing.T) {
 	}
 	if string(data) != "{invalid" {
 		t.Fatalf("broken config should not be overwritten")
+	}
+}
+
+func TestInferNovelNameFromPremise(t *testing.T) {
+	premise := `# 长夜燃灯
+
+## 题材和基调
+东方玄幻。`
+	if got := domain.ExtractNovelNameFromPremise(premise); got != "长夜燃灯" {
+		t.Fatalf("expected heading novel name, got %q", got)
+	}
+}
+
+func TestInferNovelNameFromPremiseIgnoresGenericHeading(t *testing.T) {
+	premise := `书名：蜕壳窟求生录
+
+## 核心冲突
+测试`
+	if got := domain.ExtractNovelNameFromPremise(premise); got != "蜕壳窟求生录" {
+		t.Fatalf("expected labeled novel name, got %q", got)
+	}
+}
+
+func TestInferNovelNameFromPremiseDoesNotUseSecondLevelHeading(t *testing.T) {
+	premise := `## 题材和基调
+凡人修仙。`
+	if got := domain.ExtractNovelNameFromPremise(premise); got != "" {
+		t.Fatalf("expected no novel name from h2 heading, got %q", got)
+	}
+}
+
+func TestActiveChapterFromTasksPrefersLatestActiveWriterTask(t *testing.T) {
+	tasks := []TaskSnapshot{
+		{Kind: string(domain.TaskChapterWrite), Status: string(domain.TaskRunning), Chapter: 5},
+		{Kind: string(domain.TaskChapterWrite), Status: string(domain.TaskSucceeded), Chapter: 4},
+	}
+	if got := activeChapterFromTasks(tasks); got != 5 {
+		t.Fatalf("expected active chapter 5, got %d", got)
 	}
 }
