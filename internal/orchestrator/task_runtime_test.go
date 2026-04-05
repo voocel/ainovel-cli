@@ -324,3 +324,15 @@ func TestNovelTaskRuntimeCompactsOldTerminalTasks(t *testing.T) {
 		t.Fatalf("expected oldest retained chapter compacted, got chapter %d", tasks[0].Chapter)
 	}
 }
+
+func TestInferTaskLocationFoundationPlanDoesNotBindChapter(t *testing.T) {
+	progress := &domain.Progress{
+		CurrentChapter:    0,
+		CompletedChapters: []int{1, 2, 3},
+	}
+
+	loc := inferTaskLocation(domain.TaskFoundationPlan, progress)
+	if loc.Chapter != 0 {
+		t.Fatalf("expected foundation plan chapter unset, got %d", loc.Chapter)
+	}
+}

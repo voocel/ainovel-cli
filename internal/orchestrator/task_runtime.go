@@ -417,6 +417,8 @@ func inferTaskLocation(kind domain.TaskKind, progress *domain.Progress) taskLoca
 		Arc:    progress.CurrentArc,
 	}
 	switch kind {
+	case domain.TaskFoundationPlan, domain.TaskCoordinatorDecision, domain.TaskSteerApply, domain.TaskVolumeAppend, domain.TaskArcExpand:
+		return loc
 	case domain.TaskChapterRewrite, domain.TaskChapterPolish:
 		if len(progress.PendingRewrites) > 0 {
 			loc.Chapter = progress.PendingRewrites[0]

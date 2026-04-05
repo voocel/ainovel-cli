@@ -53,8 +53,17 @@ func buildRightInfo(snap orchestrator.UISnapshot, outputDir string) string {
 	if snap.ModelName != "" {
 		parts = append(parts, snap.ModelName)
 	}
-	if snap.TotalChapters > 0 {
+	if snap.Layered {
+		if snap.CompletedCount > 0 {
+			parts = append(parts, fmt.Sprintf("Done %d", snap.CompletedCount))
+		}
+		if snap.TotalChapters > 0 {
+			parts = append(parts, fmt.Sprintf("Planned %d", snap.TotalChapters))
+		}
+	} else if snap.TotalChapters > 0 {
 		parts = append(parts, fmt.Sprintf("Ch %d/%d", snap.CompletedCount, snap.TotalChapters))
+	} else if snap.CompletedCount > 0 {
+		parts = append(parts, fmt.Sprintf("Done %d", snap.CompletedCount))
 	}
 	if snap.TotalWordCount > 0 {
 		parts = append(parts, formatNumber(snap.TotalWordCount)+"字")

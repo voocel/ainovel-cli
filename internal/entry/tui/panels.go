@@ -98,11 +98,20 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 	var overview strings.Builder
 	overview.WriteString(renderField("阶段", snapshotPhaseLabel(snap.Phase)))
 	overview.WriteString(renderField("流程", snapshotFlowLabel(snap.Flow)))
-	overview.WriteString(renderField("进度", fmt.Sprintf("%d / %d 章", snap.CompletedCount, snap.TotalChapters)))
-	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
-	if ctx := contextUsageLabel(snap); ctx != "" {
-		overview.WriteString(renderField("上下文", ctx))
+	if snap.Layered {
+		overview.WriteString(renderField("已完成", fmt.Sprintf("%d 章", snap.CompletedCount)))
+		if snap.TotalChapters > 0 {
+			overview.WriteString(renderField("已规划", fmt.Sprintf("%d 章", snap.TotalChapters)))
+		}
+	} else {
+		switch {
+		case snap.TotalChapters > 0:
+			overview.WriteString(renderField("进度", fmt.Sprintf("%d / %d 章", snap.CompletedCount, snap.TotalChapters)))
+		default:
+			overview.WriteString(renderField("已完成", fmt.Sprintf("%d 章", snap.CompletedCount)))
+		}
 	}
+	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
 	if snap.InProgressChapter > 0 {
 		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
 	}
@@ -621,40 +630,6 @@ func taskListTitle(task orchestrator.TaskSnapshot) string {
 	return taskKindLabel(task.Kind)
 }
 
-// 星光动画帧
-var sparklePatterns = []string{
-	"  ✦       ·     ✧          ·  ",
-	"     ·  ✧     ✦    ·          ",
-	"  ·        ✦       ·    ✧     ",
-	" ✧    ·        ✧       ✦     ·",
-	"      ✦    ·       ✧    ·     ",
-	"  ·       ✧    ✦       ·      ",
-	"    ✧  ·       ·    ✦    ✧    ",
-	"  ✦        ·    ✧        ✦  · ",
-}
-
-// renderSparkle 渲染事件流底部的星光加载动画。
-func renderSparkle(frame int) string {
-	idx := frame % len(sparklePatterns)
-	// 亮星用琥珀色，暗星用灰色
-	line := sparklePatterns[idx]
-	var b strings.Builder
-	for _, ch := range line {
-		switch ch {
-		case '✦':
-			b.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Render("✦"))
-		case '✧':
-			b.WriteString(lipgloss.NewStyle().Foreground(colorAccent2).Render("✧"))
-		case '·':
-			b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("·"))
-		default:
-			b.WriteRune(ch)
-		}
-	}
-	label := lipgloss.NewStyle().Foreground(colorMuted).Render("  AI 生成中...")
-	return "\n" + b.String() + "\n" + label
-}
-
 // renderEventContent 将事件列表渲染为纯文本（供 viewport 使用）。
 func renderEventContent(events []orchestrator.UIEvent, width int) string {
 	var b strings.Builder
@@ -695,6 +670,44 @@ func renderEventContent(events []orchestrator.UIEvent, width int) string {
 		}
 	}
 	return b.String()
+}
+
+func renderEventActivity(snap orchestrator.UISnapshot, frame, width int) string {
+	if !snap.IsRunning {
+		return ""
+	}
+	return renderEventSparkle(frame, width)
+}
+
+var sparkleFrames = []string{
+	"✦  ·   ✧   ·  ✦",
+	"·  ✧   ·  ✦   ·",
+	"  ✧   ·  ✦   · ",
+	"   ·  ✦   ·  ✧ ",
+	"✧   ·  ✦  ·   ✧",
+	" ·  ✧   ·  ✦  ·",
+	"✦   ·  ✧   ·  ✦",
+	" ·  ✦   ·  ✧   ",
+}
+
+func renderEventSparkle(frame, width int) string {
+	pattern := []rune(sparkleFrames[frame%len(sparkleFrames)])
+
+	var b strings.Builder
+	for _, ch := range pattern {
+		switch ch {
+		case '✦':
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#d4a21a")).Bold(true).Render("✦"))
+		case '✧':
+			b.WriteString(lipgloss.NewStyle().Foreground(colorAccent2).Render("✧"))
+		case '·':
+			b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("·"))
+		default:
+			b.WriteRune(ch)
+		}
+	}
+	_ = width
+	return " " + b.String()
 }
 
 // renderEventFlowViewport 用 viewport 包装渲染事件流面板。

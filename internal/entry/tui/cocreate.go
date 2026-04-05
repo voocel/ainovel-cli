@@ -126,12 +126,16 @@ func (s *cocreateState) buildPlan() (startup.Plan, error) {
 func renderStartupModeBar(width int, mode startupMode) string {
 	quick := renderStartupModePill(mode == startupModeQuick, "快速开始")
 	cocreate := renderStartupModePill(mode == startupModeCoCreate, "共创规划")
-	title := lipgloss.NewStyle().Foreground(colorMuted).Render("启动模式")
-	line := title + "  " + quick + "  " + cocreate
+	title := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Bold(true).
+		Render("启动模式")
+	divider := lipgloss.NewStyle().
+		Foreground(colorDim).
+		Render("·")
+	line := title + " " + divider + " " + quick + "  " + cocreate
 	return lipgloss.NewStyle().
 		Width(width).
-		Border(baseBorder, false, false, true, false).
-		BorderForeground(colorDim).
 		Padding(0, 1).
 		Render(line)
 }
@@ -139,9 +143,11 @@ func renderStartupModeBar(width int, mode startupMode) string {
 func renderStartupModePill(active bool, label string) string {
 	style := lipgloss.NewStyle().
 		Padding(0, 1).
-		Foreground(colorDim)
+		Foreground(colorText)
 	if active {
 		style = style.Foreground(lipgloss.Color("#1c1a14")).Background(colorAccent).Bold(true)
+	} else {
+		style = style.Foreground(colorMuted)
 	}
 	return style.Render(label)
 }

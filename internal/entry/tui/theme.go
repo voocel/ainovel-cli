@@ -10,6 +10,7 @@ var (
 	colorMuted   = lipgloss.AdaptiveColor{Light: "#7a7060", Dark: "#a09880"}
 	colorAccent  = lipgloss.AdaptiveColor{Light: "#b8860b", Dark: "#c9953c"}
 	colorAccent2 = lipgloss.AdaptiveColor{Light: "#3d7a42", Dark: "#7a9e7e"}
+	colorRunning = lipgloss.AdaptiveColor{Light: "#6f8641", Dark: "#9ab65b"}
 	colorSuccess = lipgloss.AdaptiveColor{Light: "#3d7a42", Dark: "#7a9e7e"}
 	colorError   = lipgloss.AdaptiveColor{Light: "#b5433a", Dark: "#c45c4a"}
 	colorReview  = lipgloss.AdaptiveColor{Light: "#b07530", Dark: "#cc8844"}
@@ -20,7 +21,7 @@ var (
 // 状态标签颜色映射
 var statusColors = map[string]lipgloss.AdaptiveColor{
 	"READY":    colorDim,
-	"RUNNING":  colorSuccess,
+	"RUNNING":  colorRunning,
 	"REVIEW":   colorReview,
 	"REWRITE":  colorReview,
 	"COMPLETE": colorSuccess,

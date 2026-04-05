@@ -169,8 +169,12 @@ func (m *Model) paneHighlighted(pane focusPane) bool {
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
 	content := renderEventContent(m.events, centerW)
-	if m.snapshot.IsRunning {
-		content += renderSparkle(m.spinnerIdx)
+	if activity := renderEventActivity(m.snapshot, m.spinnerIdx, centerW); activity != "" {
+		if strings.TrimSpace(content) != "" {
+			content += "\n\n" + activity
+		} else {
+			content = activity
+		}
 	}
 	m.viewport.SetContent(content)
 	if m.autoScroll {
