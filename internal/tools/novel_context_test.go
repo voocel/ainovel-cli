@@ -370,3 +370,254 @@ func TestTrimByBudgetRemovesMirroredMemoryKeys(t *testing.T) {
 		t.Fatal("expected mirrored references to be trimmed from reference_pack")
 	}
 }
+
+func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀请", Scenes: []string{"密谈", "留下试炼令"}},
+		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀请", Hook: "谁在背后推动这场试炼", Scenes: []string{"整理线索", "决定赴约"}},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.Progress.Init("test", 8); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
+		{ID: "trial_invite", Description: "内门试炼邀请的真实目的", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_mastermind", Description: "谁在背后推动这场试炼", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_rules", Description: "试炼规则碑文残卷", PlantedAt: 1, Status: "planted"},
+		{ID: "outer_disciple", Description: "外门弟子的旧债纠纷", PlantedAt: 1, Status: "planted"},
+		{ID: "elder_token", Description: "长老手中令牌的来历", PlantedAt: 1, Status: "planted"},
+		{ID: "hidden_gate", Description: "山门背后的隐藏通道", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_bet", Description: "试炼盘口的幕后操盘人", PlantedAt: 1, Status: "planted"},
+	}); err != nil {
+		t.Fatalf("SaveForeshadowLedger: %v", err)
+	}
+	if err := s.Drafts.SaveChapterPlan(domain.ChapterPlan{
+		Chapter: 2,
+		Title:   "试炼前夜",
+		Goal:    "决定是否回应邀请",
+		Contract: domain.ChapterContract{
+			PayoffPoints: []string{"回应内门试炼邀请"},
+			HookGoal:     "抛出谁在背后推动试炼",
+		},
+	}); err != nil {
+		t.Fatalf("SaveChapterPlan: %v", err)
+	}
+	if err := s.World.SaveReview(domain.ReviewEntry{
+		Chapter:        1,
+		Scope:          "chapter",
+		Verdict:        "polish",
+		Summary:        "主线启动完成，但伏笔不够明确。",
+		ContractStatus: "partial",
+		ContractMisses: []string{"未明确埋下内门试炼邀请"},
+		Issues: []domain.ConsistencyIssue{
+			{Type: "hook", Severity: "warning", Description: "章末钩子不够具体"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveReview: %v", err)
+	}
+
+	tool := NewContextTool(s, References{}, "default")
+	args, err := json.Marshal(map[string]any{"chapter": 2})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload struct {
+		Selected struct {
+			StoryThreads  []domain.RecallItem `json:"story_threads"`
+			ReviewLessons []domain.RecallItem `json:"review_lessons"`
+		} `json:"selected_memory"`
+		Summary string `json:"_loading_summary"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(payload.Selected.StoryThreads) == 0 {
+		t.Fatal("expected story thread recall items")
+	}
+	if len(payload.Selected.ReviewLessons) == 0 {
+		t.Fatal("expected review lesson recall items")
+	}
+	if !containsRecallSummary(payload.Selected.StoryThreads, "内门试炼邀请") {
+		t.Fatalf("expected story thread recall to mention invite, got %+v", payload.Selected.StoryThreads)
+	}
+	if !containsRecallSummary(payload.Selected.StoryThreads, "推动这场试炼") {
+		t.Fatalf("expected story thread recall to mention trial mastermind, got %+v", payload.Selected.StoryThreads)
+	}
+	if containsRecallSummary(payload.Selected.StoryThreads, "试炼规则碑文残卷") {
+		t.Fatalf("expected weak-overlap foreshadow to stay out, got %+v", payload.Selected.StoryThreads)
+	}
+	if containsRecallSummary(payload.Selected.StoryThreads, "建议回看第") {
+		t.Fatalf("expected related_chapters not to be duplicated into story_threads, got %+v", payload.Selected.StoryThreads)
+	}
+	if !containsRecallSummary(payload.Selected.ReviewLessons, "contract 漏项") {
+		t.Fatalf("expected review lesson recall to mention contract miss, got %+v", payload.Selected.ReviewLessons)
+	}
+	if !strings.Contains(payload.Summary, "线索召回:") || !strings.Contains(payload.Summary, "评审召回:") {
+		t.Fatalf("expected loading summary to report selected memory, got %q", payload.Summary)
+	}
+}
+
+func TestContextToolSelectedMemoryIncludesGlobalReviewLessons(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "开端", CoreEvent: "故事开始"},
+		{Chapter: 2, Title: "推进", CoreEvent: "主线继续推进"},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.Progress.Init("test", 6); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.World.SaveReview(domain.ReviewEntry{
+		Chapter: 1,
+		Scope:   "global",
+		Verdict: "polish",
+		Summary: "全局推进合格，但角色目标表达还不够稳定。",
+		Issues: []domain.ConsistencyIssue{
+			{Type: "character", Severity: "warning", Description: "主角目标表达不够稳定"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveReview(global): %v", err)
+	}
+
+	tool := NewContextTool(s, References{}, "default")
+	args, err := json.Marshal(map[string]any{"chapter": 2})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload struct {
+		Selected struct {
+			ReviewLessons []domain.RecallItem `json:"review_lessons"`
+		} `json:"selected_memory"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !containsRecallSummary(payload.Selected.ReviewLessons, "主角目标表达不够稳定") {
+		t.Fatalf("expected global review lesson to be recalled, got %+v", payload.Selected.ReviewLessons)
+	}
+}
+
+func TestContextToolKeepsFullForeshadowWhenRecallNotTriggered(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "起势", CoreEvent: "故事起势"},
+		{Chapter: 2, Title: "推进", CoreEvent: "继续推进"},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.Progress.Init("test", 4); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
+		{ID: "small_1", Description: "第一条小伏笔", PlantedAt: 1, Status: "planted"},
+		{ID: "small_2", Description: "第二条小伏笔", PlantedAt: 1, Status: "planted"},
+	}); err != nil {
+		t.Fatalf("SaveForeshadowLedger: %v", err)
+	}
+
+	tool := NewContextTool(s, References{}, "default")
+	args, err := json.Marshal(map[string]any{"chapter": 2})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := payload["foreshadow_ledger"]; !ok {
+		t.Fatal("expected full foreshadow ledger to remain when selected recall is not triggered")
+	}
+	if _, ok := payload["selected_memory"]; ok {
+		t.Fatalf("expected no selected_memory for small foreshadow sets, got %+v", payload["selected_memory"])
+	}
+}
+
+func TestContextToolFallsBackToFullForeshadowWhenSelectionIsTooSparse(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀请"},
+		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀请", Scenes: []string{"整理线索", "决定赴约"}},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := s.Progress.Init("test", 8); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
+		{ID: "trial_invite", Description: "内门试炼邀请的真实目的", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_rules", Description: "试炼规则碑文残卷", PlantedAt: 1, Status: "planted"},
+		{ID: "outer_disciple", Description: "外门弟子的旧债纠纷", PlantedAt: 1, Status: "planted"},
+		{ID: "elder_token", Description: "长老手中令牌的来历", PlantedAt: 1, Status: "planted"},
+		{ID: "hidden_gate", Description: "山门背后的隐藏通道", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_bet", Description: "试炼盘口的幕后操盘人", PlantedAt: 1, Status: "planted"},
+	}); err != nil {
+		t.Fatalf("SaveForeshadowLedger: %v", err)
+	}
+
+	tool := NewContextTool(s, References{}, "default")
+	args, err := json.Marshal(map[string]any{"chapter": 2})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := payload["foreshadow_ledger"]; !ok {
+		t.Fatal("expected full foreshadow ledger when selection is too sparse")
+	}
+	if selected, ok := payload["selected_memory"].(map[string]any); ok {
+		if _, exists := selected["story_threads"]; exists {
+			t.Fatalf("expected sparse story_threads to fall back to full ledger, got %+v", selected["story_threads"])
+		}
+	}
+}
+
+func containsRecallSummary(items []domain.RecallItem, want string) bool {
+	for _, item := range items {
+		if strings.Contains(item.Summary, want) {
+			return true
+		}
+	}
+	return false
+}

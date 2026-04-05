@@ -90,6 +90,16 @@ type RelatedChapter struct {
 	Reason  string `json:"reason"`
 }
 
+// RecallItem 是按当前任务选择性召回的长期信息。
+// 它不替代正式工件，只负责把当前轮真正相关的少量历史信息回注给模型。
+type RecallItem struct {
+	Kind    string `json:"kind"`
+	Key     string `json:"key,omitempty"`
+	Chapter int    `json:"chapter,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
 // CommitResult 是 commit_chapter 工具的结构化返回值。
 // 宿主程序和 Coordinator 读取此信号做控制决策。
 type CommitResult struct {

@@ -8,6 +8,8 @@ type contextBuildState struct {
 	progress        *domain.Progress
 	runMeta         *domain.RunMeta
 	currentEntry    *domain.OutlineEntry
+	chapterPlan     *domain.ChapterPlan
+	storyThreads    []domain.RecallItem
 	foreshadow      []domain.ForeshadowEntry
 	relationships   []domain.RelationshipEntry
 	allStateChanges []domain.StateChange
@@ -18,6 +20,7 @@ type chapterContextEnvelope struct {
 	Working    map[string]any
 	Episodic   map[string]any
 	References map[string]any
+	Selected   map[string]any
 }
 
 type architectContextEnvelope struct {
@@ -31,6 +34,7 @@ func newChapterContextEnvelope() chapterContextEnvelope {
 		Working:    make(map[string]any),
 		Episodic:   make(map[string]any),
 		References: make(map[string]any),
+		Selected:   make(map[string]any),
 	}
 }
 
@@ -46,6 +50,9 @@ func (e chapterContextEnvelope) apply(result map[string]any) {
 	result["working_memory"] = e.Working
 	result["episodic_memory"] = e.Episodic
 	result["reference_pack"] = e.References
+	if len(e.Selected) > 0 {
+		result["selected_memory"] = e.Selected
+	}
 	mergeContextSection(result, e.Working)
 	mergeContextSection(result, e.Episodic)
 	mergeContextSection(result, e.References)
@@ -123,11 +130,25 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	}
 	state.currentEntry = currentEntry
 
+	chapterPlan, chapterPlanErr := t.store.Drafts.LoadChapterPlan(chapter)
+	if chapterPlanErr == nil && chapterPlan != nil {
+		envelope.Working["chapter_plan"] = chapterPlan
+		if len(chapterPlan.Contract.RequiredBeats) > 0 ||
+			len(chapterPlan.Contract.ForbiddenMoves) > 0 ||
+			len(chapterPlan.Contract.ContinuityChecks) > 0 ||
+			len(chapterPlan.Contract.EvaluationFocus) > 0 ||
+			chapterPlan.Contract.EmotionTarget != "" ||
+			len(chapterPlan.Contract.PayoffPoints) > 0 ||
+			chapterPlan.Contract.HookGoal != "" {
+			envelope.Working["chapter_contract"] = chapterPlan.Contract
+		}
+	} else {
+		warn("chapter_plan", chapterPlanErr)
+	}
+	state.chapterPlan = chapterPlan
+
 	foreshadow, foreshadowErr := t.store.World.LoadActiveForeshadow()
 	warn("foreshadow_ledger", foreshadowErr)
-	if len(foreshadow) > 0 {
-		envelope.Episodic["foreshadow_ledger"] = foreshadow
-	}
 	state.foreshadow = foreshadow
 
 	relationships, relErr := t.store.World.LoadRelationships()
@@ -156,6 +177,10 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	styleRules, styleErr := t.store.World.LoadStyleRules()
 	warn("style_rules", styleErr)
 	state.styleRules = styleRules
+	state.storyThreads = t.selectStoryThreads(state)
+	if len(state.storyThreads) > 0 && len(state.storyThreads) < storyThreadRecallMinSelected {
+		state.storyThreads = nil
+	}
 
 	return state
 }
@@ -173,6 +198,7 @@ func (t *ContextTool) buildChapterContext(result map[string]any, state contextBu
 	t.buildChapterEpisodicMemory(&envelope, state, warn)
 	t.buildChapterWorkingMemory(&envelope, state, warn)
 	t.buildChapterReferencePack(&envelope, state)
+	t.buildChapterSelectedMemory(&envelope, state, warn)
 	envelope.apply(result)
 }
 
@@ -210,21 +236,6 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 		envelope.Working["checkpoint"] = checkpoint
 	}
 
-	if plan, err := t.store.Drafts.LoadChapterPlan(state.chapter); err == nil && plan != nil {
-		envelope.Working["chapter_plan"] = plan
-		if len(plan.Contract.RequiredBeats) > 0 ||
-			len(plan.Contract.ForbiddenMoves) > 0 ||
-			len(plan.Contract.ContinuityChecks) > 0 ||
-			len(plan.Contract.EvaluationFocus) > 0 ||
-			plan.Contract.EmotionTarget != "" ||
-			len(plan.Contract.PayoffPoints) > 0 ||
-			plan.Contract.HookGoal != "" {
-			envelope.Working["chapter_contract"] = plan.Contract
-		}
-	} else {
-		warn("chapter_plan", err)
-	}
-
 	if state.chapter > 1 {
 		if prevText, err := t.store.Drafts.LoadChapterText(state.chapter - 1); err == nil && prevText != "" {
 			runes := []rune(prevText)
@@ -236,7 +247,20 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 	}
 }
 
+func (t *ContextTool) buildChapterSelectedMemory(envelope *chapterContextEnvelope, state contextBuildState, warn func(string, error)) {
+	if len(state.storyThreads) > 0 {
+		envelope.Selected["story_threads"] = state.storyThreads
+	}
+	if lessons := t.selectReviewLessons(state.chapter, warn); len(lessons) > 0 {
+		envelope.Selected["review_lessons"] = lessons
+	}
+}
+
 func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelope, state contextBuildState, warn func(string, error)) {
+	if len(state.foreshadow) > 0 && len(state.storyThreads) == 0 {
+		envelope.Episodic["foreshadow_ledger"] = state.foreshadow
+	}
+
 	if state.progress != nil && state.progress.TotalChapters > 30 && state.currentEntry != nil {
 		if related := t.buildRelatedChapters(
 			state.chapter,

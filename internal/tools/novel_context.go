@@ -190,6 +190,14 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 	if n := sliceLen(result["related_chapters"]); n > 0 {
 		items = append(items, fmt.Sprintf("相关章:%d", n))
 	}
+	if selected, ok := result["selected_memory"].(map[string]any); ok && len(selected) > 0 {
+		if n := sliceLen(selected["story_threads"]); n > 0 {
+			items = append(items, fmt.Sprintf("线索召回:%d", n))
+		}
+		if n := sliceLen(selected["review_lessons"]); n > 0 {
+			items = append(items, fmt.Sprintf("评审召回:%d", n))
+		}
+	}
 
 	// 参考资料
 	if refs, ok := result["references"].(map[string]string); ok && len(refs) > 0 {
@@ -238,6 +246,8 @@ func sliceLen(v any) int {
 	case []domain.Character:
 		return len(s)
 	case []domain.RelatedChapter:
+		return len(s)
+	case []domain.RecallItem:
 		return len(s)
 	default:
 		return 0
@@ -622,6 +632,206 @@ func containsAny(text string, words []string) bool {
 		}
 	}
 	return false
+}
+
+func (t *ContextTool) selectStoryThreads(state contextBuildState) []domain.RecallItem {
+	if state.currentEntry == nil {
+		return nil
+	}
+	if len(state.foreshadow) < storyThreadRecallThreshold {
+		return nil
+	}
+
+	var items []domain.RecallItem
+	seen := make(map[string]struct{})
+	add := func(item domain.RecallItem) {
+		key := item.Kind + "|" + item.Key + "|" + item.Summary
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		items = append(items, item)
+	}
+
+	focusTerms := recallFocusTerms(state.currentEntry, state.chapterPlan)
+	focusText := strings.Join(focusTerms, " ")
+	for _, entry := range state.foreshadow {
+		if !matchesRecallTerms(entry.ID+" "+entry.Description, focusTerms) && !strings.Contains(focusText, entry.ID) {
+			continue
+		}
+		add(domain.RecallItem{
+			Kind:    "story_thread",
+			Key:     entry.ID,
+			Chapter: entry.PlantedAt,
+			Reason:  "当前章可能需要承接既有伏笔",
+			Summary: fmt.Sprintf("伏笔“%s”埋于第%d章：%s", entry.ID, entry.PlantedAt, truncateRunes(entry.Description, 30)),
+		})
+		if len(items) >= 5 {
+			return items
+		}
+	}
+
+	return items
+}
+
+func (t *ContextTool) selectReviewLessons(chapter int, warn func(string, error)) []domain.RecallItem {
+	if chapter <= 1 {
+		return nil
+	}
+
+	var items []domain.RecallItem
+	seen := make(map[string]struct{})
+	add := func(item domain.RecallItem) {
+		key := item.Summary
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		items = append(items, item)
+	}
+
+	appendReview := func(review *domain.ReviewEntry) bool {
+		if review == nil {
+			return false
+		}
+		for i, miss := range review.ContractMisses {
+			add(domain.RecallItem{
+				Kind:    "review_lesson",
+				Key:     fmt.Sprintf("review-%d-contract-%d", review.Chapter, i),
+				Chapter: review.Chapter,
+				Reason:  "最近审阅指出 contract 漏项",
+				Summary: fmt.Sprintf("第%d章 contract 漏项：%s", review.Chapter, miss),
+			})
+			if len(items) >= 3 {
+				return true
+			}
+		}
+		for i, issue := range review.Issues {
+			switch issue.Severity {
+			case "", "warning", "error", "critical":
+				add(domain.RecallItem{
+					Kind:    "review_lesson",
+					Key:     fmt.Sprintf("review-%d-issue-%d", review.Chapter, i),
+					Chapter: review.Chapter,
+					Reason:  "最近审阅指出需要避免重复问题",
+					Summary: fmt.Sprintf("第%d章审阅提醒：%s", review.Chapter, truncateRunes(issue.Description, 36)),
+				})
+			}
+			if len(items) >= 3 {
+				return true
+			}
+		}
+		return false
+	}
+
+	for ch := chapter - 1; ch >= max(chapter-3, 1); ch-- {
+		review, err := t.store.World.LoadReview(ch)
+		if err != nil {
+			warn("review", err)
+			continue
+		}
+		if appendReview(review) {
+			return items
+		}
+	}
+
+	globalReview, err := t.store.World.LoadLastReview(chapter - 1)
+	if err != nil {
+		warn("global_review", err)
+	} else if appendReview(globalReview) {
+		return items
+	}
+	return items
+}
+
+func recallFocusTerms(entry *domain.OutlineEntry, plan *domain.ChapterPlan) []string {
+	if entry == nil {
+		return nil
+	}
+	var terms []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			terms = append(terms, v)
+		}
+	}
+
+	add(entry.Title)
+	add(entry.CoreEvent)
+	add(entry.Hook)
+	for _, scene := range entry.Scenes {
+		add(scene)
+	}
+	if plan != nil {
+		add(plan.Goal)
+		add(plan.Hook)
+		for _, point := range plan.Contract.PayoffPoints {
+			add(point)
+		}
+		add(plan.Contract.HookGoal)
+	}
+	return terms
+}
+
+func matchesRecallTerms(text string, terms []string) bool {
+	for _, term := range terms {
+		term = strings.TrimSpace(term)
+		if len([]rune(term)) < 2 {
+			continue
+		}
+		if strings.Contains(text, term) || strings.Contains(term, text) {
+			return true
+		}
+		if hasMeaningfulOverlap(term, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMeaningfulOverlap(a, b string) bool {
+	ar := []rune(strings.TrimSpace(a))
+	br := []rune(strings.TrimSpace(b))
+	if len(ar) < 5 || len(br) < 5 {
+		return false
+	}
+	shorter := len(ar)
+	if len(br) < shorter {
+		shorter = len(br)
+	}
+	threshold := 5
+	switch {
+	case shorter >= 12:
+		threshold = 7
+	case shorter >= 9:
+		threshold = 6
+	}
+	return longestCommonSubstringRunes(ar, br) >= threshold
+}
+
+const storyThreadRecallThreshold = 6
+const storyThreadRecallMinSelected = 2
+
+func longestCommonSubstringRunes(a, b []rune) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	prev := make([]int, len(b)+1)
+	best := 0
+	for i := 1; i <= len(a); i++ {
+		curr := make([]int, len(b)+1)
+		for j := 1; j <= len(b); j++ {
+			if a[i-1] != b[j-1] {
+				continue
+			}
+			curr[j] = prev[j-1] + 1
+			if curr[j] > best {
+				best = curr[j]
+			}
+		}
+		prev = curr
+	}
+	return best
 }
 
 // truncateRunes 截断字符串到指定 rune 数。
