@@ -1,6 +1,7 @@
 package diag
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,9 +25,10 @@ type Snapshot struct {
 	Relationships []domain.RelationshipEntry
 	StateChanges  []domain.StateChange
 	StyleRules    *domain.WritingStyleRules
-	Reviews       map[int]*domain.ReviewEntry
-	Plans         map[int]*domain.ChapterPlan
-	Summaries     map[int]*domain.ChapterSummary
+	Reviews           map[int]*domain.ReviewEntry
+	Plans             map[int]*domain.ChapterPlan
+	Summaries         map[int]*domain.ChapterSummary
+	ContextBoundaries []domain.RuntimeContextBoundary
 
 	LoadErrors []string // 非 NotExist 的加载失败，区分"无数据"和"读取出错"
 }
@@ -91,6 +93,26 @@ func Load(s *store.Store) Snapshot {
 			}
 		}
 	}
+
+	// 加载上下文边界记录
+	if s.Runtime != nil {
+		items, err := s.Runtime.LoadQueue()
+		check("runtime_queue", err)
+		for _, item := range items {
+			if item.Kind != domain.RuntimeQueueContextEdge {
+				continue
+			}
+			raw, err := json.Marshal(item.Payload)
+			if err != nil {
+				continue
+			}
+			var b domain.RuntimeContextBoundary
+			if json.Unmarshal(raw, &b) == nil {
+				snap.ContextBoundaries = append(snap.ContextBoundaries, b)
+			}
+		}
+	}
+
 	return snap
 }
 

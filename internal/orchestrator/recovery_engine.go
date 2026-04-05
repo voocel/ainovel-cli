@@ -166,10 +166,10 @@ func recoveryPendingRewriteRule(snapshot recoverySnapshot) (bool, recoveryResult
 	return true, recoveryResult{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"上次审阅后有 %d 章被标记为待%s（受影响章节：%v）。原因：%s。\n"+
-				"请先调用 novel_context 读取相关章节原文，重新评估是否真的需要%s。如果问题不严重或已在后续章节中自然修正，可以跳过%s直接继续写第 %d 章。\n"+
-				"确实需要%s的章节请逐章调用 writer 处理。总共需要写 %d 章。",
+				"请先调用 novel_context 读取相关章节原文，然后逐章调用 writer 执行%s。这是审阅阶段的确定性裁定，必须执行，不可跳过。\n"+
+				"全部%s完成后继续写第 %d 章。总共需要写 %d 章。",
 			len(progress.PendingRewrites), verb, progress.PendingRewrites, progress.RewriteReason,
-			verb, verb, progress.NextChapter(), verb, progress.TotalChapters)),
+			verb, verb, progress.NextChapter(), progress.TotalChapters)),
 		Label: fmt.Sprintf("%s恢复：%d 章待处理 %v", verb, len(progress.PendingRewrites), progress.PendingRewrites),
 	}
 }

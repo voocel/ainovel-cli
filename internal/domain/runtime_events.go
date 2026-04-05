@@ -62,7 +62,16 @@ type RuntimeContextBoundary struct {
 	KeptCount      int    `json:"kept_count,omitempty"`
 	SplitTurn      bool   `json:"split_turn,omitempty"`
 	Incremental    bool   `json:"incremental,omitempty"`
-	SummaryRunes   int    `json:"summary_runes,omitempty"`
+	SummaryRunes   int                    `json:"summary_runes,omitempty"`
+	Steps          []ContextRewriteStep   `json:"steps,omitempty"`
+}
+
+// ContextRewriteStep 记录压缩管线中单个策略的执行情况。
+type ContextRewriteStep struct {
+	Name         string `json:"name"`
+	Applied      bool   `json:"applied"`
+	TokensBefore int    `json:"tokens_before"`
+	TokensAfter  int    `json:"tokens_after"`
 }
 
 // ControlIntentKind 表示控制队列中的指令类型。

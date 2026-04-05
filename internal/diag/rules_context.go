@@ -140,3 +140,41 @@ func RelationshipStagnation(snap *Snapshot) []Finding {
 		Suggestion: "commit_chapter 的关系更新可能停止工作，或故事关系确实无变化。检查 Writer 输出的 relationships 字段。",
 	}}
 }
+
+// ContextCompactionPressure 检测上下文压缩是否过于频繁。
+func ContextCompactionPressure(snap *Snapshot) []Finding {
+	if len(snap.ContextBoundaries) == 0 {
+		return nil
+	}
+	var committed, recovered int
+	for _, b := range snap.ContextBoundaries {
+		switch b.Kind {
+		case "compacted":
+			committed++
+		case "recovered":
+			recovered++
+		}
+	}
+	var findings []Finding
+	if recovered > 0 {
+		findings = append(findings, Finding{
+			Rule:       "ContextCompactionPressure",
+			Category:   CatContext,
+			Severity:   SevWarning,
+			Title:      fmt.Sprintf("上下文溢出恢复 %d 次", recovered),
+			Evidence:   fmt.Sprintf("total_boundaries=%d, committed=%d, recovered=%d", len(snap.ContextBoundaries), committed, recovered),
+			Suggestion: "模型上下文窗口可能不足，或 ReserveTokens 偏小。考虑增大上下文窗口或调整压缩策略阈值。",
+		})
+	}
+	if committed >= 5 {
+		findings = append(findings, Finding{
+			Rule:       "ContextCompactionPressure",
+			Category:   CatContext,
+			Severity:   SevInfo,
+			Title:      fmt.Sprintf("本次运行已提交压缩 %d 次", committed),
+			Evidence:   fmt.Sprintf("total_boundaries=%d, committed=%d", len(snap.ContextBoundaries), committed),
+			Suggestion: "频繁压缩可能导致早期上下文丢失。检查压缩后的创作质量是否有下降趋势。",
+		})
+	}
+	return findings
+}

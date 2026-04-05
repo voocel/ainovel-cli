@@ -199,13 +199,22 @@ func TestContextRewriteCallbackAppendsCommittedBoundary(t *testing.T) {
 			SummaryLen:     128,
 			Duration:       250 * time.Millisecond,
 		},
+		Steps: []corecontext.RewriteStep{
+			{Name: "tool_result_microcompact", Applied: true, TokensBefore: 98329, TokensAfter: 72000},
+			{Name: "light_trim", Applied: true, TokensBefore: 72000, TokensAfter: 13156},
+		},
 	})
 
-	if len(events) != 1 {
-		t.Fatalf("expected 1 UI event, got %d", len(events))
+	// 2 intermediate dim events + 1 final warn event = 但 light_trim 是最后一个 applied，所以只有 microcompact 是中间步骤
+	// 期望：1 个 debug (microcompact) + 1 个 warn (最终汇总) = 2
+	if len(events) != 2 {
+		t.Fatalf("expected 2 UI events (1 intermediate + 1 final), got %d", len(events))
 	}
-	if !strings.Contains(events[0].Summary, "已提交压缩") {
-		t.Fatalf("expected committed compact summary, got %q", events[0].Summary)
+	if events[0].Level != "debug" || !strings.Contains(events[0].Summary, "tool_result_microcompact") {
+		t.Fatalf("expected debug-level intermediate step, got level=%q summary=%q", events[0].Level, events[0].Summary)
+	}
+	if events[1].Level != "warn" || !strings.Contains(events[1].Summary, "已提交压缩") {
+		t.Fatalf("expected warn-level final summary, got level=%q summary=%q", events[1].Level, events[1].Summary)
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 boundary item, got %d", len(items))
@@ -222,6 +231,12 @@ func TestContextRewriteCallbackAppendsCommittedBoundary(t *testing.T) {
 	}
 	if !payload.Committed || payload.Kind != "compacted" || payload.TokensAfter != 13156 {
 		t.Fatalf("unexpected boundary payload: %+v", payload)
+	}
+	if len(payload.Steps) != 2 {
+		t.Fatalf("expected 2 steps in boundary payload, got %d", len(payload.Steps))
+	}
+	if payload.Steps[0].Name != "tool_result_microcompact" || !payload.Steps[0].Applied {
+		t.Fatalf("unexpected first step: %+v", payload.Steps[0])
 	}
 }
 

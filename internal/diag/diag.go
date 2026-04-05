@@ -46,6 +46,7 @@ var allRules = []RuleFunc{
 	GhostCharacter,
 	TimelineGaps,
 	RelationshipStagnation,
+	ContextCompactionPressure,
 }
 
 // Analyze 是诊断系统的唯一入口。

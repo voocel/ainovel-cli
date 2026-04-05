@@ -504,6 +504,21 @@ func contextRewriteCallback(agent string, emit emitFn, appendBoundary func(domai
 		}
 		slog.Warn("上下文重写", attrs...)
 
+		// 逐级 slog.Debug
+		for _, s := range ev.Steps {
+			slog.Debug("上下文策略步骤",
+				"module", "context",
+				"agent", agent,
+				"strategy", s.Name,
+				"applied", s.Applied,
+				"tokens_before", s.TokensBefore,
+				"tokens_after", s.TokensAfter,
+			)
+		}
+
+		// 构建 domain steps
+		domainSteps := convertRewriteSteps(ev.Steps)
+
 		if appendBoundary != nil {
 			boundary := domain.RuntimeContextBoundary{
 				Agent:        agent,
@@ -513,6 +528,7 @@ func contextRewriteCallback(agent string, emit emitFn, appendBoundary func(domai
 				Committed:    ev.Committed,
 				TokensBefore: ev.TokensBefore,
 				TokensAfter:  ev.TokensAfter,
+				Steps:        domainSteps,
 			}
 			if info := ev.Info; info != nil {
 				boundary.MessagesBefore = info.MessagesBefore
@@ -537,8 +553,52 @@ func contextRewriteCallback(agent string, emit emitFn, appendBoundary func(domai
 		if emit == nil {
 			return
 		}
+		// 中间已生效步骤：dim 事件
+		emitIntermediateStepEvents(emit, agent, ev)
+		// 最终汇总事件
 		summary := formatContextRewriteSummary(agent, ev, boundaryKind)
 		emit(UIEvent{Time: time.Now(), Category: "COMPACT", Summary: summary, Level: "warn"})
+	}
+}
+
+func convertRewriteSteps(steps []corecontext.RewriteStep) []domain.ContextRewriteStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]domain.ContextRewriteStep, len(steps))
+	for i, s := range steps {
+		out[i] = domain.ContextRewriteStep{
+			Name:         s.Name,
+			Applied:      s.Applied,
+			TokensBefore: s.TokensBefore,
+			TokensAfter:  s.TokensAfter,
+		}
+	}
+	return out
+}
+
+func emitIntermediateStepEvents(emit emitFn, agent string, ev corecontext.RewriteEvent) {
+	if len(ev.Steps) < 2 {
+		return
+	}
+	// 找到最后一个 applied step 的索引
+	lastApplied := -1
+	for i := len(ev.Steps) - 1; i >= 0; i-- {
+		if ev.Steps[i].Applied {
+			lastApplied = i
+			break
+		}
+	}
+	for i, s := range ev.Steps {
+		if !s.Applied || i == lastApplied {
+			continue
+		}
+		ratio := 0
+		if s.TokensBefore > 0 {
+			ratio = s.TokensAfter * 100 / s.TokensBefore
+		}
+		stepSummary := fmt.Sprintf("%s %s: %d→%d tok (%d%%)", agent, s.Name, s.TokensBefore, s.TokensAfter, ratio)
+		emit(UIEvent{Time: time.Now(), Category: "COMPACT", Summary: stepSummary, Level: "debug"})
 	}
 }
 

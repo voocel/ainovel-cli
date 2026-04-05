@@ -652,6 +652,11 @@ func renderEventContent(events []orchestrator.UIEvent, width int) string {
 		if cat == "SYSTEM" || cat == "ERROR" || cat == "REVIEW" || cat == "COMPACT" {
 			sumStyle = lipgloss.NewStyle().Foreground(color)
 		}
+		// debug 级别的 COMPACT 事件（中间策略步骤）用弱化色
+		if cat == "COMPACT" && ev.Level == "debug" {
+			catStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(7)
+			sumStyle = lipgloss.NewStyle().Foreground(colorMuted)
+		}
 
 		maxSumW := width - 20
 		summary := ev.Summary
