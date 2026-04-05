@@ -18,6 +18,7 @@ type Store struct {
 	RunMeta    *RunMetaStore
 	Signals    *SignalStore
 	Tasks      *TaskStore
+	Runtime    *RuntimeStore
 	Characters *CharacterStore
 	World      *WorldStore
 
@@ -36,6 +37,7 @@ func NewStore(dir string) *Store {
 		RunMeta:    NewRunMetaStore(newIO(dir)),
 		Signals:    NewSignalStore(newIO(dir)),
 		Tasks:      NewTaskStore(newIO(dir)),
+		Runtime:    NewRuntimeStore(newIO(dir)),
 		Characters: NewCharacterStore(newIO(dir), outline),
 		World:      NewWorldStore(newIO(dir)),
 	}
@@ -47,7 +49,7 @@ func (s *Store) Dir() string { return s.dir }
 // Init 创建所需的子目录结构。
 func (s *Store) Init() error {
 	return s.Progress.io.EnsureDirs([]string{
-		"chapters", "summaries", "drafts", "reviews", "meta",
+		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks",
 	})
 }
 

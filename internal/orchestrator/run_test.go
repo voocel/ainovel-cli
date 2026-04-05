@@ -24,7 +24,7 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, nil, nil, "", nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -56,7 +56,7 @@ func TestFinalizeSteerIfIdleKeepsActiveFlow(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, nil, nil, "", nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -192,6 +192,59 @@ func TestParseSubAgentRetryUsesStructuredPayload(t *testing.T) {
 	}
 }
 
+func TestSummarizeAskUserRequest(t *testing.T) {
+	args, err := json.Marshal(map[string]any{
+		"questions": []map[string]any{
+			{
+				"header":      "篇幅",
+				"question":    "你希望写多长？",
+				"multiSelect": false,
+				"options": []map[string]any{
+					{"label": "中篇"},
+					{"label": "长篇"},
+				},
+			},
+			{
+				"header":      "重心",
+				"question":    "你更看重哪部分？",
+				"multiSelect": true,
+				"options": []map[string]any{
+					{"label": "剧情"},
+					{"label": "人物"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	summary, payload := summarizeAskUserRequest(args)
+	if summary != "等待用户补充关键信息（2 个问题）：篇幅、重心" {
+		t.Fatalf("unexpected summary: %q", summary)
+	}
+
+	questions, ok := payload["questions"].([]map[string]any)
+	if !ok || len(questions) != 2 {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if got := questions[1]["multi_select"]; got != true {
+		t.Fatalf("expected second question to be multi-select, got %#v", got)
+	}
+}
+
+func TestExtractAskUserAnswer(t *testing.T) {
+	result, err := json.Marshal("用户回答：[篇幅] 长篇；[重心] 剧情升级")
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	answer := extractAskUserAnswer(result)
+	if answer != "用户回答：[篇幅] 长篇；[重心] 剧情升级" {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+}
+
 func TestExtractToolErrorText(t *testing.T) {
 	tests := []struct {
 		name string
@@ -273,6 +326,7 @@ func TestSessionDelaysStreamClearUntilFirstVisibleDelta(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
+		nil,
 	)
 
 	sess.handleMessageStart()
@@ -313,6 +367,7 @@ func TestSessionClearsOnlyOncePerVisibleRound(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
+		nil,
 	)
 
 	sess.handleMessageStart()
@@ -358,6 +413,7 @@ func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
+		nil,
 	)
 
 	args, err := json.Marshal(map[string]any{
@@ -397,6 +453,7 @@ func TestSessionDisplaysThinkingProgress(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
+		nil,
 	)
 
 	sess.handleMessageStart()
@@ -423,6 +480,7 @@ func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, delta) },
 		func() { seq = append(seq, "clear") },
+		nil,
 	)
 
 	sess.handleMessageStart()
@@ -452,7 +510,7 @@ func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 
 func TestSessionTracksAgentContextProgress(t *testing.T) {
 	board := newAgentBoard()
-	sess := newSession(nil, nil, nil, board, "", nil, nil, nil)
+	sess := newSession(nil, nil, nil, board, "", nil, nil, nil, nil)
 
 	meta, err := json.Marshal(map[string]any{
 		"tokens":         18000,

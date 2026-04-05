@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 )
@@ -290,6 +291,18 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		m.refreshEventViewport()
 		return m, listenEvents(m.runtime), true
+	case bootstrapMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, fetchSnapshot(m.runtime), true
+		}
+		m.applyRuntimeReplay(msg.replay)
+		if msg.resumed && m.mode == modeNew {
+			m.mode = modeRunning
+			m.textarea.SetWidth(m.currentInputWidth())
+			m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
+		}
+		return m, fetchSnapshot(m.runtime), true
 	case askUserMsg:
 		m.askState = newAskUserState(askUserRequest(msg))
 		m.textarea.Blur()
@@ -445,4 +458,38 @@ func (m *Model) resetOutputPanels() {
 	m.streamVP.SetContent("")
 	m.streamVP.GotoTop()
 	m.streamRound = 0
+}
+
+func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
+	for _, item := range items {
+		switch item.Kind {
+		case domain.RuntimeQueueUIEvent:
+			m.events = append(m.events, orchestrator.UIEvent{
+				Time:     item.Time,
+				Category: item.Category,
+				Summary:  item.Summary,
+			})
+			if len(m.events) > maxEvents {
+				m.events = m.events[len(m.events)-maxEvents:]
+			}
+		case domain.RuntimeQueueStreamClear:
+			if len(m.streamRounds) == 0 {
+				m.streamRounds = append(m.streamRounds, "")
+			} else if strings.TrimSpace(m.streamRounds[len(m.streamRounds)-1]) != "" {
+				m.streamRounds = append(m.streamRounds, "")
+			}
+		case domain.RuntimeQueueStreamDelta:
+			text := orchestrator.ReplayDeltaText(item)
+			if text == "" {
+				continue
+			}
+			if len(m.streamRounds) == 0 {
+				m.streamRounds = append(m.streamRounds, "")
+			}
+			m.streamRounds[len(m.streamRounds)-1] += text
+		}
+	}
+	m.streamRound = len(m.streamRounds)
+	m.refreshEventViewport()
+	m.streamVP.SetContent(renderStreamContent(m.streamRounds, m.streamVP.Width))
 }

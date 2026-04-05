@@ -217,7 +217,8 @@ func recoveryPendingSteerRule(snapshot recoverySnapshot) (bool, recoveryResult) 
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。\n\n[用户干预-恢复] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。",
 			next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters, snapshot.RunMeta.PendingSteer)),
-		Label: "Steer 恢复：上次干预未完成，重新注入",
+		Label:                "Steer 恢复：上次干预未完成，重新注入",
+		ConsumesPendingSteer: true,
 	}
 }
 

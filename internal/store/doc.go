@@ -16,6 +16,7 @@
 //   - RunMetaStore: 运行元数据（模型、干预历史）
 //   - SignalStore: 一次性信号文件（commit/review 结果）
 //   - TaskStore: 运行时任务状态（meta/tasks.json）
+//   - RuntimeStore: 统一运行时队列 + 每任务日志（meta/runtime/*.jsonl）
 //   - CharacterStore: 角色档案、状态快照
 //   - WorldStore: 时间线、伏笔、关系、状态变化、世界规则、风格规则、审阅、交接
 package store

@@ -32,6 +32,7 @@ type Engine struct {
 	clearCh     chan struct{}
 	done        chan struct{}
 	mu          sync.Mutex
+	controlMu   sync.Mutex
 	running     bool
 	closeOnce   sync.Once
 }
@@ -85,7 +86,7 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 		done:        make(chan struct{}, 4),
 	}
 	compactEmit = eng.emit
-	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear)
+	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.submitControl)
 	eng.session.bind()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -140,6 +141,21 @@ func (eng *Engine) emitDelta(delta string) {
 }
 
 func (eng *Engine) emit(ev UIEvent) {
+	if eng.store != nil && eng.store.Runtime != nil {
+		priority := domain.RuntimePriorityBackground
+		switch ev.Category {
+		case "SYSTEM", "ERROR":
+			priority = domain.RuntimePriorityControl
+		}
+		_, _ = eng.store.Runtime.AppendQueue(domain.RuntimeQueueItem{
+			Time:     ev.Time,
+			Kind:     domain.RuntimeQueueUIEvent,
+			Priority: priority,
+			Category: ev.Category,
+			Summary:  ev.Summary,
+			Payload:  ev,
+		})
+	}
 	defer func() { recover() }()
 	select {
 	case eng.events <- ev:
@@ -172,6 +188,11 @@ func (eng *Engine) StartPrepared(promptText string) error {
 	promptText = strings.TrimSpace(promptText)
 	if promptText == "" {
 		return fmt.Errorf("prompt is required")
+	}
+	if eng.store != nil && eng.store.Runtime != nil {
+		if err := eng.store.Runtime.Reset(); err != nil {
+			return fmt.Errorf("reset runtime queue: %w", err)
+		}
 	}
 	if err := eng.taskRT.Reset(); err != nil {
 		return fmt.Errorf("reset tasks: %w", err)
@@ -219,19 +240,24 @@ func (eng *Engine) Resume() (string, error) {
 	if err := eng.scheduler.SeedRecovery(progress, runMeta); err != nil {
 		return "", err
 	}
-	if err := eng.coordinator.Prompt(recovery.PromptText); err != nil {
-		return "", fmt.Errorf("prompt: %w", err)
+	intent := domain.ControlIntent{
+		Kind:      domain.ControlIntentResumePrompt,
+		Priority:  domain.RuntimePriorityControl,
+		Summary:   "恢复创作任务",
+		Prompt:    recovery.PromptText,
+		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskTitle: "恢复创作任务",
+		TaskInput: recovery.PromptText,
+		Payload: map[string]string{
+			"label": recovery.Label,
+		},
 	}
-	if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "恢复创作任务", recovery.PromptText, taskLocation{}); err != nil {
-		return "", fmt.Errorf("start coordinator task: %w", err)
+	if _, err := eng.prepareResumeControl(intent, recovery); err != nil {
+		return "", err
 	}
-	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在恢复创作任务")
-
-	eng.mu.Lock()
-	eng.running = true
-	eng.mu.Unlock()
-
-	go eng.waitDone()
+	if err := eng.drainControlQueue(); err != nil {
+		return "", err
+	}
 	return recovery.Label, nil
 }
 
@@ -248,20 +274,18 @@ func (eng *Engine) Continue(promptText string) error {
 	if promptText == "" {
 		return fmt.Errorf("prompt is required")
 	}
-	if err := eng.coordinator.Prompt(promptText); err != nil {
-		return fmt.Errorf("prompt: %w", err)
+	if _, err := eng.enqueueControl(domain.ControlIntent{
+		Kind:      domain.ControlIntentResumePrompt,
+		Priority:  domain.RuntimePriorityControl,
+		Summary:   "继续协调小说任务",
+		Prompt:    promptText,
+		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskTitle: "继续协调小说任务",
+		TaskInput: promptText,
+	}); err != nil {
+		return err
 	}
-	if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", promptText, taskLocation{}); err != nil {
-		return fmt.Errorf("start coordinator task: %w", err)
-	}
-	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在继续处理任务")
-
-	eng.mu.Lock()
-	eng.running = true
-	eng.mu.Unlock()
-
-	go eng.waitDone()
-	return nil
+	return eng.drainControlQueue()
 }
 
 // Abort 停止当前 coordinator 运行。
@@ -292,7 +316,23 @@ func (eng *Engine) Steer(text string) {
 	eng.mu.Unlock()
 
 	if wasRunning {
-		eng.session.submitSteer(text)
+		eng.session.persistSteer(text)
+		if _, err := eng.enqueueControl(domain.ControlIntent{
+			Kind:      domain.ControlIntentSteerMessage,
+			Priority:  domain.RuntimePriorityInterrupt,
+			Summary:   "处理用户干预",
+			Message:   text,
+			TaskKind:  domain.TaskSteerApply,
+			TaskTitle: "处理用户干预",
+			TaskInput: text,
+		}); err != nil {
+			eng.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "干预入队失败: " + err.Error(), Level: "error"})
+			return
+		}
+		if err := eng.drainControlQueue(); err != nil {
+			eng.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "干预处理失败: " + err.Error(), Level: "error"})
+			return
+		}
 	} else {
 		eng.session.persistSteer(text)
 		recovery := eng.session.recovery()
@@ -301,30 +341,151 @@ func (eng *Engine) Steer(text string) {
 			promptText = fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
 		}
 		slog.Info("agent 已停止，通过 Prompt 重启", "module", "steer", "recovery", recovery.Label)
-		if err := eng.coordinator.Prompt(promptText); err != nil {
-			slog.Error("重启 Prompt 失败", "module", "steer", "err", err)
+		if _, err := eng.enqueueControl(domain.ControlIntent{
+			Kind:      domain.ControlIntentResumePrompt,
+			Priority:  domain.RuntimePriorityInterrupt,
+			Summary:   "恢复并处理用户干预",
+			Prompt:    promptText,
+			TaskKind:  domain.TaskSteerApply,
+			TaskTitle: "处理用户干预",
+			TaskInput: text,
+			Payload: map[string]string{
+				"steer": text,
+			},
+		}); err != nil {
+			eng.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "恢复入队失败: " + err.Error(), Level: "error"})
+			return
+		}
+		if err := eng.drainControlQueue(); err != nil {
 			eng.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: "恢复失败: " + err.Error(), Level: "error"})
 			return
 		}
-		if _, err := eng.taskRT.Start(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{}); err != nil {
-			slog.Error("启动干预任务失败", "module", "steer", "err", err)
-		}
-		eng.agents.Start("coordinator", "", domain.TaskSteerApply, "正在评估用户干预")
 	}
 
 	eng.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: "干预已提交: " + truncateLog(text, 40), Level: "info"})
-
-	eng.mu.Lock()
-	if !eng.running {
-		eng.running = true
-		go eng.waitDone()
-	}
-	eng.mu.Unlock()
 }
 
 // Events 返回只读事件通道。
 func (eng *Engine) Events() <-chan UIEvent {
 	return eng.events
+}
+
+// ReplayQueue 返回指定序号之后的运行时队列项。
+func (eng *Engine) ReplayQueue(afterSeq int64) ([]domain.RuntimeQueueItem, error) {
+	if eng.store == nil || eng.store.Runtime == nil {
+		return nil, nil
+	}
+	return eng.store.Runtime.LoadQueueAfter(afterSeq)
+}
+
+func (eng *Engine) enqueueControl(intent domain.ControlIntent) (domain.ControlIntent, error) {
+	if eng.store == nil || eng.store.Runtime == nil {
+		return intent, nil
+	}
+	queued, err := eng.store.Runtime.EnqueueControl(intent)
+	if err != nil {
+		return intent, err
+	}
+	_, _ = eng.store.Runtime.AppendQueue(domain.RuntimeQueueItem{
+		Time:     time.Now(),
+		Kind:     domain.RuntimeQueueControl,
+		Priority: queued.Priority,
+		Summary:  queued.Summary,
+		Payload:  queued,
+	})
+	return queued, nil
+}
+
+func (eng *Engine) prepareResumeControl(intent domain.ControlIntent, recovery recoveryResult) (domain.ControlIntent, error) {
+	if eng.store == nil || eng.store.Runtime == nil {
+		return intent, nil
+	}
+	var dropKinds []domain.ControlIntentKind
+	if recovery.ConsumesPendingSteer {
+		dropKinds = append(dropKinds, domain.ControlIntentSteerMessage)
+	}
+	queued, err := eng.store.Runtime.PrependResumeControl(intent, dropKinds...)
+	if err != nil {
+		return intent, err
+	}
+	_, _ = eng.store.Runtime.AppendQueue(domain.RuntimeQueueItem{
+		Time:     time.Now(),
+		Kind:     domain.RuntimeQueueControl,
+		Priority: queued.Priority,
+		Summary:  queued.Summary,
+		Payload:  queued,
+	})
+	return queued, nil
+}
+
+func (eng *Engine) submitControl(intent domain.ControlIntent) error {
+	if _, err := eng.enqueueControl(intent); err != nil {
+		return err
+	}
+	go func() {
+		if err := eng.drainControlQueue(); err != nil {
+			eng.emit(UIEvent{
+				Time:     time.Now(),
+				Category: "ERROR",
+				Summary:  "控制队列处理失败: " + err.Error(),
+				Level:    "error",
+			})
+		}
+	}()
+	return nil
+}
+
+func (eng *Engine) drainControlQueue() error {
+	eng.controlMu.Lock()
+	defer eng.controlMu.Unlock()
+
+	for {
+		if eng.store == nil || eng.store.Runtime == nil {
+			return nil
+		}
+		intent, err := eng.store.Runtime.PeekControl()
+		if err != nil {
+			return err
+		}
+		if intent == nil {
+			return nil
+		}
+		if err := eng.applyControlIntent(*intent); err != nil {
+			return err
+		}
+		if err := eng.store.Runtime.DequeueControl(intent.ID); err != nil {
+			return err
+		}
+	}
+}
+
+func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
+	switch intent.Kind {
+	case domain.ControlIntentResumePrompt:
+		if err := eng.coordinator.Prompt(intent.Prompt); err != nil {
+			return fmt.Errorf("prompt: %w", err)
+		}
+		if _, err := eng.taskRT.Start(intent.TaskKind, coordinatorRuntimeOwner, intent.TaskTitle, intent.TaskInput, taskLocation{}); err != nil {
+			return fmt.Errorf("start coordinator task: %w", err)
+		}
+		eng.agents.Start("coordinator", "", intent.TaskKind, "正在"+intent.TaskTitle)
+		eng.mu.Lock()
+		wasRunning := eng.running
+		eng.running = true
+		eng.mu.Unlock()
+		if !wasRunning {
+			go eng.waitDone()
+		}
+		return nil
+	case domain.ControlIntentSteerMessage:
+		eng.session.dispatchSteer(intent.Message)
+		return nil
+	case domain.ControlIntentFollowUp:
+		eng.coordinator.FollowUp(agentcore.UserMsg(intent.Message))
+		return nil
+	default:
+		return fmt.Errorf("unknown control intent: %s", intent.Kind)
+	}
 }
 
 // Done 返回完成信号通道。

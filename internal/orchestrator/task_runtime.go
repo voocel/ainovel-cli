@@ -62,6 +62,16 @@ func (rt *novelTaskRuntime) Snapshot() []domain.TaskRecord {
 	return out
 }
 
+func (rt *novelTaskRuntime) ActiveTask(owner string) (domain.TaskRecord, bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	task := rt.latestActiveByOwnerLocked(owner)
+	if task == nil {
+		return domain.TaskRecord{}, false
+	}
+	return *task, true
+}
+
 func (rt *novelTaskRuntime) Reconcile(progress *domain.Progress) error {
 	if progress == nil {
 		return nil

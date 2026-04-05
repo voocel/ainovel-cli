@@ -8,6 +8,7 @@ import (
 
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/logger"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
@@ -62,6 +63,14 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return err
 		}
 	} else {
+		items, err := eng.ReplayQueue(0)
+		if err != nil {
+			return err
+		}
+		roundHasContent, err := replayQueue(items, stdout, stderr)
+		if err != nil {
+			return err
+		}
 		label, err := eng.Resume()
 		if err != nil {
 			return err
@@ -70,13 +79,13 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
 		}
 		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
+		return consume(eng, stdout, stderr, roundHasContent)
 	}
 
-	return consume(eng, stdout, stderr)
+	return consume(eng, stdout, stderr, false)
 }
 
-func consume(eng *orchestrator.Engine, stdout, stderr io.Writer) error {
-	var roundHasContent bool
+func consume(eng *orchestrator.Engine, stdout, stderr io.Writer, roundHasContent bool) error {
 	for {
 		select {
 		case ev, ok := <-eng.Events():
@@ -155,4 +164,35 @@ func writeEvent(w io.Writer, ev orchestrator.UIEvent) {
 		ts = "--:--:--"
 	}
 	fmt.Fprintf(w, "[%s] [%s] %s\n", ts, ev.Category, ev.Summary)
+}
+
+func replayQueue(items []domain.RuntimeQueueItem, stdout, stderr io.Writer) (bool, error) {
+	var roundHasContent bool
+	for _, item := range items {
+		switch item.Kind {
+		case domain.RuntimeQueueUIEvent:
+			writeEvent(stderr, orchestrator.UIEvent{
+				Time:     item.Time,
+				Category: item.Category,
+				Summary:  item.Summary,
+			})
+		case domain.RuntimeQueueStreamClear:
+			if roundHasContent {
+				if _, err := io.WriteString(stdout, "\n\n"); err != nil {
+					return roundHasContent, err
+				}
+				roundHasContent = false
+			}
+		case domain.RuntimeQueueStreamDelta:
+			text := orchestrator.ReplayDeltaText(item)
+			if text == "" {
+				continue
+			}
+			if _, err := io.WriteString(stdout, text); err != nil {
+				return roundHasContent, err
+			}
+			roundHasContent = true
+		}
+	}
+	return roundHasContent, nil
 }

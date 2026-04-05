@@ -101,6 +101,26 @@ func (io *IO) WriteMarkdownUnlocked(rel string, content string) error {
 	return io.WriteFileUnlocked(rel, []byte(content))
 }
 
+func (io *IO) AppendLine(rel string, data []byte) error {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	return io.AppendLineUnlocked(rel, data)
+}
+
+func (io *IO) AppendLineUnlocked(rel string, data []byte) error {
+	p := io.path(rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = f.Write(data)
+	return err
+}
+
 func (io *IO) RemoveFile(rel string) error {
 	io.mu.Lock()
 	defer io.mu.Unlock()

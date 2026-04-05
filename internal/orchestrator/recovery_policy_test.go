@@ -48,6 +48,9 @@ func TestDetermineRecoveryPendingSteer(t *testing.T) {
 	if !strings.Contains(recovery.PromptText, "让女主提前登场") {
 		t.Fatalf("expected pending steer prompt, got %q", recovery.PromptText)
 	}
+	if !recovery.ConsumesPendingSteer {
+		t.Fatalf("expected pending steer recovery to consume stale steer intents")
+	}
 }
 
 func TestDetermineRecoveryReviewing(t *testing.T) {

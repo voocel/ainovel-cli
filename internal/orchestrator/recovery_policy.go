@@ -23,9 +23,10 @@ func planningTierGuidance(runMeta *domain.RunMeta) string {
 
 // recoveryResult 恢复链的判断结果。
 type recoveryResult struct {
-	PromptText string
-	Label      string
-	IsNew      bool
+	PromptText           string
+	Label                string
+	IsNew                bool
+	ConsumesPendingSteer bool
 }
 
 // determineRecovery 根据 Progress 和 RunMeta 判断恢复类型和 Prompt 文本。

@@ -102,6 +102,16 @@ type Runtime struct {
 	*Engine
 }
 
+// ReplayDeltaText 从运行时队列项中提取可回放的流式文本。
+func ReplayDeltaText(item domain.RuntimeQueueItem) string {
+	if payload, ok := item.Payload.(map[string]any); ok {
+		if text, ok := payload["delta"].(string); ok {
+			return text
+		}
+	}
+	return ""
+}
+
 // NewRuntime 创建面向 TUI 的运行时适配器。
 func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 	engine, err := NewEngine(cfg, bundle)
@@ -109,6 +119,11 @@ func NewRuntime(cfg bootstrap.Config, bundle assets.Bundle) (*Runtime, error) {
 		return nil, err
 	}
 	return &Runtime{Engine: engine}, nil
+}
+
+// ReplayQueue 返回指定序号之后的运行时队列项。
+func (rt *Runtime) ReplayQueue(afterSeq int64) ([]domain.RuntimeQueueItem, error) {
+	return rt.Engine.ReplayQueue(afterSeq)
 }
 
 // Snapshot 读取 store 聚合为状态快照。

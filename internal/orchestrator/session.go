@@ -19,6 +19,7 @@ import (
 type session struct {
 	coordinator *agentcore.Agent
 	store       *storepkg.Store
+	recorder    *runtimeRecorder
 	taskRT      *novelTaskRuntime
 	scheduler   *taskScheduler
 	agents      *agentBoard
@@ -26,6 +27,7 @@ type session struct {
 	emit        emitFn
 	onDelta     deltaFn
 	onClear     clearFn
+	enqueueCtrl func(domain.ControlIntent) error
 
 	lastProgressSummary string
 	lastThinkingText    string
@@ -36,10 +38,11 @@ type session struct {
 	pendingClear        bool
 }
 
-func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn) *session {
+func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, enqueueCtrl func(domain.ControlIntent) error) *session {
 	return &session{
 		coordinator: coordinator,
 		store:       store,
+		recorder:    newRuntimeRecorder(store, taskRT),
 		taskRT:      taskRT,
 		scheduler:   newTaskScheduler(taskRT),
 		agents:      agents,
@@ -47,6 +50,7 @@ func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *nov
 		emit:        emit,
 		onDelta:     onDelta,
 		onClear:     onClear,
+		enqueueCtrl: enqueueCtrl,
 		agentExt:    newFieldExtractor("agent"),
 		taskExt:     newFieldExtractor("task"),
 		subFilter:   newStreamFilter("content"),
@@ -106,24 +110,7 @@ func (s *session) persistSteer(text string) {
 
 func (s *session) submitSteer(text string) {
 	s.persistSteer(text)
-	if s.taskRT != nil {
-		if _, err := s.taskRT.Start(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{}); err != nil {
-			slog.Error("启动干预任务失败", "module", "task", "err", err)
-		}
-	}
-	if s.agents != nil {
-		s.agents.Start("coordinator", "", domain.TaskSteerApply, "正在评估用户干预")
-	}
-	runMeta, err := s.store.RunMeta.Load()
-	if err != nil {
-		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)
-	}
-	guidance := planningTierGuidance(runMeta)
-	message := fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
-	if guidance != "" {
-		message += "\n" + guidance
-	}
-	s.coordinator.Steer(agentcore.UserMsg(message))
+	s.dispatchSteer(text)
 }
 
 func (s *session) finalizeSteerIfIdle() {
@@ -140,6 +127,7 @@ func (s *session) finalizeSteerIfIdle() {
 
 func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 	for _, action := range actions {
+		s.recorder.logControlAction(action)
 		switch action.Kind {
 		case actionEmitNotice:
 			if emit != nil {
@@ -155,7 +143,19 @@ func (s *session) executePolicyActions(actions []policyAction, emit emitFn) {
 				})
 			}
 		case actionFollowUp:
-			s.coordinator.FollowUp(agentcore.UserMsg(action.Message))
+			if s.enqueueCtrl != nil {
+				if err := s.enqueueCtrl(domain.ControlIntent{
+					Kind:     domain.ControlIntentFollowUp,
+					Priority: domain.RuntimePriorityControl,
+					Summary:  truncateLog(action.Message, 80),
+					Message:  action.Message,
+				}); err != nil {
+					slog.Error("follow_up 入队失败", "module", "control", "err", err)
+					s.coordinator.FollowUp(agentcore.UserMsg(action.Message))
+				}
+			} else {
+				s.coordinator.FollowUp(agentcore.UserMsg(action.Message))
+			}
 		case actionSetFlow:
 			if err := s.store.Progress.SetFlow(action.Flow); err != nil {
 				slog.Error("设置流程状态失败", "module", "host", "flow", action.Flow, "err", err)
@@ -320,6 +320,31 @@ func (s *session) clearHandledSteer() {
 	}
 }
 
+func (s *session) buildSteerMessage(text string) string {
+	runMeta, err := s.store.RunMeta.Load()
+	if err != nil {
+		slog.Warn("读取运行元信息失败", "module", "steer", "err", err)
+	}
+	guidance := planningTierGuidance(runMeta)
+	message := fmt.Sprintf("[用户干预] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。", text)
+	if guidance != "" {
+		message += "\n" + guidance
+	}
+	return message
+}
+
+func (s *session) dispatchSteer(text string) {
+	if s.taskRT != nil {
+		if _, err := s.taskRT.Start(domain.TaskSteerApply, "coordinator", "处理用户干预", text, taskLocation{}); err != nil {
+			slog.Error("启动干预任务失败", "module", "task", "err", err)
+		}
+	}
+	if s.agents != nil {
+		s.agents.Start("coordinator", "", domain.TaskSteerApply, "正在评估用户干预")
+	}
+	s.coordinator.Steer(agentcore.UserMsg(s.buildSteerMessage(text)))
+}
+
 func (s *session) saveCheckpoint(label string) {
 	progress, _ := s.store.Progress.Load()
 	if err := s.store.RunMeta.SaveCheckpoint(label, progress); err != nil {
@@ -330,6 +355,22 @@ func (s *session) saveCheckpoint(label string) {
 func (s *session) handleToolExecStart(ev agentcore.Event) {
 	slog.Debug("工具开始", "module", "tool", "name", ev.Tool)
 	s.trackTaskStart(ev)
+	if ev.Tool == "subagent" {
+		if inv, ok := parseSubagentInvocation(ev.Args); ok {
+			owner := canonicalAgentName(inv.Agent)
+			s.recorder.logTaskEvent(owner, "task_start", ev.Tool, inv.Task, map[string]any{
+				"agent": inv.Agent,
+			})
+		}
+	}
+	if ev.Tool == "ask_user" {
+		summary, payload := summarizeAskUserRequest(ev.Args)
+		s.recorder.logTaskEvent("coordinator", "ask_user_request", ev.Tool, summary, payload)
+		if s.emit != nil {
+			s.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "info"})
+		}
+		return
+	}
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".start", Level: "info"})
 	}
@@ -338,17 +379,24 @@ func (s *session) handleToolExecStart(ev agentcore.Event) {
 func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	if progress, ok := parseToolProgress(ev); ok {
 		s.trackAgentProgress(progress)
+		s.recorder.logTaskEvent(progress.Agent, "tool_progress", progress.Tool, progressSummaryLabel(progress), progress)
 	}
 	if progress, ok := parseContextProgress(ev); ok {
 		s.trackAgentContext(progress)
+		s.recorder.logTaskEvent(progress.Agent, "context", "", fmt.Sprintf("%s %.1f%%", progress.Scope, progress.Percent), progress)
 	}
 	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressTurnCounter {
 		s.trackAgentTurn(ev.Progress.Agent, ev.Progress.Turn)
+		s.recorder.logTaskEvent(ev.Progress.Agent, "turn", "", fmt.Sprintf("turn %d", ev.Progress.Turn), map[string]any{"turn": ev.Progress.Turn})
 	}
 	if delta, ok := parseStreamDelta(ev); ok {
 		if s.onDelta != nil {
 			if text := s.subFilter.Feed(delta); text != "" {
-				s.emitDisplayDelta(text)
+				agent := ""
+				if ev.Progress != nil {
+					agent = ev.Progress.Agent
+				}
+				s.emitDisplayDelta(agent, text)
 			}
 		}
 		return
@@ -356,7 +404,11 @@ func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	if thinking, ok := parseThinkingDelta(ev); ok {
 		if s.onDelta != nil {
 			if text := s.subFilter.Feed(incrementalThinkingDelta(s.lastThinkingText, thinking)); text != "" {
-				s.emitDisplayDelta(text)
+				agent := ""
+				if ev.Progress != nil {
+					agent = ev.Progress.Agent
+				}
+				s.emitDisplayDelta(agent, text)
 			}
 		}
 		s.lastThinkingText = thinking
@@ -365,7 +417,7 @@ func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 	if ev.Progress != nil && ev.Progress.Kind == agentcore.ProgressToolStart {
 		if preview := toolStartPreview(ev.Progress.Tool, ev.Progress.Args); preview != "" && s.onDelta != nil {
 			if text := s.subFilter.Feed(preview); text != "" {
-				s.emitDisplayDelta(text)
+				s.emitDisplayDelta(ev.Progress.Agent, text)
 			}
 		}
 	}
@@ -373,6 +425,9 @@ func (s *session) handleToolExecUpdate(ev agentcore.Event) {
 		slog.Warn("SubAgent 重试", "module", "tool", "summary", retry)
 		if s.emit != nil {
 			s.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: retry, Level: "warn"})
+		}
+		if ev.Progress != nil {
+			s.recorder.logTaskEvent(ev.Progress.Agent, "retry", "", retry, nil)
 		}
 		return
 	}
@@ -405,23 +460,26 @@ func (s *session) handleMessageUpdate(ev agentcore.Event) {
 		return
 	}
 	if name := s.agentExt.Feed(ev.Delta); name != "" {
-		s.emitDisplayDelta("\n▸ " + agentLabel(name) + "\n")
+		s.emitDisplayDelta("coordinator", "\n▸ "+agentLabel(name)+"\n")
 	}
 	if text := s.taskExt.Feed(ev.Delta); text != "" {
-		s.emitDisplayDelta(text)
+		s.emitDisplayDelta("coordinator", text)
 	}
 }
 
-func (s *session) emitDisplayDelta(text string) {
+func (s *session) emitDisplayDelta(agent, text string) {
 	if text == "" || s.onDelta == nil {
 		return
 	}
+	owner := canonicalAgentName(agent)
 	if s.pendingClear {
 		if s.onClear != nil {
 			s.onClear()
 		}
+		s.recorder.recordStreamClear(owner)
 		s.pendingClear = false
 	}
+	s.recorder.recordStreamDelta(owner, text)
 	s.onDelta(text)
 }
 
@@ -440,6 +498,10 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 		s.handleNovelContextEnd(ev)
 		return
 	}
+	if ev.Tool == "ask_user" {
+		s.handleAskUserEnd(ev)
+		return
+	}
 	if ev.Tool == "save_foundation" {
 		if s.taskRT != nil {
 			_ = s.taskRT.AttachOutputRef("architect", foundationOutputRef(ev.Result))
@@ -448,6 +510,7 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 		if s.emit != nil {
 			s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: foundationResultSummary(ev.Result), Level: "info"})
 		}
+		s.recorder.logTaskEvent("architect", "tool_done", ev.Tool, foundationResultSummary(ev.Result), nil)
 		return
 	}
 
@@ -455,6 +518,7 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".done", Level: "info"})
 	}
+	s.recorder.logTaskEvent("", "tool_done", ev.Tool, ev.Tool+".done", nil)
 }
 
 func (s *session) handleToolExecError(ev agentcore.Event) {
@@ -479,6 +543,7 @@ func (s *session) handleToolExecError(ev agentcore.Event) {
 		}
 		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: summary, Level: "error"})
 	}
+	s.recorder.logTaskEvent("", "tool_error", ev.Tool, truncateLog(detail, 120), nil)
 }
 
 func (s *session) handleSubAgentEventEnd(ev agentcore.Event) {
@@ -503,7 +568,24 @@ func (s *session) handleNovelContextEnd(ev agentcore.Event) {
 	}
 }
 
+func (s *session) handleAskUserEnd(ev agentcore.Event) {
+	answer := extractAskUserAnswer(ev.Result)
+	summary := "用户已完成补充信息"
+	if answer != "" {
+		summary = truncateLog(answer, 80)
+	}
+	if s.emit != nil {
+		s.emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "info"})
+	}
+	payload := map[string]any{}
+	if answer != "" {
+		payload["answer"] = answer
+	}
+	s.recorder.logTaskEvent("coordinator", "ask_user_answer", ev.Tool, truncateLog(summary, 120), payload)
+}
+
 func (s *session) handleMessageEnd(ev agentcore.Event) {
+	s.recorder.flushPendingStream()
 	if ev.Message != nil && ev.Message.GetRole() == agentcore.RoleAssistant {
 		text := ev.Message.TextContent()
 		if isUserCanceledText(text) {
@@ -516,10 +598,12 @@ func (s *session) handleMessageEnd(ev agentcore.Event) {
 		if s.emit != nil {
 			s.emit(UIEvent{Time: time.Now(), Category: "AGENT", Summary: truncateLog(text, 80), Level: "info"})
 		}
+		s.recorder.logTaskEvent("coordinator", "assistant_message", "", truncateLog(text, 120), nil)
 	}
 }
 
 func (s *session) handleProviderError(ev agentcore.Event) {
+	s.recorder.flushPendingStream()
 	if ev.Err != nil && errors.Is(ev.Err, context.Canceled) {
 		slog.Info("agent 已取消", "module", "agent", "provider", s.provider)
 		if s.taskRT != nil {
@@ -540,6 +624,7 @@ func (s *session) handleProviderError(ev agentcore.Event) {
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: fmt.Sprintf("[%s] %v", s.provider, ev.Err), Level: "error"})
 	}
+	s.recorder.logTaskEvent("coordinator", "provider_error", "", fmt.Sprintf("[%s] %v", s.provider, ev.Err), nil)
 }
 
 func (s *session) handleRetry(ev agentcore.Event) {
@@ -553,6 +638,7 @@ func (s *session) handleRetry(ev agentcore.Event) {
 			Summary: fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err),
 			Level:   "warn"})
 	}
+	s.recorder.logTaskEvent("coordinator", "provider_retry", "", fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err), nil)
 }
 
 func (s *session) trackTaskStart(ev agentcore.Event) {
@@ -587,12 +673,14 @@ func (s *session) trackTaskEnd(ev agentcore.Event) {
 	}
 	owner := canonicalAgentName(inv.Agent)
 	if ev.IsError {
+		s.recorder.logTaskEvent(owner, "task_failed", "", truncateLog(extractToolErrorText(ev.Result), 120), nil)
 		_ = s.taskRT.FailActive(owner, extractToolErrorText(ev.Result))
 		if s.agents != nil {
 			s.agents.Fail(owner, "任务失败")
 		}
 		return
 	}
+	s.recorder.logTaskEvent(owner, "task_done", "", "任务完成", nil)
 	_ = s.taskRT.CompleteActive(owner)
 	if s.agents != nil {
 		s.agents.Idle(owner, "任务完成")
@@ -716,4 +804,60 @@ func incrementalThinkingDelta(previous, current string) string {
 		return current[len(previous):]
 	}
 	return current
+}
+
+func summarizeAskUserRequest(args json.RawMessage) (string, map[string]any) {
+	var payload struct {
+		Questions []struct {
+			Question    string `json:"question"`
+			Header      string `json:"header"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label string `json:"label"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	summary := "等待用户补充关键信息"
+	if err := json.Unmarshal(args, &payload); err != nil || len(payload.Questions) == 0 {
+		return summary, map[string]any{}
+	}
+
+	questions := make([]map[string]any, 0, len(payload.Questions))
+	headers := make([]string, 0, len(payload.Questions))
+	for _, q := range payload.Questions {
+		header := strings.TrimSpace(q.Header)
+		if header == "" {
+			header = strings.TrimSpace(q.Question)
+		}
+		if header != "" {
+			headers = append(headers, header)
+		}
+		options := make([]string, 0, len(q.Options))
+		for _, opt := range q.Options {
+			label := strings.TrimSpace(opt.Label)
+			if label != "" {
+				options = append(options, label)
+			}
+		}
+		questions = append(questions, map[string]any{
+			"header":       q.Header,
+			"question":     q.Question,
+			"multi_select": q.MultiSelect,
+			"options":      options,
+		})
+	}
+
+	summary = fmt.Sprintf("等待用户补充关键信息（%d 个问题）", len(payload.Questions))
+	if len(headers) > 0 {
+		summary += "：" + truncateLog(strings.Join(headers, "、"), 24)
+	}
+	return summary, map[string]any{"questions": questions}
+}
+
+func extractAskUserAnswer(result json.RawMessage) string {
+	var text string
+	if err := json.Unmarshal(result, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(string(result))
 }

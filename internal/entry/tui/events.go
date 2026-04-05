@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/internal/diag"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -13,10 +14,15 @@ import (
 
 // 消息类型
 type (
-	eventMsg        orchestrator.UIEvent
-	snapshotMsg     orchestrator.UISnapshot
-	doneMsg         struct{ complete bool } // complete=true 全书完成，false 出错停止
-	abortResultMsg  struct{ stopped bool }
+	eventMsg       orchestrator.UIEvent
+	snapshotMsg    orchestrator.UISnapshot
+	doneMsg        struct{ complete bool } // complete=true 全书完成，false 出错停止
+	abortResultMsg struct{ stopped bool }
+	bootstrapMsg   struct {
+		replay  []domain.RuntimeQueueItem
+		resumed bool
+		err     error
+	}
 	reportLoadedMsg struct {
 		reqID      int
 		report     diag.Report
@@ -77,14 +83,18 @@ func fetchSnapshot(rt *orchestrator.Runtime) tea.Cmd {
 
 func bootstrapRuntime(rt *orchestrator.Runtime) tea.Cmd {
 	return func() tea.Msg {
+		replay, err := rt.ReplayQueue(0)
+		if err != nil {
+			return bootstrapMsg{err: err}
+		}
 		label, err := rt.Resume()
 		if err != nil {
-			return startResultMsg{err: err}
+			return bootstrapMsg{replay: replay, err: err}
 		}
-		if label != "" {
-			return startResultMsg{err: nil}
+		if label == "" && len(replay) == 0 {
+			return nil
 		}
-		return nil
+		return bootstrapMsg{replay: replay, resumed: label != ""}
 	}
 }
 
