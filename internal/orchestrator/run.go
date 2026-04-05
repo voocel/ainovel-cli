@@ -9,6 +9,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 // emitFn 是可选的 UIEvent 发射回调，用于向 UI 转发结构化事件。
@@ -475,14 +476,17 @@ func truncateLog(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-// contextRewriteCallback 创建上下文重写的可观测回调，用于 slog 日志和 TUI 事件。
-func contextRewriteCallback(agent string, emit emitFn) func(corecontext.RewriteEvent) {
+// contextRewriteCallback 创建上下文重写的可观测回调，用于 slog、运行时边界记录和 TUI 事件。
+func contextRewriteCallback(agent string, emit emitFn, appendBoundary func(domain.RuntimeQueueItem)) func(corecontext.RewriteEvent) {
 	return func(ev corecontext.RewriteEvent) {
+		boundaryKind := runtimeContextBoundaryKind(ev)
 		attrs := []any{
 			"module", "context",
 			"agent", agent,
+			"kind", boundaryKind,
 			"reason", ev.Reason,
 			"strategy", ev.Strategy,
+			"committed", ev.Committed,
 			"tokens_before", ev.TokensBefore,
 			"tokens_after", ev.TokensAfter,
 		}
@@ -500,26 +504,79 @@ func contextRewriteCallback(agent string, emit emitFn) func(corecontext.RewriteE
 		}
 		slog.Warn("上下文重写", attrs...)
 
+		if appendBoundary != nil {
+			boundary := domain.RuntimeContextBoundary{
+				Agent:        agent,
+				Kind:         boundaryKind,
+				Reason:       ev.Reason,
+				Strategy:     ev.Strategy,
+				Committed:    ev.Committed,
+				TokensBefore: ev.TokensBefore,
+				TokensAfter:  ev.TokensAfter,
+			}
+			if info := ev.Info; info != nil {
+				boundary.MessagesBefore = info.MessagesBefore
+				boundary.MessagesAfter = info.MessagesAfter
+				boundary.CompactedCount = info.CompactedCount
+				boundary.KeptCount = info.KeptCount
+				boundary.SplitTurn = info.IsSplitTurn
+				boundary.Incremental = info.IsIncremental
+				boundary.SummaryRunes = info.SummaryLen
+			}
+			appendBoundary(domain.RuntimeQueueItem{
+				Time:     time.Now(),
+				Kind:     domain.RuntimeQueueContextEdge,
+				Priority: domain.RuntimePriorityControl,
+				Agent:    agent,
+				Category: boundaryKind,
+				Summary:  formatContextRewriteSummary(agent, ev, boundaryKind),
+				Payload:  boundary,
+			})
+		}
+
 		if emit == nil {
 			return
 		}
-		ratio := 0
-		if ev.TokensBefore > 0 {
-			ratio = ev.TokensAfter * 100 / ev.TokensBefore
-		}
-		summary := fmt.Sprintf("%s 上下文%s: %s %d→%d tok (%d%%)",
-			agent, ev.Reason, ev.Strategy, ev.TokensBefore, ev.TokensAfter, ratio)
-		if info := ev.Info; info != nil {
-			summary += fmt.Sprintf(" %d→%d msgs 摘要%d字 耗时%s",
-				info.MessagesBefore, info.MessagesAfter,
-				info.SummaryLen, info.Duration.Round(time.Millisecond))
-			if info.IsSplitTurn {
-				summary += " [split]"
-			}
-			if info.IsIncremental {
-				summary += " [增量]"
-			}
-		}
+		summary := formatContextRewriteSummary(agent, ev, boundaryKind)
 		emit(UIEvent{Time: time.Now(), Category: "COMPACT", Summary: summary, Level: "warn"})
 	}
+}
+
+func runtimeContextBoundaryKind(ev corecontext.RewriteEvent) string {
+	switch {
+	case ev.Reason == "overflow":
+		return "recovered"
+	case ev.Committed:
+		return "compacted"
+	default:
+		return "projected"
+	}
+}
+
+func formatContextRewriteSummary(agent string, ev corecontext.RewriteEvent, boundaryKind string) string {
+	ratio := 0
+	if ev.TokensBefore > 0 {
+		ratio = ev.TokensAfter * 100 / ev.TokensBefore
+	}
+	label := "临时投影"
+	switch boundaryKind {
+	case "compacted":
+		label = "已提交压缩"
+	case "recovered":
+		label = "恢复压缩"
+	}
+	summary := fmt.Sprintf("%s %s: %s %d→%d tok (%d%%)",
+		agent, label, ev.Strategy, ev.TokensBefore, ev.TokensAfter, ratio)
+	if info := ev.Info; info != nil {
+		summary += fmt.Sprintf(" %d→%d msgs 摘要%d字 耗时%s",
+			info.MessagesBefore, info.MessagesAfter,
+			info.SummaryLen, info.Duration.Round(time.Millisecond))
+		if info.IsSplitTurn {
+			summary += " [split]"
+		}
+		if info.IsIncremental {
+			summary += " [增量]"
+		}
+	}
+	return summary
 }

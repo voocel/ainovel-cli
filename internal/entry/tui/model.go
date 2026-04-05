@@ -171,7 +171,7 @@ func (m *Model) refreshEventViewport() {
 	content := renderEventContent(m.events, centerW)
 	if activity := renderEventActivity(m.snapshot, m.spinnerIdx, centerW); activity != "" {
 		if strings.TrimSpace(content) != "" {
-			content += "\n\n" + activity
+			content += "\n" + activity
 		} else {
 			content = activity
 		}
@@ -376,7 +376,7 @@ func (m Model) View() string {
 		}
 
 		eventFlow := renderEventFlowViewport(m.viewport, centerW, eventH, m.paneHighlighted(focusEvents))
-		streamPanel := renderStreamPanel(m.streamVP, centerW, streamH, m.paneHighlighted(focusStream))
+		streamPanel := renderStreamPanel(m.streamVP, centerW, streamH, m.paneHighlighted(focusStream), m.snapshot.IsRunning, m.spinnerIdx)
 		center := lipgloss.JoinVertical(lipgloss.Left, eventFlow, streamPanel)
 
 		left := renderStatePanel(m.snapshot, leftW, bodyH)

@@ -10,15 +10,16 @@ import (
 
 // AgentSnapshot 是 TUI 展示使用的 Agent 状态投影。
 type AgentSnapshot struct {
-	Name      string
-	State     string
-	TaskID    string
-	TaskKind  string
-	Summary   string
-	Tool      string
-	Turn      int
-	Context   AgentContextSnapshot
-	UpdatedAt time.Time
+	Name             string
+	State            string
+	TaskID           string
+	TaskKind         string
+	Summary          string
+	Tool             string
+	Turn             int
+	Context          AgentContextSnapshot
+	RecentProjection AgentContextSnapshot
+	UpdatedAt        time.Time
 }
 
 type AgentContextSnapshot struct {
@@ -110,6 +111,7 @@ func (b *agentBoard) Idle(name, summary string) {
 	entry.Tool = ""
 	entry.Turn = 0
 	entry.Context = AgentContextSnapshot{}
+	entry.RecentProjection = AgentContextSnapshot{}
 	if summary != "" {
 		entry.Summary = summary
 	}
@@ -123,6 +125,7 @@ func (b *agentBoard) Fail(name, summary string) {
 	entry.State = "failed"
 	entry.Summary = summary
 	entry.Context = AgentContextSnapshot{}
+	entry.RecentProjection = AgentContextSnapshot{}
 	entry.UpdatedAt = time.Now()
 }
 
@@ -136,6 +139,7 @@ func (b *agentBoard) ResetAll(summary string) {
 		entry.Tool = ""
 		entry.Turn = 0
 		entry.Context = AgentContextSnapshot{}
+		entry.RecentProjection = AgentContextSnapshot{}
 		entry.Summary = summary
 		entry.UpdatedAt = time.Now()
 	}
@@ -146,6 +150,9 @@ func (b *agentBoard) UpdateContext(name string, ctx AgentContextSnapshot) {
 	defer b.mu.Unlock()
 	entry := b.ensure(name)
 	entry.Context = ctx
+	if ctx.Scope == "projected" && ctx.ContextWindow > 0 && ctx.Tokens > 0 {
+		entry.RecentProjection = ctx
+	}
 	entry.UpdatedAt = time.Now()
 }
 

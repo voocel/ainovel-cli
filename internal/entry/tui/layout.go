@@ -26,6 +26,16 @@ func renderHighlightField(label, value string) string {
 	return fieldLabelStyle.Render(label) + highlightValueStyle.Render(value) + "\n"
 }
 
+func renderContextUsageField(label string, percent float64, tokens, window int) string {
+	if window <= 0 || tokens <= 0 {
+		return ""
+	}
+	usage := highlightValueStyle.Render(fmt.Sprintf("%.0f%%", percent)) +
+		contextUsageMetaStyle.Render(" · ") +
+		contextUsageMetaStyle.Render(fmt.Sprintf("%s/%s", formatNumber(tokens), formatNumber(window)))
+	return fieldLabelStyle.Render(label) + usage + "\n"
+}
+
 func formatNumber(n int) string {
 	if n == 0 {
 		return "0"

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
@@ -171,6 +172,56 @@ func TestParseContextProgressUsesStructuredPayload(t *testing.T) {
 	}
 	if progress.Scope != "projected" || progress.Strategy != "light_trim" {
 		t.Fatalf("unexpected context labels: %+v", progress)
+	}
+}
+
+func TestContextRewriteCallbackAppendsCommittedBoundary(t *testing.T) {
+	var events []UIEvent
+	var items []domain.RuntimeQueueItem
+	callback := contextRewriteCallback("coordinator", func(ev UIEvent) {
+		events = append(events, ev)
+	}, func(item domain.RuntimeQueueItem) {
+		items = append(items, item)
+	})
+
+	callback(corecontext.RewriteEvent{
+		Reason:       "threshold",
+		Strategy:     "light_trim",
+		Changed:      true,
+		Committed:    true,
+		TokensBefore: 98329,
+		TokensAfter:  13156,
+		Info: &corecontext.SummaryInfo{
+			MessagesBefore: 42,
+			MessagesAfter:  9,
+			CompactedCount: 33,
+			KeptCount:      9,
+			SummaryLen:     128,
+			Duration:       250 * time.Millisecond,
+		},
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 UI event, got %d", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "已提交压缩") {
+		t.Fatalf("expected committed compact summary, got %q", events[0].Summary)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 boundary item, got %d", len(items))
+	}
+	if items[0].Kind != domain.RuntimeQueueContextEdge {
+		t.Fatalf("expected context boundary kind, got %s", items[0].Kind)
+	}
+	if items[0].Category != "compacted" {
+		t.Fatalf("expected compacted category, got %q", items[0].Category)
+	}
+	payload, ok := items[0].Payload.(domain.RuntimeContextBoundary)
+	if !ok {
+		t.Fatalf("expected typed boundary payload, got %T", items[0].Payload)
+	}
+	if !payload.Committed || payload.Kind != "compacted" || payload.TokensAfter != 13156 {
+		t.Fatalf("unexpected boundary payload: %+v", payload)
 	}
 }
 

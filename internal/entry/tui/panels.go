@@ -365,39 +365,42 @@ func snapshotFlowLabel(flow string) string {
 	}
 }
 
-func contextUsageLabel(snap orchestrator.UISnapshot) string {
-	if snap.ContextWindow <= 0 || snap.ContextTokens <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%.0f%% %s/%s",
-		snap.ContextPercent,
-		formatNumber(snap.ContextTokens),
-		formatNumber(snap.ContextWindow),
-	)
-}
-
 func renderContextSidebar(snap orchestrator.UISnapshot, width int) string {
-	if snap.ContextWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
+	if snap.ContextWindow <= 0 && snap.ProjectionWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
 		return ""
 	}
 	var b strings.Builder
-	if usage := contextUsageLabel(snap); usage != "" {
-		b.WriteString(renderHighlightField("占用", usage))
+	b.WriteString(renderContextUsageField("主上下文", snap.ContextPercent, snap.ContextTokens, snap.ContextWindow))
+	showProjection := snap.ProjectionTokens > 0 &&
+		snap.ProjectionWindow > 0 &&
+		(snap.ProjectionTokens != snap.ContextTokens || snap.ProjectionWindow != snap.ContextWindow)
+	if showProjection {
+		b.WriteString(renderContextUsageField("最近投影", snap.ProjectionPercent, snap.ProjectionTokens, snap.ProjectionWindow))
+	}
+	if showProjection {
+		if strategy := contextStrategyLabel(snap.ProjectionStrategy); strategy != "" {
+			b.WriteString(renderField("投影策略", truncate(strategy, max(8, width-12))))
+		}
+	} else if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
+		b.WriteString(renderField("最近策略", truncate(strategy, max(8, width-12))))
 	}
 	if scope := contextScopeLabel(snap.ContextScope); scope != "" {
-		b.WriteString(renderField("视图", scope))
-	}
-	if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
-		b.WriteString(renderField("策略", truncate(strategy, max(8, width-10))))
+		b.WriteString(renderField("当前视图", scope))
 	}
 	if snap.ContextSummaryCount > 0 {
 		b.WriteString(renderField("摘要", fmt.Sprintf("%d 条", snap.ContextSummaryCount)))
 	}
 	if snap.ContextActiveMessages > 0 {
-		b.WriteString(renderField("消息", fmt.Sprintf("%d 条", snap.ContextActiveMessages)))
+		b.WriteString(renderField("消息数", fmt.Sprintf("%d", snap.ContextActiveMessages)))
 	}
-	if snap.ContextCompactedCount > 0 || snap.ContextKeptCount > 0 {
-		b.WriteString(renderField("重写", fmt.Sprintf("%d → %d", snap.ContextCompactedCount, snap.ContextKeptCount)))
+	compactedCount := snap.ContextCompactedCount
+	keptCount := snap.ContextKeptCount
+	if showProjection && (snap.ProjectionCompacted > 0 || snap.ProjectionKept > 0) {
+		compactedCount = snap.ProjectionCompacted
+		keptCount = snap.ProjectionKept
+	}
+	if compactedCount > 0 || keptCount > 0 {
+		b.WriteString(renderField("最近重写", fmt.Sprintf("%d → %d", compactedCount, keptCount)))
 	}
 	return b.String()
 }
@@ -738,9 +741,13 @@ func renderEventFlowViewport(vp viewport.Model, width, height int, focused bool)
 }
 
 // renderStreamPanel 渲染流式输出面板（中间列下半部分）。
-func renderStreamPanel(vp viewport.Model, width, height int, focused bool) string {
+func renderStreamPanel(vp viewport.Model, width, height int, focused, running bool, frame int) string {
 	// 分隔标题栏（始终醒目）
 	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(focused).Render(":: 实时输出")
+	if running {
+		status := renderStreamActivity(frame)
+		title += " " + status
+	}
 	lineW := width - lipgloss.Width(title) - 4
 	if lineW < 0 {
 		lineW = 0
@@ -760,6 +767,24 @@ func renderStreamPanel(vp viewport.Model, width, height int, focused bool) strin
 		Foreground(colorText)
 
 	return header + "\n" + vpStyle.Render(vp.View())
+}
+
+var streamActivityFrames = [][2]string{
+	{"✦", "✧"},
+	{"✦", "✧"},
+	{"✧", "✦"},
+	{"✧", "✦"},
+	{"✦", "✧"},
+	{"✦", "✧"},
+	{"✧", "✦"},
+	{"✧", "✦"},
+}
+
+func renderStreamActivity(frame int) string {
+	pair := streamActivityFrames[frame%len(streamActivityFrames)]
+	major := lipgloss.NewStyle().Foreground(lipgloss.Color("#d4a21a")).Bold(true).Render(pair[0])
+	minor := lipgloss.NewStyle().Foreground(colorAccent2).Render(pair[1])
+	return major + " " + minor
 }
 
 // renderStreamContent 将流式输出按轮次渲染为语义分块。

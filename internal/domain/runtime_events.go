@@ -18,6 +18,7 @@ const (
 	RuntimeQueueUIEvent     RuntimeQueueKind = "ui_event"
 	RuntimeQueueStreamDelta RuntimeQueueKind = "stream_delta"
 	RuntimeQueueStreamClear RuntimeQueueKind = "stream_clear"
+	RuntimeQueueContextEdge RuntimeQueueKind = "context_boundary"
 	RuntimeQueueControl     RuntimeQueueKind = "control"
 )
 
@@ -43,6 +44,25 @@ type RuntimeTaskLogEntry struct {
 	Tool    string    `json:"tool,omitempty"`
 	Summary string    `json:"summary,omitempty"`
 	Payload any       `json:"payload,omitempty"`
+}
+
+// RuntimeContextBoundary 是上下文正式边界/投影视图的显式记录。
+// 它补充 UIEvent，便于恢复、审计和后续识别“这次是否已提交到 baseline”。
+type RuntimeContextBoundary struct {
+	Agent          string `json:"agent,omitempty"`
+	Kind           string `json:"kind"` // projected / compacted / recovered
+	Reason         string `json:"reason,omitempty"`
+	Strategy       string `json:"strategy,omitempty"`
+	Committed      bool   `json:"committed,omitempty"`
+	TokensBefore   int    `json:"tokens_before,omitempty"`
+	TokensAfter    int    `json:"tokens_after,omitempty"`
+	MessagesBefore int    `json:"messages_before,omitempty"`
+	MessagesAfter  int    `json:"messages_after,omitempty"`
+	CompactedCount int    `json:"compacted_count,omitempty"`
+	KeptCount      int    `json:"kept_count,omitempty"`
+	SplitTurn      bool   `json:"split_turn,omitempty"`
+	Incremental    bool   `json:"incremental,omitempty"`
+	SummaryRunes   int    `json:"summary_runes,omitempty"`
 }
 
 // ControlIntentKind 表示控制队列中的指令类型。

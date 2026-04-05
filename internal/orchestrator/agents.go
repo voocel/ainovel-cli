@@ -5,6 +5,7 @@ import (
 	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -94,7 +95,12 @@ func BuildCoordinator(
 		Tools:        writerTools,
 		MaxTurns:     20,
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
-			return newContextManager(model, cfg.ContextWindow, 16384, 20000, "writer", emit)
+			return newContextManager(model, cfg.ContextWindow, 16384, 20000, "writer", emit, false, func(item domain.RuntimeQueueItem) {
+				if store == nil || store.Runtime == nil {
+					return
+				}
+				_, _ = store.Runtime.AppendQueue(item)
+			})
 		},
 	}
 
@@ -114,15 +120,21 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(200),
-		agentcore.WithContextManager(newContextManager(coordinatorModel, cfg.ContextWindow, 32000, 30000, "coordinator", emit)),
+		agentcore.WithContextManager(newContextManager(coordinatorModel, cfg.ContextWindow, 32000, 30000, "coordinator", emit, true, func(item domain.RuntimeQueueItem) {
+			if store == nil || store.Runtime == nil {
+				return
+			}
+			_, _ = store.Runtime.AppendQueue(item)
+		})),
 	)
 	return agent, askUser
 }
 
-func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn) agentcore.ContextManager {
+func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn, commitOnProject bool, appendBoundary func(domain.RuntimeQueueItem)) agentcore.ContextManager {
 	engine := corecontext.NewEngine(corecontext.EngineConfig{
-		ContextWindow: contextWindow,
-		ReserveTokens: reserveTokens,
+		ContextWindow:   contextWindow,
+		ReserveTokens:   reserveTokens,
+		CommitOnProject: commitOnProject,
 		Strategies: []corecontext.Strategy{
 			corecontext.NewToolResultMicrocompact(corecontext.ToolResultMicrocompactConfig{}),
 			corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
@@ -132,7 +144,7 @@ func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, 
 			}),
 		},
 	})
-	callback := contextRewriteCallback(agent, emit)
+	callback := contextRewriteCallback(agent, emit, appendBoundary)
 	engine.SetProjectHook(callback)
 	engine.SetRecoverHook(callback)
 	return engine

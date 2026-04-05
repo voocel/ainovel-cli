@@ -51,6 +51,12 @@ type UISnapshot struct {
 	ContextPercent        float64
 	ContextScope          string
 	ContextStrategy       string
+	ProjectionTokens      int
+	ProjectionWindow      int
+	ProjectionPercent     float64
+	ProjectionStrategy    string
+	ProjectionCompacted   int
+	ProjectionKept        int
 	ContextActiveMessages int
 	ContextSummaryCount   int
 	ContextCompactedCount int
@@ -418,7 +424,7 @@ func (rt *Runtime) fillContextStatus(snap *UISnapshot) {
 	if rt.coordinator == nil || snap == nil {
 		return
 	}
-	if usage := rt.coordinator.ContextUsage(); usage != nil {
+	if usage := rt.coordinator.BaselineContextUsage(); usage != nil {
 		snap.ContextTokens = usage.Tokens
 		snap.ContextWindow = usage.ContextWindow
 		snap.ContextPercent = usage.Percent
@@ -430,11 +436,33 @@ func (rt *Runtime) fillContextStatus(snap *UISnapshot) {
 		snap.ContextSummaryCount = ctx.SummaryMessages
 		snap.ContextCompactedCount = ctx.LastCompactedCount
 		snap.ContextKeptCount = ctx.LastKeptCount
-		if snap.ContextTokens == 0 && ctx.Usage != nil {
-			snap.ContextTokens = ctx.Usage.Tokens
-			snap.ContextWindow = ctx.Usage.ContextWindow
-			snap.ContextPercent = ctx.Usage.Percent
+		if snap.ContextTokens == 0 {
+			if ctx.BaselineUsage != nil {
+				snap.ContextTokens = ctx.BaselineUsage.Tokens
+				snap.ContextWindow = ctx.BaselineUsage.ContextWindow
+				snap.ContextPercent = ctx.BaselineUsage.Percent
+			} else if ctx.Usage != nil {
+				snap.ContextTokens = ctx.Usage.Tokens
+				snap.ContextWindow = ctx.Usage.ContextWindow
+				snap.ContextPercent = ctx.Usage.Percent
+			}
 		}
+	}
+	for _, agent := range snap.Agents {
+		if canonicalAgentName(agent.Name) != "coordinator" {
+			continue
+		}
+		projection := agent.RecentProjection
+		if projection.ContextWindow <= 0 || projection.Tokens <= 0 {
+			break
+		}
+		snap.ProjectionTokens = projection.Tokens
+		snap.ProjectionWindow = projection.ContextWindow
+		snap.ProjectionPercent = projection.Percent
+		snap.ProjectionStrategy = projection.Strategy
+		snap.ProjectionCompacted = projection.CompactedCount
+		snap.ProjectionKept = projection.KeptCount
+		break
 	}
 }
 
