@@ -253,6 +253,12 @@ func (m *Model) inputHints() string {
 		}
 		return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 开始共创对话 · Esc 清空输入")
 	}
+	switch m.snapshot.RuntimeState {
+	case "pausing":
+		return dimStyle.Render("正在暂停创作 · 请等待当前轮次结束")
+	case "paused":
+		return dimStyle.Render("输入 / 搜索命令 · Enter 继续创作 · Esc 清空输入")
+	}
 	return dimStyle.Render("输入 / 搜索命令 · 点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · ^L 清屏 · Esc 暂停 · Enter 发送")
 }
 
@@ -296,6 +302,26 @@ func (m *Model) outputDir() string {
 		return ""
 	}
 	return m.runtime.Dir()
+}
+
+func defaultSteerPlaceholder() string {
+	return "输入剧情干预，例如：把感情线提前到第4章"
+}
+
+func (m *Model) syncRuntimePlaceholder() {
+	if m.mode != modeRunning || m.cocreate != nil {
+		return
+	}
+	switch m.snapshot.RuntimeState {
+	case "completed":
+		m.textarea.Placeholder = "创作已完成"
+	case "pausing":
+		m.textarea.Placeholder = "正在暂停创作..."
+	case "paused":
+		m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
+	default:
+		m.textarea.Placeholder = defaultSteerPlaceholder()
+	}
 }
 
 func (m *Model) renderBottomBar() string {

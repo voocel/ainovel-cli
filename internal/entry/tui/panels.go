@@ -97,6 +97,7 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 	}
 
 	var overview strings.Builder
+	overview.WriteString(renderField("运行态", snapshotRuntimeStateLabel(snap.RuntimeState)))
 	overview.WriteString(renderField("阶段", snapshotPhaseLabel(snap.Phase)))
 	overview.WriteString(renderField("流程", snapshotFlowLabel(snap.Flow)))
 	if snap.Layered {
@@ -358,6 +359,21 @@ func snapshotPhaseLabel(phase string) string {
 			return "-"
 		}
 		return phase
+	}
+}
+
+func snapshotRuntimeStateLabel(state string) string {
+	switch state {
+	case "running":
+		return "运行中"
+	case "pausing":
+		return "暂停中"
+	case "paused":
+		return "已暂停"
+	case "completed":
+		return "已完成"
+	default:
+		return "空闲"
 	}
 }
 

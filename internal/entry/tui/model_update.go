@@ -209,6 +209,9 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 		m.cocreate = newCoCreateState(text)
 		return m, m.sendCoCreate()
 	case modeRunning:
+		if !m.snapshot.IsRunning {
+			return m, continueRuntime(m.runtime, text)
+		}
 		return m, steerRuntime(m.runtime, text)
 	default:
 		return m, nil
@@ -300,7 +303,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		if msg.resumed && m.mode == modeNew {
 			m.mode = modeRunning
 			m.textarea.SetWidth(m.currentInputWidth())
-			m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
+			m.textarea.Placeholder = defaultSteerPlaceholder()
 		}
 		return m, fetchSnapshot(m.runtime), true
 	case askUserMsg:
@@ -313,6 +316,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, listenAskUser(m.askBridge), true
 	case snapshotMsg:
 		m.snapshot = orchestrator.UISnapshot(msg)
+		m.syncRuntimePlaceholder()
 		m.refreshEventViewport()
 		m.refreshDetailViewport()
 		return m, tickSnapshot(m.runtime), true
@@ -325,8 +329,9 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			m.textarea.Placeholder = "创作已完成"
 			m.textarea.Blur()
 		} else if m.abortPending {
-			m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
 			m.abortPending = false
+			m.snapshot.RuntimeState = "paused"
+			m.syncRuntimePlaceholder()
 		} else {
 			m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
 		}
@@ -358,6 +363,18 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case steerResultMsg:
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime)), true
+	case continueResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.events = append(m.events, orchestrator.UIEvent{
+				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
+			})
+			m.refreshEventViewport()
+			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus()), true
+		}
+		m.err = nil
+		m.textarea.Placeholder = defaultSteerPlaceholder()
+		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime), m.textarea.Focus()), true
 	case spinnerTickMsg:
 		m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
 		if m.snapshot.IsRunning {
@@ -419,7 +436,7 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 		m.cocreate = nil
 		m.mode = modeRunning
 		m.textarea.SetWidth(m.currentInputWidth())
-		m.textarea.Placeholder = "输入剧情干预，例如：把感情线提前到第4章"
+		m.textarea.Placeholder = defaultSteerPlaceholder()
 		return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
 	}
 

@@ -29,6 +29,7 @@ type UISnapshot struct {
 	NovelName         string
 	ModelName         string
 	Style             string
+	RuntimeState      string // idle / running / pausing / paused / completed
 	StatusLabel       string // READY / RUNNING / REVIEW / REWRITE / COMPLETE / ERROR
 	Phase             string
 	Flow              string
@@ -136,11 +137,13 @@ func (rt *Runtime) ReplayQueue(afterSeq int64) ([]domain.RuntimeQueueItem, error
 func (rt *Runtime) Snapshot() UISnapshot {
 	rt.mu.Lock()
 	currentProvider, currentModel, _ := rt.models.CurrentSelection("default")
+	lifecycle := rt.lifecycle
 	snap := UISnapshot{
-		Provider:  currentProvider,
-		ModelName: currentModel,
-		Style:     rt.cfg.Style,
-		IsRunning: rt.running,
+		Provider:     currentProvider,
+		ModelName:    currentModel,
+		Style:        rt.cfg.Style,
+		RuntimeState: string(lifecycle),
+		IsRunning:    isRuntimeActive(lifecycle),
 	}
 	rt.mu.Unlock()
 
@@ -179,7 +182,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 	rt.fillContextStatus(&snap)
 
 	// 状态标签映射
-	snap.StatusLabel = rt.deriveStatusLabel(progress, snap.IsRunning)
+	snap.StatusLabel = rt.deriveStatusLabel(progress, lifecycle)
 
 	// 恢复标签
 	recovery := rt.session.recovery()
@@ -354,9 +357,15 @@ func roleLabel(role string) string {
 	}
 }
 
-func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) string {
+func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, lifecycle runtimeLifecycle) string {
 	tasks := rt.taskSnapshots()
 	if progress == nil {
+		if lifecycle == runtimePausing {
+			return "PAUSING"
+		}
+		if lifecycle == runtimePaused {
+			return "PAUSED"
+		}
 		if hasPendingResumeState(nil, tasks) {
 			return "PAUSED"
 		}
@@ -365,7 +374,13 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 	if progress.Phase == domain.PhaseComplete {
 		return "COMPLETE"
 	}
-	if !isRunning {
+	switch lifecycle {
+	case runtimePausing:
+		return "PAUSING"
+	case runtimePaused:
+		return "PAUSED"
+	}
+	if !isRuntimeActive(lifecycle) {
 		if hasPendingResumeState(progress, tasks) {
 			return "PAUSED"
 		}

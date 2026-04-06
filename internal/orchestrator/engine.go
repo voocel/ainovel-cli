@@ -36,11 +36,25 @@ type Engine struct {
 	done          chan struct{}
 	mu            sync.Mutex
 	controlMu     sync.Mutex
-	running       bool
+	lifecycle     runtimeLifecycle
 	closeOnce     sync.Once
 }
 
 const coordinatorRuntimeOwner = "runtime"
+
+type runtimeLifecycle string
+
+const (
+	runtimeIdle      runtimeLifecycle = "idle"
+	runtimeRunning   runtimeLifecycle = "running"
+	runtimePausing   runtimeLifecycle = "pausing"
+	runtimePaused    runtimeLifecycle = "paused"
+	runtimeCompleted runtimeLifecycle = "completed"
+)
+
+func isRuntimeActive(state runtimeLifecycle) bool {
+	return state == runtimeRunning || state == runtimePausing
+}
 
 // NewEngine 创建与 UI 无关的会话执行内核。
 func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
@@ -88,6 +102,7 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 		streamCh:      make(chan string, 256),
 		clearCh:       make(chan struct{}, 4),
 		done:          make(chan struct{}, 4),
+		lifecycle:     runtimeIdle,
 	}
 	compactEmit = eng.emit
 	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.submitControl, func() {
@@ -187,7 +202,7 @@ func (eng *Engine) Start(prompt string) error {
 // StartPrepared 使用已编排完成的启动 prompt 开始创作。
 func (eng *Engine) StartPrepared(promptText string) error {
 	eng.mu.Lock()
-	if eng.running {
+	if isRuntimeActive(eng.lifecycle) {
 		eng.mu.Unlock()
 		return fmt.Errorf("already running")
 	}
@@ -221,9 +236,7 @@ func (eng *Engine) StartPrepared(promptText string) error {
 	}
 	eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在协调整体创作")
 
-	eng.mu.Lock()
-	eng.running = true
-	eng.mu.Unlock()
+	eng.activateLifecycle()
 
 	go eng.waitDone()
 	return nil
@@ -233,7 +246,7 @@ func (eng *Engine) StartPrepared(promptText string) error {
 // 返回恢复标签（空字符串表示无法恢复，应走新建模式）。
 func (eng *Engine) Resume() (string, error) {
 	eng.mu.Lock()
-	if eng.running {
+	if isRuntimeActive(eng.lifecycle) {
 		eng.mu.Unlock()
 		return "", fmt.Errorf("already running")
 	}
@@ -271,18 +284,32 @@ func (eng *Engine) Resume() (string, error) {
 
 // Continue 使用指定 prompt 继续驱动 coordinator，适合无界面场景的后续动作。
 func (eng *Engine) Continue(promptText string) error {
+	if err := eng.queueContinueControl(promptText); err != nil {
+		return err
+	}
+	return eng.drainControlQueue()
+}
+
+func (eng *Engine) queueContinueControl(promptText string) error {
 	eng.mu.Lock()
-	if eng.running {
+	if isRuntimeActive(eng.lifecycle) {
 		eng.mu.Unlock()
 		return fmt.Errorf("already running")
 	}
 	eng.mu.Unlock()
 
+	progress, _ := eng.store.Progress.Load()
+	if progress != nil && progress.Phase == domain.PhaseComplete {
+		return fmt.Errorf("novel already complete")
+	}
+
 	promptText = strings.TrimSpace(promptText)
 	if promptText == "" {
 		return fmt.Errorf("prompt is required")
 	}
-	if _, err := eng.enqueueControl(domain.ControlIntent{
+
+	recovery := eng.session.recovery()
+	if _, err := eng.prepareResumeControl(domain.ControlIntent{
 		Kind:      domain.ControlIntentResumePrompt,
 		Priority:  domain.RuntimePriorityControl,
 		Summary:   "继续协调小说任务",
@@ -290,16 +317,19 @@ func (eng *Engine) Continue(promptText string) error {
 		TaskKind:  domain.TaskCoordinatorDecision,
 		TaskTitle: "继续协调小说任务",
 		TaskInput: promptText,
-	}); err != nil {
+	}, recovery); err != nil {
 		return err
 	}
-	return eng.drainControlQueue()
+	return nil
 }
 
 // Abort 停止当前 coordinator 运行。
 func (eng *Engine) Abort() bool {
 	eng.mu.Lock()
-	running := eng.running
+	running := eng.lifecycle == runtimeRunning
+	if running {
+		eng.lifecycle = runtimePausing
+	}
 	eng.mu.Unlock()
 	if !running {
 		return false
@@ -320,7 +350,7 @@ func (eng *Engine) Abort() bool {
 // Steer 提交用户干预。
 func (eng *Engine) Steer(text string) {
 	eng.mu.Lock()
-	wasRunning := eng.running
+	wasRunning := isRuntimeActive(eng.lifecycle)
 	eng.mu.Unlock()
 
 	if wasRunning {
@@ -483,10 +513,7 @@ func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 			return fmt.Errorf("start coordinator task: %w", err)
 		}
 		eng.agents.Start("coordinator", "", intent.TaskKind, "正在"+intent.TaskTitle)
-		eng.mu.Lock()
-		wasRunning := eng.running
-		eng.running = true
-		eng.mu.Unlock()
+		wasRunning := eng.activateLifecycle()
 		if !wasRunning {
 			go eng.waitDone()
 		}
@@ -498,7 +525,7 @@ func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 		return eng.runQueuedTaskIntent(intent)
 	case domain.ControlIntentFollowUp:
 		eng.mu.Lock()
-		wasRunning := eng.running
+		wasRunning := isRuntimeActive(eng.lifecycle)
 		eng.mu.Unlock()
 		if !wasRunning {
 			taskKind := intent.TaskKind
@@ -517,9 +544,7 @@ func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 				return fmt.Errorf("start coordinator task: %w", err)
 			}
 			eng.agents.Start("coordinator", "", taskKind, "正在"+taskTitle)
-			eng.mu.Lock()
-			eng.running = true
-			eng.mu.Unlock()
+			eng.activateLifecycle()
 			go eng.waitDone()
 		}
 		eng.coordinator.FollowUp(agentcore.UserMsg(intent.Message))
@@ -531,16 +556,14 @@ func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 
 func (eng *Engine) runQueuedTaskIntent(intent domain.ControlIntent) error {
 	eng.mu.Lock()
-	wasRunning := eng.running
+	wasRunning := isRuntimeActive(eng.lifecycle)
 	eng.mu.Unlock()
 	if !wasRunning {
 		if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", taskDispatchSummary(intent), taskLocation{}); err != nil {
 			return fmt.Errorf("start coordinator task: %w", err)
 		}
 		eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在继续协调小说任务")
-		eng.mu.Lock()
-		eng.running = true
-		eng.mu.Unlock()
+		eng.activateLifecycle()
 		go eng.waitDone()
 	}
 	eng.coordinator.FollowUp(agentcore.UserMsg(taskDispatchPrompt(intent)))
@@ -569,10 +592,8 @@ func (eng *Engine) waitDone() {
 	eng.session.finalizeSteerIfIdle()
 	_ = eng.taskRT.CompleteActive(coordinatorRuntimeOwner)
 	eng.agents.Idle("coordinator", "待命")
-	eng.mu.Lock()
-	eng.running = false
-	eng.mu.Unlock()
-	if eng.tryAutoContinueAfterIdle() {
+	state := eng.finishLifecycleAfterIdle()
+	if state == runtimeIdle && eng.tryAutoContinueAfterIdle() {
 		return
 	}
 	select {
@@ -604,7 +625,7 @@ func (eng *Engine) tryAutoContinueAfterIdle() bool {
 				return false
 			}
 			eng.mu.Lock()
-			running := eng.running
+			running := isRuntimeActive(eng.lifecycle)
 			eng.mu.Unlock()
 			if running {
 				return true
@@ -631,6 +652,33 @@ func (eng *Engine) tryAutoContinueAfterIdle() bool {
 		return false
 	}
 	return true
+}
+
+func (eng *Engine) activateLifecycle() bool {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	wasActive := isRuntimeActive(eng.lifecycle)
+	eng.lifecycle = runtimeRunning
+	return wasActive
+}
+
+func (eng *Engine) finishLifecycleAfterIdle() runtimeLifecycle {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+
+	if eng.lifecycle == runtimePausing {
+		eng.lifecycle = runtimePaused
+		return eng.lifecycle
+	}
+
+	progress, _ := eng.store.Progress.Load()
+	if progress != nil && progress.Phase == domain.PhaseComplete {
+		eng.lifecycle = runtimeCompleted
+		return eng.lifecycle
+	}
+
+	eng.lifecycle = runtimeIdle
+	return eng.lifecycle
 }
 
 func taskDispatchSummary(intent domain.ControlIntent) string {

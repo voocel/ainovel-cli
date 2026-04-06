@@ -39,11 +39,12 @@ type (
 		reply orchestrator.CoCreateReply
 		err   error
 	}
-	steerResultMsg struct{}
-	spinnerTickMsg time.Time
-	streamDeltaMsg string   // 流式 token 增量
-	streamClearMsg struct{} // 清空流式缓冲（新消息开始）
-	quitResetMsg   struct{} // 双次 Ctrl+C 超时重置
+	steerResultMsg    struct{}
+	continueResultMsg struct{ err error }
+	spinnerTickMsg    time.Time
+	streamDeltaMsg    string   // 流式 token 增量
+	streamClearMsg    struct{} // 清空流式缓冲（新消息开始）
+	quitResetMsg      struct{} // 双次 Ctrl+C 超时重置
 )
 
 // --- Cmd 函数 ---
@@ -161,6 +162,13 @@ func steerRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
 	return func() tea.Msg {
 		rt.Steer(text)
 		return steerResultMsg{}
+	}
+}
+
+func continueRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
+	return func() tea.Msg {
+		err := rt.Continue(text)
+		return continueResultMsg{err: err}
 	}
 }
 
