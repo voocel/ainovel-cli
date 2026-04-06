@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"time"
+
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
@@ -98,12 +100,25 @@ func BuildCoordinator(
 		Tools:        writerTools,
 		MaxTurns:     20,
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
-			return newContextManager(model, cfg.ContextWindow, 16384, 20000, "writer", emit, false, func(item domain.RuntimeQueueItem) {
-				if store == nil || store.Runtime == nil {
-					return
-				}
-				_, _ = store.Runtime.AppendQueue(item)
-			}, restore.Hook())
+			return newContextManager(contextManagerConfig{
+				Model:            model,
+				ContextWindow:    cfg.ContextWindow,
+				ReserveTokens:    16384,
+				KeepRecentTokens: 20000,
+				Agent:            "writer",
+				Emit:             emit,
+				AppendBoundary:   runtimeAppender(store),
+				ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
+					IdleThreshold: 5 * time.Minute,
+				},
+				Summary: &corecontext.FullSummaryConfig{
+					PostSummaryHooks:    []corecontext.PostSummaryHook{restore.Hook()},
+					SystemPrompt:        writerSummarySystemPrompt,
+					SummaryPrompt:       writerSummaryPrompt,
+					UpdateSummaryPrompt: writerUpdateSummaryPrompt,
+					TurnPrefixPrompt:    writerTurnPrefixPrompt,
+				},
+			})
 		},
 	}
 
@@ -123,32 +138,68 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(200),
-		agentcore.WithContextManager(newContextManager(coordinatorModel, cfg.ContextWindow, 32000, 30000, "coordinator", emit, true, func(item domain.RuntimeQueueItem) {
-			if store == nil || store.Runtime == nil {
-				return
-			}
-			_, _ = store.Runtime.AppendQueue(item)
+		agentcore.WithContextManager(newContextManager(contextManagerConfig{
+			Model:            coordinatorModel,
+			ContextWindow:    cfg.ContextWindow,
+			ReserveTokens:    32000,
+			KeepRecentTokens: 30000,
+			Agent:            "coordinator",
+			Emit:             emit,
+			CommitOnProject:  true,
+			AppendBoundary:   runtimeAppender(store),
 		})),
 	)
 	return agent, askUser, restore
 }
 
-func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn, commitOnProject bool, appendBoundary func(domain.RuntimeQueueItem), hooks ...corecontext.PostSummaryHook) agentcore.ContextManager {
+func runtimeAppender(s *store.Store) func(domain.RuntimeQueueItem) {
+	return func(item domain.RuntimeQueueItem) {
+		if s == nil || s.Runtime == nil {
+			return
+		}
+		_, _ = s.Runtime.AppendQueue(item)
+	}
+}
+
+// contextManagerConfig groups all parameters for newContextManager, replacing
+// the 9-parameter function signature that accumulated over successive changes.
+type contextManagerConfig struct {
+	Model            agentcore.ChatModel
+	ContextWindow    int
+	ReserveTokens    int
+	KeepRecentTokens int
+	Agent            string
+	Emit             emitFn
+	CommitOnProject  bool
+	AppendBoundary   func(domain.RuntimeQueueItem)
+	Summary          *corecontext.FullSummaryConfig              // nil = defaults
+	ToolMicrocompact *corecontext.ToolResultMicrocompactConfig   // nil = defaults
+}
+
+func newContextManager(cfg contextManagerConfig) agentcore.ContextManager {
+	var sc corecontext.FullSummaryConfig
+	if cfg.Summary != nil {
+		sc = *cfg.Summary // copy, never mutate caller's struct
+	}
+	sc.Model = cfg.Model
+	if sc.KeepRecentTokens <= 0 {
+		sc.KeepRecentTokens = cfg.KeepRecentTokens
+	}
+	var tc corecontext.ToolResultMicrocompactConfig
+	if cfg.ToolMicrocompact != nil {
+		tc = *cfg.ToolMicrocompact
+	}
 	engine := corecontext.NewEngine(corecontext.EngineConfig{
-		ContextWindow:   contextWindow,
-		ReserveTokens:   reserveTokens,
-		CommitOnProject: commitOnProject,
+		ContextWindow:   cfg.ContextWindow,
+		ReserveTokens:   cfg.ReserveTokens,
+		CommitOnProject: cfg.CommitOnProject,
 		Strategies: []corecontext.Strategy{
-			corecontext.NewToolResultMicrocompact(corecontext.ToolResultMicrocompactConfig{}),
+			corecontext.NewToolResultMicrocompact(tc),
 			corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
-			corecontext.NewFullSummary(corecontext.FullSummaryConfig{
-				Model:            model,
-				KeepRecentTokens: keepRecentTokens,
-				PostSummaryHooks: hooks,
-			}),
+			corecontext.NewFullSummary(sc),
 		},
 	})
-	callback := contextRewriteCallback(agent, emit, appendBoundary)
+	callback := contextRewriteCallback(cfg.Agent, cfg.Emit, cfg.AppendBoundary)
 	engine.SetProjectHook(callback)
 	engine.SetRecoverHook(callback)
 	return engine
