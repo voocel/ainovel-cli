@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -89,7 +90,7 @@ func (r *runtimeRecorder) activeTaskID(owner string) string {
 	return task.ID
 }
 
-func (r *runtimeRecorder) logControlAction(action policyAction) {
+func (r *runtimeRecorder) logControlAction(action action.Action) {
 	summary := action.Summary
 	if summary == "" {
 		summary = action.Message

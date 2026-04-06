@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
 )
 
 // taskScheduler 负责把流程状态和提交结果转换成领域任务队列。
@@ -96,14 +97,14 @@ func (s *taskScheduler) syncFlow(flow domain.FlowState, progress *domain.Progres
 	}
 }
 
-func (s *taskScheduler) AfterCommit(progress *domain.Progress, result *domain.CommitResult, actions []policyAction) error {
+func (s *taskScheduler) AfterCommit(progress *domain.Progress, result *domain.CommitResult, actions []action.Action) error {
 	if s == nil || s.taskRT == nil || progress == nil || result == nil {
 		return nil
 	}
 	if progress.Phase == domain.PhaseComplete {
 		return nil
 	}
-	if hasPolicyAction(actions, actionSetFlow) || hasPolicyAction(actions, actionMarkComplete) {
+	if hasPolicyAction(actions, action.KindSetFlow) || hasPolicyAction(actions, action.KindMarkComplete) {
 		return nil
 	}
 	if progress.Flow != "" && progress.Flow != domain.FlowWriting {
@@ -152,7 +153,7 @@ func (s *taskScheduler) queueRewriteTasks(progress *domain.Progress, chapters []
 	return nil
 }
 
-func hasPolicyAction(actions []policyAction, kind policyActionKind) bool {
+func hasPolicyAction(actions []action.Action, kind action.Kind) bool {
 	for _, action := range actions {
 		if action.Kind == kind {
 			return true

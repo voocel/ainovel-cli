@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -19,12 +20,12 @@ func TestReminderEngineReadOnlySpiral(t *testing.T) {
 	}
 
 	var hasNotice, hasFollowUp bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			hasNotice = action.Summary == "连续只读探索过多，提醒开始落稿"
-		case actionFollowUp:
-			hasFollowUp = action.Message != ""
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			hasNotice = act.Summary == "连续只读探索过多，提醒开始落稿"
+		case action.KindFollowUp:
+			hasFollowUp = act.Message != ""
 		}
 	}
 	if !hasNotice || !hasFollowUp {
@@ -57,7 +58,7 @@ func TestReminderEngineToolFailureCreatesReminder(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("expected 2 actions, got %d", len(actions))
 	}
-	if actions[0].Kind != actionEmitNotice || actions[1].Kind != actionFollowUp {
+	if actions[0].Kind != action.KindEmitNotice || actions[1].Kind != action.KindFollowUp {
 		t.Fatalf("unexpected actions: %+v", actions)
 	}
 }
@@ -83,7 +84,7 @@ func TestReminderEngineFoundationIncompleteReminder(t *testing.T) {
 	if len(actions) < 2 {
 		t.Fatalf("expected reminder actions, got %+v", actions)
 	}
-	if actions[0].Kind != actionEmitNotice || actions[1].Kind != actionFollowUp {
+	if actions[0].Kind != action.KindEmitNotice || actions[1].Kind != action.KindFollowUp {
 		t.Fatalf("unexpected actions: %+v", actions)
 	}
 	if actions[1].Message == "" || !contains(actions[1].Message, "architect_long") {
@@ -114,7 +115,7 @@ func TestReminderEngineUncommittedDraftReminder(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("expected 2 reminder actions, got %+v", actions)
 	}
-	if actions[0].Kind != actionEmitNotice || actions[1].Kind != actionFollowUp {
+	if actions[0].Kind != action.KindEmitNotice || actions[1].Kind != action.KindFollowUp {
 		t.Fatalf("unexpected actions: %+v", actions)
 	}
 	if actions[1].Message == "" || !contains(actions[1].Message, "commit_chapter") {
@@ -164,8 +165,8 @@ func TestReminderEngineQueueDeduplicatesSameReminder(t *testing.T) {
 func TestReminderEngineQueueDeduplicatesByStableKeyInsteadOfMessage(t *testing.T) {
 	engine := newReminderEngine(nil)
 	engine.enqueue(
-		withDedupKey(followUp("[系统] 第一版文案"), "reminder.test.followup"),
-		withDedupKey(followUp("[系统] 第二版文案"), "reminder.test.followup"),
+		action.WithDedupKey(action.FollowUp("[系统] 第一版文案"), "reminder.test.followup"),
+		action.WithDedupKey(action.FollowUp("[系统] 第二版文案"), "reminder.test.followup"),
 	)
 
 	actions := engine.drain()

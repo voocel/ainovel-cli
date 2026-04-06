@@ -159,7 +159,7 @@ steering  -> writing / reviewing / rewriting / polishing / steering
 
 ### 长篇上下文管理
 
-500+ 章小说采用三级摘要 + 智能推荐：
+500+ 章小说采用三级摘要 + 四级压缩管线 + 智能推荐：
 
 ```
 卷（Volume）→ 卷摘要
@@ -171,6 +171,22 @@ steering  -> writing / reviewing / rewriting / polishing / steering
 - **相关章节推荐** — 每章写作时从伏笔、角色出场、状态变化、关系四个维度反查历史章节，推荐 Writer 按需回读
 - **下一章预告** — 加载下一章大纲，帮 Writer 设计章末钩子和伏笔衔接
 - **弧边界检测** — 自动识别弧/卷结束，触发评审、摘要生成和下一弧/卷展开
+
+#### 上下文压缩管线
+
+当对话超出模型上下文窗口时，按代价从低到高逐级压缩：
+
+```
+ToolResultMicrocompact → LightTrim → StoreSummaryCompact → FullSummary
+     清理旧工具结果        截断长文本      store 零 LLM 压缩      LLM 摘要兜底
+```
+
+- **StoreSummaryCompact** — Writer 专用，用 store 中已有的章节摘要、角色快照、伏笔台账直接替换旧消息，零 LLM 开销
+- **FullSummary 小说定制** — Writer 使用面向叙事连续性的摘要提示词，明确要求保留角色状态、伏笔线索、审稿待修项、风格锚点
+- **压缩后恢复包** — FullSummary 后自动注入当前章节计划、大纲和角色快照，防止 Writer 压缩后"失忆"
+- **熔断器** — 压缩连续失败时自动跳过并显式告警，采用半开模式，下轮自动重试
+- **CJK Token 估算** — 中文 `runes × 1.5`，不会因为 `bytes/4` 低估而导致压缩触发滞后
+- **TUI 健康度渐变** — 上下文占用绿(<70%)→黄(70-85%)→红(>85%)实时展示
 
 ## 快速开始
 

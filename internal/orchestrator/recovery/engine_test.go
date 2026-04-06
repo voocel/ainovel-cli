@@ -1,12 +1,15 @@
-package orchestrator
+package recovery_test
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/recovery"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
+
+func noopSaveHandoff(_ *store.Store, _ string) error { return nil }
 
 func TestDetermineRecoveryIncludesPlanningTierGuidance(t *testing.T) {
 	progress := &domain.Progress{
@@ -20,12 +23,12 @@ func TestDetermineRecoveryIncludesPlanningTierGuidance(t *testing.T) {
 		PlanningTier: domain.PlanningTierLong,
 	}
 
-	recovery := determineRecovery(progress, runMeta)
-	if !strings.Contains(recovery.PromptText, "architect_long") {
-		t.Fatalf("expected architect_long guidance, got %q", recovery.PromptText)
+	result := recovery.Evaluate(progress, runMeta, nil, noopSaveHandoff)
+	if !strings.Contains(result.PromptText, "architect_long") {
+		t.Fatalf("expected architect_long guidance, got %q", result.PromptText)
 	}
-	if !strings.Contains(recovery.PromptText, "分层大纲") {
-		t.Fatalf("expected layered-outline guidance, got %q", recovery.PromptText)
+	if !strings.Contains(result.PromptText, "分层大纲") {
+		t.Fatalf("expected layered-outline guidance, got %q", result.PromptText)
 	}
 }
 
@@ -41,14 +44,14 @@ func TestDetermineRecoveryPendingSteer(t *testing.T) {
 		PendingSteer: "让女主提前登场",
 	}
 
-	recovery := determineRecovery(progress, runMeta)
-	if !strings.Contains(recovery.Label, "Steer 恢复") {
-		t.Fatalf("expected steer recovery label, got %q", recovery.Label)
+	result := recovery.Evaluate(progress, runMeta, nil, noopSaveHandoff)
+	if !strings.Contains(result.Label, "Steer 恢复") {
+		t.Fatalf("expected steer recovery label, got %q", result.Label)
 	}
-	if !strings.Contains(recovery.PromptText, "让女主提前登场") {
-		t.Fatalf("expected pending steer prompt, got %q", recovery.PromptText)
+	if !strings.Contains(result.PromptText, "让女主提前登场") {
+		t.Fatalf("expected pending steer prompt, got %q", result.PromptText)
 	}
-	if !recovery.ConsumesPendingSteer {
+	if !result.ConsumesPendingSteer {
 		t.Fatalf("expected pending steer recovery to consume stale steer intents")
 	}
 }
@@ -63,12 +66,12 @@ func TestDetermineRecoveryReviewing(t *testing.T) {
 		TotalChapters:     12,
 	}
 
-	recovery := determineRecovery(progress, nil)
-	if !strings.Contains(recovery.Label, "审阅恢复") {
-		t.Fatalf("expected reviewing recovery label, got %q", recovery.Label)
+	result := recovery.Evaluate(progress, nil, nil, noopSaveHandoff)
+	if !strings.Contains(result.Label, "审阅恢复") {
+		t.Fatalf("expected reviewing recovery label, got %q", result.Label)
 	}
-	if !strings.Contains(recovery.PromptText, "重新调用 editor") {
-		t.Fatalf("expected editor recovery prompt, got %q", recovery.PromptText)
+	if !strings.Contains(result.PromptText, "重新调用 editor") {
+		t.Fatalf("expected editor recovery prompt, got %q", result.PromptText)
 	}
 }
 
@@ -104,12 +107,12 @@ func TestDetermineRecoveryReconcilesPendingCommit(t *testing.T) {
 		t.Fatalf("SavePendingCommit: %v", err)
 	}
 
-	recovery := determineRecovery(progress, nil, s)
-	if !strings.Contains(recovery.Label, "补齐第 2 章提交") {
-		t.Fatalf("unexpected recovery label: %q", recovery.Label)
+	result := recovery.Evaluate(progress, nil, s, noopSaveHandoff)
+	if !strings.Contains(result.Label, "补齐第 2 章提交") {
+		t.Fatalf("unexpected recovery label: %q", result.Label)
 	}
-	if !strings.Contains(recovery.PromptText, "调用 editor") {
-		t.Fatalf("expected editor follow-up prompt, got %q", recovery.PromptText)
+	if !strings.Contains(result.PromptText, "调用 editor") {
+		t.Fatalf("expected editor follow-up prompt, got %q", result.PromptText)
 	}
 
 	updated, err := s.Progress.Load()
@@ -152,12 +155,12 @@ func TestDetermineRecoveryKeepsManualPendingCommit(t *testing.T) {
 		t.Fatalf("SavePendingCommit: %v", err)
 	}
 
-	recovery := determineRecovery(progress, nil, s)
-	if !strings.Contains(recovery.Label, "提交中断") {
-		t.Fatalf("unexpected recovery label: %q", recovery.Label)
+	result := recovery.Evaluate(progress, nil, s, noopSaveHandoff)
+	if !strings.Contains(result.Label, "提交中断") {
+		t.Fatalf("unexpected recovery label: %q", result.Label)
 	}
-	if !strings.Contains(recovery.PromptText, "重新调用 commit_chapter") {
-		t.Fatalf("expected manual recovery prompt, got %q", recovery.PromptText)
+	if !strings.Contains(result.PromptText, "重新调用 commit_chapter") {
+		t.Fatalf("expected manual recovery prompt, got %q", result.PromptText)
 	}
 
 	pending, err := s.Signals.LoadPendingCommit()

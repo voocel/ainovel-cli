@@ -1,9 +1,11 @@
-package orchestrator
+package policy_test
 
 import (
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/policy"
 )
 
 func TestEvaluateCommitPolicy_RewriteFlowUnexpectedChapter(t *testing.T) {
@@ -15,11 +17,11 @@ func TestEvaluateCommitPolicy_RewriteFlowUnexpectedChapter(t *testing.T) {
 		Chapter: 4,
 	}
 
-	actions := evaluateCommitPolicy(progress, nil, result)
+	actions := policy.EvaluateCommit(progress, nil, result)
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(actions))
 	}
-	if actions[0].Kind != actionFollowUp {
+	if actions[0].Kind != action.KindFollowUp {
 		t.Fatalf("expected follow_up action, got %s", actions[0].Kind)
 	}
 	if actions[0].Message == "" {
@@ -42,20 +44,20 @@ func TestEvaluateCommitPolicy_LayeredArcEnd(t *testing.T) {
 		NextArc:    3,
 	}
 
-	actions := evaluateCommitPolicy(progress, nil, result)
+	actions := policy.EvaluateCommit(progress, nil, result)
 	if len(actions) == 0 {
 		t.Fatalf("expected actions, got none")
 	}
-	if actions[0].Kind != actionSetFlow || actions[0].Flow != domain.FlowReviewing {
+	if actions[0].Kind != action.KindSetFlow || actions[0].Flow != domain.FlowReviewing {
 		t.Fatalf("expected first action set_flow(reviewing), got %+v", actions[0])
 	}
 
 	var hasFollowUp, hasCheckpoint bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionFollowUp:
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindFollowUp:
 			hasFollowUp = true
-		case actionSaveCheckpoint:
+		case action.KindSaveCheckpoint:
 			hasCheckpoint = true
 		}
 	}
@@ -72,19 +74,19 @@ func TestEvaluateReviewPolicy_Rewrite(t *testing.T) {
 		AffectedChapters: []int{7, 8},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatalf("expected actions, got none")
 	}
 
 	var hasPending, hasFlow, hasFollowUp bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionSetPendingRewrites:
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindSetPendingRewrites:
 			hasPending = true
-		case actionSetFlow:
-			hasFlow = action.Flow == domain.FlowRewriting
-		case actionFollowUp:
+		case action.KindSetFlow:
+			hasFlow = act.Flow == domain.FlowRewriting
+		case action.KindFollowUp:
 			hasFollowUp = true
 		}
 	}
@@ -104,24 +106,24 @@ func TestEvaluateReviewPolicy_AcceptWithPartialContractEscalatesToPolish(t *test
 		AffectedChapters: []int{6},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasWarnNotice, hasFlow, hasPending, hasFollowUp bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			if action.Summary == "contract_status=partial，accept 被提升为 polish" {
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			if act.Summary == "contract_status=partial，accept 被提升为 polish" {
 				hasWarnNotice = true
 			}
-		case actionSetFlow:
-			hasFlow = action.Flow == domain.FlowPolishing
-		case actionSetPendingRewrites:
+		case action.KindSetFlow:
+			hasFlow = act.Flow == domain.FlowPolishing
+		case action.KindSetPendingRewrites:
 			hasPending = true
-		case actionFollowUp:
-			if action.Message != "" && action.Message != "[系统] " {
+		case action.KindFollowUp:
+			if act.Message != "" && act.Message != "[系统] " {
 				hasFollowUp = true
 			}
 		}
@@ -142,20 +144,20 @@ func TestEvaluateReviewPolicy_AcceptWithMissedContractEscalatesToRewrite(t *test
 		AffectedChapters: []int{6},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasWarnNotice, hasFlow bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			if action.Summary == "contract_status=missed，accept 被提升为 rewrite" {
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			if act.Summary == "contract_status=missed，accept 被提升为 rewrite" {
 				hasWarnNotice = true
 			}
-		case actionSetFlow:
-			hasFlow = action.Flow == domain.FlowRewriting
+		case action.KindSetFlow:
+			hasFlow = act.Flow == domain.FlowRewriting
 		}
 	}
 	if !hasWarnNotice || !hasFlow {
@@ -181,20 +183,20 @@ func TestEvaluateReviewPolicy_ContractMissedOverridesScorecardPolish(t *testing.
 		AffectedChapters: []int{6},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasContractRewrite, hasPolishNotice bool
-	for _, action := range actions {
-		if action.Kind != actionEmitNotice {
+	for _, act := range actions {
+		if act.Kind != action.KindEmitNotice {
 			continue
 		}
-		if action.Summary == "contract_status=missed，accept 被提升为 rewrite" {
+		if act.Summary == "contract_status=missed，accept 被提升为 rewrite" {
 			hasContractRewrite = true
 		}
-		if action.Summary == "scorecard gate 触发，accept 被提升为 polish" {
+		if act.Summary == "scorecard gate 触发，accept 被提升为 polish" {
 			hasPolishNotice = true
 		}
 	}
@@ -220,20 +222,20 @@ func TestEvaluateReviewPolicy_AcceptWithCriticalScorecardFailureEscalatesToRewri
 		AffectedChapters: []int{5},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasWarnNotice, hasFlow bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			if action.Summary == "scorecard gate 触发，accept 被提升为 rewrite" {
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			if act.Summary == "scorecard gate 触发，accept 被提升为 rewrite" {
 				hasWarnNotice = true
 			}
-		case actionSetFlow:
-			hasFlow = action.Flow == domain.FlowRewriting
+		case action.KindSetFlow:
+			hasFlow = act.Flow == domain.FlowRewriting
 		}
 	}
 	if !hasWarnNotice || !hasFlow {
@@ -258,20 +260,20 @@ func TestEvaluateReviewPolicy_AcceptWithAestheticFailEscalatesToPolish(t *testin
 		AffectedChapters: []int{5},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasWarnNotice, hasFlow bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			if action.Summary == "scorecard gate 触发，accept 被提升为 polish" {
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			if act.Summary == "scorecard gate 触发，accept 被提升为 polish" {
 				hasWarnNotice = true
 			}
-		case actionSetFlow:
-			hasFlow = action.Flow == domain.FlowPolishing
+		case action.KindSetFlow:
+			hasFlow = act.Flow == domain.FlowPolishing
 		}
 	}
 	if !hasWarnNotice || !hasFlow {
@@ -288,20 +290,20 @@ func TestEvaluateReviewPolicy_UsesEscalatedVerdictInCheckpointLabels(t *testing.
 		AffectedChapters: []int{5},
 	}
 
-	actions := evaluateReviewPolicy(nil, review)
+	actions := policy.EvaluateReview(nil, review)
 	if len(actions) == 0 {
 		t.Fatal("expected actions, got none")
 	}
 
 	var hasPolishCheckpoint, hasAcceptCheckpoint bool
-	for _, action := range actions {
-		if action.Kind != actionSaveCheckpoint {
+	for _, act := range actions {
+		if act.Kind != action.KindSaveCheckpoint {
 			continue
 		}
-		if action.Label == "review-ch05-polish" {
+		if act.Label == "review-ch05-polish" {
 			hasPolishCheckpoint = true
 		}
-		if action.Label == "review-ch05-accept" {
+		if act.Label == "review-ch05-accept" {
 			hasAcceptCheckpoint = true
 		}
 	}
@@ -318,19 +320,19 @@ func TestEvaluateCommitPolicy_AppendsPendingSteerReminder(t *testing.T) {
 		PendingSteer: "把主角改成女性",
 	}
 
-	actions := evaluateCommitPolicy(nil, runMeta, result)
+	actions := policy.EvaluateCommit(nil, runMeta, result)
 	var hasReminder, hasSteerFollowUp, hasClear bool
-	for _, action := range actions {
-		switch action.Kind {
-		case actionEmitNotice:
-			if action.Summary == "提醒 Coordinator 处理用户干预" {
+	for _, act := range actions {
+		switch act.Kind {
+		case action.KindEmitNotice:
+			if act.Summary == "提醒 Coordinator 处理用户干预" {
 				hasReminder = true
 			}
-		case actionFollowUp:
-			if action.Message != "" {
+		case action.KindFollowUp:
+			if act.Message != "" {
 				hasSteerFollowUp = true
 			}
-		case actionClearHandledSteer:
+		case action.KindClearHandledSteer:
 			hasClear = true
 		}
 	}

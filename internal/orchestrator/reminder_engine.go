@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/recovery"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -28,7 +30,7 @@ type reminderEngine struct {
 	store               *storepkg.Store
 	consecutiveReadOnly int
 	recentReadOnly      []string
-	pending             []policyAction
+	pending             []action.Action
 }
 
 var readOnlyTools = map[string]struct{}{
@@ -91,8 +93,8 @@ func (e *reminderEngine) observeToolProgress(progress toolProgress) {
 			tools := strings.Join(uniqueStrings(e.recentReadOnly), " / ")
 			e.resetReadOnlyStreak()
 			e.enqueue(
-				withDedupKey(emitNotice("SYSTEM", "连续只读探索过多，提醒开始落稿", "warn"), "reminder.readonly_spiral.notice"),
-				withDedupKey(followUp(fmt.Sprintf(
+				action.WithDedupKey(action.EmitNotice("SYSTEM", "连续只读探索过多，提醒开始落稿", "warn"), "reminder.readonly_spiral.notice"),
+				action.WithDedupKey(action.FollowUp(fmt.Sprintf(
 					"[系统] 你已经连续 %d 次调用只读工具（最近：%s）。停止继续探索，开始采取行动：如果信息已足够，请立即规划、落稿、提交，或明确给出需要重写/评审的决定。不要继续无止境地读取上下文。",
 					threshold, tools)), "reminder.readonly_spiral.followup"),
 			)
@@ -115,8 +117,8 @@ func (e *reminderEngine) observeToolFailure(tool, detail string) {
 		message += "\n失败原因：" + truncateLog(detail, 120)
 	}
 	e.enqueue(
-		withDedupKey(emitNotice("SYSTEM", summary, "warn"), "reminder.tool_failure."+tool+".notice"),
-		withDedupKey(followUp(message), "reminder.tool_failure."+tool+".followup"),
+		action.WithDedupKey(action.EmitNotice("SYSTEM", summary, "warn"), "reminder.tool_failure."+tool+".notice"),
+		action.WithDedupKey(action.FollowUp(message), "reminder.tool_failure."+tool+".followup"),
 	)
 }
 
@@ -133,7 +135,7 @@ func (e *reminderEngine) readOnlyThreshold() int {
 	if err != nil {
 		return readOnlyReminderThreshold
 	}
-	policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(totalChapters(progress)), false)
+	policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(progressTotalChapters(progress)), false)
 	if policy.ReadOnlyThreshold > 0 {
 		return policy.ReadOnlyThreshold
 	}
@@ -156,25 +158,25 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func (e *reminderEngine) enqueue(actions ...policyAction) {
-	for _, action := range actions {
-		if e.hasPending(action) {
+func (e *reminderEngine) enqueue(actions ...action.Action) {
+	for _, act := range actions {
+		if e.hasPending(act) {
 			continue
 		}
-		e.pending = append(e.pending, action)
+		e.pending = append(e.pending, act)
 	}
 }
 
-func (e *reminderEngine) drain() []policyAction {
+func (e *reminderEngine) drain() []action.Action {
 	if len(e.pending) == 0 {
 		return nil
 	}
-	actions := append([]policyAction(nil), e.pending...)
+	actions := append([]action.Action(nil), e.pending...)
 	e.pending = nil
 	return actions
 }
 
-func (e *reminderEngine) hasPending(target policyAction) bool {
+func (e *reminderEngine) hasPending(target action.Action) bool {
 	for _, existing := range e.pending {
 		if samePolicyAction(existing, target) {
 			return true
@@ -183,7 +185,7 @@ func (e *reminderEngine) hasPending(target policyAction) bool {
 	return false
 }
 
-func samePolicyAction(a, b policyAction) bool {
+func samePolicyAction(a, b action.Action) bool {
 	if a.DedupKey != "" || b.DedupKey != "" {
 		return a.DedupKey != "" && a.DedupKey == b.DedupKey
 	}
@@ -210,7 +212,7 @@ func intSliceToStrings(values []int) []string {
 	return out
 }
 
-func foundationIncompleteReminderRule(snapshot reminderSnapshot) (bool, []policyAction) {
+func foundationIncompleteReminderRule(snapshot reminderSnapshot) (bool, []action.Action) {
 	progress := snapshot.Progress
 	if progress == nil || progress.Phase != domain.PhasePremise || snapshot.Store == nil {
 		return false, nil
@@ -234,16 +236,16 @@ func foundationIncompleteReminderRule(snapshot reminderSnapshot) (bool, []policy
 		"[系统] 基础设定不完整，以下项目尚未保存：%v。请重新调用对应规划师补全这些设定。在基础设定全部完备前，不要调用 writer。",
 		missing,
 	)
-	if guidance := planningTierGuidance(snapshot.RunMeta); guidance != "" {
+	if guidance := recovery.PlanningTierGuidance(snapshot.RunMeta); guidance != "" {
 		msg += "\n" + guidance
 	}
-	return true, []policyAction{
-		withDedupKey(emitNotice("SYSTEM", fmt.Sprintf("基础设定不完整，缺失: %v", missing), "warn"), "reminder.foundation_incomplete.notice"),
-		withDedupKey(followUp(msg), "reminder.foundation_incomplete.followup"),
+	return true, []action.Action{
+		action.WithDedupKey(action.EmitNotice("SYSTEM", fmt.Sprintf("基础设定不完整，缺失: %v", missing), "warn"), "reminder.foundation_incomplete.notice"),
+		action.WithDedupKey(action.FollowUp(msg), "reminder.foundation_incomplete.followup"),
 	}
 }
 
-func uncommittedDraftReminderRule(snapshot reminderSnapshot) (bool, []policyAction) {
+func uncommittedDraftReminderRule(snapshot reminderSnapshot) (bool, []action.Action) {
 	progress := snapshot.Progress
 	if snapshot.Committed || progress == nil || progress.Phase == domain.PhaseComplete || snapshot.Store == nil {
 		return false, nil
@@ -260,10 +262,17 @@ func uncommittedDraftReminderRule(snapshot reminderSnapshot) (bool, []policyActi
 		return false, nil
 	}
 
-	return true, []policyAction{
-		withDedupKey(emitNotice("SYSTEM", fmt.Sprintf("第 %d 章有草稿但未提交", chapter), "warn"), fmt.Sprintf("reminder.uncommitted_draft.ch%d.notice", chapter)),
-		withDedupKey(followUp(fmt.Sprintf(
+	return true, []action.Action{
+		action.WithDedupKey(action.EmitNotice("SYSTEM", fmt.Sprintf("第 %d 章有草稿但未提交", chapter), "warn"), fmt.Sprintf("reminder.uncommitted_draft.ch%d.notice", chapter)),
+		action.WithDedupKey(action.FollowUp(fmt.Sprintf(
 			"[系统] Writer 结束但第 %d 章草稿未提交。请重新调用 writer 完成该章的自审和提交（commit_chapter）。",
 			chapter)), fmt.Sprintf("reminder.uncommitted_draft.ch%d.followup", chapter)),
 	}
+}
+
+func progressTotalChapters(progress *domain.Progress) int {
+	if progress == nil {
+		return 0
+	}
+	return progress.TotalChapters
 }

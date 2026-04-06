@@ -1,4 +1,4 @@
-package orchestrator
+package ctxpack
 
 import (
 	"context"
@@ -115,7 +115,7 @@ func TestStoreSummaryCompactApplyFallsBackWhenStoreDataInsufficient(t *testing.T
 
 func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
 	s := seededWriterStore(t)
-	pack := &writerRestorePack{}
+	pack := &WriterRestorePack{}
 	pack.Refresh(s)
 
 	msg, ok := pack.buildMessage(restoreBudgetTokens)

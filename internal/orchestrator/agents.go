@@ -8,19 +8,20 @@ import (
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
-// 返回 Agent、AskUserTool 和 writerRestorePack（供调用方在写章生命周期中 Refresh）。
+// 返回 Agent、AskUserTool 和 WriterRestorePack（供调用方在写章生命周期中 Refresh）。
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
 	emit emitFn,
-) (*agentcore.Agent, *tools.AskUserTool, *writerRestorePack) {
+) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
 	readChapter := tools.NewReadChapterTool(store)
@@ -89,7 +90,7 @@ func BuildCoordinator(
 		writerPrompt += "\n\n" + style
 	}
 
-	restore := &writerRestorePack{}
+	restore := &ctxpack.WriterRestorePack{}
 	restore.Refresh(store) // initial load
 
 	writer := agentcore.SubAgentConfig{
@@ -112,17 +113,17 @@ func BuildCoordinator(
 					IdleThreshold: 5 * time.Minute,
 				},
 				ExtraStrategies: []corecontext.Strategy{
-					NewStoreSummaryCompact(StoreSummaryCompactConfig{
+					ctxpack.NewStoreSummaryCompact(ctxpack.StoreSummaryCompactConfig{
 						Store:            store,
 						KeepRecentTokens: 20000,
 					}),
 				},
 				Summary: &corecontext.FullSummaryConfig{
 					PostSummaryHooks:    []corecontext.PostSummaryHook{restore.Hook()},
-					SystemPrompt:        writerSummarySystemPrompt,
-					SummaryPrompt:       writerSummaryPrompt,
-					UpdateSummaryPrompt: writerUpdateSummaryPrompt,
-					TurnPrefixPrompt:    writerTurnPrefixPrompt,
+					SystemPrompt:        ctxpack.WriterSummarySystemPrompt,
+					SummaryPrompt:       ctxpack.WriterSummaryPrompt,
+					UpdateSummaryPrompt: ctxpack.WriterUpdateSummaryPrompt,
+					TurnPrefixPrompt:    ctxpack.WriterTurnPrefixPrompt,
 				},
 			})
 		},

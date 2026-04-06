@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // renderTopBar 渲染顶部状态栏。
@@ -854,7 +855,7 @@ func renderChapterBlock(text string, width int) string {
 
 	// 按 ThinkingSep 分割：奇数段是思考，偶数段是正文
 	// 格式：[正文] \x02 [思考] [正文] \x02 [思考] ...
-	parts := strings.Split(text, orchestrator.ThinkingSep)
+	parts := strings.Split(text, utils.ThinkingSep)
 
 	var b strings.Builder
 	for i, part := range parts {

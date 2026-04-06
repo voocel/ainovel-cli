@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/action"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -92,10 +93,10 @@ func TestExecutePolicyActionsClearHandledSteerKeepsRewriteQueue(t *testing.T) {
 		scheduler: newTaskScheduler(rt),
 	}
 
-	s.executePolicyActions([]policyAction{
-		setPendingRewrites([]int{1}, "需要修复动机"),
-		setFlow(domain.FlowRewriting),
-		clearHandledSteerAction(),
+	s.executePolicyActions([]action.Action{
+		action.SetPendingRewrites([]int{1}, "需要修复动机"),
+		action.SetFlow(domain.FlowRewriting),
+		action.ClearHandledSteerAction(),
 	}, nil)
 
 	progress, err := store.Progress.Load()
@@ -167,7 +168,7 @@ func TestExecutePolicyActionsClearHandledSteerDoesNotFinishRuntimeCoordinatorTas
 		taskRT:    rt,
 		scheduler: newTaskScheduler(rt),
 	}
-	s.executePolicyActions([]policyAction{clearHandledSteerAction()}, nil)
+	s.executePolicyActions([]action.Action{action.ClearHandledSteerAction()}, nil)
 
 	tasks := rt.Snapshot()
 	statusByOwner := map[string]domain.TaskStatus{}

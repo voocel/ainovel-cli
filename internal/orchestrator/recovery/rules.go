@@ -1,70 +1,28 @@
-package orchestrator
+package recovery
 
 import (
 	"fmt"
 	"log/slog"
 	"strings"
 
+	orchestratoraction "github.com/voocel/ainovel-cli/internal/orchestrator/action"
+	orchestratorpolicy "github.com/voocel/ainovel-cli/internal/orchestrator/policy"
+
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-type recoveryRule func(recoverySnapshot) (bool, recoveryResult)
-
-type recoverySnapshot struct {
-	Progress *domain.Progress
-	RunMeta  *domain.RunMeta
-	Store    *storepkg.Store
-}
-
-type recoveryEngine struct {
-	rules []recoveryRule
-}
-
-var defaultRecoveryEngine = recoveryEngine{
-	rules: []recoveryRule{
-		recoveryPendingCommitRule,
-		recoveryTaskRule,
-		recoveryNewRule,
-		recoveryPlanningRule,
-		recoveryInProgressChapterRule,
-		recoveryPendingRewriteRule,
-		recoveryReviewingRule,
-		recoverySteeringResetRule,
-		recoveryPendingSteerRule,
-		recoveryLayeredPlanningRule,
-		recoveryResumableRule,
-	},
-}
-
-func (e recoveryEngine) evaluate(snapshot recoverySnapshot) recoveryResult {
-	for _, rule := range e.rules {
-		if matched, result := rule(snapshot); matched {
-			return result
-		}
-	}
-	return recoveryResult{IsNew: true}
-}
-
-func (s recoverySnapshot) withGuidance(prompt string) string {
-	guidance := planningTierGuidance(s.RunMeta)
-	if guidance == "" {
-		return prompt
-	}
-	return prompt + "\n" + guidance
-}
-
-func recoveryPendingCommitRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryPendingCommitRule(snapshot snapshot) (bool, Result) {
 	if snapshot.Store == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	pending, err := snapshot.Store.Signals.LoadPendingCommit()
 	if err != nil {
 		slog.Error("读取 pending_commit 失败", "module", "recovery", "err", err)
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	if pending == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
 	switch pending.Stage {
@@ -72,34 +30,34 @@ func recoveryPendingCommitRule(snapshot recoverySnapshot) (bool, recoveryResult)
 		result, recErr := reconcileCommittedChapter(snapshot, pending)
 		if recErr != nil {
 			slog.Error("补齐章节提交失败", "module", "recovery", "chapter", pending.Chapter, "stage", pending.Stage, "err", recErr)
-			return true, recoveryResult{
+			return true, Result{
 				PromptText: snapshot.withGuidance(pendingCommitManualPrompt(pending)),
 				Label:      fmt.Sprintf("恢复：第 %d 章提交中断（%s）", pending.Chapter, pending.Stage),
 			}
 		}
 		return true, result
 	default:
-		return true, recoveryResult{
+		return true, Result{
 			PromptText: snapshot.withGuidance(pendingCommitManualPrompt(pending)),
 			Label:      fmt.Sprintf("恢复：第 %d 章提交中断（%s）", pending.Chapter, pending.Stage),
 		}
 	}
 }
 
-func recoveryNewRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryNewRule(snapshot snapshot) (bool, Result) {
 	if snapshot.Progress != nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
-	return true, recoveryResult{IsNew: true}
+	return true, Result{IsNew: true}
 }
 
-func recoveryTaskRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryTaskRule(snapshot snapshot) (bool, Result) {
 	if snapshot.Store == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	tasks, err := snapshot.Store.Tasks.Load()
 	if err != nil || len(tasks) == 0 {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
 	var active *domain.TaskRecord
@@ -112,41 +70,41 @@ func recoveryTaskRule(snapshot recoverySnapshot) (bool, recoveryResult) {
 		break
 	}
 	if active == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
 	prompt, label := recoveryPromptFromTask(*active)
 	if prompt == "" {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(prompt),
 		Label:      label,
 	}
 }
 
-func recoveryPlanningRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryPlanningRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	if progress.Phase != domain.PhasePremise && progress.Phase != domain.PhaseOutline {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(
 			"上次在规划阶段中断。请调用 novel_context 检查当前基础设定状态，补全缺失的设定项（premise/outline/characters/world_rules），然后开始写作。"),
 		Label: fmt.Sprintf("恢复：规划阶段（%s）", progress.Phase),
 	}
 }
 
-func recoveryInProgressChapterRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryInProgressChapterRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || progress.InProgressChapter <= 0 {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	ch := progress.InProgressChapter
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"第 %d 章正在进行中，已有部分草稿。请调用 writer 继续完成该章（可用 read_chapter 读取已有草稿）。总共需要写 %d 章。",
 			ch, progress.TotalChapters)),
@@ -154,16 +112,16 @@ func recoveryInProgressChapterRule(snapshot recoverySnapshot) (bool, recoveryRes
 	}
 }
 
-func recoveryPendingRewriteRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryPendingRewriteRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || len(progress.PendingRewrites) == 0 {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	verb := "重写"
 	if progress.Flow == domain.FlowPolishing {
 		verb = "打磨"
 	}
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"上次审阅后有 %d 章被标记为待%s（受影响章节：%v）。原因：%s。\n"+
 				"请先调用 novel_context 读取相关章节原文，然后逐章调用 writer 执行%s。这是审阅阶段的确定性裁定，必须执行，不可跳过。\n"+
@@ -174,12 +132,12 @@ func recoveryPendingRewriteRule(snapshot recoverySnapshot) (bool, recoveryResult
 	}
 }
 
-func recoveryReviewingRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryReviewingRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || progress.Flow != domain.FlowReviewing {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"上次审阅中断，请重新调用 editor 对已完成章节进行全局审阅。已完成 %d 章，共 %d 字。总共需要写 %d 章。",
 			len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
@@ -187,19 +145,19 @@ func recoveryReviewingRule(snapshot recoverySnapshot) (bool, recoveryResult) {
 	}
 }
 
-func recoverySteeringResetRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoverySteeringResetRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || progress.Flow != domain.FlowSteering {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	if snapshot.RunMeta != nil && snapshot.RunMeta.PendingSteer != "" {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	if !progress.IsResumable() {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	next := progress.NextChapter()
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。",
 			next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
@@ -207,13 +165,13 @@ func recoverySteeringResetRule(snapshot recoverySnapshot) (bool, recoveryResult)
 	}
 }
 
-func recoveryPendingSteerRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryPendingSteerRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || !progress.IsResumable() || snapshot.RunMeta == nil || snapshot.RunMeta.PendingSteer == "" {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	next := progress.NextChapter()
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。\n\n[用户干预-恢复] %s\n请评估影响范围，决定是否需要修改设定或重写已有章节。",
 			next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters, snapshot.RunMeta.PendingSteer)),
@@ -222,20 +180,20 @@ func recoveryPendingSteerRule(snapshot recoverySnapshot) (bool, recoveryResult) 
 	}
 }
 
-func recoveryLayeredPlanningRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryLayeredPlanningRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || !progress.IsResumable() || !progress.Layered || snapshot.Store == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
 	next := progress.NextChapter()
 	if _, err := snapshot.Store.Outline.GetChapterOutline(next); err == nil {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
 	volumes := mustLoadLayered(snapshot.Store)
 	if vol, arc := domain.NextSkeletonArc(volumes, progress.CurrentVolume, progress.CurrentArc); vol > 0 {
-		return true, recoveryResult{
+		return true, Result{
 			PromptText: snapshot.withGuidance(fmt.Sprintf(
 				"上次弧级评审已完成，但第 %d 卷第 %d 弧尚未展开章节。请调用 architect_long 为该弧展开详细章节规划（save_foundation type=expand_arc, volume=%d, arc=%d），然后继续写作。已完成 %d 章，共 %d 字。",
 				vol, arc, vol, arc, len(progress.CompletedChapters), progress.TotalWordCount)),
@@ -251,10 +209,10 @@ func recoveryLayeredPlanningRule(snapshot recoverySnapshot) (bool, recoveryResul
 		}
 	}
 	if currentFinal {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"上次卷级评审已完成，需要创建下一卷。请调用 architect_long 自主规划下一卷（save_foundation type=append_volume），参考终局方向和已写内容决定方向，同时更新指南针（save_foundation type=update_compass），然后继续写作。已完成 %d 章，共 %d 字。",
 			len(progress.CompletedChapters), progress.TotalWordCount)),
@@ -262,13 +220,13 @@ func recoveryLayeredPlanningRule(snapshot recoverySnapshot) (bool, recoveryResul
 	}
 }
 
-func recoveryResumableRule(snapshot recoverySnapshot) (bool, recoveryResult) {
+func recoveryResumableRule(snapshot snapshot) (bool, Result) {
 	progress := snapshot.Progress
 	if progress == nil || !progress.IsResumable() {
-		return false, recoveryResult{}
+		return false, Result{}
 	}
 	next := progress.NextChapter()
-	return true, recoveryResult{
+	return true, Result{
 		PromptText: snapshot.withGuidance(fmt.Sprintf(
 			"从第 %d 章继续写作。之前已完成 %d 章，共 %d 字。总共需要写 %d 章。",
 			next, len(progress.CompletedChapters), progress.TotalWordCount, progress.TotalChapters)),
@@ -285,27 +243,27 @@ func mustLoadLayered(s *storepkg.Store) []domain.VolumeOutline {
 	return v
 }
 
-func reconcileCommittedChapter(snapshot recoverySnapshot, pending *domain.PendingCommit) (recoveryResult, error) {
+func reconcileCommittedChapter(snapshot snapshot, pending *domain.PendingCommit) (Result, error) {
 	if pending == nil || pending.Result == nil || snapshot.Store == nil {
-		return recoveryResult{}, fmt.Errorf("pending commit 缺少可恢复结果")
+		return Result{}, fmt.Errorf("pending commit 缺少可恢复结果")
 	}
 
-	actions := evaluateCommitPolicy(snapshot.Progress, snapshot.RunMeta, pending.Result)
-	if err := applyRecoveryCommitActions(actions, snapshot.Store); err != nil {
-		return recoveryResult{}, err
+	actions := orchestratorpolicy.EvaluateCommit(snapshot.Progress, snapshot.RunMeta, pending.Result)
+	if err := applyRecoveryCommitActions(actions, snapshot.Store, snapshot.SaveHandoff); err != nil {
+		return Result{}, err
 	}
 	if err := snapshot.Store.Signals.ClearLastCommit(); err != nil {
-		return recoveryResult{}, err
+		return Result{}, err
 	}
 	if err := snapshot.Store.Progress.ClearInProgress(); err != nil {
-		return recoveryResult{}, err
+		return Result{}, err
 	}
 	if err := snapshot.Store.Signals.ClearPendingCommit(); err != nil {
-		return recoveryResult{}, err
+		return Result{}, err
 	}
 
 	fallback := fallbackPostCommitPrompt(snapshot.Progress, pending.Result)
-	return recoveryResult{
+	return Result{
 		PromptText: snapshot.withGuidance(recoveryPromptFromActions(actions, fallback)),
 		Label:      fmt.Sprintf("恢复：补齐第 %d 章提交", pending.Chapter),
 	}, nil
@@ -349,31 +307,33 @@ func recoveryPromptFromTask(task domain.TaskRecord) (prompt string, label string
 	}
 }
 
-func applyRecoveryCommitActions(actions []policyAction, store *storepkg.Store) error {
+func applyRecoveryCommitActions(actions []orchestratoraction.Action, store *storepkg.Store, saveHandoff func(*storepkg.Store, string) error) error {
 	for _, action := range actions {
 		switch action.Kind {
-		case actionSetFlow:
+		case orchestratoraction.KindSetFlow:
 			if err := store.Progress.SetFlow(action.Flow); err != nil {
 				return err
 			}
-		case actionSetPendingRewrites:
+		case orchestratoraction.KindSetPendingRewrites:
 			if err := store.Progress.SetPendingRewrites(action.Chapters, action.Reason); err != nil {
 				return err
 			}
-		case actionCompleteRewrite:
+		case orchestratoraction.KindCompleteRewrite:
 			if err := store.Progress.CompleteRewrite(action.Chapter); err != nil {
 				return err
 			}
-		case actionSaveCheckpoint:
+		case orchestratoraction.KindSaveCheckpoint:
 			progress, _ := store.Progress.Load()
 			if err := store.RunMeta.SaveCheckpoint(action.Label, progress); err != nil {
 				return err
 			}
-		case actionSaveHandoff:
-			if err := saveHandoffSnapshot(store, action.Label); err != nil {
-				return err
+		case orchestratoraction.KindSaveHandoff:
+			if saveHandoff != nil {
+				if err := saveHandoff(store, action.Label); err != nil {
+					return err
+				}
 			}
-		case actionMarkComplete:
+		case orchestratoraction.KindMarkComplete:
 			if err := store.Progress.MarkComplete(); err != nil {
 				return err
 			}
@@ -382,10 +342,10 @@ func applyRecoveryCommitActions(actions []policyAction, store *storepkg.Store) e
 	return nil
 }
 
-func recoveryPromptFromActions(actions []policyAction, fallback string) string {
+func recoveryPromptFromActions(actions []orchestratoraction.Action, fallback string) string {
 	var parts []string
 	for _, action := range actions {
-		if action.Kind == actionFollowUp && strings.TrimSpace(action.Message) != "" {
+		if action.Kind == orchestratoraction.KindFollowUp && strings.TrimSpace(action.Message) != "" {
 			parts = append(parts, strings.TrimSpace(action.Message))
 		}
 	}

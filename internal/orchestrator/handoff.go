@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/recovery"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -64,13 +65,13 @@ func buildHandoffPack(store *storepkg.Store, reason string) (*domain.HandoffPack
 		wordCount := progress.ChapterWordCounts[lastCh]
 		pack.LastCommit = fmt.Sprintf("第%d章已完成，约%d字。下一章=%d。", lastCh, wordCount, progress.NextChapter())
 		if review, reviewErr := store.World.LoadLastReview(lastCh); reviewErr == nil && review != nil {
-			pack.LastReview = fmt.Sprintf("最近审阅 verdict=%s，summary=%s", review.Verdict, truncateLog(review.Summary, 80))
+			pack.LastReview = fmt.Sprintf("最近审阅 verdict=%s，summary=%s", review.Verdict, handoffTruncateText(review.Summary, 80))
 		}
 	}
 	if summaries, err := store.Summaries.LoadRecentSummaries(progress.NextChapter(), 3); err == nil {
 		for _, summary := range summaries {
 			pack.RecentSummaries = append(pack.RecentSummaries,
-				fmt.Sprintf("第%d章：%s", summary.Chapter, truncateLog(summary.Summary, 80)))
+				fmt.Sprintf("第%d章：%s", summary.Chapter, handoffTruncateText(summary.Summary, 80)))
 		}
 	}
 	pack.Guidance = buildHandoffGuidance(progress, runMeta)
@@ -80,7 +81,7 @@ func buildHandoffPack(store *storepkg.Store, reason string) (*domain.HandoffPack
 func buildHandoffGuidance(progress *domain.Progress, runMeta *domain.RunMeta) []string {
 	var guidance []string
 	guidance = append(guidance, "优先依赖 handoff pack、chapter contract、recent summaries 和 review，不要假设你还记得旧对话。")
-	policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(totalChapters(progress)), false)
+	policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(handoffTotalChapters(progress)), false)
 	if progress != nil {
 		if progress.Flow == domain.FlowReviewing {
 			guidance = append(guidance, "当前处于审阅流程，先完成 editor 相关动作，再决定是否继续写新章。")
@@ -101,36 +102,36 @@ func buildHandoffGuidance(progress *domain.Progress, runMeta *domain.RunMeta) []
 	return guidance
 }
 
-func applyHandoffToRecovery(store *storepkg.Store, recovery recoveryResult) recoveryResult {
-	if store == nil || recovery.IsNew {
-		return recovery
+func applyHandoffToRecovery(store *storepkg.Store, rec recovery.Result) recovery.Result {
+	if store == nil || rec.IsNew {
+		return rec
 	}
 	progress, _ := store.Progress.Load()
 	if !shouldUseHandoff(progress) {
-		return recovery
+		return rec
 	}
 	pack, err := store.World.LoadHandoffPack()
 	if err != nil || pack == nil {
 		pack, _ = buildHandoffPack(store, "recovery")
 	}
 	if pack == nil {
-		return recovery
+		return rec
 	}
 	if pack.MemoryPolicy == nil {
-		policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(totalChapters(progress)), false)
+		policy := domain.NewChapterMemoryPolicy(progress, domain.NewContextProfile(handoffTotalChapters(progress)), false)
 		pack.MemoryPolicy = &policy
 	}
 	body := renderHandoffPack(*pack)
 	if body == "" {
-		return recovery
+		return rec
 	}
-	recovery.PromptText = body + "\n\n" + recovery.PromptText
-	if recovery.Label != "" {
-		recovery.Label += " + Handoff"
+	rec.PromptText = body + "\n\n" + rec.PromptText
+	if rec.Label != "" {
+		rec.Label += " + Handoff"
 	} else {
-		recovery.Label = "Handoff 恢复"
+		rec.Label = "Handoff 恢复"
 	}
-	return recovery
+	return rec
 }
 
 func renderHandoffPack(pack domain.HandoffPack) string {
@@ -180,9 +181,17 @@ func renderHandoffPack(pack domain.HandoffPack) string {
 	return strings.Join(lines, "\n")
 }
 
-func totalChapters(progress *domain.Progress) int {
+func handoffTotalChapters(progress *domain.Progress) int {
 	if progress == nil {
 		return 0
 	}
 	return progress.TotalChapters
+}
+
+func handoffTruncateText(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }

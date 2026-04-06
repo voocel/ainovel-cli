@@ -11,6 +11,8 @@ import (
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/ctxpack"
+	"github.com/voocel/ainovel-cli/internal/orchestrator/recovery"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -18,24 +20,24 @@ import (
 // Engine 是独立于 UI 的会话执行内核。
 // 它负责模型装配后的主循环、事件流、恢复、干预与生命周期管理。
 type Engine struct {
-	cfg            bootstrap.Config
-	models         *bootstrap.ModelSet
-	store          *storepkg.Store
-	taskRT         *novelTaskRuntime
-	scheduler      *taskScheduler
-	agents         *agentBoard
-	coordinator    *agentcore.Agent
-	session        *session
-	askUser        *tools.AskUserTool
-	writerRestore  *writerRestorePack
-	events         chan UIEvent
-	streamCh       chan string
-	clearCh        chan struct{}
-	done           chan struct{}
-	mu             sync.Mutex
-	controlMu      sync.Mutex
-	running        bool
-	closeOnce      sync.Once
+	cfg           bootstrap.Config
+	models        *bootstrap.ModelSet
+	store         *storepkg.Store
+	taskRT        *novelTaskRuntime
+	scheduler     *taskScheduler
+	agents        *agentBoard
+	coordinator   *agentcore.Agent
+	session       *session
+	askUser       *tools.AskUserTool
+	writerRestore *ctxpack.WriterRestorePack
+	events        chan UIEvent
+	streamCh      chan string
+	clearCh       chan struct{}
+	done          chan struct{}
+	mu            sync.Mutex
+	controlMu     sync.Mutex
+	running       bool
+	closeOnce     sync.Once
 }
 
 const coordinatorRuntimeOwner = "runtime"
@@ -402,7 +404,7 @@ func (eng *Engine) enqueueControl(intent domain.ControlIntent) (domain.ControlIn
 	return queued, nil
 }
 
-func (eng *Engine) prepareResumeControl(intent domain.ControlIntent, recovery recoveryResult) (domain.ControlIntent, error) {
+func (eng *Engine) prepareResumeControl(intent domain.ControlIntent, recovery recovery.Result) (domain.ControlIntent, error) {
 	if eng.store == nil || eng.store.Runtime == nil {
 		return intent, nil
 	}
