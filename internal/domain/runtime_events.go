@@ -118,6 +118,7 @@ const (
 	ControlIntentResumePrompt ControlIntentKind = "resume_prompt"
 	ControlIntentSteerMessage ControlIntentKind = "steer_message"
 	ControlIntentFollowUp     ControlIntentKind = "follow_up"
+	ControlIntentRunTask      ControlIntentKind = "run_task"
 )
 
 // ControlIntent 是持久化控制队列中的一项。

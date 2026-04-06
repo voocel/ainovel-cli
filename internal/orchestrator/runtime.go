@@ -173,7 +173,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 
 	snap.Agents = rt.agents.Snapshot()
 	snap.Tasks = rt.taskSnapshots()
-	if snap.InProgressChapter == 0 {
+	if snap.InProgressChapter == 0 && snap.IsRunning {
 		snap.InProgressChapter = activeChapterFromTasks(snap.Tasks)
 	}
 	rt.fillContextStatus(&snap)
@@ -195,7 +195,7 @@ func (rt *Runtime) Snapshot() UISnapshot {
 
 func activeChapterFromTasks(tasks []TaskSnapshot) int {
 	for _, task := range tasks {
-		if task.Status != string(domain.TaskRunning) && task.Status != string(domain.TaskQueued) {
+		if task.Status != string(domain.TaskRunning) {
 			continue
 		}
 		switch task.Kind {
@@ -355,16 +355,23 @@ func roleLabel(role string) string {
 }
 
 func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) string {
+	tasks := rt.taskSnapshots()
 	if progress == nil {
+		if hasPendingResumeState(nil, tasks) {
+			return "PAUSED"
+		}
 		return "READY"
 	}
 	if progress.Phase == domain.PhaseComplete {
 		return "COMPLETE"
 	}
 	if !isRunning {
+		if hasPendingResumeState(progress, tasks) {
+			return "PAUSED"
+		}
 		return "READY"
 	}
-	for _, task := range rt.taskSnapshots() {
+	for _, task := range tasks {
 		if task.Status != string(domain.TaskRunning) && task.Status != string(domain.TaskQueued) {
 			continue
 		}
@@ -383,6 +390,18 @@ func (rt *Runtime) deriveStatusLabel(progress *domain.Progress, isRunning bool) 
 	default:
 		return "RUNNING"
 	}
+}
+
+func hasPendingResumeState(progress *domain.Progress, tasks []TaskSnapshot) bool {
+	for _, task := range tasks {
+		if task.Status == string(domain.TaskQueued) || task.Status == string(domain.TaskRunning) {
+			return true
+		}
+	}
+	if progress == nil {
+		return false
+	}
+	return len(progress.PendingRewrites) > 0 || progress.Flow == domain.FlowSteering || progress.IsResumable()
 }
 
 func (rt *Runtime) taskSnapshots() []TaskSnapshot {

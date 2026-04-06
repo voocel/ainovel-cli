@@ -727,3 +727,63 @@ func TestSessionRefreshesWriterRestoreAfterRelevantTools(t *testing.T) {
 		t.Fatalf("expected refresh after save_foundation, got %d", refreshCalls)
 	}
 }
+
+func TestSessionAutoContinueIntentUsesQueuedWriteTask(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Queue(domain.TaskChapterWrite, "writer", "创作第 2 章", "等待写作", taskLocation{Chapter: 2}); err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	sess := newSession(nil, store, rt, nil, "", nil, nil, nil, nil, nil)
+
+	intent, ok := sess.autoContinueIntent()
+	if !ok {
+		t.Fatal("expected auto continue intent")
+	}
+	if intent.Kind != domain.ControlIntentRunTask {
+		t.Fatalf("expected follow_up intent, got %+v", intent)
+	}
+	if intent.TaskKind != domain.TaskChapterWrite {
+		t.Fatalf("expected chapter_write task kind, got %s", intent.TaskKind)
+	}
+	if !strings.Contains(intent.Message, "创作第 2 章") {
+		t.Fatalf("unexpected auto continue message: %q", intent.Message)
+	}
+}
+
+func TestSessionAutoContinueIntentPrefersConcreteQueuedTask(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Queue(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", "", taskLocation{}); err != nil {
+		t.Fatalf("Queue coordinator: %v", err)
+	}
+	if _, err := rt.Queue(domain.TaskChapterReview, "editor", "评审第 3 章", "", taskLocation{Chapter: 3}); err != nil {
+		t.Fatalf("Queue review: %v", err)
+	}
+	sess := newSession(nil, store, rt, nil, "", nil, nil, nil, nil, nil)
+
+	intent, ok := sess.autoContinueIntent()
+	if !ok {
+		t.Fatal("expected auto continue intent")
+	}
+	if intent.Kind != domain.ControlIntentRunTask {
+		t.Fatalf("expected run_task intent, got %+v", intent)
+	}
+	if !strings.Contains(intent.Message, "评审第 3 章") {
+		t.Fatalf("expected concrete queued task to be selected, got %q", intent.Message)
+	}
+}

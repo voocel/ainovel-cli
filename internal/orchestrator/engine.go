@@ -494,12 +494,57 @@ func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 	case domain.ControlIntentSteerMessage:
 		eng.session.dispatchSteer(intent.Message)
 		return nil
+	case domain.ControlIntentRunTask:
+		return eng.runQueuedTaskIntent(intent)
 	case domain.ControlIntentFollowUp:
+		eng.mu.Lock()
+		wasRunning := eng.running
+		eng.mu.Unlock()
+		if !wasRunning {
+			taskKind := intent.TaskKind
+			if taskKind == "" {
+				taskKind = domain.TaskCoordinatorDecision
+			}
+			taskTitle := strings.TrimSpace(intent.TaskTitle)
+			if taskTitle == "" {
+				taskTitle = "继续协调小说任务"
+			}
+			taskInput := strings.TrimSpace(intent.TaskInput)
+			if taskInput == "" {
+				taskInput = strings.TrimSpace(intent.Message)
+			}
+			if _, err := eng.taskRT.Start(taskKind, coordinatorRuntimeOwner, taskTitle, taskInput, taskLocation{}); err != nil {
+				return fmt.Errorf("start coordinator task: %w", err)
+			}
+			eng.agents.Start("coordinator", "", taskKind, "正在"+taskTitle)
+			eng.mu.Lock()
+			eng.running = true
+			eng.mu.Unlock()
+			go eng.waitDone()
+		}
 		eng.coordinator.FollowUp(agentcore.UserMsg(intent.Message))
 		return nil
 	default:
 		return fmt.Errorf("unknown control intent: %s", intent.Kind)
 	}
+}
+
+func (eng *Engine) runQueuedTaskIntent(intent domain.ControlIntent) error {
+	eng.mu.Lock()
+	wasRunning := eng.running
+	eng.mu.Unlock()
+	if !wasRunning {
+		if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", taskDispatchSummary(intent), taskLocation{}); err != nil {
+			return fmt.Errorf("start coordinator task: %w", err)
+		}
+		eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在继续协调小说任务")
+		eng.mu.Lock()
+		eng.running = true
+		eng.mu.Unlock()
+		go eng.waitDone()
+	}
+	eng.coordinator.FollowUp(agentcore.UserMsg(taskDispatchPrompt(intent)))
+	return nil
 }
 
 // Done 返回完成信号通道。
@@ -523,12 +568,111 @@ func (eng *Engine) waitDone() {
 	eng.coordinator.WaitForIdle()
 	eng.session.finalizeSteerIfIdle()
 	_ = eng.taskRT.CompleteActive(coordinatorRuntimeOwner)
+	eng.agents.Idle("coordinator", "待命")
 	eng.mu.Lock()
 	eng.running = false
 	eng.mu.Unlock()
-	eng.agents.Idle("coordinator", "待命")
+	if eng.tryAutoContinueAfterIdle() {
+		return
+	}
 	select {
 	case eng.done <- struct{}{}:
 	default:
 	}
+}
+
+func (eng *Engine) tryAutoContinueAfterIdle() bool {
+	if eng.store != nil && eng.store.Runtime != nil {
+		intent, err := eng.store.Runtime.PeekControl()
+		if err != nil {
+			eng.emit(UIEvent{
+				Time:     time.Now(),
+				Category: "ERROR",
+				Summary:  "检查控制队列失败: " + err.Error(),
+				Level:    "error",
+			})
+			return false
+		}
+		if intent != nil {
+			if err := eng.drainControlQueue(); err != nil {
+				eng.emit(UIEvent{
+					Time:     time.Now(),
+					Category: "ERROR",
+					Summary:  "控制队列处理失败: " + err.Error(),
+					Level:    "error",
+				})
+				return false
+			}
+			eng.mu.Lock()
+			running := eng.running
+			eng.mu.Unlock()
+			if running {
+				return true
+			}
+		}
+	}
+	intent, ok := eng.session.autoContinueIntent()
+	if !ok {
+		return false
+	}
+	eng.emit(UIEvent{
+		Time:     time.Now(),
+		Category: "SYSTEM",
+		Summary:  intent.Summary,
+		Level:    "info",
+	})
+	if err := eng.submitControl(intent); err != nil {
+		eng.emit(UIEvent{
+			Time:     time.Now(),
+			Category: "ERROR",
+			Summary:  "自动续跑失败: " + err.Error(),
+			Level:    "error",
+		})
+		return false
+	}
+	return true
+}
+
+func taskDispatchSummary(intent domain.ControlIntent) string {
+	if strings.TrimSpace(intent.Summary) != "" {
+		return intent.Summary
+	}
+	return "自动续跑任务"
+}
+
+func taskDispatchPrompt(intent domain.ControlIntent) string {
+	payload := map[string]string{}
+	for k, v := range intent.Payload {
+		payload[k] = strings.TrimSpace(v)
+	}
+
+	var b strings.Builder
+	b.WriteString("[系统-任务派发]\n")
+	b.WriteString("以下任务由宿主根据运行时状态确定，不需要你重新决定流程顺序。\n")
+	b.WriteString("请直接执行该任务；只有在任务失败、数据缺失或系统状态冲突时，才中断并上报。\n\n")
+	b.WriteString("task:\n")
+	b.WriteString(fmt.Sprintf("- kind: %s\n", intent.TaskKind))
+	if owner := payload["owner"]; owner != "" {
+		b.WriteString(fmt.Sprintf("- owner: %s\n", owner))
+	}
+	if title := strings.TrimSpace(intent.TaskTitle); title != "" {
+		b.WriteString(fmt.Sprintf("- title: %s\n", title))
+	}
+	if chapter := payload["chapter"]; chapter != "" && chapter != "0" {
+		b.WriteString(fmt.Sprintf("- chapter: %s\n", chapter))
+	}
+	if volume := payload["volume"]; volume != "" && volume != "0" {
+		b.WriteString(fmt.Sprintf("- volume: %s\n", volume))
+	}
+	if arc := payload["arc"]; arc != "" && arc != "0" {
+		b.WriteString(fmt.Sprintf("- arc: %s\n", arc))
+	}
+	if input := strings.TrimSpace(intent.TaskInput); input != "" {
+		b.WriteString(fmt.Sprintf("- input: %s\n", input))
+	}
+	b.WriteString("\n执行要求：\n")
+	b.WriteString("1. 立即处理这个任务，不要重复讨论“下一步做什么”。\n")
+	b.WriteString("2. 任务完成后继续推进后续任务，除非系统状态明确要求停止。\n")
+	b.WriteString("3. 如果任务与当前状态冲突，先明确指出冲突原因，再请求修正。\n")
+	return b.String()
 }

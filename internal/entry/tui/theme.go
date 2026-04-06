@@ -21,6 +21,7 @@ var (
 // 状态标签颜色映射
 var statusColors = map[string]lipgloss.AdaptiveColor{
 	"READY":    colorDim,
+	"PAUSED":   colorAccent,
 	"RUNNING":  colorRunning,
 	"REVIEW":   colorReview,
 	"REWRITE":  colorReview,

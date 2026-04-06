@@ -117,7 +117,11 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
 	}
 	if headline := snapshotHeadline(tasks, snap); headline != "" {
-		overview.WriteString(renderHighlightField("当前", truncate(headline, contentW-10)))
+		label := "当前"
+		if !snap.IsRunning {
+			label = "待恢复"
+		}
+		overview.WriteString(renderHighlightField(label, truncate(headline, contentW-10)))
 	}
 	sections = append(sections, renderSidebarSection("概览", overview.String(), contentW))
 
@@ -316,12 +320,22 @@ func sidebarTasks(tasks []orchestrator.TaskSnapshot) []orchestrator.TaskSnapshot
 
 func snapshotHeadline(tasks []orchestrator.TaskSnapshot, snap orchestrator.UISnapshot) string {
 	if len(tasks) > 0 {
-		return taskListTitle(tasks[0])
+		title := taskListTitle(tasks[0])
+		if !snap.IsRunning && tasks[0].Status == "queued" {
+			return "待恢复：" + title
+		}
+		return title
 	}
 	if snap.PendingSteer != "" {
+		if !snap.IsRunning {
+			return "待恢复：处理用户干预"
+		}
 		return "等待处理用户干预"
 	}
 	if len(snap.PendingRewrites) > 0 {
+		if !snap.IsRunning {
+			return "待恢复：返工处理"
+		}
 		return "等待返工处理"
 	}
 	return ""

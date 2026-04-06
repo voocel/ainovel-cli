@@ -44,8 +44,8 @@ github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc
 github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3VfY/Cnk=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
-github.com/voocel/agentcore v1.6.0 h1:olMgqdqyHeaIwDzNaU9l1ZcmMKC/z5tBttWk56TWMB8=
-github.com/voocel/agentcore v1.6.0/go.mod h1:gG3cQIuoG5extUNWrmMmRov72yrqfBassNlU66SJSKc=
+github.com/voocel/agentcore v1.6.1 h1:eUf+R4Wb0QrK6A/o3J0Uhkv+LXs+MmlUN1nBrXViroo=
+github.com/voocel/agentcore v1.6.1/go.mod h1:gG3cQIuoG5extUNWrmMmRov72yrqfBassNlU66SJSKc=
 github.com/voocel/litellm v1.6.5 h1:4UaZ0Br9P0+0cJvgrj/V0OBUWi8ILwfSFCDrd0GJbLk=
 github.com/voocel/litellm v1.6.5/go.mod h1:6MBUu3I4DHm7h72Vl+3nqLruSwYmgqMf/I9BGoordJ4=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=

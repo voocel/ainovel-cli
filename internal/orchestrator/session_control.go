@@ -402,6 +402,83 @@ func (s *session) handleEditorDone(emit emitFn) {
 	s.executePolicyActions(actions, emit)
 }
 
+func (s *session) autoContinueIntent() (domain.ControlIntent, bool) {
+	if s == nil || s.taskRT == nil {
+		return domain.ControlIntent{}, false
+	}
+	task, ok := nextQueuedTaskForAutoContinue(s.taskRT.Snapshot())
+	if !ok {
+		return domain.ControlIntent{}, false
+	}
+	message := autoContinueMessage(task)
+	return domain.ControlIntent{
+		Kind:      domain.ControlIntentRunTask,
+		Priority:  domain.RuntimePriorityControl,
+		Summary:   autoContinueSummary(task),
+		Message:   message,
+		TaskKind:  task.Kind,
+		TaskTitle: task.Title,
+		TaskInput: task.Input,
+		Payload: map[string]string{
+			"owner":   task.Owner,
+			"chapter": fmt.Sprintf("%d", task.Chapter),
+			"volume":  fmt.Sprintf("%d", task.Volume),
+			"arc":     fmt.Sprintf("%d", task.Arc),
+		},
+	}, true
+}
+
+func nextQueuedTaskForAutoContinue(tasks []domain.TaskRecord) (domain.TaskRecord, bool) {
+	for _, task := range tasks {
+		if task.Status != domain.TaskQueued {
+			continue
+		}
+		if task.Owner == coordinatorRuntimeOwner {
+			continue
+		}
+		return task, true
+	}
+	for _, task := range tasks {
+		if task.Status == domain.TaskQueued {
+			return task, true
+		}
+	}
+	return domain.TaskRecord{}, false
+}
+
+func autoContinueSummary(task domain.TaskRecord) string {
+	return "自动续跑：" + task.Title
+}
+
+func autoContinueMessage(task domain.TaskRecord) string {
+	switch task.Kind {
+	case domain.TaskFoundationPlan:
+		return "[系统] 检测到待处理任务：规划故事基础设定。请立即调用合适的 architect 子智能体完成基础设定规划，然后继续推进后续任务。"
+	case domain.TaskChapterWrite:
+		return fmt.Sprintf("[系统] 检测到待处理任务：创作第 %d 章。请立即调用 writer 创作第 %d 章，并在提交后继续自动推进后续任务。", task.Chapter, task.Chapter)
+	case domain.TaskChapterReview:
+		if task.Chapter > 0 {
+			return fmt.Sprintf("[系统] 检测到待处理任务：评审第 %d 章。请立即调用 editor 执行评审，并根据结果继续推进。", task.Chapter)
+		}
+		return "[系统] 检测到待处理任务：执行章节评审。请立即调用 editor 执行评审，并根据结果继续推进。"
+	case domain.TaskChapterRewrite:
+		return fmt.Sprintf("[系统] 检测到待处理任务：重写第 %d 章。请立即调用 writer 重写该章，完成后继续处理后续任务。", task.Chapter)
+	case domain.TaskChapterPolish:
+		return fmt.Sprintf("[系统] 检测到待处理任务：打磨第 %d 章。请立即调用 writer 打磨该章，完成后继续处理后续任务。", task.Chapter)
+	case domain.TaskArcExpand:
+		return fmt.Sprintf("[系统] 检测到待处理任务：展开第 %d 卷第 %d 弧。请立即调用 architect_long 展开该弧的详细章节规划，然后继续写作。", task.Volume, task.Arc)
+	case domain.TaskVolumeAppend:
+		return "[系统] 检测到待处理任务：规划下一卷。请立即调用 architect_long 规划下一卷并更新指南针，然后继续写作。"
+	case domain.TaskSteerApply:
+		return "[系统] 检测到待处理任务：处理用户干预。请优先评估影响范围，处理干预，再继续后续任务。"
+	case domain.TaskCoordinatorDecision:
+		return "[系统] 当前仍有待处理工作。请继续协调并推进下一步，不要停止。"
+	default:
+		return fmt.Sprintf("[系统] 检测到待处理任务：%s。请立即处理并继续推进后续任务。", task.Title)
+	}
+}
+
+
 func reviewOutputRef(review domain.ReviewEntry) string {
 	switch review.Scope {
 	case "global":
