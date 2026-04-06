@@ -2,14 +2,10 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
-	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -108,11 +104,9 @@ const restoreBudgetTokens = 6000
 // (chapter start, commit, recovery) and consumed by the PostSummaryHook as a
 // pure in-memory injection — no I/O in the hook path.
 type writerRestorePack struct {
-	mu       sync.RWMutex
-	plan     *domain.ChapterPlan
-	outline  *domain.OutlineEntry
-	snaps    []domain.CharacterSnapshot
-	chapter  int
+	mu      sync.RWMutex
+	text    string
+	chapter int
 }
 
 // Refresh loads the current chapter's context from store and caches it.
@@ -136,28 +130,23 @@ func (p *writerRestorePack) Refresh(s *store.Store) {
 		return
 	}
 
-	plan, _ := s.Drafts.LoadChapterPlan(ch)
-	outline, _ := s.Outline.GetChapterOutline(ch)
-	if outline == nil {
-		outline, _ = s.Outline.GetChapterFromLayered(ch)
+	text, ok, err := buildWriterRestoreText(s, restoreBudgetTokens)
+	if err != nil || !ok {
+		p.Clear()
+		return
 	}
-	snaps, _ := s.Characters.LoadLatestSnapshots()
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.chapter = ch
-	p.plan = plan
-	p.outline = outline
-	p.snaps = snaps
+	p.text = text
 }
 
 // Clear drops cached data (e.g., when switching chapters).
 func (p *writerRestorePack) Clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.plan = nil
-	p.outline = nil
-	p.snaps = nil
+	p.text = ""
 	p.chapter = 0
 }
 
@@ -180,54 +169,13 @@ func (p *writerRestorePack) buildMessage(budgetTokens int) (agentcore.Message, b
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if p.plan == nil && p.outline == nil && len(p.snaps) == 0 {
+	if p.text == "" {
 		return agentcore.Message{}, false
 	}
-
-	type item struct {
-		heading string
-		data    any
-	}
-	// Priority order: plan first, outline second, snapshots last.
-	candidates := []item{
-		{"当前章节计划", p.plan},
-		{"当前章节大纲", p.outline},
-		{"角色快照", p.snaps},
-	}
-
-	var parts []string
-	remaining := budgetTokens
-	for _, c := range candidates {
-		if c.data == nil {
-			continue
-		}
-		// Skip empty slices
-		if snaps, ok := c.data.([]domain.CharacterSnapshot); ok && len(snaps) == 0 {
-			continue
-		}
-		b, err := json.Marshal(c.data)
-		if err != nil {
-			continue
-		}
-		tokens := corecontext.EstimateTokens(agentcore.UserMsg(string(b)))
-		if tokens > remaining {
-			// Try truncating (keep first N bytes that fit)
-			if remaining > 100 {
-				truncated := truncateJSONToTokens(b, remaining)
-				parts = append(parts, fmt.Sprintf("## %s\n%s [已截断]", c.heading, truncated))
-			}
-			break // budget exhausted, skip lower-priority items
-		}
-		remaining -= tokens
-		parts = append(parts, fmt.Sprintf("## %s\n%s", c.heading, string(b)))
-	}
-
-	if len(parts) == 0 {
+	if budgetTokens > 0 && corecontext.EstimateTokens(agentcore.UserMsg(p.text)) > budgetTokens {
 		return agentcore.Message{}, false
 	}
-
-	text := "<post-compact-context>\n" + strings.Join(parts, "\n\n") + "\n</post-compact-context>"
-	return agentcore.UserMsg(text), true
+	return agentcore.UserMsg(p.text), true
 }
 
 // truncateJSONToTokens keeps the first portion of JSON bytes that fits within

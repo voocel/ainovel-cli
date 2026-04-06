@@ -111,6 +111,12 @@ func BuildCoordinator(
 				ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
 					IdleThreshold: 5 * time.Minute,
 				},
+				ExtraStrategies: []corecontext.Strategy{
+					NewStoreSummaryCompact(StoreSummaryCompactConfig{
+						Store:            store,
+						KeepRecentTokens: 20000,
+					}),
+				},
 				Summary: &corecontext.FullSummaryConfig{
 					PostSummaryHooks:    []corecontext.PostSummaryHook{restore.Hook()},
 					SystemPrompt:        writerSummarySystemPrompt,
@@ -172,8 +178,9 @@ type contextManagerConfig struct {
 	Emit             emitFn
 	CommitOnProject  bool
 	AppendBoundary   func(domain.RuntimeQueueItem)
-	Summary          *corecontext.FullSummaryConfig              // nil = defaults
-	ToolMicrocompact *corecontext.ToolResultMicrocompactConfig   // nil = defaults
+	Summary          *corecontext.FullSummaryConfig            // nil = defaults
+	ToolMicrocompact *corecontext.ToolResultMicrocompactConfig // nil = defaults
+	ExtraStrategies  []corecontext.Strategy
 }
 
 func newContextManager(cfg contextManagerConfig) agentcore.ContextManager {
@@ -189,19 +196,20 @@ func newContextManager(cfg contextManagerConfig) agentcore.ContextManager {
 	if cfg.ToolMicrocompact != nil {
 		tc = *cfg.ToolMicrocompact
 	}
+	strategies := []corecontext.Strategy{
+		corecontext.NewToolResultMicrocompact(tc),
+		corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
+	}
+	strategies = append(strategies, cfg.ExtraStrategies...)
+	strategies = append(strategies, corecontext.NewFullSummary(sc))
 	engine := corecontext.NewEngine(corecontext.EngineConfig{
 		ContextWindow:   cfg.ContextWindow,
 		ReserveTokens:   cfg.ReserveTokens,
 		CommitOnProject: cfg.CommitOnProject,
-		Strategies: []corecontext.Strategy{
-			corecontext.NewToolResultMicrocompact(tc),
-			corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
-			corecontext.NewFullSummary(sc),
-		},
+		Strategies:      strategies,
 	})
 	callback := contextRewriteCallback(cfg.Agent, cfg.Emit, cfg.AppendBoundary)
 	engine.SetProjectHook(callback)
 	engine.SetRecoverHook(callback)
 	return engine
 }
-
