@@ -604,6 +604,8 @@ func emitIntermediateStepEvents(emit emitFn, agent string, ev corecontext.Rewrit
 
 func runtimeContextBoundaryKind(ev corecontext.RewriteEvent) string {
 	switch {
+	case ev.Reason == "circuit_breaker":
+		return "skipped"
 	case ev.Reason == "overflow":
 		return "recovered"
 	case ev.Committed:
@@ -624,6 +626,9 @@ func formatContextRewriteSummary(agent string, ev corecontext.RewriteEvent, boun
 		label = "已提交压缩"
 	case "recovered":
 		label = "恢复压缩"
+	case "skipped":
+		return fmt.Sprintf("%s 压缩已跳过: 连续失败%d次触发熔断 上下文%d tok",
+			agent, ev.Failures, ev.TokensBefore)
 	}
 	summary := fmt.Sprintf("%s %s: %s %d→%d tok (%d%%)",
 		agent, label, ev.Strategy, ev.TokensBefore, ev.TokensAfter, ratio)

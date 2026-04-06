@@ -113,7 +113,7 @@ func TestSessionRecoveryAppliesHandoff(t *testing.T) {
 		t.Fatalf("SaveHandoffPack: %v", err)
 	}
 
-	sess := newSession(nil, s, nil, nil, "openrouter", nil, nil, nil, nil)
+	sess := newSession(nil, s, nil, nil, "openrouter", nil, nil, nil, nil, nil)
 	recovery := sess.recovery()
 	if !strings.Contains(recovery.Label, "Handoff") {
 		t.Fatalf("expected handoff label, got %q", recovery.Label)

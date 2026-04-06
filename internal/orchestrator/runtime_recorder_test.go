@@ -94,7 +94,7 @@ func TestRuntimeRecorderFlushesStreamDeltaAtThreshold(t *testing.T) {
 
 func TestSessionFlushesPendingStreamOnMessageEnd(t *testing.T) {
 	store := storepkg.NewStore(t.TempDir())
-	sess := newSession(nil, store, nil, nil, "", nil, func(string) {}, func() {}, nil)
+	sess := newSession(nil, store, nil, nil, "", nil, func(string) {}, func() {}, nil, nil)
 
 	sess.handleMessageStart()
 	sess.emitDisplayDelta("writer", "未结束的输出")

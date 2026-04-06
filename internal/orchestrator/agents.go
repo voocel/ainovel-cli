@@ -11,14 +11,14 @@ import (
 )
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
-// 返回 Agent 和 AskUserTool（供调用方注入 handler）。
+// 返回 Agent、AskUserTool 和 writerRestorePack（供调用方在写章生命周期中 Refresh）。
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
 	emit emitFn,
-) (*agentcore.Agent, *tools.AskUserTool) {
+) (*agentcore.Agent, *tools.AskUserTool, *writerRestorePack) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
 	readChapter := tools.NewReadChapterTool(store)
@@ -87,6 +87,9 @@ func BuildCoordinator(
 		writerPrompt += "\n\n" + style
 	}
 
+	restore := &writerRestorePack{}
+	restore.Refresh(store) // initial load
+
 	writer := agentcore.SubAgentConfig{
 		Name:         "writer",
 		Description:  "创作者：自主完成一章的构思、写作、自审和提交",
@@ -100,7 +103,7 @@ func BuildCoordinator(
 					return
 				}
 				_, _ = store.Runtime.AppendQueue(item)
-			})
+			}, restore.Hook())
 		},
 	}
 
@@ -127,10 +130,10 @@ func BuildCoordinator(
 			_, _ = store.Runtime.AppendQueue(item)
 		})),
 	)
-	return agent, askUser
+	return agent, askUser, restore
 }
 
-func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn, commitOnProject bool, appendBoundary func(domain.RuntimeQueueItem)) agentcore.ContextManager {
+func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, keepRecentTokens int, agent string, emit emitFn, commitOnProject bool, appendBoundary func(domain.RuntimeQueueItem), hooks ...corecontext.PostSummaryHook) agentcore.ContextManager {
 	engine := corecontext.NewEngine(corecontext.EngineConfig{
 		ContextWindow:   contextWindow,
 		ReserveTokens:   reserveTokens,
@@ -141,6 +144,7 @@ func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, 
 			corecontext.NewFullSummary(corecontext.FullSummaryConfig{
 				Model:            model,
 				KeepRecentTokens: keepRecentTokens,
+				PostSummaryHooks: hooks,
 			}),
 		},
 	})
@@ -149,3 +153,4 @@ func newContextManager(model agentcore.ChatModel, contextWindow, reserveTokens, 
 	engine.SetRecoverHook(callback)
 	return engine
 }
+

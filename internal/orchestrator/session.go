@@ -37,9 +37,10 @@ type session struct {
 	reminders           *reminderEngine
 	pendingClear        bool
 	diagActionKeys      map[string]struct{}
+	refreshWriterRestore func()
 }
 
-func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, enqueueCtrl func(domain.ControlIntent) error) *session {
+func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, enqueueCtrl func(domain.ControlIntent) error, refreshWriterRestore func()) *session {
 	return &session{
 		coordinator:    coordinator,
 		store:          store,
@@ -57,6 +58,7 @@ func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *nov
 		subFilter:      newStreamFilter("content"),
 		reminders:      newReminderEngine(store),
 		diagActionKeys: make(map[string]struct{}),
+		refreshWriterRestore: refreshWriterRestore,
 	}
 }
 
@@ -505,6 +507,9 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 		s.handleAskUserEnd(ev)
 		return
 	}
+	if s.refreshWriterRestore != nil && toolAffectsWriterRestore(ev.Tool) {
+		s.refreshWriterRestore()
+	}
 	if ev.Tool == "save_foundation" {
 		if s.taskRT != nil {
 			_ = s.taskRT.AttachOutputRef("architect", foundationOutputRef(ev.Result))
@@ -522,6 +527,15 @@ func (s *session) handleToolExecEnd(ev agentcore.Event) {
 		s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: ev.Tool + ".done", Level: "info"})
 	}
 	s.recorder.logTaskEvent("", "tool_done", ev.Tool, ev.Tool+".done", nil)
+}
+
+func toolAffectsWriterRestore(tool string) bool {
+	switch tool {
+	case "plan_chapter", "save_foundation", "commit_chapter":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *session) handleToolExecError(ev agentcore.Event) {

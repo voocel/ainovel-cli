@@ -1,6 +1,10 @@
 package tui
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // --- 辅助函数 ---
 
@@ -26,11 +30,29 @@ func renderHighlightField(label, value string) string {
 	return fieldLabelStyle.Render(label) + highlightValueStyle.Render(value) + "\n"
 }
 
+// contextPercentColor returns a health-gradient color based on context usage.
+// Mirrors Claude Code's calculateTokenWarningState concept:
+//   - < 70%: green (healthy headroom)
+//   - 70-85%: yellow (approaching compression threshold)
+//   - > 85%: red (compression imminent or active)
+func contextPercentColor(percent float64) lipgloss.AdaptiveColor {
+	switch {
+	case percent >= 85:
+		return colorError
+	case percent >= 70:
+		return colorReview
+	default:
+		return colorSuccess
+	}
+}
+
 func renderContextUsageField(label string, percent float64, tokens, window int) string {
 	if window <= 0 || tokens <= 0 {
 		return ""
 	}
-	usage := highlightValueStyle.Render(fmt.Sprintf("%.0f%%", percent)) +
+	percentColor := contextPercentColor(percent)
+	usage := lipgloss.NewStyle().Foreground(percentColor).Bold(true).
+		Render(fmt.Sprintf("%.0f%%", percent)) +
 		contextUsageMetaStyle.Render(" · ") +
 		contextUsageMetaStyle.Render(fmt.Sprintf("%s/%s", formatNumber(tokens), formatNumber(window)))
 	return fieldLabelStyle.Render(label) + usage + "\n"

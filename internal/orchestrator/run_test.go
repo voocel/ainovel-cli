@@ -25,7 +25,7 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, nil, nil, "", nil, nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -57,7 +57,7 @@ func TestFinalizeSteerIfIdleKeepsActiveFlow(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, nil, nil, "", nil, nil, nil, nil).finalizeSteerIfIdle()
+	newSession(nil, store, nil, nil, "", nil, nil, nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -392,7 +392,7 @@ func TestSessionDelaysStreamClearUntilFirstVisibleDelta(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
-		nil,
+		nil, nil,
 	)
 
 	sess.handleMessageStart()
@@ -433,7 +433,7 @@ func TestSessionClearsOnlyOncePerVisibleRound(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
-		nil,
+		nil, nil,
 	)
 
 	sess.handleMessageStart()
@@ -479,7 +479,7 @@ func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
-		nil,
+		nil, nil,
 	)
 
 	args, err := json.Marshal(map[string]any{
@@ -534,7 +534,7 @@ func TestSessionRunOperationalDiagEnqueuesFollowUpOncePerPersistentIssue(t *test
 	sess := newSession(nil, store, nil, nil, "", nil, nil, nil, func(intent domain.ControlIntent) error {
 		controls = append(controls, intent)
 		return nil
-	})
+	}, nil)
 
 	sess.runOperationalDiag()
 	sess.runOperationalDiag()
@@ -586,7 +586,7 @@ func TestSessionRunOperationalDiagEmitsNoticeForPhaseFlowMismatch(t *testing.T) 
 	}, nil, nil, func(intent domain.ControlIntent) error {
 		controls = append(controls, intent)
 		return nil
-	})
+	}, nil)
 
 	sess.runOperationalDiag()
 
@@ -612,7 +612,7 @@ func TestSessionDisplaysThinkingProgress(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, "delta:"+delta) },
 		func() { seq = append(seq, "clear") },
-		nil,
+		nil, nil,
 	)
 
 	sess.handleMessageStart()
@@ -639,7 +639,7 @@ func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 	sess := newSession(nil, nil, nil, nil, "", nil,
 		func(delta string) { seq = append(seq, delta) },
 		func() { seq = append(seq, "clear") },
-		nil,
+		nil, nil,
 	)
 
 	sess.handleMessageStart()
@@ -669,7 +669,7 @@ func TestSessionThinkingProgressUsesIncrementalDelta(t *testing.T) {
 
 func TestSessionTracksAgentContextProgress(t *testing.T) {
 	board := newAgentBoard()
-	sess := newSession(nil, nil, nil, board, "", nil, nil, nil, nil)
+	sess := newSession(nil, nil, nil, board, "", nil, nil, nil, nil, nil)
 
 	meta, err := json.Marshal(map[string]any{
 		"tokens":         18000,
@@ -703,5 +703,27 @@ func TestSessionTracksAgentContextProgress(t *testing.T) {
 	}
 	if writer.Context.Scope != "projected" || writer.Context.Strategy != "full_summary" {
 		t.Fatalf("unexpected writer context labels: %+v", writer.Context)
+	}
+}
+
+func TestSessionRefreshesWriterRestoreAfterRelevantTools(t *testing.T) {
+	var refreshCalls int
+	sess := newSession(nil, nil, nil, nil, "", nil, nil, nil, nil, func() {
+		refreshCalls++
+	})
+
+	sess.handleToolExecEnd(agentcore.Event{Tool: "plan_chapter"})
+	if refreshCalls != 1 {
+		t.Fatalf("expected refresh after plan_chapter, got %d", refreshCalls)
+	}
+
+	sess.handleToolExecEnd(agentcore.Event{Tool: "draft_chapter"})
+	if refreshCalls != 1 {
+		t.Fatalf("expected no refresh after draft_chapter, got %d", refreshCalls)
+	}
+
+	sess.handleToolExecEnd(agentcore.Event{Tool: "save_foundation"})
+	if refreshCalls != 2 {
+		t.Fatalf("expected refresh after save_foundation, got %d", refreshCalls)
 	}
 }

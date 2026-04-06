@@ -18,23 +18,24 @@ import (
 // Engine 是独立于 UI 的会话执行内核。
 // 它负责模型装配后的主循环、事件流、恢复、干预与生命周期管理。
 type Engine struct {
-	cfg         bootstrap.Config
-	models      *bootstrap.ModelSet
-	store       *storepkg.Store
-	taskRT      *novelTaskRuntime
-	scheduler   *taskScheduler
-	agents      *agentBoard
-	coordinator *agentcore.Agent
-	session     *session
-	askUser     *tools.AskUserTool
-	events      chan UIEvent
-	streamCh    chan string
-	clearCh     chan struct{}
-	done        chan struct{}
-	mu          sync.Mutex
-	controlMu   sync.Mutex
-	running     bool
-	closeOnce   sync.Once
+	cfg            bootstrap.Config
+	models         *bootstrap.ModelSet
+	store          *storepkg.Store
+	taskRT         *novelTaskRuntime
+	scheduler      *taskScheduler
+	agents         *agentBoard
+	coordinator    *agentcore.Agent
+	session        *session
+	askUser        *tools.AskUserTool
+	writerRestore  *writerRestorePack
+	events         chan UIEvent
+	streamCh       chan string
+	clearCh        chan struct{}
+	done           chan struct{}
+	mu             sync.Mutex
+	controlMu      sync.Mutex
+	running        bool
+	closeOnce      sync.Once
 }
 
 const coordinatorRuntimeOwner = "runtime"
@@ -63,7 +64,7 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
 
 	var compactEmit emitFn
-	coordinator, askUser := BuildCoordinator(cfg, store, models, bundle, func(ev UIEvent) {
+	coordinator, askUser, writerRestore := BuildCoordinator(cfg, store, models, bundle, func(ev UIEvent) {
 		if compactEmit != nil {
 			compactEmit(ev)
 		}
@@ -72,21 +73,26 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 	store.Signals.ClearStaleSignals()
 
 	eng := &Engine{
-		cfg:         cfg,
-		models:      models,
-		store:       store,
-		taskRT:      taskRT,
-		scheduler:   newTaskScheduler(taskRT),
-		agents:      newAgentBoard(),
-		coordinator: coordinator,
-		askUser:     askUser,
-		events:      make(chan UIEvent, 100),
-		streamCh:    make(chan string, 256),
-		clearCh:     make(chan struct{}, 4),
-		done:        make(chan struct{}, 4),
+		cfg:           cfg,
+		models:        models,
+		store:         store,
+		taskRT:        taskRT,
+		scheduler:     newTaskScheduler(taskRT),
+		agents:        newAgentBoard(),
+		coordinator:   coordinator,
+		askUser:       askUser,
+		writerRestore: writerRestore,
+		events:        make(chan UIEvent, 100),
+		streamCh:      make(chan string, 256),
+		clearCh:       make(chan struct{}, 4),
+		done:          make(chan struct{}, 4),
 	}
 	compactEmit = eng.emit
-	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.submitControl)
+	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.submitControl, func() {
+		if eng.writerRestore != nil {
+			eng.writerRestore.Refresh(eng.store)
+		}
+	})
 	eng.session.bind()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -419,6 +425,12 @@ func (eng *Engine) prepareResumeControl(intent domain.ControlIntent, recovery re
 }
 
 func (eng *Engine) submitControl(intent domain.ControlIntent) error {
+	// Refresh the writer's post-compact restore pack before each control cycle.
+	// This ensures the restore pack reflects the latest chapter/outline/character
+	// state when compression occurs mid-writing.
+	if eng.writerRestore != nil {
+		eng.writerRestore.Refresh(eng.store)
+	}
 	if _, err := eng.enqueueControl(intent); err != nil {
 		return err
 	}

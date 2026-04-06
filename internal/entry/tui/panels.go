@@ -415,6 +415,8 @@ func contextScopeLabel(scope string) string {
 		return "恢复"
 	case "committed":
 		return "已提交"
+	case "skipped":
+		return "熔断跳过"
 	default:
 		return scope
 	}
@@ -465,9 +467,9 @@ func agentContextLine(agent orchestrator.AgentSnapshot) string {
 	if ctx.ContextWindow <= 0 || ctx.Tokens <= 0 {
 		return ""
 	}
-	parts := []string{
-		fmt.Sprintf("ctx %.0f%%", ctx.Percent),
-	}
+	percentColor := contextPercentColor(ctx.Percent)
+	percentStr := lipgloss.NewStyle().Foreground(percentColor).Render(fmt.Sprintf("ctx %.0f%%", ctx.Percent))
+	parts := []string{percentStr}
 	if scope := contextScopeLabel(ctx.Scope); scope != "" {
 		parts = append(parts, scope)
 	}
