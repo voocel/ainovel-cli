@@ -152,6 +152,28 @@ func renderReportText(report diag.Report, width int, startedAt, finishedAt time.
 		b.WriteString("\n")
 		renderFinding(&b, f, width)
 	}
+
+	if len(report.Actions) > 0 {
+		b.WriteString("\n")
+		b.WriteString(titleStyle.Render("可执行动作"))
+		b.WriteString(" ")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("(%d)", len(report.Actions))))
+		b.WriteString("\n")
+		actionStyle := lipgloss.NewStyle().Foreground(colorSuccess)
+		for _, a := range report.Actions {
+			b.WriteString("\n")
+			b.WriteString(actionStyle.Render("["+string(a.Kind)+"]"))
+			b.WriteString(" ")
+			b.WriteString(a.Summary)
+			b.WriteString("\n")
+			if a.Message != "" {
+				b.WriteString("  ")
+				b.WriteString(mutedStyle.Render(wrapText(a.Message, width-4)))
+				b.WriteString("\n")
+			}
+		}
+	}
+
 	return b.String()
 }
 
@@ -199,6 +221,23 @@ func renderFinding(b *strings.Builder, f diag.Finding, width int) {
 	b.WriteString(sevStyle.Render(fmt.Sprintf("[%s]", marker)))
 	b.WriteString(" ")
 	b.WriteString(f.Title)
+	if f.Confidence != "" || f.AutoLevel != "" {
+		tagStyle := lipgloss.NewStyle().Foreground(colorDim)
+		tags := ""
+		if f.Confidence != "" {
+			tags += string(f.Confidence)
+		}
+		if f.AutoLevel != "" && f.AutoLevel != diag.AutoNone {
+			if tags != "" {
+				tags += "/"
+			}
+			tags += string(f.AutoLevel)
+		}
+		if tags != "" {
+			b.WriteString(" ")
+			b.WriteString(tagStyle.Render("[" + tags + "]"))
+		}
+	}
 	b.WriteString("\n")
 
 	if f.Evidence != "" {

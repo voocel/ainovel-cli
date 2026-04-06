@@ -514,6 +514,99 @@ func TestSessionDisplaysSaveFoundationPreview(t *testing.T) {
 	}
 }
 
+func TestSessionRunOperationalDiagEnqueuesFollowUpOncePerPersistentIssue(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("test", 3); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := store.Progress.SetFlow(domain.FlowWriting); err != nil {
+		t.Fatalf("SetFlow: %v", err)
+	}
+	if err := store.RunMeta.SetPendingSteer("主角性格需要调整"); err != nil {
+		t.Fatalf("SetPendingSteer: %v", err)
+	}
+
+	var controls []domain.ControlIntent
+	sess := newSession(nil, store, nil, nil, "", nil, nil, nil, func(intent domain.ControlIntent) error {
+		controls = append(controls, intent)
+		return nil
+	})
+
+	sess.runOperationalDiag()
+	sess.runOperationalDiag()
+
+	if len(controls) != 1 {
+		t.Fatalf("expected one follow-up control for persistent orphaned steer, got %d", len(controls))
+	}
+	if controls[0].Kind != domain.ControlIntentFollowUp {
+		t.Fatalf("expected follow-up control, got %+v", controls[0])
+	}
+
+	if err := store.RunMeta.SetPendingSteer(""); err != nil {
+		t.Fatalf("ClearPendingSteer: %v", err)
+	}
+	if err := store.RunMeta.SetPendingSteer("主角性格再次调整"); err != nil {
+		t.Fatalf("SetPendingSteer again: %v", err)
+	}
+
+	sess.runOperationalDiag()
+	if len(controls) != 2 {
+		t.Fatalf("expected follow-up to fire again after issue reappears, got %d", len(controls))
+	}
+}
+
+func TestSessionRunOperationalDiagEmitsNoticeForPhaseFlowMismatch(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("test", 2); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+
+	progress, err := store.Progress.Load()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	progress.Phase = domain.PhaseOutline
+	progress.Flow = domain.FlowRewriting
+	if err := store.Progress.Save(progress); err != nil {
+		t.Fatalf("SaveProgress: %v", err)
+	}
+
+	var events []UIEvent
+	var controls []domain.ControlIntent
+	sess := newSession(nil, store, nil, nil, "", func(ev UIEvent) {
+		events = append(events, ev)
+	}, nil, nil, func(intent domain.ControlIntent) error {
+		controls = append(controls, intent)
+		return nil
+	})
+
+	sess.runOperationalDiag()
+
+	if len(events) != 1 {
+		t.Fatalf("expected one notice event, got %d", len(events))
+	}
+	if events[0].Category != "SYSTEM" || events[0].Level != "error" {
+		t.Fatalf("unexpected notice event: %+v", events[0])
+	}
+	if !strings.Contains(events[0].Summary, "阶段/流程状态不匹配") {
+		t.Fatalf("unexpected notice summary: %q", events[0].Summary)
+	}
+	if len(controls) != 1 || controls[0].Kind != domain.ControlIntentFollowUp {
+		t.Fatalf("expected one follow-up control, got %+v", controls)
+	}
+	if !strings.Contains(controls[0].Message, "phase=outline") {
+		t.Fatalf("unexpected follow-up message: %q", controls[0].Message)
+	}
+}
+
 func TestSessionDisplaysThinkingProgress(t *testing.T) {
 	var seq []string
 	sess := newSession(nil, nil, nil, nil, "", nil,

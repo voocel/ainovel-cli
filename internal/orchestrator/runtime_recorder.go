@@ -107,6 +107,31 @@ func (r *runtimeRecorder) logControlAction(action policyAction) {
 	})
 }
 
+func (r *runtimeRecorder) recordEvidence(owner, category, summary string, payload any) {
+	if r == nil || r.runtime == nil || payload == nil {
+		return
+	}
+	owner = canonicalAgentName(owner)
+	taskID := r.activeTaskID(owner)
+	r.appendQueue(domain.RuntimeQueueItem{
+		Time:     time.Now(),
+		Kind:     domain.RuntimeQueueEvidence,
+		Priority: domain.RuntimePriorityBackground,
+		TaskID:   taskID,
+		Agent:    owner,
+		Category: category,
+		Summary:  summary,
+		Payload:  payload,
+	})
+	r.appendTaskLog(owner, domain.RuntimeTaskLogEntry{
+		TaskID:  taskID,
+		Agent:   owner,
+		Event:   "diag_evidence",
+		Summary: summary,
+		Payload: payload,
+	})
+}
+
 func (r *runtimeRecorder) recordStreamClear(owner string) {
 	owner = canonicalAgentName(owner)
 	r.flushPendingStream()

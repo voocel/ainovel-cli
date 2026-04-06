@@ -8,8 +8,8 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// StuckRewriteLoop 检测改写循环卡住。
-func StuckRewriteLoop(snap *Snapshot) []Finding {
+// RewritePendingPressure 检测存在待改写章节（当前仅检测状态存在，不判定停滞）。
+func RewritePendingPressure(snap *Snapshot) []Finding {
 	if snap.Progress == nil {
 		return nil
 	}
@@ -21,16 +21,19 @@ func StuckRewriteLoop(snap *Snapshot) []Finding {
 		return nil
 	}
 	chapters := intsToStr(p.PendingRewrites)
-		return []Finding{{
-			Rule:     "StuckRewriteLoop",
-			Category: CatFlow,
-			Severity: SevCritical,
-			Title:    fmt.Sprintf("改写循环卡住: 章节 [%s]", chapters),
-			Evidence: fmt.Sprintf("flow=%s, pending_rewrites=[%s]", p.Flow, chapters),
-			Suggestion: "检查 Editor 评审标准是否过严，或 Writer 改写 prompt 是否有效。" +
-				"如需人工打断当前循环，请直接在输入框提交新的干预指令，要求系统调整评审标准、跳过该轮改写或改写指定章节。",
-		}}
-	}
+	return []Finding{{
+		Rule:       "RewritePendingPressure",
+		Category:   CatFlow,
+		Severity:   SevWarning,
+		Confidence: ConfMedium,
+		AutoLevel:  AutoNone,
+		Target:     "runtime.flow",
+		Title:      fmt.Sprintf("待改写章节: [%s]", chapters),
+		Evidence:   fmt.Sprintf("flow=%s, pending_rewrites=[%s]", p.Flow, chapters),
+		Suggestion: "检查 Editor 评审标准是否过严，或 Writer 改写 prompt 是否有效。" +
+			"如需人工打断，请在输入框提交干预指令。",
+	}}
+}
 
 // OrphanedSteer 检测未消费的用户转向指令。
 func OrphanedSteer(snap *Snapshot) []Finding {
@@ -44,6 +47,9 @@ func OrphanedSteer(snap *Snapshot) []Finding {
 		Rule:       "OrphanedSteer",
 		Category:   CatFlow,
 		Severity:   SevWarning,
+		Confidence: ConfHigh,
+		AutoLevel:  AutoSafe,
+		Target:     "runtime.recovery",
 		Title:      "存在未消费的转向指令",
 		Evidence:   fmt.Sprintf("pending_steer=%q, flow=%s", truncStr(snap.RunMeta.PendingSteer, 60), flowStr(snap.Progress)),
 		Suggestion: "该 steer 被持久化但未被 Coordinator 消费。检查中断恢复逻辑，或通过重新提交覆盖。",
@@ -66,6 +72,9 @@ func PhaseFlowMismatch(snap *Snapshot) []Finding {
 		Rule:       "PhaseFlowMismatch",
 		Category:   CatFlow,
 		Severity:   SevCritical,
+		Confidence: ConfHigh,
+		AutoLevel:  AutoSafe,
+		Target:     "runtime.flow",
 		Title:      fmt.Sprintf("阶段/流程状态不匹配: phase=%s, flow=%s", p.Phase, p.Flow),
 		Evidence:   fmt.Sprintf("phase=%s 不应出现非初始 flow=%s", p.Phase, p.Flow),
 		Suggestion: "状态机可能损坏，需手动检查 meta/progress.json 的 phase 和 flow 字段。",
@@ -93,6 +102,9 @@ func ChapterGaps(snap *Snapshot) []Finding {
 		Rule:       "ChapterGaps",
 		Category:   CatFlow,
 		Severity:   SevWarning,
+		Confidence: ConfHigh,
+		AutoLevel:  AutoNone,
+		Target:     "runtime.flow",
 		Title:      fmt.Sprintf("章节跳号: 缺少 [%s]", intsToStr(gaps)),
 		Evidence:   fmt.Sprintf("completed=[%s]", intsToStr(sorted)),
 		Suggestion: "commit_chapter 可能中途中断。检查 meta/pending_commit.json 是否存在未完成提交。",

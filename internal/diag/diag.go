@@ -21,12 +21,14 @@ const (
 	ThresholdCompassDrift     = 15  // CompassDrift: 指南针未更新章数上限
 	ThresholdTimelineGapRate  = 0.3 // TimelineGaps: 缺失率容忍上限
 	ThresholdForeshadowMin    = 8   // StaleForeshadow: 伏笔停滞最小章数
+	ThresholdDesignWeakRate   = 0.6 // 设计诊断：症状与缺口相关性的最低比例
+	ThresholdDesignMinSamples = 2   // 设计诊断：最少样本数
 )
 
 // allRules 按 flow → quality → planning → context 排列。
 var allRules = []RuleFunc{
 	// Flow
-	StuckRewriteLoop,
+	RewritePendingPressure,
 	OrphanedSteer,
 	PhaseFlowMismatch,
 	ChapterGaps,
@@ -47,6 +49,10 @@ var allRules = []RuleFunc{
 	TimelineGaps,
 	RelationshipStagnation,
 	ContextCompactionPressure,
+	ChapterPlanInjectionGap,
+	ContinuitySupportWeak,
+	RewriteAfterCompaction,
+	ContractExecutionWeak,
 }
 
 // Analyze 是诊断系统的唯一入口。
@@ -59,6 +65,9 @@ func Analyze(s *store.Store) Report {
 			Rule:       "LoadError",
 			Category:   CatFlow,
 			Severity:   SevWarning,
+			Confidence: ConfHigh,
+			AutoLevel:  AutoNone,
+			Target:     "runtime.flow",
 			Title:      fmt.Sprintf("工件加载失败: %s", e),
 			Suggestion: "文件可能损坏或权限不足，相关诊断规则的结果可能不完整。",
 		})
@@ -71,6 +80,7 @@ func Analyze(s *store.Store) Report {
 	return Report{
 		Stats:    buildStats(&snap),
 		Findings: findings,
+		Actions:  PlanActions(findings),
 	}
 }
 

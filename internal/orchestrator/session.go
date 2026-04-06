@@ -36,25 +36,27 @@ type session struct {
 	subFilter           *streamFilter
 	reminders           *reminderEngine
 	pendingClear        bool
+	diagActionKeys      map[string]struct{}
 }
 
 func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, enqueueCtrl func(domain.ControlIntent) error) *session {
 	return &session{
-		coordinator: coordinator,
-		store:       store,
-		recorder:    newRuntimeRecorder(store, taskRT),
-		taskRT:      taskRT,
-		scheduler:   newTaskScheduler(taskRT),
-		agents:      agents,
-		provider:    provider,
-		emit:        emit,
-		onDelta:     onDelta,
-		onClear:     onClear,
-		enqueueCtrl: enqueueCtrl,
-		agentExt:    newFieldExtractor("agent"),
-		taskExt:     newFieldExtractor("task"),
-		subFilter:   newStreamFilter("content"),
-		reminders:   newReminderEngine(store),
+		coordinator:    coordinator,
+		store:          store,
+		recorder:       newRuntimeRecorder(store, taskRT),
+		taskRT:         taskRT,
+		scheduler:      newTaskScheduler(taskRT),
+		agents:         agents,
+		provider:       provider,
+		emit:           emit,
+		onDelta:        onDelta,
+		onClear:        onClear,
+		enqueueCtrl:    enqueueCtrl,
+		agentExt:       newFieldExtractor("agent"),
+		taskExt:        newFieldExtractor("task"),
+		subFilter:      newStreamFilter("content"),
+		reminders:      newReminderEngine(store),
+		diagActionKeys: make(map[string]struct{}),
 	}
 }
 
@@ -278,6 +280,7 @@ func (s *session) handleEditorDone(emit emitFn) {
 		slog.Warn("critical 问题但 verdict=accept，强制升级为 rewrite", "module", "host", "critical", criticalN)
 		review.Verdict = "rewrite"
 	}
+	s.recorder.recordEvidence("editor", "review_outcome", fmt.Sprintf("review.ch%02d", review.Chapter), buildReviewOutcomeEvidence(*review))
 	runMeta, _ := s.store.RunMeta.Load()
 	actions := evaluateReviewPolicy(runMeta, review)
 	s.executePolicyActions(actions, emit)
@@ -552,6 +555,7 @@ func (s *session) handleSubAgentEventEnd(ev agentcore.Event) {
 	s.handleEditorDone(s.emit)
 	s.reminders.observeSubAgentDone(s.store, committed)
 	s.executePolicyActions(s.reminders.drain(), s.emit)
+	s.runOperationalDiag()
 }
 
 func (s *session) handleNovelContextEnd(ev agentcore.Event) {
@@ -562,6 +566,11 @@ func (s *session) handleNovelContextEnd(ev agentcore.Event) {
 		}
 	} else {
 		slog.Debug("上下文加载", "module", "tool", "result", truncateLog(string(ev.Result), 200))
+	}
+	if evidence := extractContextBuildEvidence(ev.Result); evidence != nil {
+		owner := s.contextEvidenceOwner(evidence)
+		evidence.Agent = owner
+		s.recorder.recordEvidence(owner, "context_build", contextEvidenceSummary(*evidence), *evidence)
 	}
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "TOOL", Summary: "novel_context.done", Level: "info"})
