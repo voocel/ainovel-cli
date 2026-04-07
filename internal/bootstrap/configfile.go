@@ -134,6 +134,9 @@ func mergeConfig(base, overlay Config) Config {
 			if v.Model != "" {
 				existing.Model = v.Model
 			}
+			if len(v.Fallbacks) > 0 {
+				existing.Fallbacks = append([]ModelRef(nil), v.Fallbacks...)
+			}
 			base.Roles[k] = existing
 		}
 	}

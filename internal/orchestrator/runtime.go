@@ -274,9 +274,11 @@ func (rt *Runtime) SwitchModel(role, provider, model string) error {
 		if rt.cfg.Roles == nil {
 			rt.cfg.Roles = make(map[string]bootstrap.RoleConfig)
 		}
+		existing := rt.cfg.Roles[role]
 		rt.cfg.Roles[role] = bootstrap.RoleConfig{
-			Provider: provider,
-			Model:    model,
+			Provider:  provider,
+			Model:     model,
+			Fallbacks: append([]bootstrap.ModelRef(nil), existing.Fallbacks...),
 		}
 	}
 
@@ -324,7 +326,12 @@ func persistModelChangeToPath(cfgPath, role, provider, model string, baseline bo
 		if cfg.Roles == nil {
 			cfg.Roles = make(map[string]bootstrap.RoleConfig)
 		}
-		cfg.Roles[role] = bootstrap.RoleConfig{Provider: provider, Model: model}
+		existing := cfg.Roles[role]
+		cfg.Roles[role] = bootstrap.RoleConfig{
+			Provider:  provider,
+			Model:     model,
+			Fallbacks: append([]bootstrap.ModelRef(nil), existing.Fallbacks...),
+		}
 	}
 
 	// 确保目标 provider 的凭证配置存在。

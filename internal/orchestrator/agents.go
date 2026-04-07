@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/voocel/agentcore"
@@ -21,6 +23,7 @@ func BuildCoordinator(
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
 	emit emitFn,
+	onFailover func(bootstrap.FailoverEvent),
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
@@ -52,10 +55,38 @@ func BuildCoordinator(
 		tools.NewSaveVolumeSummaryTool(store),
 	}
 
-	architectModel := models.ForRole("architect")
-	writerModel := models.ForRole("writer")
-	editorModel := models.ForRole("editor")
-	coordinatorModel := models.ForRole("coordinator")
+	reportFailover := func(ev bootstrap.FailoverEvent) {
+		summary := fmt.Sprintf(
+			"Provider 切换：%s [%s] %s/%s -> %s/%s",
+			roleLabel(ev.Role),
+			ev.Code,
+			ev.FromProvider,
+			ev.FromModel,
+			ev.ToProvider,
+			ev.ToModel,
+		)
+		slog.Warn("provider 切换",
+			"module", "agent",
+			"role", ev.Role,
+			"code", ev.Code,
+			"from_provider", ev.FromProvider,
+			"from_model", ev.FromModel,
+			"to_provider", ev.ToProvider,
+			"to_model", ev.ToModel,
+			"err", ev.Err,
+		)
+		if onFailover != nil {
+			onFailover(ev)
+		}
+		if emit != nil {
+			emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "warn"})
+		}
+	}
+
+	architectModel := models.ForRoleWithFailover("architect", reportFailover)
+	writerModel := models.ForRoleWithFailover("writer", reportFailover)
+	editorModel := models.ForRoleWithFailover("editor", reportFailover)
+	coordinatorModel := models.ForRoleWithFailover("coordinator", reportFailover)
 
 	architectShort := agentcore.SubAgentConfig{
 		Name:         "architect_short",

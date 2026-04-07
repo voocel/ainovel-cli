@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/apperr"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/utils"
@@ -23,12 +25,14 @@ type session struct {
 	taskRT      *novelTaskRuntime
 	scheduler   *taskScheduler
 	agents      *agentBoard
-	provider    string
 	emit        emitFn
 	onDelta     deltaFn
 	onClear     clearFn
 	enqueueCtrl func(domain.ControlIntent) error
 
+	providerMu           sync.RWMutex
+	provider             string
+	providerSource       func() string
 	lastProgressSummary  string
 	lastThinkingText     string
 	agentExt             *utils.JSONFieldExtractor
@@ -92,6 +96,7 @@ func (s *session) handleEvent(ev agentcore.Event) {
 // ---------------------------------------------------------------------------
 
 func (s *session) handleMessageStart() {
+	s.resetCurrentProvider()
 	s.agentExt.Reset()
 	s.taskExt.Reset()
 	s.subFilter.Reset()
@@ -148,7 +153,7 @@ func (s *session) handleMessageEnd(ev agentcore.Event) {
 func (s *session) handleProviderError(ev agentcore.Event) {
 	s.recorder.flushPendingStream()
 	if ev.Err != nil && errors.Is(ev.Err, context.Canceled) {
-		slog.Info("agent 已取消", "module", "agent", "provider", s.provider)
+		slog.Info("agent 已取消", "module", "agent", "provider", s.currentProvider())
 		if s.taskRT != nil {
 			_ = s.taskRT.CancelActive(coordinatorRuntimeOwner, "已暂停")
 		}
@@ -157,31 +162,64 @@ func (s *session) handleProviderError(ev agentcore.Event) {
 		}
 		return
 	}
-	slog.Error("provider 错误", "module", "agent", "provider", s.provider, "err", ev.Err)
+	err := apperr.ClassifyProviderError(ev.Err, "orchestrator.provider_call")
+	code := apperr.CodeOf(err)
+	provider := s.currentProvider()
+	summary := fmt.Sprintf("[%s][%s] %s", provider, code, apperr.Display(err))
+	slog.Error("provider 错误", "module", "agent", "provider", provider, "code", code, "err", err)
 	if s.taskRT != nil {
-		_ = s.taskRT.FailActive(coordinatorRuntimeOwner, fmt.Sprintf("[%s] %v", s.provider, ev.Err))
+		_ = s.taskRT.FailActive(coordinatorRuntimeOwner, summary)
 	}
 	if s.agents != nil {
-		s.agents.Fail("coordinator", fmt.Sprintf("[%s] %v", s.provider, ev.Err))
+		s.agents.Fail("coordinator", summary)
 	}
 	if s.emit != nil {
-		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: fmt.Sprintf("[%s] %v", s.provider, ev.Err), Level: "error"})
+		s.emit(UIEvent{Time: time.Now(), Category: "ERROR", Summary: summary, Level: "error"})
 	}
-	s.recorder.logTaskEvent("coordinator", "provider_error", "", fmt.Sprintf("[%s] %v", s.provider, ev.Err), nil)
+	s.recorder.logTaskEvent("coordinator", "provider_error", "", summary, map[string]any{
+		"provider_code": code,
+	})
 }
 
 func (s *session) handleRetry(ev agentcore.Event) {
 	if ev.RetryInfo == nil {
 		return
 	}
+	err := apperr.ClassifyProviderError(ev.RetryInfo.Err, "orchestrator.provider_retry")
+	code := apperr.CodeOf(err)
 	slog.Warn("重试", "module", "agent", "attempt", ev.RetryInfo.Attempt,
-		"max", ev.RetryInfo.MaxRetries, "err", ev.RetryInfo.Err)
+		"max", ev.RetryInfo.MaxRetries, "code", code, "err", err)
+	summary := fmt.Sprintf("重试 (%d/%d) [%s]: %s", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, code, apperr.Display(err))
 	if s.emit != nil {
 		s.emit(UIEvent{Time: time.Now(), Category: "SYSTEM",
-			Summary: fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err),
+			Summary: summary,
 			Level:   "warn"})
 	}
-	s.recorder.logTaskEvent("coordinator", "provider_retry", "", fmt.Sprintf("重试 (%d/%d): %v", ev.RetryInfo.Attempt, ev.RetryInfo.MaxRetries, ev.RetryInfo.Err), nil)
+	s.recorder.logTaskEvent("coordinator", "provider_retry", "", summary, map[string]any{
+		"provider_code": code,
+	})
+}
+
+func (s *session) currentProvider() string {
+	s.providerMu.RLock()
+	defer s.providerMu.RUnlock()
+	return s.provider
+}
+
+func (s *session) setCurrentProvider(provider string) {
+	if strings.TrimSpace(provider) == "" {
+		return
+	}
+	s.providerMu.Lock()
+	defer s.providerMu.Unlock()
+	s.provider = provider
+}
+
+func (s *session) resetCurrentProvider() {
+	if s.providerSource == nil {
+		return
+	}
+	s.setCurrentProvider(s.providerSource())
 }
 
 // ---------------------------------------------------------------------------

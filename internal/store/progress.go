@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/voocel/ainovel-cli/internal/apperr"
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
@@ -314,5 +315,9 @@ func (s *ProgressStore) ValidateChapterCommit(chapter int) error {
 	if p.Flow == domain.FlowPolishing {
 		verb = "打磨"
 	}
-	return fmt.Errorf("第 %d 章不在待%s队列中，当前队列：%v", chapter, verb, p.PendingRewrites)
+	return apperr.New(
+		apperr.CodeToolConflict,
+		"store.validate_chapter_commit",
+		fmt.Sprintf("第 %d 章不在待%s队列中，当前队列：%v", chapter, verb, p.PendingRewrites),
+	)
 }

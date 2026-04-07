@@ -80,9 +80,14 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
 
 	var compactEmit emitFn
+	var sessionRef *session
 	coordinator, askUser, writerRestore := BuildCoordinator(cfg, store, models, bundle, func(ev UIEvent) {
 		if compactEmit != nil {
 			compactEmit(ev)
+		}
+	}, func(ev bootstrap.FailoverEvent) {
+		if sessionRef != nil && ev.Role == "coordinator" {
+			sessionRef.setCurrentProvider(ev.ToProvider)
 		}
 	})
 
@@ -110,6 +115,11 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 			eng.writerRestore.Refresh(eng.store)
 		}
 	})
+	eng.session.providerSource = func() string {
+		provider, _, _ := eng.models.CurrentSelection("coordinator")
+		return provider
+	}
+	sessionRef = eng.session
 	eng.session.bind()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
@@ -320,6 +330,12 @@ func (eng *Engine) queueContinueControl(promptText string) error {
 	}, recovery); err != nil {
 		return err
 	}
+	eng.emit(UIEvent{
+		Time:     time.Now(),
+		Category: "SYSTEM",
+		Summary:  "恢复指令已提交: " + truncateLog(promptText, 60),
+		Level:    "warn",
+	})
 	return nil
 }
 

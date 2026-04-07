@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -703,6 +704,30 @@ func TestSessionTracksAgentContextProgress(t *testing.T) {
 	}
 	if writer.Context.Scope != "projected" || writer.Context.Strategy != "full_summary" {
 		t.Fatalf("unexpected writer context labels: %+v", writer.Context)
+	}
+}
+
+func TestSessionProviderErrorUsesFailoverProviderAndResetsOnNextMessage(t *testing.T) {
+	var events []UIEvent
+	sess := newSession(nil, nil, nil, nil, "openrouter", func(ev UIEvent) {
+		events = append(events, ev)
+	}, nil, nil, nil, nil)
+	sess.providerSource = func() string { return "openrouter" }
+
+	sess.setCurrentProvider("openai")
+	sess.handleProviderError(agentcore.Event{Err: errors.New("429 too many requests")})
+
+	sess.handleMessageStart()
+	sess.handleProviderError(agentcore.Event{Err: errors.New("429 too many requests")})
+
+	if len(events) != 2 {
+		t.Fatalf("expected 2 error events, got %d", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "[openai][PROVIDER_RATE_LIMIT]") {
+		t.Fatalf("unexpected first summary: %q", events[0].Summary)
+	}
+	if !strings.Contains(events[1].Summary, "[openrouter][PROVIDER_RATE_LIMIT]") {
+		t.Fatalf("unexpected second summary: %q", events[1].Summary)
 	}
 }
 

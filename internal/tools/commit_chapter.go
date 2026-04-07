@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/internal/apperr"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -84,29 +85,40 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		Feedback            *domain.OutlineFeedback    `json:"feedback"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
-		return nil, fmt.Errorf("invalid args: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeToolArgsInvalid, "tools.commit_chapter.decode_args", "invalid args")
 	}
 	if a.Chapter <= 0 {
-		return nil, fmt.Errorf("chapter must be > 0")
+		return nil, apperr.New(apperr.CodeToolArgsInvalid, "tools.commit_chapter.validate_args", "chapter must be > 0")
 	}
 	existingPending, err := t.store.Signals.LoadPendingCommit()
 	if err != nil {
-		return nil, fmt.Errorf("load pending commit: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreReadFailed, "tools.commit_chapter.load_pending_commit", "load pending commit")
 	}
 	if existingPending != nil && existingPending.Chapter != a.Chapter {
-		return nil, fmt.Errorf("存在未恢复的章节提交：第 %d 章（阶段 %s），请先恢复或重新提交该章", existingPending.Chapter, existingPending.Stage)
+		return nil, apperr.New(
+			apperr.CodeToolConflict,
+			"tools.commit_chapter.check_pending_commit",
+			fmt.Sprintf("存在未恢复的章节提交：第 %d 章（阶段 %s），请先恢复或重新提交该章", existingPending.Chapter, existingPending.Stage),
+		)
 	}
 	if err := t.store.Progress.ValidateChapterCommit(a.Chapter); err != nil {
-		return nil, err
+		if apperr.CodeOf(err) != apperr.CodeUnknown {
+			return nil, err
+		}
+		return nil, apperr.Wrap(err, apperr.CodeToolPreconditionFailed, "tools.commit_chapter.validate_commit", "章节当前不允许提交")
 	}
 
 	// 1. 加载章节正文
 	content, wordCount, err := t.store.Drafts.LoadChapterContent(a.Chapter)
 	if err != nil {
-		return nil, fmt.Errorf("load chapter content: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreReadFailed, "tools.commit_chapter.load_chapter_content", "load chapter content")
 	}
 	if content == "" {
-		return nil, fmt.Errorf("no content found for chapter %d", a.Chapter)
+		return nil, apperr.New(
+			apperr.CodeToolPreconditionFailed,
+			"tools.commit_chapter.load_chapter_content",
+			fmt.Sprintf("no content found for chapter %d", a.Chapter),
+		)
 	}
 
 	now := time.Now().Format(time.RFC3339)
@@ -120,12 +132,12 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		UpdatedAt:      now,
 	}
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
-		return nil, fmt.Errorf("save pending commit: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.save_pending_commit", "save pending commit")
 	}
 
 	// 2. 保存终稿
 	if err := t.store.Drafts.SaveFinalChapter(a.Chapter, content); err != nil {
-		return nil, fmt.Errorf("save final chapter: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.save_final_chapter", "save final chapter")
 	}
 
 	// 3. 保存摘要
@@ -136,7 +148,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		KeyEvents:  a.KeyEvents,
 	}
 	if err := t.store.Summaries.SaveSummary(summary); err != nil {
-		return nil, fmt.Errorf("save summary: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.save_summary", "save summary")
 	}
 
 	// 4. 更新状态增量
@@ -145,12 +157,12 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			a.TimelineEvents[i].Chapter = a.Chapter
 		}
 		if err := t.store.World.AppendTimelineEvents(a.TimelineEvents); err != nil {
-			return nil, fmt.Errorf("append timeline: %w", err)
+			return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.append_timeline", "append timeline")
 		}
 	}
 	if len(a.ForeshadowUpdates) > 0 {
 		if err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates); err != nil {
-			return nil, fmt.Errorf("update foreshadow: %w", err)
+			return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_foreshadow", "update foreshadow")
 		}
 	}
 	if len(a.RelationshipChanges) > 0 {
@@ -158,7 +170,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			a.RelationshipChanges[i].Chapter = a.Chapter
 		}
 		if err := t.store.World.UpdateRelationships(a.RelationshipChanges); err != nil {
-			return nil, fmt.Errorf("update relationships: %w", err)
+			return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_relationships", "update relationships")
 		}
 	}
 	if len(a.StateChanges) > 0 {
@@ -166,24 +178,24 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			a.StateChanges[i].Chapter = a.Chapter
 		}
 		if err := t.store.World.AppendStateChanges(a.StateChanges); err != nil {
-			return nil, fmt.Errorf("append state changes: %w", err)
+			return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.append_state_changes", "append state changes")
 		}
 	}
 	pending.Stage = domain.CommitStageStateApplied
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
-		return nil, fmt.Errorf("update pending commit stage: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_pending_commit_stage", "update pending commit stage")
 	}
 
 	// 5. 更新进度
 	if err := t.store.Progress.MarkChapterComplete(a.Chapter, wordCount, a.HookType, a.DominantStrand); err != nil {
-		return nil, fmt.Errorf("mark chapter complete: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.mark_chapter_complete", "mark chapter complete")
 	}
 
 	// 6. 判断是否需要审阅
 	progress, err := t.store.Progress.Load()
 	if err != nil {
-		return nil, fmt.Errorf("load progress: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreReadFailed, "tools.commit_chapter.load_progress", "load progress")
 	}
 	completedCount := 0
 	if progress != nil {
@@ -242,25 +254,25 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	pending.Result = &result
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
-		return nil, fmt.Errorf("update pending commit result: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_pending_commit_result", "update pending commit result")
 	}
 
 	// 8. 写入信号文件
 	if err := t.store.Signals.SaveLastCommit(result); err != nil {
-		return nil, fmt.Errorf("save commit signal: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.save_last_commit", "save commit signal")
 	}
 	pending.Stage = domain.CommitStageSignalSaved
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
-		return nil, fmt.Errorf("update pending commit signal stage: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_pending_commit_signal_stage", "update pending commit signal stage")
 	}
 
 	// 9. 清除进度中间状态
 	if err := t.store.Progress.ClearInProgress(); err != nil {
-		return nil, fmt.Errorf("clear in-progress: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.clear_in_progress", "clear in-progress")
 	}
 	if err := t.store.Signals.ClearPendingCommit(); err != nil {
-		return nil, fmt.Errorf("clear pending commit: %w", err)
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.clear_pending_commit", "clear pending commit")
 	}
 
 	return json.Marshal(result)

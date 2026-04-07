@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/voocel/ainovel-cli/internal/apperr"
+)
 
 // 状态迁移规则（最小版）
 //
@@ -50,7 +54,11 @@ func ValidatePhaseTransition(from, to Phase) error {
 	if CanTransitionPhase(from, to) {
 		return nil
 	}
-	return fmt.Errorf("invalid phase transition: %q -> %q", from, to)
+	return apperr.New(
+		apperr.CodePhaseTransitionInvalid,
+		"domain.validate_phase_transition",
+		fmt.Sprintf("invalid phase transition: %q -> %q", from, to),
+	)
 }
 
 // CanTransitionFlow 判断 FlowState 是否允许迁移。
@@ -83,5 +91,9 @@ func ValidateFlowTransition(from, to FlowState) error {
 	if CanTransitionFlow(from, to) {
 		return nil
 	}
-	return fmt.Errorf("invalid flow transition: %q -> %q", from, to)
+	return apperr.New(
+		apperr.CodeFlowTransitionInvalid,
+		"domain.validate_flow_transition",
+		fmt.Sprintf("invalid flow transition: %q -> %q", from, to),
+	)
 }

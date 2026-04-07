@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/voocel/ainovel-cli/internal/apperr"
 )
 
 // ProviderConfig 定义单个 LLM 提供商的凭证。
@@ -39,7 +41,11 @@ func (pc ProviderConfig) ProviderType(name string) (string, error) {
 	if _, ok := knownProviderTypes[name]; ok {
 		return name, nil
 	}
-	return "", fmt.Errorf("provider %q 缺少 type，且不在已知 provider 列表中", name)
+	return "", apperr.New(
+		apperr.CodeProviderInvalid,
+		"bootstrap.provider_type",
+		fmt.Sprintf("provider %q 缺少 type，且不在已知 provider 列表中", name),
+	)
 }
 
 // knownProviderTypes 已知 provider 名称到 API 协议类型的映射。
@@ -56,10 +62,17 @@ var knownProviderTypes = map[string]bool{
 	"bedrock":    true,
 }
 
-// RoleConfig 定义单个角色的模型覆盖。
-type RoleConfig struct {
+// ModelRef 表示一个 provider/model 组合。
+type ModelRef struct {
 	Provider string `json:"provider"` // provider 名称（Providers map 中的 key）
 	Model    string `json:"model"`    // 模型名（原样透传，不做任何解析）
+}
+
+// RoleConfig 定义单个角色的模型覆盖。
+type RoleConfig struct {
+	Provider  string     `json:"provider"`            // 主 provider 名称（Providers map 中的 key）
+	Model     string     `json:"model"`               // 主模型名（原样透传，不做任何解析）
+	Fallbacks []ModelRef `json:"fallbacks,omitempty"` // 显式备用 provider/model 列表
 }
 
 // knownRoles 支持的角色名。
@@ -93,35 +106,58 @@ type Config struct {
 // ValidateBase 校验基础配置。
 func (c *Config) ValidateBase() error {
 	if c.Provider == "" {
-		return fmt.Errorf("provider is required")
+		return apperr.New(apperr.CodeConfigInvalid, "bootstrap.validate_base", "provider is required")
 	}
 	if c.ModelName == "" {
-		return fmt.Errorf("model is required")
+		return apperr.New(apperr.CodeConfigInvalid, "bootstrap.validate_base", "model is required")
 	}
 
 	// 默认 provider 必须有凭证
 	pc, ok := c.Providers[c.Provider]
 	if !ok {
-		return fmt.Errorf("provider %q is not configured in providers", c.Provider)
+		return apperr.New(
+			apperr.CodeConfigInvalid,
+			"bootstrap.validate_base",
+			fmt.Sprintf("provider %q is not configured in providers", c.Provider),
+		)
 	}
 	if pc.RequiresAPIKey(c.Provider) && pc.APIKey == "" {
-		return fmt.Errorf("provider %q has no api_key configured", c.Provider)
+		return apperr.New(
+			apperr.CodeConfigInvalid,
+			"bootstrap.validate_base",
+			fmt.Sprintf("provider %q has no api_key configured", c.Provider),
+		)
 	}
 
 	// 校验角色覆盖
 	for role, rc := range c.Roles {
 		if !knownRoles[role] {
-			return fmt.Errorf("unknown role %q in roles config (valid: coordinator/architect/writer/editor)", role)
+			return apperr.New(
+				apperr.CodeConfigInvalid,
+				"bootstrap.validate_base",
+				fmt.Sprintf("unknown role %q in roles config (valid: coordinator/architect/writer/editor)", role),
+			)
 		}
 		if rc.Provider == "" || rc.Model == "" {
-			return fmt.Errorf("role %q must have both provider and model", role)
+			return apperr.New(
+				apperr.CodeConfigInvalid,
+				"bootstrap.validate_base",
+				fmt.Sprintf("role %q must have both provider and model", role),
+			)
 		}
-		rpc, ok := c.Providers[rc.Provider]
-		if !ok {
-			return fmt.Errorf("role %q references provider %q which is not configured", role, rc.Provider)
+		if err := c.validateModelRef(
+			fmt.Sprintf("role %q", role),
+			ModelRef{Provider: rc.Provider, Model: rc.Model},
+		); err != nil {
+			return err
 		}
-		if rpc.RequiresAPIKey(rc.Provider) && rpc.APIKey == "" {
-			return fmt.Errorf("role %q references provider %q which has no api_key", role, rc.Provider)
+		for i, fallback := range rc.Fallbacks {
+			if err := c.validateModelRef(
+				fmt.Sprintf("role %q fallback[%d]", role, i),
+				fallback,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -185,6 +221,38 @@ func (c Config) CandidateModels(provider string) []string {
 		if rc.Provider == provider {
 			add(rc.Model)
 		}
+		for _, fallback := range rc.Fallbacks {
+			if fallback.Provider == provider {
+				add(fallback.Model)
+			}
+		}
 	}
 	return models
+}
+
+func (c Config) validateModelRef(owner string, ref ModelRef) error {
+	if ref.Provider == "" || ref.Model == "" {
+		return apperr.New(
+			apperr.CodeConfigInvalid,
+			"bootstrap.validate_base",
+			fmt.Sprintf("%s must have both provider and model", owner),
+		)
+	}
+
+	pc, ok := c.Providers[ref.Provider]
+	if !ok {
+		return apperr.New(
+			apperr.CodeConfigInvalid,
+			"bootstrap.validate_base",
+			fmt.Sprintf("%s references provider %q which is not configured", owner, ref.Provider),
+		)
+	}
+	if pc.RequiresAPIKey(ref.Provider) && pc.APIKey == "" {
+		return apperr.New(
+			apperr.CodeConfigInvalid,
+			"bootstrap.validate_base",
+			fmt.Sprintf("%s references provider %q which has no api_key", owner, ref.Provider),
+		)
+	}
+	return nil
 }

@@ -194,7 +194,13 @@ func saveExampleConfig() {
   // "roles": {
   //   "writer": {
   //     "provider": "anthropic",
-  //     "model": "claude-sonnet-4"
+  //     "model": "claude-sonnet-4",
+  //     "fallbacks": [
+  //       {
+  //         "provider": "openrouter",
+  //         "model": "google/gemini-2.5-pro"
+  //       }
+  //     ]
   //   },
   //   "architect": {
   //     "provider": "openrouter",
