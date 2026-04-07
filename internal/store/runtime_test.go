@@ -150,10 +150,10 @@ func TestRuntimeStoreControlQueue(t *testing.T) {
 		t.Fatalf("EnqueueControl first: %v", err)
 	}
 	_, err = store.Runtime.EnqueueControl(domain.ControlIntent{
-		Kind:     domain.ControlIntentFollowUp,
-		Priority: domain.RuntimePriorityControl,
-		Summary:  "继续推进",
-		Message:  "继续处理",
+		Kind:     domain.ControlIntentSteerMessage,
+		Priority: domain.RuntimePriorityInterrupt,
+		Summary:  "处理用户干预",
+		Message:  "主角改成女性",
 	})
 	if err != nil {
 		t.Fatalf("EnqueueControl second: %v", err)
@@ -174,7 +174,7 @@ func TestRuntimeStoreControlQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadControls: %v", err)
 	}
-	if len(intents) != 1 || intents[0].Kind != domain.ControlIntentFollowUp {
+	if len(intents) != 1 || intents[0].Kind != domain.ControlIntentSteerMessage {
 		t.Fatalf("unexpected remaining intents: %+v", intents)
 	}
 }
@@ -184,12 +184,12 @@ func TestRuntimeStorePrependResumeControl(t *testing.T) {
 	store := NewStore(dir)
 
 	if _, err := store.Runtime.EnqueueControl(domain.ControlIntent{
-		Kind:     domain.ControlIntentFollowUp,
-		Priority: domain.RuntimePriorityControl,
-		Summary:  "旧的 follow up",
-		Message:  "继续处理旧任务",
+		Kind:     domain.ControlIntentSteerMessage,
+		Priority: domain.RuntimePriorityInterrupt,
+		Summary:  "旧的干预",
+		Message:  "主角改成女性",
 	}); err != nil {
-		t.Fatalf("EnqueueControl follow_up: %v", err)
+		t.Fatalf("EnqueueControl steer: %v", err)
 	}
 	if _, err := store.Runtime.EnqueueControl(domain.ControlIntent{
 		Kind:      domain.ControlIntentResumePrompt,
@@ -223,8 +223,8 @@ func TestRuntimeStorePrependResumeControl(t *testing.T) {
 	if intents[0].ID != resume.ID || intents[0].Kind != domain.ControlIntentResumePrompt {
 		t.Fatalf("expected new resume at queue head, got %+v", intents[0])
 	}
-	if intents[1].Kind != domain.ControlIntentFollowUp {
-		t.Fatalf("expected follow_up preserved after resume, got %+v", intents[1])
+	if intents[1].Kind != domain.ControlIntentSteerMessage {
+		t.Fatalf("expected steer preserved after resume, got %+v", intents[1])
 	}
 }
 
@@ -240,15 +240,6 @@ func TestRuntimeStorePrependResumeControlDropsRequestedKinds(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnqueueControl steer: %v", err)
 	}
-	if _, err := store.Runtime.EnqueueControl(domain.ControlIntent{
-		Kind:     domain.ControlIntentFollowUp,
-		Priority: domain.RuntimePriorityControl,
-		Summary:  "继续推进",
-		Message:  "继续处理",
-	}); err != nil {
-		t.Fatalf("EnqueueControl follow_up: %v", err)
-	}
-
 	resume, err := store.Runtime.PrependResumeControl(domain.ControlIntent{
 		Kind:      domain.ControlIntentResumePrompt,
 		Priority:  domain.RuntimePriorityControl,
@@ -265,13 +256,10 @@ func TestRuntimeStorePrependResumeControlDropsRequestedKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadControls: %v", err)
 	}
-	if len(intents) != 2 {
-		t.Fatalf("expected 2 intents after pruning, got %d", len(intents))
+	if len(intents) != 1 {
+		t.Fatalf("expected 1 intent after pruning, got %d", len(intents))
 	}
 	if intents[0].ID != resume.ID || intents[0].Kind != domain.ControlIntentResumePrompt {
 		t.Fatalf("expected resume at queue head, got %+v", intents[0])
-	}
-	if intents[1].Kind != domain.ControlIntentFollowUp {
-		t.Fatalf("expected follow_up preserved after pruning steer, got %+v", intents[1])
 	}
 }

@@ -56,11 +56,7 @@ func (s *session) trackTaskEnd(ev agentcore.Event) {
 		}
 		return
 	}
-	s.recorder.logTaskEvent(owner, "task_done", "", "任务完成", nil)
-	_ = s.taskRT.CompleteActive(owner)
-	if s.agents != nil {
-		s.agents.Idle(owner, "任务完成")
-	}
+	s.recorder.logTaskEvent(owner, "task_tool_done", "", "SubAgent 调用完成，等待领域结果确认", nil)
 }
 
 func (s *session) trackAgentProgress(progress toolProgress) {
@@ -180,11 +176,6 @@ func (s *session) persistSteer(text string) {
 	}
 }
 
-func (s *session) submitSteer(text string) {
-	s.persistSteer(text)
-	s.dispatchSteer(text)
-}
-
 func (s *session) finalizeSteerIfIdle() {
 	runMeta, _ := s.store.RunMeta.Load()
 	progress, _ := s.store.Progress.Load()
@@ -195,6 +186,13 @@ func (s *session) finalizeSteerIfIdle() {
 		return
 	}
 	s.clearHandledSteer()
+	if s.taskRT != nil {
+		_ = s.taskRT.CompleteActive("coordinator")
+		_ = s.taskRT.ClearQueued(domain.TaskSteerApply, 0)
+	}
+	if s.agents != nil {
+		s.agents.Idle("coordinator", "干预处理完成")
+	}
 }
 
 func (s *session) dispatchSteer(text string) {
@@ -257,18 +255,8 @@ func (s *session) executePolicyActions(actions []action.Action, emit emitFn) {
 				})
 			}
 		case action.KindFollowUp:
-			if s.enqueueCtrl != nil {
-				if err := s.enqueueCtrl(domain.ControlIntent{
-					Kind:     domain.ControlIntentFollowUp,
-					Priority: domain.RuntimePriorityControl,
-					Summary:  truncateLog(act.Message, 80),
-					Message:  act.Message,
-				}); err != nil {
-					slog.Error("follow_up 入队失败", "module", "control", "err", err)
-					s.coordinator.FollowUp(agentcore.UserMsg(act.Message))
-				}
-			} else {
-				s.coordinator.FollowUp(agentcore.UserMsg(act.Message))
+			if err := s.dispatchFollowUp(act.Message); err != nil {
+				slog.Error("follow_up 发送失败", "module", "control", "err", err)
 			}
 		case action.KindSetFlow:
 			if err := s.store.Progress.SetFlow(act.Flow); err != nil {
@@ -370,18 +358,19 @@ func (s *session) handleSubAgentDone(emit emitFn) bool {
 	if err := s.scheduler.AfterCommit(updated, result, actions); err != nil {
 		slog.Error("提交后同步任务失败", "module", "task", "chapter", result.Chapter, "err", err)
 	}
+	s.completeOwnerTask("writer", "任务完成")
 	return true
 }
 
 // handleEditorDone 在 Editor SubAgent 完成后读取审阅信号。
-func (s *session) handleEditorDone(emit emitFn) {
+func (s *session) handleEditorDone(emit emitFn) bool {
 	review, err := s.store.Signals.LoadAndClearLastReview()
 	if err != nil {
 		slog.Error("加载审阅信号失败", "module", "host", "err", err)
-		return
+		return false
 	}
 	if review == nil {
-		return
+		return false
 	}
 	if s.taskRT != nil {
 		_ = s.taskRT.AttachOutputRef("editor", reviewOutputRef(*review))
@@ -400,47 +389,8 @@ func (s *session) handleEditorDone(emit emitFn) {
 	runMeta, _ := s.store.RunMeta.Load()
 	actions := policy.EvaluateReview(runMeta, review)
 	s.executePolicyActions(actions, emit)
-}
-
-func (s *session) autoContinueIntent() (domain.ControlIntent, bool) {
-	if s == nil || s.taskRT == nil {
-		return domain.ControlIntent{}, false
-	}
-	task, ok := nextQueuedTaskForAutoContinue(s.taskRT.Snapshot())
-	if !ok {
-		return domain.ControlIntent{}, false
-	}
-	return domain.ControlIntent{
-		Kind:      domain.ControlIntentRunTask,
-		Priority:  domain.RuntimePriorityControl,
-		Summary:   autoContinueSummary(task),
-		TaskKind:  task.Kind,
-		TaskTitle: task.Title,
-		TaskInput: task.Input,
-		Payload: map[string]string{
-			"owner":   task.Owner,
-			"chapter": fmt.Sprintf("%d", task.Chapter),
-			"volume":  fmt.Sprintf("%d", task.Volume),
-			"arc":     fmt.Sprintf("%d", task.Arc),
-		},
-	}, true
-}
-
-func nextQueuedTaskForAutoContinue(tasks []domain.TaskRecord) (domain.TaskRecord, bool) {
-	for _, task := range tasks {
-		if task.Status != domain.TaskQueued {
-			continue
-		}
-		if task.Owner == coordinatorRuntimeOwner || task.Owner == "coordinator" {
-			continue
-		}
-		return task, true
-	}
-	return domain.TaskRecord{}, false
-}
-
-func autoContinueSummary(task domain.TaskRecord) string {
-	return "自动续跑：" + task.Title
+	s.completeOwnerTask("editor", "任务完成")
+	return true
 }
 
 func reviewOutputRef(review domain.ReviewEntry) string {

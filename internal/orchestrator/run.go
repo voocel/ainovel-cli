@@ -187,19 +187,6 @@ func foundationTypeFromArgs(args json.RawMessage) string {
 	return strings.TrimSpace(payload.Type)
 }
 
-func foundationTypeFromResult(result json.RawMessage) string {
-	if len(result) == 0 {
-		return ""
-	}
-	var payload struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(result, &payload); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(payload.Type)
-}
-
 func foundationStepLabel(typ string) string {
 	switch typ {
 	case "premise":
@@ -226,10 +213,18 @@ func foundationStepLabel(typ string) string {
 func toolStartPreview(tool string, args json.RawMessage) string {
 	switch tool {
 	case "save_foundation":
-		return foundationPreview(args)
+		return formatPreviewBlock(foundationPreview(args))
 	default:
 		return ""
 	}
+}
+
+func formatPreviewBlock(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return "\n" + text + "\n"
 }
 
 func foundationPreview(args json.RawMessage) string {

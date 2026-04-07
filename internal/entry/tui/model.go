@@ -67,6 +67,7 @@ type Model struct {
 	reportSeq    int
 	err          error
 	spinnerIdx   int
+	cursorIdx    int  // 流式光标帧索引（独立 tick）
 	streamRound  int  // 流式输出轮次计数
 	quitPending  bool // 双次 Ctrl+C 退出确认
 	abortPending bool // 等待 Done 回来的手动暂停
@@ -120,6 +121,7 @@ func (m Model) Init() tea.Cmd {
 		tickSnapshot(m.runtime),
 		bootstrapRuntime(m.runtime),
 		tickSpinner(),
+		tickCursor(),
 	)
 }
 
@@ -180,6 +182,14 @@ func (m *Model) refreshEventViewport() {
 	if m.autoScroll {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *Model) refreshStreamViewport() {
+	cursor := ""
+	if m.snapshot.IsRunning {
+		cursor = renderStreamCursor(m.cursorIdx)
+	}
+	m.streamVP.SetContent(renderStreamContent(m.streamRounds, m.streamVP.Width, cursor))
 }
 
 func (m *Model) refreshDetailViewport() {
@@ -320,7 +330,11 @@ func (m *Model) syncRuntimePlaceholder() {
 	case "paused":
 		m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
 	default:
-		m.textarea.Placeholder = defaultSteerPlaceholder()
+		if !m.snapshot.IsRunning {
+			m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+		} else {
+			m.textarea.Placeholder = defaultSteerPlaceholder()
+		}
 	}
 }
 

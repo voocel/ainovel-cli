@@ -37,6 +37,7 @@ type Engine struct {
 	mu            sync.Mutex
 	controlMu     sync.Mutex
 	lifecycle     runtimeLifecycle
+	lastRetry     taskRetryState
 	closeOnce     sync.Once
 }
 
@@ -110,7 +111,7 @@ func NewEngine(cfg bootstrap.Config, bundle assets.Bundle) (*Engine, error) {
 		lifecycle:     runtimeIdle,
 	}
 	compactEmit = eng.emit
-	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.submitControl, func() {
+	eng.session = newSession(coordinator, store, taskRT, eng.agents, cfg.Provider, eng.emit, eng.emitDelta, eng.emitClear, eng.continueCoordinator, func() {
 		if eng.writerRestore != nil {
 			eng.writerRestore.Refresh(eng.store)
 		}
@@ -472,29 +473,6 @@ func (eng *Engine) prepareResumeControl(intent domain.ControlIntent, recovery re
 	return queued, nil
 }
 
-func (eng *Engine) submitControl(intent domain.ControlIntent) error {
-	// Refresh the writer's post-compact restore pack before each control cycle.
-	// This ensures the restore pack reflects the latest chapter/outline/character
-	// state when compression occurs mid-writing.
-	if eng.writerRestore != nil {
-		eng.writerRestore.Refresh(eng.store)
-	}
-	if _, err := eng.enqueueControl(intent); err != nil {
-		return err
-	}
-	go func() {
-		if err := eng.drainControlQueue(); err != nil {
-			eng.emit(UIEvent{
-				Time:     time.Now(),
-				Category: "ERROR",
-				Summary:  "控制队列处理失败: " + err.Error(),
-				Level:    "error",
-			})
-		}
-	}()
-	return nil
-}
-
 func (eng *Engine) drainControlQueue() error {
 	eng.controlMu.Lock()
 	defer eng.controlMu.Unlock()
@@ -522,68 +500,22 @@ func (eng *Engine) drainControlQueue() error {
 func (eng *Engine) applyControlIntent(intent domain.ControlIntent) error {
 	switch intent.Kind {
 	case domain.ControlIntentResumePrompt:
-		if err := eng.coordinator.Prompt(intent.Prompt); err != nil {
-			return fmt.Errorf("prompt: %w", err)
-		}
-		if _, err := eng.taskRT.Start(intent.TaskKind, coordinatorRuntimeOwner, intent.TaskTitle, intent.TaskInput, taskLocation{}); err != nil {
-			return fmt.Errorf("start coordinator task: %w", err)
-		}
-		eng.agents.Start("coordinator", "", intent.TaskKind, "正在"+intent.TaskTitle)
-		wasRunning := eng.activateLifecycle()
-		if !wasRunning {
-			go eng.waitDone()
-		}
-		return nil
+		return eng.startCoordinatorPrompt(intent.TaskKind, intent.TaskTitle, intent.TaskInput, taskLocation{}, intent.Prompt)
 	case domain.ControlIntentSteerMessage:
-		eng.session.dispatchSteer(intent.Message)
-		return nil
-	case domain.ControlIntentRunTask:
-		return eng.runQueuedTaskIntent(intent)
-	case domain.ControlIntentFollowUp:
 		eng.mu.Lock()
-		wasRunning := isRuntimeActive(eng.lifecycle)
+		active := isRuntimeActive(eng.lifecycle)
 		eng.mu.Unlock()
-		if !wasRunning {
-			taskKind := intent.TaskKind
-			if taskKind == "" {
-				taskKind = domain.TaskCoordinatorDecision
-			}
-			taskTitle := strings.TrimSpace(intent.TaskTitle)
-			if taskTitle == "" {
-				taskTitle = "继续协调小说任务"
-			}
-			taskInput := strings.TrimSpace(intent.TaskInput)
-			if taskInput == "" {
-				taskInput = strings.TrimSpace(intent.Message)
-			}
-			if _, err := eng.taskRT.Start(taskKind, coordinatorRuntimeOwner, taskTitle, taskInput, taskLocation{}); err != nil {
-				return fmt.Errorf("start coordinator task: %w", err)
-			}
-			eng.agents.Start("coordinator", "", taskKind, "正在"+taskTitle)
-			eng.activateLifecycle()
-			go eng.waitDone()
+		if !active {
+			return fmt.Errorf("steer_message requires active coordinator")
 		}
-		eng.coordinator.FollowUp(agentcore.UserMsg(intent.Message))
+		if eng.session == nil {
+			return fmt.Errorf("session is nil")
+		}
+		eng.session.dispatchSteer(intent.Message)
 		return nil
 	default:
 		return fmt.Errorf("unknown control intent: %s", intent.Kind)
 	}
-}
-
-func (eng *Engine) runQueuedTaskIntent(intent domain.ControlIntent) error {
-	eng.mu.Lock()
-	wasRunning := isRuntimeActive(eng.lifecycle)
-	eng.mu.Unlock()
-	if !wasRunning {
-		if _, err := eng.taskRT.Start(domain.TaskCoordinatorDecision, coordinatorRuntimeOwner, "继续协调小说任务", taskDispatchSummary(intent), taskLocation{}); err != nil {
-			return fmt.Errorf("start coordinator task: %w", err)
-		}
-		eng.agents.Start("coordinator", "", domain.TaskCoordinatorDecision, "正在继续协调小说任务")
-		eng.activateLifecycle()
-		go eng.waitDone()
-	}
-	eng.coordinator.FollowUp(agentcore.UserMsg(taskDispatchPrompt(intent)))
-	return nil
 }
 
 // Done 返回完成信号通道。
@@ -608,8 +540,7 @@ func (eng *Engine) waitDone() {
 	eng.session.finalizeSteerIfIdle()
 	_ = eng.taskRT.CompleteActive(coordinatorRuntimeOwner)
 	eng.agents.Idle("coordinator", "待命")
-	state := eng.finishLifecycleAfterIdle()
-	if state == runtimeIdle && eng.tryAutoContinueAfterIdle() {
+	if eng.decideNextAfterIdle() {
 		return
 	}
 	select {
@@ -618,56 +549,76 @@ func (eng *Engine) waitDone() {
 	}
 }
 
-func (eng *Engine) tryAutoContinueAfterIdle() bool {
-	if eng.store != nil && eng.store.Runtime != nil {
-		intent, err := eng.store.Runtime.PeekControl()
-		if err != nil {
-			eng.emit(UIEvent{
-				Time:     time.Now(),
-				Category: "ERROR",
-				Summary:  "检查控制队列失败: " + err.Error(),
-				Level:    "error",
-			})
-			return false
-		}
-		if intent != nil {
-			if err := eng.drainControlQueue(); err != nil {
-				eng.emit(UIEvent{
-					Time:     time.Now(),
-					Category: "ERROR",
-					Summary:  "控制队列处理失败: " + err.Error(),
-					Level:    "error",
-				})
-				return false
-			}
-			eng.mu.Lock()
-			running := isRuntimeActive(eng.lifecycle)
-			eng.mu.Unlock()
-			if running {
-				return true
-			}
-		}
+func (eng *Engine) continueCoordinator(message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
 	}
-	intent, ok := eng.session.autoContinueIntent()
-	if !ok {
-		return false
+	if eng.writerRestore != nil {
+		eng.writerRestore.Refresh(eng.store)
 	}
-	eng.emit(UIEvent{
-		Time:     time.Now(),
-		Category: "SYSTEM",
-		Summary:  intent.Summary,
-		Level:    "info",
-	})
-	if err := eng.submitControl(intent); err != nil {
-		eng.emit(UIEvent{
-			Time:     time.Now(),
-			Category: "ERROR",
-			Summary:  "自动续跑失败: " + err.Error(),
-			Level:    "error",
-		})
-		return false
+	eng.mu.Lock()
+	wasRunning := isRuntimeActive(eng.lifecycle)
+	eng.mu.Unlock()
+	if !wasRunning {
+		return eng.startCoordinatorFollowUp(
+			domain.TaskCoordinatorDecision,
+			"继续协调小说任务",
+			message,
+			taskLocation{},
+			message,
+		)
 	}
-	return true
+	eng.coordinator.FollowUp(agentcore.UserMsg(message))
+	return nil
+}
+
+func (eng *Engine) startCoordinatorPrompt(kind domain.TaskKind, title, input string, loc taskLocation, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("prompt is empty")
+	}
+	if err := eng.coordinator.Prompt(prompt); err != nil {
+		return fmt.Errorf("prompt: %w", err)
+	}
+	if err := eng.beginCoordinatorRun(kind, title, input, loc); err != nil {
+		eng.coordinator.AbortSilent()
+		return err
+	}
+	return nil
+}
+
+func (eng *Engine) startCoordinatorFollowUp(kind domain.TaskKind, title, input string, loc taskLocation, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("prompt is empty")
+	}
+	if err := eng.beginCoordinatorRun(kind, title, input, loc); err != nil {
+		return err
+	}
+	eng.coordinator.FollowUp(agentcore.UserMsg(prompt))
+	return nil
+}
+
+func (eng *Engine) beginCoordinatorRun(kind domain.TaskKind, title, input string, loc taskLocation) error {
+	if strings.TrimSpace(title) == "" {
+		title = "继续协调小说任务"
+	}
+	if kind == "" {
+		kind = domain.TaskCoordinatorDecision
+	}
+	if eng.writerRestore != nil {
+		eng.writerRestore.Refresh(eng.store)
+	}
+	if _, err := eng.taskRT.Start(kind, coordinatorRuntimeOwner, title, input, loc); err != nil {
+		return fmt.Errorf("start coordinator task: %w", err)
+	}
+	eng.agents.Start("coordinator", "", kind, "正在"+title)
+	wasRunning := eng.activateLifecycle()
+	if !wasRunning {
+		go eng.waitDone()
+	}
+	return nil
 }
 
 func (eng *Engine) activateLifecycle() bool {
@@ -695,13 +646,6 @@ func (eng *Engine) finishLifecycleAfterIdle() runtimeLifecycle {
 
 	eng.lifecycle = runtimeIdle
 	return eng.lifecycle
-}
-
-func taskDispatchSummary(intent domain.ControlIntent) string {
-	if strings.TrimSpace(intent.Summary) != "" {
-		return intent.Summary
-	}
-	return "自动续跑任务"
 }
 
 func taskDispatchPrompt(intent domain.ControlIntent) string {

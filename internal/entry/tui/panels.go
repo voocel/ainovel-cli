@@ -807,6 +807,18 @@ func renderStreamPanel(vp viewport.Model, width, height int, focused, running bo
 	return header + "\n" + vpStyle.Render(vp.View())
 }
 
+var streamCursorFrames = []string{"·", "✢", "✳", "✶", "✻", "✽"}
+
+func renderStreamCursor(frame int) string {
+	f := frame % len(streamCursorFrames)
+	var dots [3]string
+	for i := range 3 {
+		dots[i] = streamCursorFrames[(f+i)%len(streamCursorFrames)]
+	}
+	trail := dots[0] + " " + dots[1] + " " + dots[2]
+	return "\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("  "+trail)
+}
+
 var streamActivityFrames = [][2]string{
 	{"✦", "✧"},
 	{"✦", "✧"},
@@ -827,7 +839,8 @@ func renderStreamActivity(frame int) string {
 
 // renderStreamContent 将流式输出按轮次渲染为语义分块。
 // Agent 调度块（以 ▸ 开头）用 accent 标题 + dim 指令；正文块用标准文本色。
-func renderStreamContent(rounds []string, width int) string {
+// cursor 非空时追加在末尾，表示 AI 正在输出。
+func renderStreamContent(rounds []string, width int, cursor string) string {
 	if width < 24 {
 		width = 24
 	}
@@ -844,7 +857,11 @@ func renderStreamContent(rounds []string, width int) string {
 			blocks = append(blocks, renderChapterBlock(text, width))
 		}
 	}
-	return strings.Join(blocks, "\n\n")
+	result := strings.Join(blocks, "\n\n")
+	if cursor != "" {
+		result += cursor
+	}
+	return result
 }
 
 // renderAgentBlock 渲染 Agent 调度块：标题 + 分隔线 + 任务指令。

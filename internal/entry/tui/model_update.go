@@ -318,11 +318,13 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		m.snapshot = orchestrator.UISnapshot(msg)
 		m.syncRuntimePlaceholder()
 		m.refreshEventViewport()
+		m.refreshStreamViewport()
 		m.refreshDetailViewport()
 		return m, tickSnapshot(m.runtime), true
 	case doneMsg:
 		m.snapshot.IsRunning = false
 		m.refreshEventViewport()
+		m.refreshStreamViewport()
 		if msg.complete {
 			m.abortPending = false
 			m.mode = modeDone
@@ -381,12 +383,18 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			m.refreshEventViewport()
 		}
 		return m, tickSpinner(), true
+	case cursorTickMsg:
+		m.cursorIdx++
+		if m.snapshot.IsRunning {
+			m.refreshStreamViewport()
+		}
+		return m, tickCursor(), true
 	case streamDeltaMsg:
 		if len(m.streamRounds) == 0 {
 			m.streamRounds = append(m.streamRounds, "")
 		}
 		m.streamRounds[len(m.streamRounds)-1] += string(msg)
-		m.streamVP.SetContent(renderStreamContent(m.streamRounds, m.streamVP.Width))
+		m.refreshStreamViewport()
 		if m.streamScroll {
 			m.streamVP.GotoBottom()
 		}
@@ -398,7 +406,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			m.streamRounds = append(m.streamRounds, "")
 		}
 		m.streamRound = len(m.streamRounds)
-		m.streamVP.SetContent(renderStreamContent(m.streamRounds, m.streamVP.Width))
+		m.refreshStreamViewport()
 		if m.streamScroll {
 			m.streamVP.GotoBottom()
 		}
@@ -508,5 +516,5 @@ func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
 	}
 	m.streamRound = len(m.streamRounds)
 	m.refreshEventViewport()
-	m.streamVP.SetContent(renderStreamContent(m.streamRounds, m.streamVP.Width))
+	m.refreshStreamViewport()
 }

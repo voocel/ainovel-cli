@@ -16,6 +16,9 @@ import (
 func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 	dir := t.TempDir()
 	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
 	if err := store.Progress.Init("test", 3); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
@@ -26,7 +29,15 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	newSession(nil, store, nil, nil, "", nil, nil, nil, nil, nil).finalizeSteerIfIdle()
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Queue(domain.TaskSteerApply, "coordinator", "处理用户干预", "主角改成女性", taskLocation{}); err != nil {
+		t.Fatalf("Queue steer task: %v", err)
+	}
+
+	newSession(nil, store, rt, nil, "", nil, nil, nil, nil, nil).finalizeSteerIfIdle()
 
 	progress, err := store.Progress.Load()
 	if err != nil {
@@ -42,6 +53,12 @@ func TestFinalizeSteerIfIdleClearsPendingState(t *testing.T) {
 	}
 	if runMeta.PendingSteer != "" {
 		t.Fatalf("expected pending steer cleared, got %q", runMeta.PendingSteer)
+	}
+
+	for _, task := range rt.Snapshot() {
+		if task.Kind == domain.TaskSteerApply && task.Status == domain.TaskQueued {
+			t.Fatalf("expected queued steer task cleared, got %+v", task)
+		}
 	}
 }
 
@@ -531,20 +548,17 @@ func TestSessionRunOperationalDiagEnqueuesFollowUpOncePerPersistentIssue(t *test
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
 
-	var controls []domain.ControlIntent
-	sess := newSession(nil, store, nil, nil, "", nil, nil, nil, func(intent domain.ControlIntent) error {
-		controls = append(controls, intent)
+	var followUps []string
+	sess := newSession(nil, store, nil, nil, "", nil, nil, nil, func(message string) error {
+		followUps = append(followUps, message)
 		return nil
 	}, nil)
 
 	sess.runOperationalDiag()
 	sess.runOperationalDiag()
 
-	if len(controls) != 1 {
-		t.Fatalf("expected one follow-up control for persistent orphaned steer, got %d", len(controls))
-	}
-	if controls[0].Kind != domain.ControlIntentFollowUp {
-		t.Fatalf("expected follow-up control, got %+v", controls[0])
+	if len(followUps) != 1 {
+		t.Fatalf("expected one follow-up for persistent orphaned steer, got %d", len(followUps))
 	}
 
 	if err := store.RunMeta.SetPendingSteer(""); err != nil {
@@ -555,8 +569,8 @@ func TestSessionRunOperationalDiagEnqueuesFollowUpOncePerPersistentIssue(t *test
 	}
 
 	sess.runOperationalDiag()
-	if len(controls) != 2 {
-		t.Fatalf("expected follow-up to fire again after issue reappears, got %d", len(controls))
+	if len(followUps) != 2 {
+		t.Fatalf("expected follow-up to fire again after issue reappears, got %d", len(followUps))
 	}
 }
 
@@ -581,11 +595,11 @@ func TestSessionRunOperationalDiagEmitsNoticeForPhaseFlowMismatch(t *testing.T) 
 	}
 
 	var events []UIEvent
-	var controls []domain.ControlIntent
+	var followUps []string
 	sess := newSession(nil, store, nil, nil, "", func(ev UIEvent) {
 		events = append(events, ev)
-	}, nil, nil, func(intent domain.ControlIntent) error {
-		controls = append(controls, intent)
+	}, nil, nil, func(message string) error {
+		followUps = append(followUps, message)
 		return nil
 	}, nil)
 
@@ -600,11 +614,11 @@ func TestSessionRunOperationalDiagEmitsNoticeForPhaseFlowMismatch(t *testing.T) 
 	if !strings.Contains(events[0].Summary, "阶段/流程状态不匹配") {
 		t.Fatalf("unexpected notice summary: %q", events[0].Summary)
 	}
-	if len(controls) != 1 || controls[0].Kind != domain.ControlIntentFollowUp {
-		t.Fatalf("expected one follow-up control, got %+v", controls)
+	if len(followUps) != 1 {
+		t.Fatalf("expected one follow-up, got %+v", followUps)
 	}
-	if !strings.Contains(controls[0].Message, "phase=outline") {
-		t.Fatalf("unexpected follow-up message: %q", controls[0].Message)
+	if !strings.Contains(followUps[0], "phase=outline") {
+		t.Fatalf("unexpected follow-up message: %q", followUps[0])
 	}
 }
 
@@ -728,6 +742,290 @@ func TestSessionProviderErrorUsesFailoverProviderAndResetsOnNextMessage(t *testi
 	}
 	if !strings.Contains(events[1].Summary, "[openrouter][PROVIDER_RATE_LIMIT]") {
 		t.Fatalf("unexpected second summary: %q", events[1].Summary)
+	}
+}
+
+func TestHandleSubAgentEventEndEnqueuesFollowUpWhenFoundationPlanIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("test", 12); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskFoundationPlan, "architect", "规划故事基础设定", "", taskLocation{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var followUps []string
+	sess := newSession(agentcore.NewAgent(), store, rt, nil, "", nil, nil, nil, func(message string) error {
+		followUps = append(followUps, message)
+		return nil
+	}, nil)
+
+	args := mustMarshalJSON(map[string]any{
+		"agent": "architect_long",
+		"task":  "完成基础规划",
+	})
+	sess.handleSubAgentEventEnd(agentcore.Event{
+		Tool: "subagent",
+		Args: args,
+	})
+
+	if len(followUps) != 1 {
+		t.Fatalf("expected 1 follow-up, got %d", len(followUps))
+	}
+	if !strings.Contains(followUps[0], "save_foundation") {
+		t.Fatalf("expected save_foundation guidance, got %q", followUps[0])
+	}
+
+	task, ok := rt.ActiveTask("architect")
+	if !ok {
+		t.Fatal("expected architect task still active")
+	}
+	if task.Status != domain.TaskRunning {
+		t.Fatalf("expected architect task still running, got %s", task.Status)
+	}
+}
+
+func TestHandleArchitectDoneResumesWritingAfterArcExpand(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := store.Progress.Init("test", 12); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := store.Progress.UpdatePhase(domain.PhaseOutline); err != nil {
+		t.Fatalf("UpdatePhase outline: %v", err)
+	}
+	if err := store.Progress.SetTotalChapters(12); err != nil {
+		t.Fatalf("SetTotalChapters: %v", err)
+	}
+	if err := store.Progress.SetLayered(true); err != nil {
+		t.Fatalf("SetLayered: %v", err)
+	}
+	if err := store.Progress.UpdateVolumeArc(1, 1); err != nil {
+		t.Fatalf("UpdateVolumeArc: %v", err)
+	}
+	if err := store.Outline.SaveLayeredOutline([]domain.VolumeOutline{
+		{
+			Index: 1,
+			Arcs: []domain.ArcOutline{
+				{
+					Index: 1,
+					Chapters: []domain.OutlineEntry{
+						{Chapter: 1, Title: "第一章"},
+						{Chapter: 2, Title: "第二章"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveLayeredOutline: %v", err)
+	}
+	if err := store.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "第一章"},
+		{Chapter: 2, Title: "第二章"},
+	}); err != nil {
+		t.Fatalf("SaveOutline: %v", err)
+	}
+	if err := store.Outline.SaveCompass(domain.StoryCompass{EndingDirection: "终局"}); err != nil {
+		t.Fatalf("SaveCompass: %v", err)
+	}
+	if err := store.Characters.Save([]domain.Character{{Name: "主角"}}); err != nil {
+		t.Fatalf("SaveCharacters: %v", err)
+	}
+	if err := store.World.SaveWorldRules([]domain.WorldRule{{Rule: "规则"}}); err != nil {
+		t.Fatalf("SaveWorldRules: %v", err)
+	}
+
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+	if _, err := rt.Start(domain.TaskArcExpand, "architect", "展开第 1 卷第 1 弧", "", taskLocation{Volume: 1, Arc: 1}); err != nil {
+		t.Fatalf("Start architect task: %v", err)
+	}
+
+	sess := newSession(agentcore.NewAgent(), store, rt, nil, "", nil, nil, nil, nil, nil)
+	sess.handleSubAgentEventEnd(agentcore.Event{
+		Tool: "subagent",
+		Args: mustMarshalJSON(map[string]any{
+			"agent": "architect_long",
+			"task":  "展开第 1 卷第 1 弧",
+		}),
+	})
+
+	progress, err := store.Progress.Load()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if progress.Phase != domain.PhaseWriting {
+		t.Fatalf("expected phase writing, got %s", progress.Phase)
+	}
+	if progress.Flow != domain.FlowWriting {
+		t.Fatalf("expected flow writing, got %s", progress.Flow)
+	}
+
+	task, ok := nextDispatchableTask(rt.Snapshot())
+	if !ok {
+		t.Fatal("expected queued writing task")
+	}
+	if task.Owner != "writer" || task.Kind != domain.TaskChapterWrite || task.Chapter != 1 {
+		t.Fatalf("unexpected queued task: %+v", task)
+	}
+}
+
+func TestNextDispatchableTaskAllowsCoordinatorSteerTask(t *testing.T) {
+	tasks := []domain.TaskRecord{
+		{Owner: coordinatorRuntimeOwner, Kind: domain.TaskCoordinatorDecision, Status: domain.TaskQueued},
+		{Owner: "coordinator", Kind: domain.TaskSteerApply, Status: domain.TaskQueued, Title: "处理用户干预"},
+	}
+
+	task, ok := nextDispatchableTask(tasks)
+	if !ok {
+		t.Fatal("expected queued task")
+	}
+	if task.Owner != "coordinator" || task.Kind != domain.TaskSteerApply {
+		t.Fatalf("unexpected task selected: %+v", task)
+	}
+}
+
+func TestNextRetryableTaskSkipsRuntimeOwner(t *testing.T) {
+	tasks := []domain.TaskRecord{
+		{Owner: coordinatorRuntimeOwner, Kind: domain.TaskCoordinatorDecision, Status: domain.TaskRunning},
+		{Owner: "writer", Kind: domain.TaskChapterWrite, Status: domain.TaskRunning, Title: "创作第 3 章"},
+	}
+
+	task, ok := nextRetryableTask(tasks)
+	if !ok {
+		t.Fatal("expected running task")
+	}
+	if task.Owner != "writer" || task.Kind != domain.TaskChapterWrite {
+		t.Fatalf("unexpected task selected: %+v", task)
+	}
+}
+
+func TestDecideNextAfterIdleDoesNotDispatchQueuedTaskWhenRunningTaskIsStuck(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+
+	running, err := rt.Start(domain.TaskChapterWrite, "writer", "创作第 1 章", "继续写作", taskLocation{Chapter: 1})
+	if err != nil {
+		t.Fatalf("Start running task: %v", err)
+	}
+	if _, err := rt.Queue(domain.TaskChapterReview, "editor", "评审第 1 章", "等待审阅", taskLocation{Chapter: 1}); err != nil {
+		t.Fatalf("Queue review task: %v", err)
+	}
+
+	eng := &Engine{
+		store:     store,
+		taskRT:    rt,
+		lifecycle: runtimeRunning,
+		lastRetry: taskRetryState{
+			TaskID:    running.ID,
+			UpdatedAt: running.UpdatedAt,
+		},
+	}
+
+	if eng.decideNextAfterIdle() {
+		t.Fatal("expected no auto-continue when running task is stuck")
+	}
+
+	var reviewTask domain.TaskRecord
+	foundReview := false
+	for _, task := range rt.Snapshot() {
+		if task.Kind != domain.TaskChapterReview {
+			continue
+		}
+		reviewTask = task
+		foundReview = true
+		break
+	}
+	if !foundReview {
+		t.Fatal("expected queued review task to remain present")
+	}
+	if reviewTask.Status != domain.TaskQueued {
+		t.Fatalf("expected queued review task to stay queued, got %s", reviewTask.Status)
+	}
+}
+
+func TestMarkTaskRetryRejectsSameTaskWithoutProgress(t *testing.T) {
+	eng := &Engine{}
+	now := time.Now()
+	task := domain.TaskRecord{
+		ID:        "task-1",
+		Status:    domain.TaskRunning,
+		UpdatedAt: now,
+	}
+
+	if !eng.markTaskRetry(task) {
+		t.Fatal("expected first retry to pass")
+	}
+	if eng.markTaskRetry(task) {
+		t.Fatal("expected same task without progress to be rejected")
+	}
+
+	task.UpdatedAt = now.Add(time.Second)
+	if !eng.markTaskRetry(task) {
+		t.Fatal("expected retry after progress update to pass")
+	}
+}
+
+func TestApplyControlIntentRejectsSteerMessageWhenIdle(t *testing.T) {
+	eng := &Engine{lifecycle: runtimeIdle}
+
+	err := eng.applyControlIntent(domain.ControlIntent{
+		Kind:    domain.ControlIntentSteerMessage,
+		Message: "调整主角设定",
+	})
+	if err == nil {
+		t.Fatal("expected steer_message to be rejected when coordinator is idle")
+	}
+	if !strings.Contains(err.Error(), "active coordinator") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTaskRuntimeStartPromotesQueuedTaskToRunning(t *testing.T) {
+	dir := t.TempDir()
+	store := storepkg.NewStore(dir)
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	rt, err := newNovelTaskRuntime(store)
+	if err != nil {
+		t.Fatalf("newNovelTaskRuntime: %v", err)
+	}
+
+	queued, err := rt.Queue(domain.TaskChapterWrite, "writer", "创作第 2 章", "等待写作", taskLocation{Chapter: 2})
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	started, err := rt.Start(domain.TaskChapterWrite, "writer", "创作第 2 章", "等待写作", taskLocation{Chapter: 2})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if started.ID != queued.ID {
+		t.Fatalf("expected queued task promoted in place, got queued=%s started=%s", queued.ID, started.ID)
+	}
+	if started.Status != domain.TaskRunning {
+		t.Fatalf("expected running status, got %s", started.Status)
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/apperr"
-	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
@@ -28,7 +27,7 @@ type session struct {
 	emit        emitFn
 	onDelta     deltaFn
 	onClear     clearFn
-	enqueueCtrl func(domain.ControlIntent) error
+	continueRun func(string) error
 
 	providerMu           sync.RWMutex
 	provider             string
@@ -44,7 +43,7 @@ type session struct {
 	refreshWriterRestore func()
 }
 
-func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, enqueueCtrl func(domain.ControlIntent) error, refreshWriterRestore func()) *session {
+func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *novelTaskRuntime, agents *agentBoard, provider string, emit emitFn, onDelta deltaFn, onClear clearFn, continueRun func(string) error, refreshWriterRestore func()) *session {
 	return &session{
 		coordinator:          coordinator,
 		store:                store,
@@ -56,7 +55,7 @@ func newSession(coordinator *agentcore.Agent, store *storepkg.Store, taskRT *nov
 		emit:                 emit,
 		onDelta:              onDelta,
 		onClear:              onClear,
-		enqueueCtrl:          enqueueCtrl,
+		continueRun:          continueRun,
 		agentExt:             utils.NewFieldExtractor("agent"),
 		taskExt:              utils.NewFieldExtractor("task"),
 		subFilter:            utils.NewStreamFilter("content"),

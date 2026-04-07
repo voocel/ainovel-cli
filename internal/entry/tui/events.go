@@ -42,7 +42,8 @@ type (
 	steerResultMsg    struct{}
 	continueResultMsg struct{ err error }
 	spinnerTickMsg    time.Time
-	streamDeltaMsg    string   // 流式 token 增量
+	cursorTickMsg     time.Time // 流式光标独立 tick
+	streamDeltaMsg    string    // 流式 token 增量
 	streamClearMsg    struct{} // 清空流式缓冲（新消息开始）
 	quitResetMsg      struct{} // 双次 Ctrl+C 超时重置
 )
@@ -192,6 +193,12 @@ func loadReport(dir string, reqID int) tea.Cmd {
 func tickSpinner() tea.Cmd {
 	return tea.Tick(350*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
+	})
+}
+
+func tickCursor() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg {
+		return cursorTickMsg(t)
 	})
 }
 

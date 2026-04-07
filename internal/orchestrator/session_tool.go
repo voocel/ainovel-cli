@@ -183,7 +183,13 @@ func (s *session) handleToolExecError(ev agentcore.Event) {
 func (s *session) handleSubAgentEventEnd(ev agentcore.Event) {
 	logSubAgentResult(ev.Result, s.emit)
 	committed := s.handleSubAgentDone(s.emit)
-	s.handleEditorDone(s.emit)
+	reviewed := s.handleEditorDone(s.emit)
+	architectDone := s.handleArchitectDone()
+	if !committed && !reviewed && !architectDone {
+		if inv, ok := parseSubagentInvocation(ev.Args); ok {
+			s.handleIncompleteSubAgent(inv, s.emit)
+		}
+	}
 	s.reminders.observeSubAgentDone(s.store, committed)
 	s.executePolicyActions(s.reminders.drain(), s.emit)
 	s.runOperationalDiag()
