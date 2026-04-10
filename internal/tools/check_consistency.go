@@ -22,7 +22,7 @@ func NewCheckConsistencyTool(store *store.Store) *CheckConsistencyTool {
 
 func (t *CheckConsistencyTool) Name() string { return "check_consistency" }
 func (t *CheckConsistencyTool) Description() string {
-	return "加载章节内容和对照数据（世界规则、伏笔、关系、别名、最近摘要），供你检查一致性"
+	return "加载已写草稿和对照数据（世界规则、伏笔、关系、别名、最近摘要），供你检查一致性。必须在 draft_chapter 之后调用"
 }
 func (t *CheckConsistencyTool) Label() string { return "一致性检查" }
 

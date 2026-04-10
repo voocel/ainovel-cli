@@ -1,8 +1,10 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -29,6 +31,7 @@ type agentState struct {
 	tool    string
 	summary string
 	turn    int
+	context AgentContextSnapshot
 	updated time.Time
 }
 
@@ -53,8 +56,19 @@ func (o *observer) finalize() {
 	}
 }
 
-// persistEvent 将事件写入 runtime queue 供 ReplayQueue 消费（headless 恢复用）。
+// persistEvent 将事件写入 runtime queue 和 slog 日志。
 func (o *observer) persistEvent(ev Event) {
+	// slog 日志 — 所有关键事件都记录,出问题时可追溯
+	level := slog.LevelInfo
+	switch ev.Level {
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.Log(context.Background(), level, ev.Summary, "module", "event", "category", ev.Category)
+
+	// runtime queue — headless 恢复用
 	if o.store == nil || o.store.Runtime == nil {
 		return
 	}
@@ -228,8 +242,32 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 	if json.Unmarshal(ev.Progress.Meta, &payload) != nil {
 		return
 	}
-	o.updateAgent(ev.Progress.Agent, func(a *agentState) {
-		// 上下文信息记录到 agent 状态供 Snapshot 使用
+
+	agent := ev.Progress.Agent
+	if agent == "" {
+		agent = "coordinator"
+	}
+
+	ctxEv := Event{
+		Time:     time.Now(),
+		Category: "SYSTEM",
+		Summary:  fmt.Sprintf("%s 上下文 %.0f%% (%d/%d) 策略: %s", agent, payload.Percent, payload.Tokens, payload.ContextWindow, payload.Strategy),
+		Level:    "info",
+	}
+	if payload.Percent > 85 {
+		ctxEv.Level = "warn"
+	}
+	o.emitEv(ctxEv)
+	o.persistEvent(ctxEv)
+
+	o.updateAgent(agent, func(a *agentState) {
+		a.context = AgentContextSnapshot{
+			Tokens:        payload.Tokens,
+			ContextWindow: payload.ContextWindow,
+			Percent:       payload.Percent,
+			Scope:         payload.Scope,
+			Strategy:      payload.Strategy,
+		}
 	})
 }
 
@@ -313,6 +351,7 @@ func (o *observer) agentSnapshots() []AgentSnapshot {
 			Summary:   a.summary,
 			Tool:      a.tool,
 			Turn:      a.turn,
+			Context:   a.context,
 			UpdatedAt: a.updated,
 		})
 	}
@@ -358,9 +397,19 @@ func displayToolName(tool string, args json.RawMessage) string {
 			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
 		}
 	case "read_chapter":
-		var p struct{ Chapter int `json:"chapter"` }
+		var p struct {
+			Chapter   int    `json:"chapter"`
+			Source    string `json:"source"`
+			Character string `json:"character"`
+		}
 		if json.Unmarshal(args, &p) == nil && p.Chapter > 0 {
-			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
+			suffix := ""
+			if p.Character != "" {
+				suffix = "·" + p.Character + "对话"
+			} else if p.Source == "draft" {
+				suffix = "·草稿"
+			}
+			return fmt.Sprintf("%s(第%d章%s)", tool, p.Chapter, suffix)
 		}
 	}
 	return tool

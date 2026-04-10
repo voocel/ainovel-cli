@@ -45,13 +45,15 @@ func NewContextTool(store *store.Store, refs References, style string) *ContextT
 
 func (t *ContextTool) Name() string { return "novel_context" }
 func (t *ContextTool) Description() string {
-	return "获取小说创作上下文，包括基础设定、状态数据、前情摘要和写作参考资料"
+	return "获取小说当前状态和创作上下文。" +
+		"不传 chapter：返回 progress_status（phase/flow/next_chapter/pending_rewrites 等进度字段）+ 基础设定，用于判断下一步该做什么。" +
+		"传 chapter=N：额外返回该章的前情摘要、伏笔、角色状态、风格规则等写作上下文"
 }
 func (t *ContextTool) Label() string { return "加载上下文" }
 
 func (t *ContextTool) Schema() map[string]any {
 	return schema.Object(
-		schema.Property("chapter", schema.Int("章节号。不传则返回基础设定和模板（供 Architect 使用）")),
+		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Coordinator 用于判断下一步）；传入则额外返回该章的写作上下文（Writer 用）")),
 	)
 }
 
@@ -86,6 +88,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		seed.apply(result)
 		t.buildChapterContext(result, state, warn)
 	} else {
+		t.buildProgressStatus(result)
 		t.buildArchitectContext(result, warn)
 	}
 

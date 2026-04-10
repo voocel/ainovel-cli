@@ -73,6 +73,36 @@ func mergeContextSection(result map[string]any, section map[string]any) {
 	}
 }
 
+// buildProgressStatus 仅在 Coordinator 调用（不传 chapter）时返回进度摘要,
+// Writer 不需要这些信息,避免干扰写作。
+func (t *ContextTool) buildProgressStatus(result map[string]any) {
+	progress, err := t.store.Progress.Load()
+	if err != nil || progress == nil {
+		return
+	}
+	status := map[string]any{
+		"phase":              string(progress.Phase),
+		"flow":               string(progress.Flow),
+		"completed_chapters": len(progress.CompletedChapters),
+		"total_chapters":     progress.TotalChapters,
+		"next_chapter":       progress.NextChapter(),
+		"total_word_count":   progress.TotalWordCount,
+	}
+	if progress.InProgressChapter > 0 {
+		status["in_progress_chapter"] = progress.InProgressChapter
+	}
+	if len(progress.PendingRewrites) > 0 {
+		status["pending_rewrites"] = progress.PendingRewrites
+		status["rewrite_reason"] = progress.RewriteReason
+	}
+	if progress.Layered {
+		status["layered"] = true
+		status["current_volume"] = progress.CurrentVolume
+		status["current_arc"] = progress.CurrentArc
+	}
+	result["progress_status"] = status
+}
+
 func (t *ContextTool) buildBaseContext(result map[string]any, warn func(string, error)) {
 	if premise, err := t.store.Outline.LoadPremise(); err == nil && premise != "" {
 		result["premise"] = premise

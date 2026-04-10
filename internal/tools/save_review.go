@@ -22,7 +22,9 @@ func NewSaveReviewTool(store *store.Store) *SaveReviewTool {
 
 func (t *SaveReviewTool) Name() string { return "save_review" }
 func (t *SaveReviewTool) Description() string {
-	return "保存审阅结果。verdict 必须是 accept/polish/rewrite 之一"
+	return "保存审阅结果并更新流程状态。verdict 为 accept/polish/rewrite 之一。" +
+		"工具内部执行评分卡门禁（可能升级 verdict），直接更新 Progress 的 flow 和 pending_rewrites。" +
+		"返回 system_hints 指示下一步（重写/打磨/继续写作）"
 }
 func (t *SaveReviewTool) Label() string { return "保存审阅" }
 

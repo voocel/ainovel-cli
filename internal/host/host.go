@@ -121,6 +121,8 @@ func (h *Host) StartPrepared(promptText string) error {
 		return fmt.Errorf("init progress: %w", err)
 	}
 
+	slog.Info("开始创作", "module", "host", "prompt_len", len(promptText))
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "开始创作", Level: "info"})
 	if err := h.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
@@ -149,6 +151,8 @@ func (h *Host) Resume() (string, error) {
 		return "", nil // 新建模式，无恢复
 	}
 
+	slog.Info("恢复创作", "module", "host", "label", label)
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "恢复创作: " + label, Level: "info"})
 	h.refreshWriterRestore()
 	if err := h.coordinator.Prompt(prompt); err != nil {
 		return "", fmt.Errorf("resume prompt: %w", err)
@@ -243,8 +247,18 @@ func (h *Host) waitDone() {
 	progress, _ := h.store.Progress.Load()
 	if progress != nil && progress.Phase == domain.PhaseComplete {
 		h.lifecycle = lifecycleCompleted
+		summary := fmt.Sprintf("创作完成: %d 章 %d 字", len(progress.CompletedChapters), progress.TotalWordCount)
+		slog.Info(summary, "module", "host")
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "success"})
 	} else if h.lifecycle == lifecycleRunning {
 		h.lifecycle = lifecycleIdle
+		completed := 0
+		if progress != nil {
+			completed = len(progress.CompletedChapters)
+		}
+		summary := fmt.Sprintf("Coordinator 停止 (已完成 %d 章)", completed)
+		slog.Warn(summary, "module", "host")
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "warn"})
 	}
 	h.mu.Unlock()
 

@@ -24,7 +24,8 @@ func NewCommitChapterTool(store *store.Store) *CommitChapterTool {
 
 func (t *CommitChapterTool) Name() string { return "commit_chapter" }
 func (t *CommitChapterTool) Description() string {
-	return "提交章节终稿。加载草稿正文，保存为终稿，同时更新时间线、伏笔、关系、角色状态。返回结构化信号"
+	return "提交章节终稿。加载草稿正文保存为终稿，更新时间线、伏笔、关系、角色状态和进度。" +
+		"返回值包含 next_chapter、review_required、arc_end 等字段和 system_hints（[系统] 前缀的下一步指令）"
 }
 func (t *CommitChapterTool) Label() string { return "提交章节" }
 

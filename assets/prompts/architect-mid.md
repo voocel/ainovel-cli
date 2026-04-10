@@ -135,3 +135,4 @@
 - 不要像短篇那样过度压缩
 - 也不要像长篇那样预留过多远期空间
 - **你必须按顺序完成全部 4 步（premise → outline → characters → world_rules），全部保存后才算完成。每次 save_foundation 返回值中的 `remaining` 字段会告诉你还有哪些未完成，不要在 remaining 非空时停止。**
+- **所有设定通过 save_foundation 保存。保存完成后直接结束，不要输出规划内容的文字总结。**

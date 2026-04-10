@@ -148,6 +148,7 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(1000),
+		agentcore.WithDefaultToolChoice("required"),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    cfg.ContextWindow,
