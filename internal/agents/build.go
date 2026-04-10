@@ -1,4 +1,4 @@
-package orchestrator
+package agents
 
 import (
 	"fmt"
@@ -8,35 +8,30 @@ import (
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
+	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/orchestrator/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
-// 返回 Agent、AskUserTool 和 WriterRestorePack（供调用方在写章生命周期中 Refresh）。
+// 返回 Agent、AskUserTool 和 WriterRestorePack。
+// Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
-	emit emitFn,
-	onFailover func(bootstrap.FailoverEvent),
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
 	readChapter := tools.NewReadChapterTool(store)
 	askUser := tools.NewAskUserTool()
 
-	// Architect SubAgent 工具
 	architectTools := []agentcore.Tool{
 		contextTool,
 		tools.NewSaveFoundationTool(store),
 	}
-
-	// Writer SubAgent 工具：读写 + 规划 + 一致性检查 + 提交
 	writerTools := []agentcore.Tool{
 		contextTool,
 		readChapter,
@@ -45,8 +40,6 @@ func BuildCoordinator(
 		tools.NewCheckConsistencyTool(store),
 		tools.NewCommitChapterTool(store),
 	}
-
-	// Editor SubAgent 工具：读原文 + 审阅 + 摘要
 	editorTools := []agentcore.Tool{
 		contextTool,
 		readChapter,
@@ -55,32 +48,16 @@ func BuildCoordinator(
 		tools.NewSaveVolumeSummaryTool(store),
 	}
 
+	// Provider failover 只记日志,不通知宿主
 	reportFailover := func(ev bootstrap.FailoverEvent) {
-		summary := fmt.Sprintf(
-			"Provider 切换：%s [%s] %s/%s -> %s/%s",
-			roleLabel(ev.Role),
-			ev.Code,
-			ev.FromProvider,
-			ev.FromModel,
-			ev.ToProvider,
-			ev.ToModel,
-		)
 		slog.Warn("provider 切换",
 			"module", "agent",
 			"role", ev.Role,
 			"code", ev.Code,
-			"from_provider", ev.FromProvider,
-			"from_model", ev.FromModel,
-			"to_provider", ev.ToProvider,
-			"to_model", ev.ToModel,
+			"from", fmt.Sprintf("%s/%s", ev.FromProvider, ev.FromModel),
+			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel),
 			"err", ev.Err,
 		)
-		if onFailover != nil {
-			onFailover(ev)
-		}
-		if emit != nil {
-			emit(UIEvent{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "warn"})
-		}
 	}
 
 	architectModel := models.ForRoleWithFailover("architect", reportFailover)
@@ -96,7 +73,6 @@ func BuildCoordinator(
 		Tools:        architectTools,
 		MaxTurns:     10,
 	}
-
 	architectMid := agentcore.SubAgentConfig{
 		Name:         "architect_mid",
 		Description:  "中篇规划师：为多阶段但篇幅受控的故事生成可推进的设定与阶段化大纲",
@@ -105,7 +81,6 @@ func BuildCoordinator(
 		Tools:        architectTools,
 		MaxTurns:     12,
 	}
-
 	architectLong := agentcore.SubAgentConfig{
 		Name:         "architect_long",
 		Description:  "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
@@ -115,14 +90,13 @@ func BuildCoordinator(
 		MaxTurns:     14,
 	}
 
-	// 动态拼接风格指令到 Writer prompt
 	writerPrompt := bundle.Prompts.Writer
 	if style, ok := bundle.Styles[cfg.Style]; ok {
 		writerPrompt += "\n\n" + style
 	}
 
 	restore := &ctxpack.WriterRestorePack{}
-	restore.Refresh(store) // initial load
+	restore.Refresh(store)
 
 	writer := agentcore.SubAgentConfig{
 		Name:         "writer",
@@ -138,8 +112,6 @@ func BuildCoordinator(
 				ReserveTokens:    16384,
 				KeepRecentTokens: 20000,
 				Agent:            "writer",
-				Emit:             emit,
-				AppendBoundary:   runtimeAppender(store),
 				ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
 					IdleThreshold: 5 * time.Minute,
 				},
@@ -175,73 +147,15 @@ func BuildCoordinator(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
-		agentcore.WithMaxTurns(200),
+		agentcore.WithMaxTurns(1000),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    cfg.ContextWindow,
 			ReserveTokens:    32000,
 			KeepRecentTokens: 30000,
 			Agent:            "coordinator",
-			Emit:             emit,
 			CommitOnProject:  true,
-			AppendBoundary:   runtimeAppender(store),
 		})),
 	)
 	return agent, askUser, restore
-}
-
-func runtimeAppender(s *store.Store) func(domain.RuntimeQueueItem) {
-	return func(item domain.RuntimeQueueItem) {
-		if s == nil || s.Runtime == nil {
-			return
-		}
-		_, _ = s.Runtime.AppendQueue(item)
-	}
-}
-
-// contextManagerConfig groups all parameters for newContextManager, replacing
-// the 9-parameter function signature that accumulated over successive changes.
-type contextManagerConfig struct {
-	Model            agentcore.ChatModel
-	ContextWindow    int
-	ReserveTokens    int
-	KeepRecentTokens int
-	Agent            string
-	Emit             emitFn
-	CommitOnProject  bool
-	AppendBoundary   func(domain.RuntimeQueueItem)
-	Summary          *corecontext.FullSummaryConfig            // nil = defaults
-	ToolMicrocompact *corecontext.ToolResultMicrocompactConfig // nil = defaults
-	ExtraStrategies  []corecontext.Strategy
-}
-
-func newContextManager(cfg contextManagerConfig) agentcore.ContextManager {
-	var sc corecontext.FullSummaryConfig
-	if cfg.Summary != nil {
-		sc = *cfg.Summary // copy, never mutate caller's struct
-	}
-	sc.Model = cfg.Model
-	if sc.KeepRecentTokens <= 0 {
-		sc.KeepRecentTokens = cfg.KeepRecentTokens
-	}
-	var tc corecontext.ToolResultMicrocompactConfig
-	if cfg.ToolMicrocompact != nil {
-		tc = *cfg.ToolMicrocompact
-	}
-	strategies := []corecontext.Strategy{
-		corecontext.NewToolResultMicrocompact(tc),
-		corecontext.NewLightTrim(corecontext.LightTrimConfig{}),
-	}
-	strategies = append(strategies, cfg.ExtraStrategies...)
-	strategies = append(strategies, corecontext.NewFullSummary(sc))
-	engine := corecontext.NewEngine(corecontext.EngineConfig{
-		ContextWindow:   cfg.ContextWindow,
-		ReserveTokens:   cfg.ReserveTokens,
-		CommitOnProject: cfg.CommitOnProject,
-		Strategies:      strategies,
-	})
-	callback := contextRewriteCallback(cfg.Agent, cfg.Emit, cfg.AppendBoundary)
-	engine.SetProjectHook(callback)
-	engine.SetRecoverHook(callback)
-	return engine
 }

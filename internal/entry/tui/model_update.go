@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -287,7 +287,7 @@ func (m Model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case eventMsg:
-		ev := orchestrator.UIEvent(msg)
+		ev := host.Event(msg)
 		m.events = append(m.events, ev)
 		if len(m.events) > maxEvents {
 			m.events = m.events[len(m.events)-maxEvents:]
@@ -309,13 +309,13 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case askUserMsg:
 		m.askState = newAskUserState(askUserRequest(msg))
 		m.textarea.Blur()
-		m.events = append(m.events, orchestrator.UIEvent{
+		m.events = append(m.events, host.Event{
 			Time: time.Now(), Category: "SYSTEM", Summary: "等待用户补充关键信息", Level: "info",
 		})
 		m.refreshEventViewport()
 		return m, listenAskUser(m.askBridge), true
 	case snapshotMsg:
-		m.snapshot = orchestrator.UISnapshot(msg)
+		m.snapshot = host.UISnapshot(msg)
 		m.syncRuntimePlaceholder()
 		m.refreshEventViewport()
 		m.refreshStreamViewport()
@@ -368,7 +368,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case continueResultMsg:
 		if msg.err != nil {
 			m.err = msg.err
-			m.events = append(m.events, orchestrator.UIEvent{
+			m.events = append(m.events, host.Event{
 				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
 			})
 			m.refreshEventViewport()
@@ -423,7 +423,7 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.err = msg.err
 		if m.mode != modeNew {
-			m.events = append(m.events, orchestrator.UIEvent{
+			m.events = append(m.events, host.Event{
 				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
 			})
 			m.refreshEventViewport()
@@ -489,7 +489,7 @@ func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
 	for _, item := range items {
 		switch item.Kind {
 		case domain.RuntimeQueueUIEvent:
-			m.events = append(m.events, orchestrator.UIEvent{
+			m.events = append(m.events, host.Event{
 				Time:     item.Time,
 				Category: item.Category,
 				Summary:  item.Summary,
@@ -504,7 +504,7 @@ func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
 				m.streamRounds = append(m.streamRounds, "")
 			}
 		case domain.RuntimeQueueStreamDelta:
-			text := orchestrator.ReplayDeltaText(item)
+			text := host.ReplayDeltaText(item)
 			if text == "" {
 				continue
 			}

@@ -11,7 +11,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/logger"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type Options struct {
@@ -38,7 +38,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		stdin = os.Stdin
 	}
 
-	eng, err := orchestrator.NewEngine(cfg, bundle)
+	eng, err := host.New(cfg, bundle)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	return consume(eng, stdout, stderr, false)
 }
 
-func consume(eng *orchestrator.Engine, stdout, stderr io.Writer, roundHasContent bool) error {
+func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool) error {
 	for {
 		select {
 		case ev, ok := <-eng.Events():
@@ -123,7 +123,7 @@ func consume(eng *orchestrator.Engine, stdout, stderr io.Writer, roundHasContent
 	}
 }
 
-func drainPending(eng *orchestrator.Engine, stdout, stderr io.Writer, roundHasContent bool) error {
+func drainPending(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool) error {
 	for {
 		select {
 		case ev, ok := <-eng.Events():
@@ -155,7 +155,7 @@ func drainPending(eng *orchestrator.Engine, stdout, stderr io.Writer, roundHasCo
 	}
 }
 
-func writeEvent(w io.Writer, ev orchestrator.UIEvent) {
+func writeEvent(w io.Writer, ev host.Event) {
 	if w == nil || strings.TrimSpace(ev.Summary) == "" {
 		return
 	}
@@ -171,7 +171,7 @@ func replayQueue(items []domain.RuntimeQueueItem, stdout, stderr io.Writer) (boo
 	for _, item := range items {
 		switch item.Kind {
 		case domain.RuntimeQueueUIEvent:
-			writeEvent(stderr, orchestrator.UIEvent{
+			writeEvent(stderr, host.Event{
 				Time:     item.Time,
 				Category: item.Category,
 				Summary:  item.Summary,
@@ -184,7 +184,7 @@ func replayQueue(items []domain.RuntimeQueueItem, stdout, stderr io.Writer) (boo
 				roundHasContent = false
 			}
 		case domain.RuntimeQueueStreamDelta:
-			text := orchestrator.ReplayDeltaText(item)
+			text := host.ReplayDeltaText(item)
 			if text == "" {
 				continue
 			}

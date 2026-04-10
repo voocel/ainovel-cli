@@ -43,10 +43,7 @@ func TestLoadEmpty(t *testing.T) {
 	if v, err := s.World.LoadReview(99); err != nil || v != nil {
 		t.Errorf("Review: want (nil, nil), got (%v, %v)", v, err)
 	}
-	if v, err := s.World.LoadHandoffPack(); err != nil || v != nil {
-		t.Errorf("Handoff: want (nil, nil), got (%v, %v)", v, err)
-	}
-	if v, err := s.World.LoadLastReview(10); err != nil || v != nil {
+if v, err := s.World.LoadLastReview(10); err != nil || v != nil {
 		t.Errorf("LastReview: want (nil, nil), got (%v, %v)", v, err)
 	}
 }
@@ -301,17 +298,3 @@ func TestRenderWorldRules(t *testing.T) {
 	}
 }
 
-// ── Handoff ──
-
-func TestHandoff_SaveAndLoad(t *testing.T) {
-	s := newTestStore(t)
-	pack := domain.HandoffPack{
-		Reason: "review-ch08-accept", NextChapter: 9, CompletedCount: 8,
-	}
-	_ = s.World.SaveHandoffPack(pack)
-
-	got, _ := s.World.LoadHandoffPack()
-	if got == nil || got.Reason != pack.Reason || got.NextChapter != 9 {
-		t.Errorf("roundtrip: %+v", got)
-	}
-}

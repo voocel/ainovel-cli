@@ -11,35 +11,36 @@ import (
 type Store struct {
 	dir string
 
-	Progress   *ProgressStore
-	Outline    *OutlineStore
-	Drafts     *DraftStore
-	Summaries  *SummaryStore
-	RunMeta    *RunMetaStore
-	Signals    *SignalStore
-	Tasks      *TaskStore
-	Runtime    *RuntimeStore
-	Characters *CharacterStore
-	World      *WorldStore
+	Progress    *ProgressStore
+	Outline     *OutlineStore
+	Drafts      *DraftStore
+	Summaries   *SummaryStore
+	RunMeta     *RunMetaStore
+	Signals     *SignalStore
+	Runtime     *RuntimeStore
+	Characters  *CharacterStore
+	World       *WorldStore
+	Checkpoints *CheckpointStore
 
 	crossMu sync.Mutex // 保护跨域原子操作
 }
 
 // NewStore 创建状态管理器，dir 为小说输出根目录。
 func NewStore(dir string) *Store {
-	outline := NewOutlineStore(newIO(dir))
+	io := newIO(dir)
+	outline := NewOutlineStore(io)
 	return &Store{
-		dir:        dir,
-		Progress:   NewProgressStore(newIO(dir)),
-		Outline:    outline,
-		Drafts:     NewDraftStore(newIO(dir)),
-		Summaries:  NewSummaryStore(newIO(dir), outline),
-		RunMeta:    NewRunMetaStore(newIO(dir)),
-		Signals:    NewSignalStore(newIO(dir)),
-		Tasks:      NewTaskStore(newIO(dir)),
-		Runtime:    NewRuntimeStore(newIO(dir)),
-		Characters: NewCharacterStore(newIO(dir), outline),
-		World:      NewWorldStore(newIO(dir)),
+		dir:         dir,
+		Progress:    NewProgressStore(newIO(dir)),
+		Outline:     outline,
+		Drafts:      NewDraftStore(newIO(dir)),
+		Summaries:   NewSummaryStore(newIO(dir), outline),
+		RunMeta:     NewRunMetaStore(newIO(dir)),
+		Signals:     NewSignalStore(newIO(dir)),
+		Runtime:     NewRuntimeStore(newIO(dir)),
+		Characters:  NewCharacterStore(newIO(dir), outline),
+		World:       NewWorldStore(newIO(dir)),
+		Checkpoints: NewCheckpointStore(io),
 	}
 }
 

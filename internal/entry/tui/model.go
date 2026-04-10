@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
@@ -36,7 +36,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // Model 是 TUI 的顶层状态。
 type Model struct {
-	runtime      *orchestrator.Runtime
+	runtime      *host.Host
 	askBridge    *askUserBridge
 	askState     *askUserState
 	cocreate     *cocreateState
@@ -46,8 +46,8 @@ type Model struct {
 	compItems    []commandPaletteItem
 	compIdx      int
 	compActive   bool
-	snapshot     orchestrator.UISnapshot
-	events       []orchestrator.UIEvent
+	snapshot     host.UISnapshot
+	events       []host.Event
 	viewport     viewport.Model   // 事件流 viewport
 	streamVP     viewport.Model   // 流式输出 viewport
 	detailVP     viewport.Model   // 右侧详情 viewport
@@ -74,7 +74,7 @@ type Model struct {
 }
 
 // NewModel 创建 TUI Model。
-func NewModel(rt *orchestrator.Runtime, bridge *askUserBridge) Model {
+func NewModel(rt *host.Host, bridge *askUserBridge) Model {
 	ta := textarea.New()
 	ta.Placeholder = placeholderForNewMode(startupModeQuick)
 	ta.CharLimit = 500

@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type startupMode int
@@ -90,7 +90,7 @@ func (s *cocreateState) appendUser(text string) {
 	s.session.AppendUser(text)
 }
 
-func (s *cocreateState) apply(reply orchestrator.CoCreateReply) {
+func (s *cocreateState) apply(reply host.CoCreateReply) {
 	s.awaiting = false
 	s.session.ApplyReply(reply)
 }

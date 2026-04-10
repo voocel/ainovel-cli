@@ -8,14 +8,14 @@ import (
 	"github.com/voocel/ainovel-cli/internal/diag"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // 消息类型
 type (
-	eventMsg       orchestrator.UIEvent
-	snapshotMsg    orchestrator.UISnapshot
+	eventMsg       host.Event
+	snapshotMsg    host.UISnapshot
 	doneMsg        struct{ complete bool } // complete=true 全书完成，false 出错停止
 	abortResultMsg struct{ stopped bool }
 	bootstrapMsg   struct {
@@ -36,7 +36,7 @@ type (
 	}
 	cocreateDoneMsg struct {
 		reqID int
-		reply orchestrator.CoCreateReply
+		reply host.CoCreateReply
 		err   error
 	}
 	steerResultMsg    struct{}
@@ -50,7 +50,7 @@ type (
 
 // --- Cmd 函数 ---
 
-func listenEvents(rt *orchestrator.Runtime) tea.Cmd {
+func listenEvents(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-rt.Events()
 		if !ok {
@@ -60,7 +60,7 @@ func listenEvents(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func listenDone(rt *orchestrator.Runtime) tea.Cmd {
+func listenDone(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		_, ok := <-rt.Done()
 		if !ok {
@@ -71,19 +71,19 @@ func listenDone(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func tickSnapshot(rt *orchestrator.Runtime) tea.Cmd {
+func tickSnapshot(rt *host.Host) tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return snapshotMsg(rt.Snapshot())
 	})
 }
 
-func fetchSnapshot(rt *orchestrator.Runtime) tea.Cmd {
+func fetchSnapshot(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		return snapshotMsg(rt.Snapshot())
 	}
 }
 
-func bootstrapRuntime(rt *orchestrator.Runtime) tea.Cmd {
+func bootstrapRuntime(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		replay, err := rt.ReplayQueue(0)
 		if err != nil {
@@ -100,14 +100,14 @@ func bootstrapRuntime(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func startRuntime(rt *orchestrator.Runtime, plan startup.Plan) tea.Cmd {
+func startRuntime(rt *host.Host, plan startup.Plan) tea.Cmd {
 	return func() tea.Msg {
 		err := rt.StartPrepared(plan.StartPrompt)
 		return startResultMsg{err: err}
 	}
 }
 
-func runCoCreate(rt *orchestrator.Runtime, state *cocreateState) tea.Cmd {
+func runCoCreate(rt *host.Host, state *cocreateState) tea.Cmd {
 	history := state.session.History()
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel = cancel
@@ -159,21 +159,21 @@ func listenCoCreateDone(state *cocreateState) tea.Cmd {
 	}
 }
 
-func steerRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
+func steerRuntime(rt *host.Host, text string) tea.Cmd {
 	return func() tea.Msg {
 		rt.Steer(text)
 		return steerResultMsg{}
 	}
 }
 
-func continueRuntime(rt *orchestrator.Runtime, text string) tea.Cmd {
+func continueRuntime(rt *host.Host, text string) tea.Cmd {
 	return func() tea.Msg {
 		err := rt.Continue(text)
 		return continueResultMsg{err: err}
 	}
 }
 
-func abortRuntime(rt *orchestrator.Runtime) tea.Cmd {
+func abortRuntime(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		return abortResultMsg{stopped: rt.Abort()}
 	}
@@ -202,7 +202,7 @@ func tickCursor() tea.Cmd {
 	})
 }
 
-func listenStream(rt *orchestrator.Runtime) tea.Cmd {
+func listenStream(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		delta, ok := <-rt.Stream()
 		if !ok {
@@ -212,7 +212,7 @@ func listenStream(rt *orchestrator.Runtime) tea.Cmd {
 	}
 }
 
-func listenStreamClear(rt *orchestrator.Runtime) tea.Cmd {
+func listenStreamClear(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		_, ok := <-rt.StreamClear()
 		if !ok {

@@ -189,6 +189,15 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/expand_arc/append_volume/update_compass", a.Type)
 	}
 
+	// checkpoint
+	scope := domain.GlobalScope()
+	if a.Type == "expand_arc" {
+		scope = domain.ArcScope(a.Volume, a.Arc)
+	} else if a.Type == "append_volume" {
+		scope = domain.GlobalScope()
+	}
+	_, _ = t.store.Checkpoints.Append(scope, a.Type, "", "")
+
 	// 返回剩余未完成项，引导 Architect 继续
 	result["remaining"] = t.remaining()
 	return json.Marshal(result)

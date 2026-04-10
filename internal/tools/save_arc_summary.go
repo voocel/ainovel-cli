@@ -112,6 +112,10 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 		styleRulesSaved = true
 	}
 
+	_, _ = t.store.Checkpoints.Append(
+		domain.ArcScope(a.Volume, a.Arc), "arc_summary", "", "",
+	)
+
 	return json.Marshal(map[string]any{
 		"saved": true, "type": "arc_summary",
 		"volume": a.Volume, "arc": a.Arc,

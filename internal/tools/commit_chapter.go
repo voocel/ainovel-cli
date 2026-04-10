@@ -250,21 +250,15 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		NextVolume:     nextVol,
 		NextArc:        nextArc,
 	}
+
+	// 8. 生成 [系统] 提示 — 替代 orchestrator/policy 层的 FollowUp
+	result.SystemHints = t.buildSystemHints(&result, progress)
+
 	pending.Stage = domain.CommitStageProgressMarked
 	pending.Result = &result
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
 		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_pending_commit_result", "update pending commit result")
-	}
-
-	// 8. 写入信号文件
-	if err := t.store.Signals.SaveLastCommit(result); err != nil {
-		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.save_last_commit", "save commit signal")
-	}
-	pending.Stage = domain.CommitStageSignalSaved
-	pending.UpdatedAt = time.Now().Format(time.RFC3339)
-	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
-		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.update_pending_commit_signal_stage", "update pending commit signal stage")
 	}
 
 	// 9. 清除进度中间状态
@@ -275,5 +269,100 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.clear_pending_commit", "clear pending commit")
 	}
 
+	// 10. 追加 checkpoint
+	_, _ = t.store.Checkpoints.Append(
+		domain.ChapterScope(a.Chapter), "commit",
+		fmt.Sprintf("chapters/ch%02d.md", a.Chapter), "",
+	)
+
 	return json.Marshal(result)
+}
+
+// buildSystemHints 内联原 orchestrator/policy/commit.go 的决策逻辑，
+// 把确定性的下一步指令嵌入返回值，由 Coordinator 直接读取执行。
+func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progress *domain.Progress) []string {
+	var hints []string
+
+	// Writer 大纲偏离反馈
+	if result.Feedback != nil && result.Feedback.Deviation != "" {
+		hints = append(hints, fmt.Sprintf(
+			"[系统] writer_feedback: Writer 在第 %d 章发现大纲偏离。偏离：%s。建议：%s。请评估是否需要调用规划师调整后续大纲。",
+			result.Chapter, result.Feedback.Deviation, result.Feedback.Suggestion))
+	}
+
+	// 重写/打磨流程中的章节完成
+	if progress != nil && (progress.Flow == domain.FlowRewriting || progress.Flow == domain.FlowPolishing) {
+		verb := "重写"
+		if progress.Flow == domain.FlowPolishing {
+			verb = "打磨"
+		}
+		remaining := removeInt(progress.PendingRewrites, result.Chapter)
+		if len(remaining) > 0 {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] %s完成: 第 %d 章已完成%s。剩余待处理章节: %v。请继续处理下一章。",
+				verb, result.Chapter, verb, remaining))
+		} else {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] %s全部完成: 第 %d 章已完成%s。所有待%s章节已处理完毕，继续写第 %d 章。",
+				verb, result.Chapter, verb, verb, result.NextChapter))
+		}
+		return hints
+	}
+
+	// 全书完成
+	if progress != nil && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
+		hints = append(hints, fmt.Sprintf(
+			"[系统] book_complete: 全部 %d 章已写完（共 %d 字）。请输出全书总结并结束，不要再调用 writer。",
+			progress.TotalChapters, progress.TotalWordCount+result.WordCount))
+		return hints
+	}
+
+	// 长篇弧/卷结束
+	if result.ArcEnd {
+		if result.VolumeEnd {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] arc_end: 第 %d 卷第 %d 弧结束（卷结束）。请依次：1) 调用 editor 对本弧进行评审 2) 调用 editor 生成弧摘要 3) 调用 editor 生成卷摘要。",
+				result.Volume, result.Arc))
+		} else {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] arc_end: 第 %d 卷第 %d 弧结束。请依次：1) 调用 editor 对本弧进行评审 2) 调用 editor 生成弧摘要。",
+				result.Volume, result.Arc))
+		}
+		if result.NeedsNewVolume {
+			hints = append(hints, "[系统] new_volume_required: 评审和摘要完成后，请调用 architect_long 自主规划下一卷（save_foundation type=append_volume），同时更新指南针（save_foundation type=update_compass），然后继续写作。")
+		} else if result.NeedsExpansion {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] expand_arc_required: 评审和摘要完成后，请调用 architect_long 为第 %d 卷第 %d 弧展开详细章节规划（save_foundation type=expand_arc），然后继续写作。",
+				result.NextVolume, result.NextArc))
+		}
+		return hints
+	}
+
+	// 非弧结束的审阅触发
+	if result.ReviewRequired {
+		hints = append(hints, fmt.Sprintf(
+			"[系统] review_required: %s。请调用 editor 进行全局审阅。",
+			result.ReviewReason))
+		return hints
+	}
+
+	// 默认：继续写下一章
+	if progress != nil && progress.TotalChapters > 0 {
+		hints = append(hints, fmt.Sprintf(
+			"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章（共 %d 章）。",
+			result.Chapter, result.WordCount, result.NextChapter, progress.TotalChapters))
+	}
+
+	return hints
+}
+
+// removeInt 从 slice 中移除指定值。
+func removeInt(s []int, v int) []int {
+	var result []int
+	for _, x := range s {
+		if x != v {
+			result = append(result, x)
+		}
+	}
+	return result
 }

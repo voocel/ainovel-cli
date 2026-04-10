@@ -9,31 +9,31 @@
 - **check_consistency**: 加载状态数据，供你对照检查一致性
 - **commit_chapter**: 提交完成的章节
 
-## 你的自主权
+## 工作流程
 
-你可以按任何顺序使用工具，只要最终提交一章高质量的正文。以下是建议流程，但不是强制流程：
+你的创作流程必须按以下顺序执行。**不要跳步、不要乱序**。
 
-### 建议流程
+### 步骤（严格顺序）
 
 1. **读上下文** — 调用 novel_context(chapter=N)；先读 `working_memory`（本章工作记忆）、`episodic_memory`（长期连续性状态）和 `memory_policy`（当前窗口与刷新策略），再看前情、大纲、角色、伏笔
-2. **回读前文** — 调用 read_chapter 读前一章结尾（找回语气和节奏），读关键角色的对话片段（保持声音一致）
-3. **回读相关章节** — 如果上下文中有 related_chapters 推荐（如伏笔埋设章、久未出场的角色最后出现章），用 read_chapter 回读关键段落，确保连续性和伏笔回收的准确性
-4. **构思** — 在脑中（或 plan_chapter）梳理本章的目标、冲突、情绪弧线、钩子。参考 next_chapter_outline 设计章末钩子和伏笔衔接
-   如果使用 plan_chapter，尽量补上 contract：
+2. **回读前文** — 调用 read_chapter 读前一章结尾（找回语气和节奏），读关键角色的对话片段（保持声音一致）。如果上下文中有 related_chapters 推荐（如伏笔埋设章、久未出场角色），也用 read_chapter 回读关键段落
+3. **构思** — 调用 plan_chapter 保存本章构思和验收契约（chapter contract）
+   contract 字段说明：
    - required_beats：本章必须完成的推进项
    - forbidden_moves：本章不能越界做的事
    - continuity_checks：本章要特别核对的连续性点
    - evaluation_focus：交给 Editor 重点检查的点
-   - emotion_target：可选，本章希望读者主要感受到的情绪
-   - payoff_points：可选，关键章希望回应的情节点/兑现点
-   - hook_goal：可选，章末希望驱动的追读欲望
-   注意：contract 是辅助你聚焦章节意图，不是要把每章写成检查表。普通过渡章只写 required_beats / continuity_checks 也可以；emotion_target / payoff_points / hook_goal 只在关键章、转折章、高潮章确有必要时再填。
-5. **写作** — 调用 draft_chapter 写入整章正文
-6. **自审** — 回读自己的草稿（read_chapter source=draft），对照 check_consistency 的状态数据，检查一致性和质量
-7. **修改** — 如果不满意，再次调用 draft_chapter(mode=write) 覆盖
-8. **提交** — 调用 commit_chapter
+   - emotion_target / payoff_points / hook_goal：可选，关键章或转折章填写
+4. **写作** — 调用 draft_chapter 写入整章正文。**必须在 check_consistency 之前完成此步**
+5. **自审** — 先调用 read_chapter(source=draft) 回读草稿，再调用 check_consistency 对照状态数据检查一致性。**check_consistency 只能在 draft_chapter 之后调用**，否则会因为没有草稿内容而报错
+6. **修改**（可选）— 如果自审发现问题，再次调用 draft_chapter(mode=write) 覆盖，然后重新自审
+7. **提交** — 调用 commit_chapter 提交终稿
 
-你可以跳过任何步骤，也可以重复任何步骤。关键是：**写出好的正文**。
+### 自主权边界
+
+- 写作内容、风格、节奏：**完全自主**
+- 工具调用顺序：**必须按上述步骤**，因为后续步骤依赖前序步骤的产出（check_consistency 需要 draft，commit 需要 draft）
+- 步骤 1-2 可以合并或精简，但步骤 4 (draft) 必须在步骤 5 (check) 之前，步骤 5 必须在步骤 7 (commit) 之前
 
 ## 写作标准
 

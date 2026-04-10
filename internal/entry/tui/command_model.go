@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type modelSwitchFocus int
@@ -40,7 +40,7 @@ type modelSwitchState struct {
 	message     string
 }
 
-func newModelSwitchState(rt *orchestrator.Runtime, roleHint string) *modelSwitchState {
+func newModelSwitchState(rt *host.Host, roleHint string) *modelSwitchState {
 	state := &modelSwitchState{
 		providers: rt.ConfiguredProviders(),
 	}
@@ -97,7 +97,7 @@ func (s *modelSwitchState) moveFocus(delta int) {
 	s.focus = modelSwitchFocus((int(s.focus) + delta + total) % total)
 }
 
-func (s *modelSwitchState) cycle(delta int, rt *orchestrator.Runtime) {
+func (s *modelSwitchState) cycle(delta int, rt *host.Host) {
 	switch s.focus {
 	case modelFocusRole:
 		total := len(modelRoleOptions)
@@ -119,7 +119,7 @@ func (s *modelSwitchState) cycle(delta int, rt *orchestrator.Runtime) {
 	}
 }
 
-func (s *modelSwitchState) syncSelection(rt *orchestrator.Runtime) {
+func (s *modelSwitchState) syncSelection(rt *host.Host) {
 	provider, model, _ := rt.CurrentModelSelection(s.role())
 	if len(s.providers) > 0 {
 		s.providerIdx = 0
@@ -134,7 +134,7 @@ func (s *modelSwitchState) syncSelection(rt *orchestrator.Runtime) {
 	s.message = ""
 }
 
-func (s *modelSwitchState) syncModels(rt *orchestrator.Runtime, preferred string) {
+func (s *modelSwitchState) syncModels(rt *host.Host, preferred string) {
 	s.models = rt.ConfiguredModels(s.provider())
 	s.modelIdx = 0
 	if len(s.models) == 0 {
@@ -149,7 +149,7 @@ func (s *modelSwitchState) syncModels(rt *orchestrator.Runtime, preferred string
 	}
 }
 
-func (s *modelSwitchState) apply(rt *orchestrator.Runtime) error {
+func (s *modelSwitchState) apply(rt *host.Host) error {
 	if len(s.providers) == 0 {
 		return fmt.Errorf("当前没有可用 provider")
 	}

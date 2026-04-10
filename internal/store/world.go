@@ -312,25 +312,6 @@ func (s *WorldStore) LoadLastReview(fromChapter int) (*domain.ReviewEntry, error
 	return nil, nil
 }
 
-// ── 交接 ──
-
-// SaveHandoffPack 保存最新交接包。
-func (s *WorldStore) SaveHandoffPack(pack domain.HandoffPack) error {
-	return s.io.WriteJSON("meta/handoff.json", pack)
-}
-
-// LoadHandoffPack 读取最新交接包。
-func (s *WorldStore) LoadHandoffPack() (*domain.HandoffPack, error) {
-	var pack domain.HandoffPack
-	if err := s.io.ReadJSON("meta/handoff.json", &pack); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &pack, nil
-}
-
 // ── render helpers ──
 
 func pairKey(a, b string) string {

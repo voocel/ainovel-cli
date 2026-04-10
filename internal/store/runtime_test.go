@@ -143,7 +143,7 @@ func TestRuntimeStoreControlQueue(t *testing.T) {
 		Kind:      domain.ControlIntentResumePrompt,
 		Priority:  domain.RuntimePriorityControl,
 		Summary:   "恢复创作",
-		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskKind:  "coordinator_decision",
 		TaskTitle: "恢复创作任务",
 	})
 	if err != nil {
@@ -196,7 +196,7 @@ func TestRuntimeStorePrependResumeControl(t *testing.T) {
 		Priority:  domain.RuntimePriorityControl,
 		Summary:   "旧的恢复",
 		Prompt:    "old prompt",
-		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskKind:  "coordinator_decision",
 		TaskTitle: "恢复创作任务",
 	}); err != nil {
 		t.Fatalf("EnqueueControl stale resume: %v", err)
@@ -206,7 +206,7 @@ func TestRuntimeStorePrependResumeControl(t *testing.T) {
 		Priority:  domain.RuntimePriorityControl,
 		Summary:   "新的恢复",
 		Prompt:    "new prompt",
-		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskKind:  "coordinator_decision",
 		TaskTitle: "恢复创作任务",
 	})
 	if err != nil {
@@ -245,7 +245,7 @@ func TestRuntimeStorePrependResumeControlDropsRequestedKinds(t *testing.T) {
 		Priority:  domain.RuntimePriorityControl,
 		Summary:   "Steer 恢复",
 		Prompt:    "resume prompt",
-		TaskKind:  domain.TaskCoordinatorDecision,
+		TaskKind:  "coordinator_decision",
 		TaskTitle: "恢复创作任务",
 	}, domain.ControlIntentSteerMessage)
 	if err != nil {

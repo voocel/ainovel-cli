@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -55,11 +56,14 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 		if err := t.store.Drafts.AppendDraft(a.Chapter, a.Content); err != nil {
 			return nil, fmt.Errorf("append draft: %w", err)
 		}
-		// 读取合并后的完整内容计算字数
 		full, err := t.store.Drafts.LoadDraft(a.Chapter)
 		if err != nil {
 			return nil, fmt.Errorf("load draft after append: %w", err)
 		}
+		_, _ = t.store.Checkpoints.Append(
+			domain.ChapterScope(a.Chapter), "draft",
+			fmt.Sprintf("drafts/ch%02d.draft.md", a.Chapter), "",
+		)
 		return json.Marshal(map[string]any{
 			"written":    true,
 			"chapter":    a.Chapter,
@@ -71,6 +75,10 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 		if err := t.store.Drafts.SaveDraft(a.Chapter, a.Content); err != nil {
 			return nil, fmt.Errorf("save draft: %w", err)
 		}
+		_, _ = t.store.Checkpoints.Append(
+			domain.ChapterScope(a.Chapter), "draft",
+			fmt.Sprintf("drafts/ch%02d.draft.md", a.Chapter), "",
+		)
 		return json.Marshal(map[string]any{
 			"written":    true,
 			"chapter":    a.Chapter,

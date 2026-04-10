@@ -7,12 +7,12 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 // renderInputBox 渲染底部输入区。
 // 输入框单独负责输入与提示，不承载启动模式栏。
-func renderInputBox(inputView, hints string, snap orchestrator.UISnapshot, outputDir string, width int) string {
+func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir string, width int) string {
 	innerW := width - 4 // border + padding
 	if innerW < 12 {
 		innerW = 12
@@ -44,7 +44,7 @@ func renderInputBox(inputView, hints string, snap orchestrator.UISnapshot, outpu
 }
 
 // buildRightInfo 构建右侧进度和目录信息。
-func buildRightInfo(snap orchestrator.UISnapshot, outputDir string) string {
+func buildRightInfo(snap host.UISnapshot, outputDir string) string {
 	var parts []string
 
 	if snap.Provider != "" {

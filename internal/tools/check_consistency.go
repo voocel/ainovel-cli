@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -79,6 +80,10 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	if summaries, _ := t.store.Summaries.LoadRecentSummaries(a.Chapter, 2); len(summaries) > 0 {
 		result["recent_summaries"] = summaries
 	}
+
+	_, _ = t.store.Checkpoints.Append(
+		domain.ChapterScope(a.Chapter), "consistency_check", "", "",
+	)
 
 	return json.Marshal(result)
 }

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 // PrepareQuick 将直接输入整理为可进入 Engine 的快速启动计划。
@@ -16,6 +16,6 @@ func PrepareQuick(req Request) (Plan, error) {
 	return Plan{
 		Mode:        ModeQuick,
 		DisplayName: "快速开始",
-		StartPrompt: orchestrator.BuildStartPrompt(prompt),
+		StartPrompt: host.BuildStartPrompt(prompt),
 	}, nil
 }

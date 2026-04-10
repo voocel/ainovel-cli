@@ -8,13 +8,13 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // renderTopBar 渲染顶部状态栏。
 // 左侧：provider/model，中间：书名，右侧：状态胶囊。
-func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) string {
+func renderTopBar(snap host.UISnapshot, width int, spinnerFrame string) string {
 	novelName := snap.NovelName
 	if novelName == "" {
 		novelName = "未定书名"
@@ -84,7 +84,7 @@ func renderTopBar(snap orchestrator.UISnapshot, width int, spinnerFrame string) 
 }
 
 // renderStatePanel 渲染左侧状态面板。
-func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
+func renderStatePanel(snap host.UISnapshot, width, height int) string {
 	contentW := max(12, width-4)
 	agents := sidebarAgents(snap.Agents)
 	tasks := sidebarTasks(snap.Tasks)
@@ -180,7 +180,7 @@ func renderStatePanel(snap orchestrator.UISnapshot, width, height int) string {
 	return style.Render(strings.Join(sections, "\n\n"))
 }
 
-func renderAgentLine(agent orchestrator.AgentSnapshot, width int) string {
+func renderAgentLine(agent host.AgentSnapshot, width int) string {
 	stateColor := taskStatusColor(agent.State)
 	icon := lipgloss.NewStyle().Foreground(stateColor).Render(agentStateIcon(agent.State))
 	badge := lipgloss.NewStyle().Foreground(stateColor).Render(agentStateLabel(agent.State))
@@ -208,7 +208,7 @@ func renderAgentLine(agent orchestrator.AgentSnapshot, width int) string {
 	return line
 }
 
-func renderTaskLine(task orchestrator.TaskSnapshot, width int) string {
+func renderTaskLine(task host.TaskSnapshot, width int) string {
 	color := taskStatusColor(task.Status)
 	icon := lipgloss.NewStyle().Foreground(color).Render(taskStateIcon(task.Status))
 	head := lipgloss.NewStyle().Foreground(color).Render(taskStatusLabel(task.Status))
@@ -256,8 +256,8 @@ func renderSidebarSection(title, body string, width int) string {
 	return header + "\n" + card
 }
 
-func sidebarAgents(agents []orchestrator.AgentSnapshot) []orchestrator.AgentSnapshot {
-	var out []orchestrator.AgentSnapshot
+func sidebarAgents(agents []host.AgentSnapshot) []host.AgentSnapshot {
+	var out []host.AgentSnapshot
 	for _, agent := range agents {
 		if agent.State == "idle" {
 			continue
@@ -277,7 +277,7 @@ func sidebarAgents(agents []orchestrator.AgentSnapshot) []orchestrator.AgentSnap
 	return out
 }
 
-func sidebarIdleAgents(agents []orchestrator.AgentSnapshot) []string {
+func sidebarIdleAgents(agents []host.AgentSnapshot) []string {
 	var names []string
 	hasActive := false
 	for _, agent := range agents {
@@ -294,8 +294,8 @@ func sidebarIdleAgents(agents []orchestrator.AgentSnapshot) []string {
 	return names
 }
 
-func sidebarTasks(tasks []orchestrator.TaskSnapshot) []orchestrator.TaskSnapshot {
-	var active []orchestrator.TaskSnapshot
+func sidebarTasks(tasks []host.TaskSnapshot) []host.TaskSnapshot {
+	var active []host.TaskSnapshot
 	for _, task := range tasks {
 		if task.Status != "running" && task.Status != "queued" {
 			continue
@@ -306,7 +306,7 @@ func sidebarTasks(tasks []orchestrator.TaskSnapshot) []orchestrator.TaskSnapshot
 		return active
 	}
 
-	var concrete []orchestrator.TaskSnapshot
+	var concrete []host.TaskSnapshot
 	for _, task := range active {
 		if task.Kind == "coordinator_decision" {
 			continue
@@ -319,7 +319,7 @@ func sidebarTasks(tasks []orchestrator.TaskSnapshot) []orchestrator.TaskSnapshot
 	return active
 }
 
-func snapshotHeadline(tasks []orchestrator.TaskSnapshot, snap orchestrator.UISnapshot) string {
+func snapshotHeadline(tasks []host.TaskSnapshot, snap host.UISnapshot) string {
 	if len(tasks) > 0 {
 		title := taskListTitle(tasks[0])
 		if !snap.IsRunning && tasks[0].Status == "queued" {
@@ -396,7 +396,7 @@ func snapshotFlowLabel(flow string) string {
 	}
 }
 
-func renderContextSidebar(snap orchestrator.UISnapshot, width int) string {
+func renderContextSidebar(snap host.UISnapshot, width int) string {
 	if snap.ContextWindow <= 0 && snap.ProjectionWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
 		return ""
 	}
@@ -483,7 +483,7 @@ func agentDisplayName(name string) string {
 	}
 }
 
-func agentTaskLine(agent orchestrator.AgentSnapshot) string {
+func agentTaskLine(agent host.AgentSnapshot) string {
 	if agent.TaskKind != "" {
 		return taskKindLabel(agent.TaskKind)
 	}
@@ -493,7 +493,7 @@ func agentTaskLine(agent orchestrator.AgentSnapshot) string {
 	return ""
 }
 
-func agentContextLine(agent orchestrator.AgentSnapshot) string {
+func agentContextLine(agent host.AgentSnapshot) string {
 	ctx := agent.Context
 	if ctx.ContextWindow <= 0 || ctx.Tokens <= 0 {
 		return ""
@@ -651,7 +651,7 @@ func taskOwnerLabel(owner string) string {
 	}
 }
 
-func taskListTitle(task orchestrator.TaskSnapshot) string {
+func taskListTitle(task host.TaskSnapshot) string {
 	switch task.Kind {
 	case "foundation_plan", "coordinator_decision", "steer_apply", "volume_append", "arc_expand":
 		return taskKindLabel(task.Kind)
@@ -667,7 +667,7 @@ func taskListTitle(task orchestrator.TaskSnapshot) string {
 }
 
 // renderEventContent 将事件列表渲染为纯文本（供 viewport 使用）。
-func renderEventContent(events []orchestrator.UIEvent, width int) string {
+func renderEventContent(events []host.Event, width int) string {
 	var b strings.Builder
 	for i, ev := range events {
 		ts := ev.Time.Format("15:04:05")
@@ -713,7 +713,7 @@ func renderEventContent(events []orchestrator.UIEvent, width int) string {
 	return b.String()
 }
 
-func renderEventActivity(snap orchestrator.UISnapshot, frame, width int) string {
+func renderEventActivity(snap host.UISnapshot, frame, width int) string {
 	if !snap.IsRunning {
 		return ""
 	}
@@ -1069,7 +1069,7 @@ func max(a, b int) int {
 
 // renderDetailContent 构建右侧详情面板内容。
 // 优先展示基础设定（大纲、角色），然后是运行时信息（提交、审阅等）。
-func renderDetailContent(snap orchestrator.UISnapshot, contentW int) string {
+func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	var b strings.Builder
 
 	// 大纲

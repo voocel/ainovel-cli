@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 // CoCreateSession 承载共创模式的非 UI 状态。
 type CoCreateSession struct {
-	history     []orchestrator.CoCreateMessage
+	history     []host.CoCreateMessage
 	draftPrompt string
 	ready       bool
 	streamReply string
@@ -17,17 +17,17 @@ type CoCreateSession struct {
 
 func NewCoCreateSession(initial string) *CoCreateSession {
 	return &CoCreateSession{
-		history: []orchestrator.CoCreateMessage{
+		history: []host.CoCreateMessage{
 			{Role: "user", Content: strings.TrimSpace(initial)},
 		},
 	}
 }
 
-func (s *CoCreateSession) History() []orchestrator.CoCreateMessage {
+func (s *CoCreateSession) History() []host.CoCreateMessage {
 	if s == nil {
 		return nil
 	}
-	return append([]orchestrator.CoCreateMessage(nil), s.history...)
+	return append([]host.CoCreateMessage(nil), s.history...)
 }
 
 func (s *CoCreateSession) AppendUser(text string) {
@@ -38,16 +38,16 @@ func (s *CoCreateSession) AppendUser(text string) {
 	if text == "" {
 		return
 	}
-	s.history = append(s.history, orchestrator.CoCreateMessage{Role: "user", Content: text})
+	s.history = append(s.history, host.CoCreateMessage{Role: "user", Content: text})
 }
 
-func (s *CoCreateSession) ApplyReply(reply orchestrator.CoCreateReply) {
+func (s *CoCreateSession) ApplyReply(reply host.CoCreateReply) {
 	if s == nil {
 		return
 	}
 	s.streamReply = ""
 	if text := strings.TrimSpace(reply.Message); text != "" {
-		s.history = append(s.history, orchestrator.CoCreateMessage{Role: "assistant", Content: text})
+		s.history = append(s.history, host.CoCreateMessage{Role: "assistant", Content: text})
 	}
 	s.draftPrompt = strings.TrimSpace(reply.Prompt)
 	s.ready = reply.Ready
@@ -99,6 +99,6 @@ func (s *CoCreateSession) BuildPlan() (Plan, error) {
 	return Plan{
 		Mode:        ModeCoCreate,
 		DisplayName: "共创规划",
-		StartPrompt: orchestrator.BuildStartPrompt(s.DraftPrompt()),
+		StartPrompt: host.BuildStartPrompt(s.DraftPrompt()),
 	}, nil
 }

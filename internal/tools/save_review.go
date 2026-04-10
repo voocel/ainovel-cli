@@ -70,17 +70,85 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		return nil, fmt.Errorf("save review: %w", err)
 	}
 
-	// 写入信号文件供宿主读取
-	if err := t.store.Signals.SaveLastReview(r); err != nil {
-		return nil, fmt.Errorf("save review signal: %w", err)
+	// 评分卡门禁 — 内联原 policy/review.go 的升级逻辑
+	finalVerdict := r.Verdict
+	var escalationReason string
+
+	if r.Verdict == "accept" {
+		// 合同状态检查
+		if r.ContractStatus == "missed" {
+			finalVerdict = "rewrite"
+			escalationReason = "合同履约状态为 missed，升级为重写"
+		} else if r.ContractStatus == "partial" {
+			finalVerdict = "polish"
+			escalationReason = "合同履约状态为 partial，升级为打磨"
+		}
+		// 评分卡门禁
+		if finalVerdict == "accept" {
+			if gate := evaluateScorecardGate(r.Dimensions); gate != "" {
+				if strings.Contains(gate, "rewrite") {
+					finalVerdict = "rewrite"
+				} else {
+					finalVerdict = "polish"
+				}
+				escalationReason = gate
+			}
+		}
 	}
 
+	// 根据最终 verdict 更新 Progress
+	var hints []string
+	progress, _ := t.store.Progress.Load()
+	if finalVerdict == "rewrite" || finalVerdict == "polish" {
+		affected := r.AffectedChapters
+		if len(affected) == 0 && r.Chapter > 0 {
+			affected = []int{r.Chapter}
+		}
+		flow := domain.FlowRewriting
+		verb := "重写"
+		if finalVerdict == "polish" {
+			flow = domain.FlowPolishing
+			verb = "打磨"
+		}
+		_ = t.store.Progress.SetPendingRewrites(affected, r.Summary)
+		_ = t.store.Progress.SetFlow(flow)
+
+		hint := fmt.Sprintf("[系统] %s_required: 审阅结论为 %s，受影响章节 %v。", verb, finalVerdict, affected)
+		if escalationReason != "" {
+			hint += fmt.Sprintf(" （升级原因：%s）", escalationReason)
+		}
+		hint += fmt.Sprintf(" 请逐章调用 writer 执行%s，全部完成后再继续写新章节。", verb)
+		hints = append(hints, hint)
+	} else {
+		_ = t.store.Progress.SetFlow(domain.FlowWriting)
+		nextCh := 0
+		if progress != nil {
+			nextCh = progress.NextChapter()
+		}
+		hints = append(hints, fmt.Sprintf(
+			"[系统] review_accepted: 审阅通过，继续写第 %d 章。", nextCh))
+	}
+
+	// 追加 checkpoint
+	scope := domain.ChapterScope(r.Chapter)
+	if r.Scope == "arc" {
+		vol, arc := 0, 0
+		if progress != nil {
+			vol, arc = progress.CurrentVolume, progress.CurrentArc
+		}
+		scope = domain.ArcScope(vol, arc)
+	}
+	_, _ = t.store.Checkpoints.Append(scope, "review", "", "")
+
 	return json.Marshal(map[string]any{
-		"saved":   true,
-		"chapter": r.Chapter,
-		"scope":   r.Scope,
-		"verdict": r.Verdict,
-		"issues":  len(r.Issues),
+		"saved":        true,
+		"chapter":      r.Chapter,
+		"scope":        r.Scope,
+		"verdict":      r.Verdict,
+		"final_verdict": finalVerdict,
+		"escalation":   escalationReason,
+		"issues":       len(r.Issues),
+		"system_hints": hints,
 	})
 }
 
@@ -155,4 +223,35 @@ func expectedDimensionVerdict(score int) string {
 	default:
 		return "fail"
 	}
+}
+
+// criticalDimensions 定义会触发 verdict 升级的关键维度。
+var criticalDimensions = map[string]struct{}{
+	"consistency": {},
+	"character":   {},
+	"continuity":  {},
+}
+
+// evaluateScorecardGate 检查评分卡是否需要升级 verdict。
+// 返回空字符串表示不升级。
+func evaluateScorecardGate(dimensions []domain.DimensionScore) string {
+	var criticalFails []string
+	var polishIssues []string
+
+	for _, dim := range dimensions {
+		_, isCritical := criticalDimensions[dim.Dimension]
+		if isCritical && (dim.Verdict == "fail" || dim.Score < 60) {
+			criticalFails = append(criticalFails, fmt.Sprintf("%s(%d)", dim.Dimension, dim.Score))
+		} else if dim.Verdict == "warning" || (isCritical && dim.Score < 80) {
+			polishIssues = append(polishIssues, fmt.Sprintf("%s(%d)", dim.Dimension, dim.Score))
+		}
+	}
+
+	if len(criticalFails) > 0 {
+		return fmt.Sprintf("rewrite: 关键维度不合格 %v", criticalFails)
+	}
+	if len(polishIssues) > 0 {
+		return fmt.Sprintf("polish: 部分维度需打磨 %v", polishIssues)
+	}
+	return ""
 }

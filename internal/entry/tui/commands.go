@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/orchestrator"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type slashCommandSpec struct {
@@ -74,7 +74,7 @@ func commandRegistryInstance() commandRegistry {
 				if len(args) > 0 {
 					roleHint = args[0]
 					if normalizeRoleKey(roleHint) == "" {
-						m.events = append(m.events, orchestrator.UIEvent{
+						m.events = append(m.events, host.Event{
 							Time: time.Now(), Category: "ERROR", Summary: "未知角色：" + roleHint, Level: "error",
 						})
 						m.refreshEventViewport()
@@ -109,14 +109,14 @@ func commandSpecs() []slashCommandSpec {
 func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
 	spec, ok := commandRegistryInstance().Find(cmd.name)
 	if !ok {
-		m.events = append(m.events, orchestrator.UIEvent{
+		m.events = append(m.events, host.Event{
 			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
 		})
 		m.refreshEventViewport()
 		return m, nil
 	}
 	if spec.NeedsIdle && m.snapshot.IsRunning {
-		m.events = append(m.events, orchestrator.UIEvent{
+		m.events = append(m.events, host.Event{
 			Time: time.Now(), Category: "ERROR", Summary: "命令仅可在空闲状态执行：/" + spec.Name, Level: "error",
 		})
 		m.refreshEventViewport()

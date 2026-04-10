@@ -59,6 +59,11 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 		return nil, fmt.Errorf("save chapter plan: %w", err)
 	}
 
+	_, _ = t.store.Checkpoints.Append(
+		domain.ChapterScope(plan.Chapter), "plan",
+		fmt.Sprintf("drafts/ch%02d.plan.json", plan.Chapter), "",
+	)
+
 	return json.Marshal(map[string]any{
 		"planned": true,
 		"chapter": plan.Chapter,

@@ -127,7 +127,7 @@ type ControlIntent struct {
 	Summary   string               `json:"summary,omitempty"`
 	Message   string               `json:"message,omitempty"`
 	Prompt    string               `json:"prompt,omitempty"`
-	TaskKind  TaskKind             `json:"task_kind,omitempty"`
+	TaskKind  string               `json:"task_kind,omitempty"`
 	TaskTitle string               `json:"task_title,omitempty"`
 	TaskInput string               `json:"task_input,omitempty"`
 	CreatedAt time.Time            `json:"created_at"`

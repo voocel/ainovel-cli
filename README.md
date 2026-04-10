@@ -1,6 +1,6 @@
 # ainovel-cli
 
-全自动 AI 长篇小说创作引擎。采用面向长篇任务的 Novel Harness 架构，在多智能体协作之上提供运行时控制面、上下文工程、断点恢复与结构化交接，从一句话需求到完整小说，全程无需人工干预。
+全自动 AI 长篇小说创作引擎。Coordinator 在一次 Prompt 里驱动 Architect / Writer / Editor 三个子代理完成整本书的创作，Host 只做启动、恢复和观察。从一句话需求到完整小说，全程无需人工干预。
 
 <p align="center">
   <img src="scripts/sample.gif" alt="ainovel-cli demo" width="800">
@@ -8,10 +8,9 @@
 
 ## 特性
 
-- **多智能体协作** — Coordinator 调度 Architect / Writer / Editor 三个专职智能体，各司其职
-- **Novel Harness 运行时** — 将启动期装配（Scaffolding）与运行期编排（Harness）分离，宿主层统一负责提醒、恢复、交接、评审门禁与状态一致性
-- **确定性控制面** — 宿主程序通过信号文件驱动流程，不依赖 LLM 判断控制流
-- **章节级断点恢复** — Ctrl+C、崩溃、断网后再次运行自动从上次进度续写，覆盖规划/写作/审阅/重写/干预全部阶段
+- **多智能体协作** — Coordinator 在一次长循环中调度 Architect / Writer / Editor 三个子代理，自主决策创作流程
+- **LLM 驱动长循环** — 一次 Prompt 写完整本书，Host 不介入调度。越简单越稳定，拒绝复杂编排
+- **Step 级断点恢复** — 每个工具执行成功后写入 checkpoint，崩溃后精确到 plan/draft/check/commit 步骤级恢复
 - **卷弧双层滚动规划** — 长篇不再一次性规划全部章节。初始只规划前 2 卷弧骨架 + 第 1 弧详细章节，后续弧/卷在写作推进到时再由 Architect 展开，每次展开都参考前文摘要和角色状态，远期规划不空洞
 - **相关章节智能推荐** — 每章写作时从伏笔、角色出场、状态变化、关系四个维度自动推荐相关历史章节，配合下一章预告，确保 500+ 章长篇的连续性
 - **自适应上下文策略** — 根据总章节数自动切换全量 / 滑窗 / 分层摘要，支持 500+ 章长篇
@@ -22,31 +21,34 @@
 
 ## 架构
 
-本项目不是“模型 + 工具”的直接拼装，而是一个面向长篇创作任务的 **Scaffolding + Harness** 架构：
-
-- **Scaffolding** — 启动前完成模型、Prompt、Tool、SubAgent 组装
-- **Harness** — 运行中统一处理状态迁移、提醒注入、评审门禁、交接包、断点恢复、提交一致性
-- **Agents** — Coordinator / Architect / Writer / Editor 负责具体创作与审阅
-- **Persistence** — 所有创作工件、运行状态与交接包都落到 JSON/Markdown 文件
+核心设计：**LLM 驱动，Host 服务**。Coordinator 在一次 Run 中自主决策整本书的创作流程，Host 只做启动、恢复和事件观察。
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                Harness（运行时控制面 / Host）                │
-│ reminder / recovery / handoff / policy / session / commit │
-└──────────────┬─────────────────────────────┬───────────────┘
-               │                             │
-       ┌───────▼────────┐          ┌────────▼────────┐
-       │   Coordinator   │◄────────►│   State Store   │
-       │   （调度中枢）    │          │ JSON + Markdown │
-       └───┬─────┬──────┘          └─────────────────┘
-           │     │
-   ┌───────▼┐ ┌──▼────┐ ┌─────────┐
-   │Architect│ │Writer │ │ Editor  │
-   └────────┘ └───────┘ └─────────┘
-
-Scaffolding：模型 / Prompt / Tool / SubAgent 组装
-Context Engineering：working memory / episodic memory / reference pack
+┌─────────────────────────────────────────────────┐
+│                Host（薄外壳）                     │
+│           启动 / 恢复 / 观察 / 干预注入            │
+└──────────────────────┬──────────────────────────┘
+                       │ 一次 Prompt
+┌──────────────────────▼──────────────────────────┐
+│              Coordinator（LLM 长循环）             │
+│    读 novel_context → 调子代理 → 读结果 → 继续     │
+└────┬──────────┬──────────┬──────────────────────┘
+     │          │          │
+ ┌───▼────┐ ┌───▼───┐ ┌────▼────┐
+ │Architect│ │Writer │ │ Editor  │
+ └───┬────┘ └───┬───┘ └────┬────┘
+     └──────────┼──────────┘
+                │ 工具调用（IO + checkpoint）
+┌───────────────▼─────────────────────────────────┐
+│                   Store                          │
+│  Progress / Checkpoint / Outline / Drafts / ...  │
+└─────────────────────────────────────────────────┘
 ```
+
+- **Host** — 启动 Coordinator、崩溃恢复、事件投影给 TUI。不做任何调度决策
+- **Coordinator** — 唯一的决策者，在一次 Run 里驱动规划→写作→评审→总结的完整流程
+- **SubAgents** — Architect / Writer / Editor 各自独立 context，通过 Store 中的工件协作
+- **Tools** — 原子 IO + checkpoint 写入 + 结构化 `[系统]` 提示返回给 Coordinator
 
 ### 智能体职责
 
@@ -68,14 +70,14 @@ Context Engineering：working memory / episodic memory / reference pack
                                           （参考前文摘要+角色快照）
 ```
 
-Writer 自主决定每章的创作流程，建议路径：
+Writer 按固定顺序完成每章（写作内容完全自主，工具调用顺序严格）：
 
-1. `novel_context` — 加载上下文（前情摘要、时间线、伏笔、角色状态、风格规则、下一章预告、相关章节推荐）
-2. `read_chapter` — 回读前一章结尾和角色对话，找回语气和节奏
+1. `novel_context` — 加载上下文（前情摘要、伏笔、角色状态、风格规则、相关章节推荐）
+2. `read_chapter` — 回读前文找回语气和节奏
 3. `plan_chapter` — 构思本章目标、冲突、情绪弧线
 4. `draft_chapter` — 写入整章正文
-5. `read_chapter` + `check_consistency` — 自审：回读草稿，对照状态数据检查一致性
-6. `commit_chapter` — 提交终稿，更新全局状态（可选附带大纲偏离反馈）
+5. `check_consistency` — 对照状态数据检查一致性（必须在 draft 之后）
+6. `commit_chapter` — 提交终稿，返回 `system_hints` 指示 Coordinator 下一步
 
 ### 状态迁移规则
 
@@ -352,7 +354,7 @@ output/{novel_name}/
 │   ├── state_changes.json # 角色状态变化记录
 │   ├── style_rules.json# 写作风格规则（弧边界时提炼）
 │   ├── snapshots/      # 角色状态快照（长篇）
-│   ├── checkpoints/    # 进度快照（每次提交/评审后保存）
+│   ├── checkpoints.jsonl # Step 级 checkpoint（每个工具成功后追加）
 │   ├── characters.md   # 角色档案（可读版）
 │   └── world_rules.md  # 世界规则（可读版）
 ```
@@ -375,11 +377,11 @@ output/{novel_name}/
 
 ### 工作原理
 
-所有创作产物（大纲、角色、摘要、终稿、时间线、伏笔、关系）都以 JSON 文件持久化在 `output/` 目录。重启时：
+所有创作产物持久化在 `output/` 目录。每个工具执行成功后写入 checkpoint (`meta/checkpoints.jsonl`)。重启时：
 
-1. 读取 `progress.json`（阶段、已完成章节、当前流程状态）和 `run.json`（规划级别、未完成干预）
-2. 自动判断恢复类型，生成对应的恢复指令
-3. Coordinator 通过 `novel_context` 工具重新加载上下文（摘要、角色、世界观等），恢复创作
+1. 读取 `progress.json` + 最近 checkpoint + 待处理信号
+2. 精确到 step 级生成恢复指令（如"第 7 章 draft 已落盘，请继续 check_consistency"）
+3. 一次 `Prompt` 启动 Coordinator，进入长循环继续创作
 
 > 文件写入使用 temp + fsync + rename 原子操作，即使在写入过程中断电也不会损坏已有数据。
 
@@ -411,74 +413,41 @@ output/{novel_name}/
 
 ## 设计理念
 
-### Agent 驱动原则
+> **把复杂度从代码搬到模型里。** 代码越少，能坏的地方越少。决策权交给更擅长做决策的角色。
 
-**工具负责 IO，Agent 负责思考。不要用流水线绑住 Agent 的手脚。**
+### LLM 驱动，越简单越稳定
 
-这是本项目所有设计决策的最高优先级准则。具体要求：
-
-1. **工具只做数据读写** — 工具不包含业务逻辑判断，不强制执行顺序。工具是 Agent 的手和眼，不是 Agent 的脑。
-2. **决策权归 Agent** — 规划、写作、打磨、自审都是 Agent 的思考行为，不是工具调用节点。Agent 自主决定何时读、何时写、何时审。
-3. **不用流水线约束创作** — 不强制"先规划→再按场景写→再打磨→再检查"的固定流程。Writer 可以先写完整章，回读后修改，自审后提交，顺序自定。
-4. **给 Agent 感知能力** — Agent 能回读自己写的文字和前文原文，而非只看结构化摘要。风格保持靠阅读原文，不靠字段描述。
-5. **Host 只兜底控制流** — 确定性状态机只负责"下一步该做什么"的流程判断，不干预创作内容。
-
-任何新增功能或工具设计，都必须先问：**这是 IO 操作还是思考行为？** 如果是思考，交给 Agent；如果是 IO，才做成工具。
+- **决策权归 LLM** — 流程决策全部由 Coordinator 自主判断，Host 不介入。工具失败时返回结构化错误，由 LLM 自行决定重试或调整策略
+- **工具负责 IO + checkpoint** — 每个写入类工具原子落盘后追加 checkpoint，返回 `[系统]` 提示告知 Coordinator 下一步
+- **拒绝复杂编排** — 没有 task queue、没有 scheduler、没有 policy engine。Coordinator 的一次 Run 就是唯一的控制流
+- **模型越强收益越大** — 架构把决策权留在 prompt 和工具语义里，模型升级后直接吃到收益，Host 一行不用改
 
 ### 全自动闭环
 
-一句话输入，完整小说输出，中间零人工干预。系统自主完成全部创作决策：
+一句话输入，完整小说输出：
 
 ```
-"写一部悬疑小说" → 构建世界观 → 设计角色 → 规划大纲
+“写一部悬疑小说” → 构建世界观 → 设计角色 → 规划大纲
                 → 逐章写作 → 质量评审 → 自动重写
                 → 弧级摘要 → 角色快照 → 完整成书
 ```
 
-**自主决策能力：**
-
-- **Architect 自主构建** — 从用户一句话需求推导出完整的前提、大纲、角色关系和世界规则
-- **Writer 自主创作** — 每章独立完成规划、写作、打磨、一致性校验的完整闭环
-- **Editor 自主评审** — 跨章节分析结构问题，输出裁定（通过 / 打磨 / 重写）及影响范围
-- **Coordinator 自主调度** — 根据评审裁定安排重写，根据弧边界触发摘要生成，无需外部指令
-- **自动伏笔管理** — 埋设、推进、回收全程由 Agent 自行追踪，不会烂尾
+- **Coordinator 自主调度** — 在一次长循环里根据工具返回的 `system_hints` 决定下一步，无需 Host 干预
+- **Writer 自主创作** — 每章独立完成 plan → draft → check → commit 的完整闭环
+- **Editor 自主评审** — 跨章节分析结构问题，输出裁定及影响范围
+- **Architect 自主构建** — 从一句话需求推导出完整设定，弧/卷边界时自主展开后续规划
+- **自动伏笔管理** — 埋设、推进、回收全程由 Agent 自行追踪
 - **自动节奏调控** — 追踪叙事线和钩子类型历史，避免连续章节结构雷同
 
-### 确定性控制面
+### 工具即信号
 
-Agent 负责创造，Host 负责兜底。**控制流不交给 LLM 判断**。
+确定性指令不由 Host 注入，而是**嵌在工具返回值**里：
 
-Writer 调用 `commit_chapter` 后，宿主程序读取信号文件 `meta/last_commit.json`，确定性地决定下一步：
+- `commit_chapter` 检测弧结束/全书完成/审阅触发 → 在 `system_hints` 中返回 `[系统]` 指令
+- `save_review` 评估评分卡门禁/verdict 升级 → 在 `system_hints` 中返回重写/打磨指令
+- Coordinator 每次工具调用后读取 `system_hints`，按指令直接执行下一步
 
-| 信号 | 宿主动作 |
-|------|----------|
-| 全部章节完成 | 标记完成，通知 Coordinator 总结全书 |
-| `review_required=true` | 注入 Editor 评审指令 |
-| `arc_end=true` | 注入弧级评审 + 弧摘要生成指令 |
-| `arc_end` + `needs_expansion` | 额外注入 Architect 展开下一弧指令 |
-| `volume_end=true` | 额外注入卷摘要生成指令 |
-| `volume_end` + `needs_volume_expansion` | 额外注入 Architect 展开下一卷指令 |
-| 有待重写章节 | 注入重写指令 |
-| 以上皆否 | 注入"继续写下一章"指令 |
-
-Editor 评审裁定同理：`accept` → 继续，`polish/rewrite` → 注入修改指令。
-
-这种设计保证：即使 LLM 幻觉或遗忘，宿主层的状态机也能把流程拉回正轨。
-
-### Harness 视角
-
-如果从运行时架构而不是“智能体数量”来看，本项目当前更准确的定位是：
-
-- **Novel Harness** — 宿主层负责长周期创作的运行时治理
-- **Agents as workers** — 智能体负责规划、写作、评审这些具体认知工作
-- **Structured artifacts** — 章节合同、评审结果、交接包、提交标记、摘要与快照都是一等工件
-
-这意味着项目的核心价值不只是“多智能体写小说”，而是：
-
-- 长会话不漂
-- 中断后能恢复
-- 评审有门禁
-- 上下文可压缩、可交接、可继续推进
+这让信号跟工具调用在同一上下文链里，LLM 不会错过。
 
 ## 技术栈
 
