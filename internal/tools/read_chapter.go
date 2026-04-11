@@ -110,8 +110,8 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	if content == "" {
 		return json.Marshal(map[string]any{
 			"chapter": a.Chapter,
-			"content": "",
-			"note":    "章节不存在",
+			"exists":  false,
+			"hint":    "该章节尚未写入，如需写作请先调用 draft_chapter",
 		})
 	}
 

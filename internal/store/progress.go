@@ -105,6 +105,32 @@ func (s *ProgressStore) UpdatePhase(phase domain.Phase) error {
 	})
 }
 
+// StartChapter 标记某章进入写作中状态。纯 IO，不做状态验证。
+func (s *ProgressStore) StartChapter(chapter int) error {
+	if chapter <= 0 {
+		return fmt.Errorf("chapter must be > 0")
+	}
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			p = &domain.Progress{}
+		}
+		p.Phase = domain.PhaseWriting
+		if p.Flow != domain.FlowRewriting && p.Flow != domain.FlowPolishing {
+			p.Flow = domain.FlowWriting
+		}
+		if p.CurrentChapter < chapter {
+			p.CurrentChapter = chapter
+		}
+		p.InProgressChapter = chapter
+		p.CompletedScenes = nil
+		return s.saveUnlocked(p)
+	})
+}
+
 // MarkChapterComplete 标记章节完成，原子性更新进度。
 func (s *ProgressStore) MarkChapterComplete(chapter, wordCount int, hookType, dominantStrand string) error {
 	return s.io.WithWriteLock(func() error {

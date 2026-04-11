@@ -58,6 +58,9 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	if err := t.store.Drafts.SaveChapterPlan(plan); err != nil {
 		return nil, fmt.Errorf("save chapter plan: %w", err)
 	}
+	if err := t.store.Progress.StartChapter(plan.Chapter); err != nil {
+		return nil, fmt.Errorf("mark chapter in progress: %w", err)
+	}
 
 	_, _ = t.store.Checkpoints.Append(
 		domain.ChapterScope(plan.Chapter), "plan",
@@ -65,7 +68,8 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	)
 
 	return json.Marshal(map[string]any{
-		"planned": true,
-		"chapter": plan.Chapter,
+		"planned":   true,
+		"chapter":   plan.Chapter,
+		"next_step": "立即调用 draft_chapter 写入正文，不要重复规划同一章",
 	})
 }

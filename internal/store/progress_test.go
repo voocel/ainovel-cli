@@ -62,6 +62,30 @@ func TestUpdatePhaseRejectsRegression(t *testing.T) {
 	}
 }
 
+func TestStartChapter(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	_ = store.Progress.Init("test", 10)
+
+	if err := store.Progress.StartChapter(1); err != nil {
+		t.Fatalf("StartChapter: %v", err)
+	}
+
+	p, _ := store.Progress.Load()
+	if p.Phase != domain.PhaseWriting {
+		t.Fatalf("expected phase writing, got %s", p.Phase)
+	}
+	if p.Flow != domain.FlowWriting {
+		t.Fatalf("expected flow writing, got %s", p.Flow)
+	}
+	if p.CurrentChapter != 1 {
+		t.Fatalf("expected current chapter 1, got %d", p.CurrentChapter)
+	}
+	if p.InProgressChapter != 1 {
+		t.Fatalf("expected in-progress chapter 1, got %d", p.InProgressChapter)
+	}
+}
+
 func TestSetPendingRewrites(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

@@ -105,6 +105,7 @@ func BuildCoordinator(
 		SystemPrompt: writerPrompt,
 		Tools:        writerTools,
 		MaxTurns:     20,
+		ToolChoice:   "required",
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			return newContextManager(contextManagerConfig{
 				Model:            model,
