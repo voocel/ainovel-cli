@@ -50,6 +50,14 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 	if a.Content == "" {
 		return nil, fmt.Errorf("content must not be empty")
 	}
+	if t.store.Progress.IsChapterCompleted(a.Chapter) {
+		return json.Marshal(map[string]any{
+			"chapter":   a.Chapter,
+			"skipped":   true,
+			"reason":    fmt.Sprintf("第 %d 章已提交完成，不能覆盖", a.Chapter),
+			"next_step": "该章节已完成，请继续写下一章",
+		})
+	}
 	if err := t.store.Progress.StartChapter(a.Chapter); err != nil {
 		return nil, fmt.Errorf("mark chapter in progress: %w", err)
 	}

@@ -80,14 +80,15 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		warnings = append(warnings, msg)
 	}
 
-	t.buildBaseContext(result, warn)
-
 	if a.Chapter > 0 {
+		// Writer 路径：加载全量基础数据 + 章节上下文
+		t.buildBaseContext(result, warn)
 		seed := newChapterContextEnvelope()
 		state := t.prepareChapterContext(a.Chapter, &seed, result, warn)
 		seed.apply(result)
 		t.buildChapterContext(result, state, warn)
 	} else {
+		// Coordinator/Architect 路径：只返回状态 + 结构化数据，不加载全量原文
 		t.buildProgressStatus(result)
 		t.buildArchitectContext(result, warn)
 	}
@@ -98,7 +99,9 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 
 	// 优先级预算：总大小超过阈值时自动裁剪低优先级数据
 	if a.Chapter > 0 {
-		trimByBudget(result, 100*1024) // 100KB 预算
+		trimByBudget(result, 100*1024) // Writer: 100KB
+	} else {
+		trimByBudget(result, 60*1024) // Coordinator/Architect: 60KB
 	}
 
 	result["_loading_summary"] = buildLoadingSummary(result, a.Chapter)

@@ -449,6 +449,11 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 	} else {
 		warn("character_snapshots", err)
 	}
+	if rules, err := t.store.World.LoadWorldRules(); err == nil && len(rules) > 0 {
+		envelope.Foundation["world_rules"] = rules
+	} else {
+		warn("world_rules", err)
+	}
 	if foreshadow, err := t.store.World.LoadActiveForeshadow(); err == nil && len(foreshadow) > 0 {
 		envelope.Foundation["foreshadow_ledger"] = foreshadow
 	} else {

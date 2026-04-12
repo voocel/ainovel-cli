@@ -198,8 +198,14 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 	}
 	_, _ = t.store.Checkpoints.Append(scope, a.Type, "", "")
 
-	// 返回剩余未完成项，引导 Architect 继续
-	result["remaining"] = t.remaining()
+	// 返回剩余未完成项，引导 Architect 继续或结束
+	remaining := t.remaining()
+	result["remaining"] = remaining
+	if len(remaining) == 0 {
+		result["system_hints"] = map[string]string{
+			"next_step": "所有基础设定已完成，直接返回结果给 Coordinator",
+		}
+	}
 	return json.Marshal(result)
 }
 

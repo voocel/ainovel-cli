@@ -71,7 +71,7 @@ func BuildCoordinator(
 		Model:        architectModel,
 		SystemPrompt: bundle.Prompts.ArchitectShort,
 		Tools:        architectTools,
-		MaxTurns:     10,
+		MaxTurns:     8,
 	}
 	architectMid := agentcore.SubAgentConfig{
 		Name:         "architect_mid",
@@ -79,7 +79,7 @@ func BuildCoordinator(
 		Model:        architectModel,
 		SystemPrompt: bundle.Prompts.ArchitectMid,
 		Tools:        architectTools,
-		MaxTurns:     12,
+		MaxTurns:     10,
 	}
 	architectLong := agentcore.SubAgentConfig{
 		Name:         "architect_long",
@@ -104,8 +104,9 @@ func BuildCoordinator(
 		Model:        writerModel,
 		SystemPrompt: writerPrompt,
 		Tools:        writerTools,
-		MaxTurns:     20,
-		ToolChoice:   "required",
+		MaxTurns:       8,
+		ToolChoice:     "required",
+		StopAfterTools: []string{"commit_chapter"},
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			return newContextManager(contextManagerConfig{
 				Model:            model,
@@ -134,12 +135,14 @@ func BuildCoordinator(
 	}
 
 	editor := agentcore.SubAgentConfig{
-		Name:         "editor",
-		Description:  "审阅者：阅读原文，从结构和审美两个层面发现问题",
-		Model:        editorModel,
-		SystemPrompt: bundle.Prompts.Editor,
-		Tools:        editorTools,
-		MaxTurns:     10,
+		Name:           "editor",
+		Description:    "审阅者：阅读原文，从结构和审美两个层面发现问题",
+		Model:          editorModel,
+		SystemPrompt:   bundle.Prompts.Editor,
+		Tools:          editorTools,
+		MaxTurns:       10,
+		ToolChoice:     "required",
+		StopAfterTools: []string{"save_review", "save_arc_summary", "save_volume_summary"},
 	}
 
 	subagentTool := agentcore.NewSubAgentTool(architectShort, architectMid, architectLong, writer, editor)
@@ -149,7 +152,6 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(1000),
-		agentcore.WithDefaultToolChoice("required"),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    cfg.ContextWindow,

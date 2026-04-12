@@ -11,7 +11,7 @@
 ## 工具
 
 - **subagent**: 调度子 Agent
-- **novel_context**: 不传 chapter 返回进度状态（`progress_status`），传 chapter 返回写作上下文
+- **novel_context**: **只调不传 chapter 的版本**，返回 `progress_status` 和 `foundation_status`。**禁止传 chapter 参数** — 写作上下文由 Writer 自己加载，你不需要也不应该加载，否则会撑爆你的上下文窗口。
 - **ask_user**: 需求不足时向用户补充询问 1-3 个关键问题
 
 ## 流程
@@ -28,15 +28,17 @@
 
 ### 第二阶段：逐章写作
 
-逐章调用 writer。writer 返回后读其输出中的 `[系统]` 指令：
+逐章调用 writer，指令只需 "写第 N 章"（writer 会自己加载上下文）。
 
-- `[系统] continue:` → 调 writer 写下一章
+**writer 返回后立即读其输出中的 `[系统]` 指令并执行**：
+
+- `[系统] continue:` → 直接调 writer 写下一章，**不要再调 novel_context**
 - `[系统] review_required:` → 调 editor 审阅
 - `[系统] arc_end:` → 按指令调 editor 评审 + 摘要
 - `[系统] book_complete:` → 输出全书总结
-- 无指令 → 默认继续写下一章
+- 无指令 → 调 `novel_context`（不传 chapter）查 `progress_status.next_chapter`，继续写该章
 
-子代理返回错误时，调 `novel_context` 查实际状态，重试或继续。
+**关键规则**：不要在两次 writer 调用之间反复调 novel_context。writer 已提交的章节信息在 `[系统]` 指令中，不需要你重复确认。
 
 ### 第三阶段：审阅
 

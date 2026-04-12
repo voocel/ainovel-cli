@@ -131,6 +131,15 @@ func (s *ProgressStore) StartChapter(chapter int) error {
 	})
 }
 
+// IsChapterCompleted 检查章节是否已提交完成。
+func (s *ProgressStore) IsChapterCompleted(chapter int) bool {
+	p, err := s.Load()
+	if err != nil || p == nil {
+		return false
+	}
+	return slices.Contains(p.CompletedChapters, chapter)
+}
+
 // MarkChapterComplete 标记章节完成，原子性更新进度。
 func (s *ProgressStore) MarkChapterComplete(chapter, wordCount int, hookType, dominantStrand string) error {
 	return s.io.WithWriteLock(func() error {

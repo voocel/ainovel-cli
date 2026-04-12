@@ -86,6 +86,26 @@ func TestStartChapter(t *testing.T) {
 	}
 }
 
+func TestIsChapterCompleted(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	_ = store.Progress.Init("test", 10)
+
+	if store.Progress.IsChapterCompleted(1) {
+		t.Fatal("chapter 1 should not be completed initially")
+	}
+
+	_ = store.Progress.StartChapter(1)
+	_ = store.Progress.MarkChapterComplete(1, 5000, "", "")
+
+	if !store.Progress.IsChapterCompleted(1) {
+		t.Fatal("chapter 1 should be completed after MarkChapterComplete")
+	}
+	if store.Progress.IsChapterCompleted(2) {
+		t.Fatal("chapter 2 should not be completed")
+	}
+}
+
 func TestSetPendingRewrites(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

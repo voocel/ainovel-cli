@@ -285,3 +285,34 @@ func TestPlanChapterMarksInProgress(t *testing.T) {
 		t.Fatalf("expected in-progress chapter 1, got %d", progress.InProgressChapter)
 	}
 }
+
+func TestDraftChapterRejectsCompleted(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 10); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	_ = s.Drafts.SaveDraft(1, "第一章正文")
+	_ = s.Progress.StartChapter(1)
+	_ = s.Progress.MarkChapterComplete(1, 3000, "", "")
+
+	tool := NewDraftChapterTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"chapter": 1,
+		"content": "试图覆盖已提交的章节",
+	})
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected soft rejection, got error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if payload["skipped"] != true {
+		t.Fatalf("expected skipped=true, got %+v", payload)
+	}
+}

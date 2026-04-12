@@ -91,6 +91,14 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	if a.Chapter <= 0 {
 		return nil, apperr.New(apperr.CodeToolArgsInvalid, "tools.commit_chapter.validate_args", "chapter must be > 0")
 	}
+	if t.store.Progress.IsChapterCompleted(a.Chapter) {
+		return json.Marshal(map[string]any{
+			"chapter":   a.Chapter,
+			"skipped":   true,
+			"reason":    fmt.Sprintf("第 %d 章已提交完成，无需重复提交", a.Chapter),
+			"next_step": "该章节已完成，请继续写下一章",
+		})
+	}
 	existingPending, err := t.store.Signals.LoadPendingCommit()
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.CodeStoreReadFailed, "tools.commit_chapter.load_pending_commit", "load pending commit")

@@ -124,10 +124,12 @@ func (o *observer) handle(ev agentcore.Event) {
 		}
 	case agentcore.EventError:
 		if ev.Err != nil {
+			fullMsg := ev.Err.Error()
+			slog.Error(fullMsg, "module", "agent", "category", "ERROR")
 			errEv := Event{
 				Time:     time.Now(),
 				Category: "ERROR",
-				Summary:  truncate(ev.Err.Error(), 120),
+				Summary:  truncate(fullMsg, 120),
 				Level:    "error",
 			}
 			o.emitEv(errEv)
@@ -248,18 +250,7 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 		agent = "coordinator"
 	}
 
-	ctxEv := Event{
-		Time:     time.Now(),
-		Category: "SYSTEM",
-		Summary:  fmt.Sprintf("%s 上下文 %.0f%% (%d/%d) 策略: %s", agent, payload.Percent, payload.Tokens, payload.ContextWindow, payload.Strategy),
-		Level:    "info",
-	}
-	if payload.Percent > 85 {
-		ctxEv.Level = "warn"
-	}
-	o.emitEv(ctxEv)
-	o.persistEvent(ctxEv)
-
+	// 更新 agent 快照（TUI 侧边栏始终可见）
 	o.updateAgent(agent, func(a *agentState) {
 		a.context = AgentContextSnapshot{
 			Tokens:        payload.Tokens,
@@ -269,6 +260,26 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 			Strategy:      payload.Strategy,
 		}
 	})
+
+	level := "info"
+	if payload.Percent > 85 {
+		level = "warn"
+	}
+	summary := fmt.Sprintf("%s 上下文 %.0f%% (%d/%d) 策略: %s", agent, payload.Percent, payload.Tokens, payload.ContextWindow, payload.Strategy)
+
+	if payload.Strategy != "" {
+		// 触发了压缩 → 事件流 + 日志
+		ctxEv := Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level}
+		o.emitEv(ctxEv)
+		o.persistEvent(ctxEv)
+	} else {
+		// 普通使用率报告 → 仅日志
+		slogLevel := slog.LevelInfo
+		if level == "warn" {
+			slogLevel = slog.LevelWarn
+		}
+		slog.Log(context.Background(), slogLevel, summary, "module", "context", "agent", agent)
+	}
 }
 
 func (o *observer) handleToolEnd(ev agentcore.Event) {
@@ -281,6 +292,8 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		summary := fmt.Sprintf("%s → %s 失败", agent, ev.Tool)
 		if len(ev.Result) > 0 {
 			errText := string(ev.Result)
+			// 完整错误写日志
+			slog.Error(fmt.Sprintf("%s: %s", summary, errText), "module", "agent", "tool", ev.Tool)
 			if len(errText) > 120 {
 				errText = errText[:120] + "..."
 			}
