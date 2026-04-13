@@ -65,6 +65,8 @@ func BuildCoordinator(
 	editorModel := models.ForRoleWithFailover("editor", reportFailover)
 	coordinatorModel := models.ForRoleWithFailover("coordinator", reportFailover)
 
+	onMsg := store.Sessions.SubAgentLogger()
+
 	architectShort := agentcore.SubAgentConfig{
 		Name:         "architect_short",
 		Description:  "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
@@ -72,6 +74,7 @@ func BuildCoordinator(
 		SystemPrompt: bundle.Prompts.ArchitectShort,
 		Tools:        architectTools,
 		MaxTurns:     8,
+		OnMessage:    onMsg,
 	}
 	architectMid := agentcore.SubAgentConfig{
 		Name:         "architect_mid",
@@ -80,6 +83,7 @@ func BuildCoordinator(
 		SystemPrompt: bundle.Prompts.ArchitectMid,
 		Tools:        architectTools,
 		MaxTurns:     10,
+		OnMessage:    onMsg,
 	}
 	architectLong := agentcore.SubAgentConfig{
 		Name:         "architect_long",
@@ -88,6 +92,7 @@ func BuildCoordinator(
 		SystemPrompt: bundle.Prompts.ArchitectLong,
 		Tools:        architectTools,
 		MaxTurns:     14,
+		OnMessage:    onMsg,
 	}
 
 	writerPrompt := bundle.Prompts.Writer
@@ -105,6 +110,7 @@ func BuildCoordinator(
 		SystemPrompt: writerPrompt,
 		Tools:        writerTools,
 		MaxTurns:     10,
+		OnMessage:    onMsg,
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			return newContextManager(contextManagerConfig{
 				Model:            model,
@@ -139,6 +145,7 @@ func BuildCoordinator(
 		SystemPrompt: bundle.Prompts.Editor,
 		Tools:        editorTools,
 		MaxTurns:     10,
+		OnMessage:    onMsg,
 	}
 
 	subagentTool := agentcore.NewSubAgentTool(architectShort, architectMid, architectLong, writer, editor)
@@ -149,6 +156,7 @@ func BuildCoordinator(
 		agentcore.WithTools(subagentTool, contextTool, askUser),
 		agentcore.WithMaxTurns(1000),
 		agentcore.WithDefaultToolChoice("required"),
+		agentcore.WithOnMessage(store.Sessions.CoordinatorLogger()),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    cfg.ContextWindow,

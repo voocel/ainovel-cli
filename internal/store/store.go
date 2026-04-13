@@ -21,6 +21,7 @@ type Store struct {
 	Characters  *CharacterStore
 	World       *WorldStore
 	Checkpoints *CheckpointStore
+	Sessions    *SessionStore
 
 	crossMu sync.Mutex // 保护跨域原子操作
 }
@@ -41,6 +42,7 @@ func NewStore(dir string) *Store {
 		Characters:  NewCharacterStore(newIO(dir), outline),
 		World:       NewWorldStore(newIO(dir)),
 		Checkpoints: NewCheckpointStore(io),
+		Sessions:    NewSessionStore(newIO(dir)),
 	}
 }
 
@@ -50,7 +52,7 @@ func (s *Store) Dir() string { return s.dir }
 // Init 创建所需的子目录结构。
 func (s *Store) Init() error {
 	return s.Progress.io.EnsureDirs([]string{
-		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks",
+		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks", "meta/sessions", "meta/sessions/agents",
 	})
 }
 
