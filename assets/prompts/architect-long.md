@@ -194,7 +194,9 @@
 - 第一弧包含详细章节，其余弧为骨架
 - 如果判断故事接近尾声（活跃长线大部分已收束），可设 `"final": true` 标记此卷为最终卷
 
-4. 调用 save_foundation(type="append_volume", content=<VolumeOutline JSON>)
+4. **决定是否继续或结束**：
+   - 故事应该继续 → 调用 save_foundation(type="append_volume", content=<VolumeOutline JSON>)
+   - 故事应该在当前卷结束（活跃线索已收束、主角命运已明确） → 调用 save_foundation(type="mark_final", volume=当前卷号, content={})，不创建新卷
 
 5. **同时更新指南针**：
    - 移除已收束的 open_threads

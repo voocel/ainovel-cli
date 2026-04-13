@@ -38,7 +38,10 @@
 - `[系统] book_complete:` → 输出全书总结
 - 无指令 → 调 `novel_context`（不传 chapter）查 `progress_status.next_chapter`，继续写该章
 
-**关键规则**：不要在两次 writer 调用之间反复调 novel_context。writer 已提交的章节信息在 `[系统]` 指令中，不需要你重复确认。
+**关键规则**：
+- 不要在两次 writer 调用之间反复调 novel_context。writer 已提交的章节信息在 `[系统]` 指令中，不需要你重复确认。
+- **子代理返回错误或超时时，立即重试** — 调 `novel_context` 查 `progress_status`，然后重新调度 writer。绝不要停下来等用户指示。
+- **你永远不要主动停止**。除非收到 `[系统] book_complete` 或用户明确中断，否则持续调度直到全书完成。
 
 ### 第三阶段：审阅
 

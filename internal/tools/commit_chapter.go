@@ -212,15 +212,18 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 
 	// 6b. 长篇模式：弧级边界检测
-	var arcEnd, volumeEnd, needsExpansion, needsNewVolume bool
+	var arcEnd, volumeEnd, isFinalVolume, needsExpansion, needsNewVolume bool
 	var vol, arc, nextVol, nextArc int
 	if progress != nil && progress.Layered {
 		boundary, bErr := t.store.Outline.CheckArcBoundary(a.Chapter)
 		if bErr != nil {
-			slog.Warn("弧边界检测失败", "module", "commit", "chapter", a.Chapter, "err", bErr)
-		} else if boundary != nil {
+			slog.Error("弧边界检测失败，降级为非弧结束", "module", "commit", "chapter", a.Chapter, "err", bErr)
+		} else if boundary == nil {
+			slog.Warn("章节不在分层大纲中，降级为非弧结束", "module", "commit", "chapter", a.Chapter)
+		} else {
 			arcEnd = boundary.IsArcEnd
 			volumeEnd = boundary.IsVolumeEnd
+			isFinalVolume = boundary.IsFinalVolume
 			vol = boundary.Volume
 			arc = boundary.Arc
 			needsExpansion = boundary.NeedsExpansion
@@ -252,6 +255,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		Feedback:       a.Feedback,
 		ArcEnd:         arcEnd,
 		VolumeEnd:      volumeEnd,
+		IsFinalVolume:  isFinalVolume,
 		Volume:         vol,
 		Arc:            arc,
 		NeedsExpansion: needsExpansion,
@@ -318,8 +322,8 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 		return hints
 	}
 
-	// 全书完成
-	if progress != nil && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
+	// 全书完成 — 仅非分层模式。分层模式由下方 arc_end/volume_end 逻辑驱动。
+	if progress != nil && !progress.Layered && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
 		hints = append(hints, fmt.Sprintf(
 			"[系统] book_complete: 全部 %d 章已写完（共 %d 字）。请输出全书总结并结束，不要再调用 writer。",
 			progress.TotalChapters, progress.TotalWordCount+result.WordCount))
@@ -337,8 +341,21 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 				"[系统] arc_end: 第 %d 卷第 %d 弧结束。请依次：1) 调用 editor 对本弧进行评审 2) 调用 editor 生成弧摘要。",
 				result.Volume, result.Arc))
 		}
-		if result.NeedsNewVolume {
-			hints = append(hints, "[系统] new_volume_required: 评审和摘要完成后，请调用 architect_long 自主规划下一卷（save_foundation type=append_volume），同时更新指南针（save_foundation type=update_compass），然后继续写作。")
+		if result.VolumeEnd && result.IsFinalVolume {
+			// 最终卷结束 = 全书完成
+			totalWords := 0
+			if progress != nil {
+				totalWords = progress.TotalWordCount + result.WordCount
+			}
+			hints = append(hints, fmt.Sprintf(
+				"[系统] book_complete: 最终卷（第 %d 卷）全部完成（共 %d 字）。完成评审和摘要后，请输出全书总结并结束，不要再调用 writer。",
+				result.Volume, totalWords))
+		} else if result.NeedsNewVolume {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] new_volume_required: 评审和摘要完成后，请调用 architect_long 决定下一步："+
+					"如果故事应该继续，规划下一卷（save_foundation type=append_volume）并更新指南针（type=update_compass）；"+
+					"如果故事应该在第 %d 卷结束，标记为最终卷（save_foundation type=mark_final, volume=%d）并更新指南针。",
+				result.Volume, result.Volume))
 		} else if result.NeedsExpansion {
 			hints = append(hints, fmt.Sprintf(
 				"[系统] expand_arc_required: 评审和摘要完成后，请调用 architect_long 为第 %d 卷第 %d 弧展开详细章节规划（save_foundation type=expand_arc），然后继续写作。",
@@ -356,10 +373,17 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 	}
 
 	// 默认：继续写下一章
-	if progress != nil && progress.TotalChapters > 0 {
-		hints = append(hints, fmt.Sprintf(
-			"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章（共 %d 章）。",
-			result.Chapter, result.WordCount, result.NextChapter, progress.TotalChapters))
+	if progress != nil {
+		if progress.Layered {
+			// 分层模式：章节数动态增长，不报固定总数
+			hints = append(hints, fmt.Sprintf(
+				"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章。",
+				result.Chapter, result.WordCount, result.NextChapter))
+		} else if progress.TotalChapters > 0 {
+			hints = append(hints, fmt.Sprintf(
+				"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章（共 %d 章）。",
+				result.Chapter, result.WordCount, result.NextChapter, progress.TotalChapters))
+		}
 	}
 
 	return hints

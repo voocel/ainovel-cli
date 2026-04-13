@@ -115,6 +115,7 @@ type CommitResult struct {
 	// 长篇分层信号
 	ArcEnd         bool `json:"arc_end,omitempty"`
 	VolumeEnd      bool `json:"volume_end,omitempty"`
+	IsFinalVolume  bool `json:"is_final_volume,omitempty"`  // 当前卷为最终卷
 	Volume         int  `json:"volume,omitempty"`
 	Arc            int  `json:"arc,omitempty"`
 	NeedsExpansion bool `json:"needs_expansion,omitempty"`  // 下一弧是骨架，需要展开章节
