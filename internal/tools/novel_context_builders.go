@@ -100,6 +100,10 @@ func (t *ContextTool) buildProgressStatus(result map[string]any) {
 		status["current_volume"] = progress.CurrentVolume
 		status["current_arc"] = progress.CurrentArc
 	}
+	if progress.Phase == domain.PhaseComplete {
+		status["finished"] = true
+		status["instruction"] = "全书已完成，不要再调用 writer。如果尚未输出全书总结，请输出后结束。"
+	}
 	result["progress_status"] = status
 }
 

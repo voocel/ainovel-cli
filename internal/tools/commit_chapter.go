@@ -324,6 +324,7 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 
 	// 全书完成 — 仅非分层模式。分层模式由下方 arc_end/volume_end 逻辑驱动。
 	if progress != nil && !progress.Layered && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
+		_ = t.store.Progress.MarkComplete()
 		hints = append(hints, fmt.Sprintf(
 			"[系统] book_complete: 全部 %d 章已写完（共 %d 字）。请输出全书总结并结束，不要再调用 writer。",
 			progress.TotalChapters, progress.TotalWordCount+result.WordCount))
@@ -343,6 +344,7 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 		}
 		if result.VolumeEnd && result.IsFinalVolume {
 			// 最终卷结束 = 全书完成
+			_ = t.store.Progress.MarkComplete()
 			totalWords := 0
 			if progress != nil {
 				totalWords = progress.TotalWordCount + result.WordCount
