@@ -92,6 +92,10 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, apperr.New(apperr.CodeToolArgsInvalid, "tools.commit_chapter.validate_args", "chapter must be > 0")
 	}
 	if t.store.Progress.IsChapterCompleted(a.Chapter) {
+		// 清理可能残留的 PendingCommit（崩溃发生在 ProgressMarked 之后、ClearPendingCommit 之前）
+		if pending, _ := t.store.Signals.LoadPendingCommit(); pending != nil && pending.Chapter == a.Chapter {
+			_ = t.store.Signals.ClearPendingCommit()
+		}
 		return json.Marshal(map[string]any{
 			"chapter":   a.Chapter,
 			"skipped":   true,

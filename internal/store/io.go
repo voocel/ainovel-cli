@@ -117,8 +117,10 @@ func (io *IO) AppendLineUnlocked(rel string, data []byte) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	_, err = f.Write(data)
-	return err
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func (io *IO) RemoveFile(rel string) error {
