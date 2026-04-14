@@ -64,10 +64,16 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 			maxCompleted = maxCompletedChapter(p.CompletedChapters)
 		}
 		samples := t.store.Drafts.ExtractDialogue(a.Character, aliases, 8, maxCompleted)
-		return json.Marshal(map[string]any{
+		result := map[string]any{
 			"character": a.Character,
 			"samples":   samples,
-		})
+		}
+		if len(samples) == 0 {
+			result["system_hints"] = map[string]string{
+				"note": "该角色暂无对话样本，无需重试，直接进入下一步",
+			}
+		}
+		return json.Marshal(result)
 	}
 
 	// 模式 2：范围读取

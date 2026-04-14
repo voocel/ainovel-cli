@@ -10,9 +10,12 @@ import (
 // Event 是 TUI 消费的结构化事件。
 type Event struct {
 	Time     time.Time
-	Category string // TOOL / SYSTEM / REVIEW / CHECK / ERROR / AGENT
+	Category string        // DISPATCH / TOOL / DONE / SYSTEM / REVIEW / CHECK / ERROR
+	Agent    string        // 产生事件的 agent
 	Summary  string
-	Level    string // info / warn / error / success
+	Level    string        // info / warn / error / success
+	Depth    int           // 0 = coordinator 层, 1 = sub-agent 层
+	Duration time.Duration // 执行耗时（DONE=总耗时, depth-1 TOOL=自派发经过时间）
 }
 
 // UISnapshot 是 TUI 渲染所需的聚合状态快照。

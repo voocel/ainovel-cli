@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -469,15 +470,15 @@ func contextStrategyLabel(strategy string) string {
 }
 
 func agentDisplayName(name string) string {
-	switch name {
-	case "architect":
-		return "规划师"
-	case "coordinator":
+	switch {
+	case name == "coordinator":
 		return "协调器"
-	case "editor":
-		return "评审者"
-	case "writer":
+	case strings.HasPrefix(name, "architect"):
+		return "规划师"
+	case name == "writer":
 		return "写作者"
+	case name == "editor":
+		return "评审者"
 	default:
 		return name
 	}
@@ -522,14 +523,14 @@ func agentStateRank(state string) int {
 }
 
 func agentOrder(name string) int {
-	switch name {
-	case "architect":
+	switch {
+	case strings.HasPrefix(name, "architect"):
 		return 0
-	case "coordinator":
+	case name == "coordinator":
 		return 1
-	case "editor":
+	case name == "editor":
 		return 2
-	case "writer":
+	case name == "writer":
 		return 3
 	default:
 		return 9
@@ -666,51 +667,150 @@ func taskListTitle(task host.TaskSnapshot) string {
 	return taskKindLabel(task.Kind)
 }
 
-// renderEventContent 将事件列表渲染为纯文本（供 viewport 使用）。
+// renderEventContent 将事件列表渲染为层次化事件流。
+// DISPATCH 作为顶级标题，子代理工具缩进显示，形成清晰的调度树。
 func renderEventContent(events []host.Event, width int) string {
 	var b strings.Builder
 	for i, ev := range events {
-		ts := ev.Time.Format("15:04:05")
-		cat := ev.Category
-
-		color, ok := categoryColors[cat]
-		if !ok {
-			color = colorText
-		}
-
-		catStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Width(7)
-		tsStyle := lipgloss.NewStyle().Foreground(colorDim)
-		sumStyle := lipgloss.NewStyle().Foreground(colorText)
-		// 关键系统类事件的摘要用自身颜色高亮
-		if cat == "SYSTEM" || cat == "ERROR" || cat == "REVIEW" || cat == "COMPACT" {
-			sumStyle = lipgloss.NewStyle().Foreground(color)
-		}
-		// debug 级别的 COMPACT 事件（中间策略步骤）用弱化色
-		if cat == "COMPACT" && ev.Level == "debug" {
-			catStyle = lipgloss.NewStyle().Foreground(colorMuted).Width(7)
-			sumStyle = lipgloss.NewStyle().Foreground(colorMuted)
-		}
-
-		maxSumW := width - 20
-		summary := ev.Summary
-		if cat == "ERROR" {
-			// 错误信息不截断，自动换行
-			lines := wrapStreamText(summary, maxSumW)
-			first := tsStyle.Render(ts) + " " + catStyle.Render(cat) + " " + sumStyle.Render(lines[0])
-			b.WriteString(first)
-			indent := strings.Repeat(" ", 16) // 对齐到摘要起始位置
-			for _, l := range lines[1:] {
-				b.WriteString("\n" + indent + sumStyle.Render(l))
-			}
-		} else {
-			line := tsStyle.Render(ts) + " " + catStyle.Render(cat) + " " + sumStyle.Render(truncate(summary, maxSumW))
-			b.WriteString(line)
-		}
+		b.WriteString(renderEventLine(ev, width))
 		if i < len(events)-1 {
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+func renderEventLine(ev host.Event, width int) string {
+	tsStr := lipgloss.NewStyle().Foreground(colorDim).Render(ev.Time.Format("15:04:05"))
+	indent := ""
+	if ev.Depth > 0 {
+		indent = "  "
+	}
+	maxSumW := max(20, width-12-ev.Depth*2)
+
+	durStr := renderEventDuration(ev.Duration)
+
+	switch {
+	case ev.Category == "DISPATCH":
+		icon := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▶")
+		sum := renderDispatchSummary(ev.Summary, maxSumW)
+		return tsStr + " " + icon + " " + sum
+
+	case ev.Category == "DONE":
+		icon := lipgloss.NewStyle().Foreground(colorSuccess).Render("✓")
+		color := eventAgentColor(ev.Agent)
+		name := lipgloss.NewStyle().Foreground(color).Render(agentDisplayName(ev.Agent))
+		return tsStr + " " + icon + " " + name + durStr
+
+	case ev.Category == "TOOL" && ev.Depth == 0:
+		icon := lipgloss.NewStyle().Foreground(colorTool).Render("◇")
+		sum := lipgloss.NewStyle().Foreground(colorTool).Render(truncate(ev.Summary, maxSumW))
+		return tsStr + " " + icon + " " + sum
+
+	case ev.Category == "TOOL":
+		icon := lipgloss.NewStyle().Foreground(colorDim).Render("├")
+		sum := lipgloss.NewStyle().Foreground(colorMuted).Render(truncate(ev.Summary, maxSumW))
+		return tsStr + " " + indent + icon + " " + sum + durStr
+
+	case ev.Category == "ERROR":
+		icon := lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
+		errStyle := lipgloss.NewStyle().Foreground(colorError)
+		lines := wrapStreamText(ev.Summary, maxSumW)
+		first := tsStr + " " + indent + icon + " " + errStyle.Render(lines[0])
+		pad := strings.Repeat(" ", 10+len(indent))
+		for _, l := range lines[1:] {
+			first += "\n" + pad + errStyle.Render(l)
+		}
+		if durStr != "" {
+			first += durStr
+		}
+		return first
+
+	case ev.Category == "SYSTEM":
+		icon := lipgloss.NewStyle().Foreground(colorAccent).Render("⚙")
+		sumColor := colorMuted
+		if ev.Level == "warn" {
+			sumColor = colorAccent
+		}
+		sum := lipgloss.NewStyle().Foreground(sumColor).Render(truncate(ev.Summary, maxSumW))
+		return tsStr + " " + indent + icon + " " + sum
+
+	case ev.Category == "CONTEXT" || ev.Category == "COMPACT":
+		icon := lipgloss.NewStyle().Foreground(colorContext).Render("⚙")
+		sumColor := colorContext
+		if ev.Level == "debug" {
+			sumColor = colorMuted
+		}
+		sum := lipgloss.NewStyle().Foreground(sumColor).Render(truncate(ev.Summary, maxSumW))
+		return tsStr + " " + indent + icon + " " + sum
+
+	default:
+		color, ok := categoryColors[ev.Category]
+		if !ok {
+			color = colorText
+		}
+		icon := lipgloss.NewStyle().Foreground(color).Render("·")
+		sum := lipgloss.NewStyle().Foreground(color).Render(truncate(ev.Summary, maxSumW))
+		return tsStr + " " + indent + icon + " " + sum
+	}
+}
+
+// renderDispatchSummary 渲染 DISPATCH 摘要：Agent 名用角色色，任务用淡色。
+func renderDispatchSummary(summary string, maxW int) string {
+	agentName := summary
+	taskPart := ""
+	if idx := strings.Index(summary, "（"); idx > 0 {
+		agentName = summary[:idx]
+		taskPart = summary[idx:]
+	}
+	displayName := agentDisplayName(agentName)
+	color := eventAgentColor(agentName)
+	nameW := lipgloss.Width(displayName)
+	if nameW >= maxW {
+		return lipgloss.NewStyle().Foreground(color).Bold(true).Render(truncate(displayName, maxW))
+	}
+	result := lipgloss.NewStyle().Foreground(color).Bold(true).Render(displayName)
+	if taskPart != "" {
+		remaining := maxW - nameW
+		if remaining > 2 {
+			result += lipgloss.NewStyle().Foreground(colorMuted).Render(truncate(taskPart, remaining))
+		}
+	}
+	return result
+}
+
+// eventAgentColor 返回 Agent 角色对应的主题色。
+func eventAgentColor(agent string) lipgloss.AdaptiveColor {
+	switch {
+	case strings.HasPrefix(agent, "architect"):
+		return colorAccent2
+	case agent == "writer":
+		return colorTool
+	case agent == "editor":
+		return colorReview
+	default:
+		return colorAccent
+	}
+}
+
+// renderEventDuration 将 Duration 渲染为淡色括号标注，零值返回空。
+func renderEventDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return " " + lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render("("+formatDuration(d)+")")
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 func renderEventActivity(snap host.UISnapshot, frame, width int) string {
@@ -1144,7 +1244,10 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	if snap.Premise != "" {
 		b.WriteString(panelTitleStyle.Render(":: 前提"))
 		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render(truncate(snap.Premise, contentW*3)))
+		for _, line := range wrapStreamText(snap.Premise, contentW) {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render(line))
+			b.WriteString("\n")
+		}
 		b.WriteString("\n\n")
 	}
 

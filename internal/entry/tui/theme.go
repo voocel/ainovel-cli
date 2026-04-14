@@ -32,8 +32,10 @@ var statusColors = map[string]lipgloss.AdaptiveColor{
 
 // 事件分类颜色映射
 var categoryColors = map[string]lipgloss.AdaptiveColor{
-	"TOOL":    colorTool,
-	"SYSTEM":  colorAccent,
+	"DISPATCH": colorAccent,
+	"DONE":     colorSuccess,
+	"TOOL":     colorTool,
+	"SYSTEM":   colorAccent,
 	"REVIEW":  colorReview,
 	"CHECK":   colorSuccess,
 	"ERROR":   colorError,

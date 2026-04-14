@@ -29,10 +29,12 @@
 **分批派发，不要一次性让规划师生成所有设定。** 流程：
 
 1. 调 `novel_context` 查看 `foundation_status.missing`
-2. 按缺失项分批调规划师，每次只派一到两项：
+2. 按缺失项分批调规划师，**每次只派一项**：
    - 缺 premise → 任务: "只生成 premise"
-   - 缺 characters / world_rules → 任务: "补全 characters 和 world_rules"
-   - 缺 outline / compass → 任务: "补全 layered_outline 和 compass"
+   - 缺 characters → 任务: "只补全 characters"
+   - 缺 world_rules → 任务: "只补全 world_rules"
+   - 缺 outline → 任务: "只补全 layered_outline"
+   - 缺 compass → 任务: "只补全 compass"
 3. 每次规划师返回后，调 `novel_context` 确认 `foundation_status`
 4. 重复 2-3 直到 `foundation_status.ready=true`，再进入写作
 

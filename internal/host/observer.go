@@ -27,7 +27,10 @@ type observer struct {
 	agentMu sync.Mutex
 
 	streamThinking      bool
-	lastThinkingByAgent map[string]string // agent → 最近的累积 thinking 文本（用于提取增量 delta）
+	lastThinkingByAgent   map[string]string   // agent → 最近的累积 thinking 文本（用于提取增量 delta）
+	dispatchStarts        map[string]time.Time // dispatched agent → dispatch 开始时间
+	currentDispatchTarget string               // 当前正在执行的 subagent 名（handleToolEnd 时 Args 可能为空）
+	toolStarts            map[string]time.Time // agent → 当前工具开始时间
 }
 
 type agentState struct {
@@ -48,6 +51,8 @@ func newObserver(coordinator *agentcore.Agent, s *storepkg.Store, emitEv func(Ev
 		store:               s,
 		agents:              make(map[string]*agentState),
 		lastThinkingByAgent: make(map[string]string),
+		dispatchStarts:      make(map[string]time.Time),
+		toolStarts:          make(map[string]time.Time),
 	}
 	o.unsub = coordinator.Subscribe(o.handle)
 	return o
@@ -72,7 +77,7 @@ func (o *observer) persistEvent(ev Event) {
 	case "error":
 		level = slog.LevelError
 	}
-	slog.Log(context.Background(), level, ev.Summary, "module", "event", "category", ev.Category)
+	slog.Log(context.Background(), level, ev.Summary, "module", "event", "category", ev.Category, "agent", ev.Agent)
 
 	// runtime queue — headless 恢复用
 	if o.store == nil || o.store.Runtime == nil {
@@ -154,29 +159,49 @@ func (o *observer) handleToolStart(ev agentcore.Event) {
 		return
 	}
 	agent := agentFromEvent(ev)
-	toolName := displayToolName(ev.Tool, ev.Args)
-	summary := fmt.Sprintf("%s → %s", agent, toolName)
 
-	// subagent 调用: 解析具体的 agent 名和任务描述
+	// subagent 调用 → DISPATCH 事件
 	if ev.Tool == "subagent" {
-		if sub := parseSubagentArgs(ev.Args); sub.agent != "" {
-			summary = fmt.Sprintf("%s → %s", agent, sub.agent)
-			if sub.task != "" {
-				summary += "（" + truncate(sub.task, 30) + "）"
-			}
+		sub := parseSubagentArgs(ev.Args)
+		target := sub.agent
+		if target == "" {
+			target = "subagent"
 		}
+		dispatchSummary := target
+		if sub.task != "" {
+			dispatchSummary += "（" + truncate(sub.task, 30) + "）"
+		}
+		o.updateAgent(agent, func(a *agentState) {
+			a.state = "working"
+			a.tool = ev.Tool
+			a.summary = fmt.Sprintf("%s → %s", agent, dispatchSummary)
+		})
+		o.currentDispatchTarget = target
+		o.dispatchStarts[target] = time.Now()
+		toolEv := Event{
+			Time:     time.Now(),
+			Category: "DISPATCH",
+			Agent:    agent,
+			Summary:  dispatchSummary,
+			Level:    "info",
+		}
+		o.emitEv(toolEv)
+		o.persistEvent(toolEv)
+		return
 	}
 
+	// coordinator 自身工具
+	toolName := displayToolName(ev.Tool, ev.Args)
 	o.updateAgent(agent, func(a *agentState) {
 		a.state = "working"
 		a.tool = ev.Tool
-		a.summary = summary
+		a.summary = fmt.Sprintf("%s → %s", agent, toolName)
 	})
-
 	toolEv := Event{
 		Time:     time.Now(),
 		Category: "TOOL",
-		Summary:  summary,
+		Agent:    agent,
+		Summary:  toolName,
 		Level:    "info",
 	}
 	o.emitEv(toolEv)
@@ -196,19 +221,44 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		// 子代理内部的工具调用（如 writer → draft_chapter）
 		if ev.Progress.Agent != "" && ev.Progress.Tool != "" {
 			toolName := displayToolName(ev.Progress.Tool, ev.Progress.Args)
+			o.toolStarts[ev.Progress.Agent] = time.Now()
 			subEv := Event{
 				Time:     time.Now(),
 				Category: "TOOL",
-				Summary:  fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName),
+				Agent:    ev.Progress.Agent,
+				Summary:  toolName,
 				Level:    "info",
+				Depth:    1,
 			}
 			o.emitEv(subEv)
 			o.persistEvent(subEv)
 			o.updateAgent(ev.Progress.Agent, func(a *agentState) {
 				a.state = "working"
 				a.tool = ev.Progress.Tool
-				a.summary = subEv.Summary
+				a.summary = fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName)
 			})
+		}
+	case agentcore.ProgressToolEnd:
+		if ev.Progress.Agent != "" && ev.Progress.Tool != "" {
+			var duration time.Duration
+			if start, ok := o.toolStarts[ev.Progress.Agent]; ok {
+				duration = time.Since(start)
+				delete(o.toolStarts, ev.Progress.Agent)
+			}
+			if duration > 0 {
+				toolName := ev.Progress.Tool
+				doneEv := Event{
+					Time:     time.Now(),
+					Category: "DONE",
+					Agent:    ev.Progress.Agent,
+					Summary:  toolName,
+					Level:    "info",
+					Depth:    1,
+					Duration: duration,
+				}
+				o.emitEv(doneEv)
+				o.persistEvent(doneEv)
+			}
 		}
 	case agentcore.ProgressThinking:
 		o.handleThinkingProgress(ev)
@@ -216,14 +266,17 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		retryEv := Event{
 			Time:     time.Now(),
 			Category: "SYSTEM",
-			Summary: fmt.Sprintf("%s 重试 (%d/%d): %s",
-				ev.Progress.Agent, ev.Progress.Attempt, ev.Progress.MaxRetries,
+			Agent:    ev.Progress.Agent,
+			Summary: fmt.Sprintf("重试 (%d/%d): %s",
+				ev.Progress.Attempt, ev.Progress.MaxRetries,
 				truncate(ev.Progress.Message, 80)),
 			Level: "warn",
+			Depth: 1,
 		}
 		o.emitEv(retryEv)
 		o.persistEvent(retryEv)
 	case agentcore.ProgressToolError:
+		delete(o.toolStarts, ev.Progress.Agent)
 		msg := ev.Progress.Message
 		if msg == "" {
 			msg = "unknown error"
@@ -231,8 +284,10 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		errEv := Event{
 			Time:     time.Now(),
 			Category: "ERROR",
-			Summary:  fmt.Sprintf("%s → %s 错误: %s", ev.Progress.Agent, ev.Progress.Tool, truncate(msg, 100)),
+			Agent:    ev.Progress.Agent,
+			Summary:  fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, truncate(msg, 100)),
 			Level:    "error",
+			Depth:    1,
 		}
 		o.emitEv(errEv)
 		o.persistEvent(errEv)
@@ -297,9 +352,14 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 	}
 	summary := fmt.Sprintf("%s 上下文 %.0f%% (%d/%d) 策略: %s", agent, payload.Percent, payload.Tokens, payload.ContextWindow, payload.Strategy)
 
+	depth := 0
+	if agent != "coordinator" {
+		depth = 1
+	}
+
 	if payload.Strategy != "" {
 		// 触发了压缩 → 事件流 + 日志
-		ctxEv := Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level}
+		ctxEv := Event{Time: time.Now(), Category: "SYSTEM", Agent: agent, Summary: summary, Level: level, Depth: depth}
 		o.emitEv(ctxEv)
 		o.persistEvent(ctxEv)
 	} else {
@@ -319,12 +379,35 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 	})
 	delete(o.lastThinkingByAgent, agent)
 
+	// 计算 dispatch 耗时（handleToolEnd 的 ev.Args 可能为空，从 currentDispatchTarget 获取）
+	var dispatchDuration time.Duration
+	var dispatchTarget string
+	if ev.Tool == "subagent" {
+		dispatchTarget = o.currentDispatchTarget
+		o.currentDispatchTarget = ""
+		if dispatchTarget == "" {
+			if sub := parseSubagentArgs(ev.Args); sub.agent != "" {
+				dispatchTarget = sub.agent
+			}
+		}
+		if dispatchTarget == "" {
+			dispatchTarget = "subagent"
+		}
+		if start, ok := o.dispatchStarts[dispatchTarget]; ok {
+			dispatchDuration = time.Since(start)
+			delete(o.dispatchStarts, dispatchTarget)
+		}
+	}
+
 	if ev.IsError {
-		summary := fmt.Sprintf("%s → %s 失败", agent, ev.Tool)
+		depth := 0
+		if agent != "coordinator" {
+			depth = 1
+		}
+		summary := fmt.Sprintf("%s 失败", ev.Tool)
 		if len(ev.Result) > 0 {
 			errText := string(ev.Result)
-			// 完整错误写日志
-			slog.Error(fmt.Sprintf("%s: %s", summary, errText), "module", "agent", "tool", ev.Tool)
+			slog.Error(fmt.Sprintf("%s → %s: %s", agent, ev.Tool, errText), "module", "agent", "tool", ev.Tool)
 			if len(errText) > 120 {
 				errText = errText[:120] + "..."
 			}
@@ -333,8 +416,11 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		errEv := Event{
 			Time:     time.Now(),
 			Category: "ERROR",
+			Agent:    agent,
 			Summary:  summary,
 			Level:    "error",
+			Depth:    depth,
+			Duration: dispatchDuration,
 		}
 		o.emitEv(errEv)
 		o.persistEvent(errEv)
@@ -343,16 +429,30 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 
 	if errEv, fullErr := o.subagentResultErrorEvent(ev); errEv != nil {
 		slog.Error(fullErr, "module", "agent", "tool", ev.Tool)
+		errEv.Duration = dispatchDuration
+		// 用 dispatchTarget 修正（subagentResultErrorEvent 解析 ev.Args 可能为空）
+		if dispatchTarget != "" && dispatchTarget != "subagent" {
+			errEv.Agent = dispatchTarget
+		}
 		o.emitEv(*errEv)
 		o.persistEvent(*errEv)
 		return
 	}
 
-	// 成功完成的关键工具 — 提取有意义的摘要
-	if successEv := o.toolSuccessEvent(ev); successEv != nil {
-		o.emitEv(*successEv)
-		o.persistEvent(*successEv)
+	// subagent 成功完成 → DONE 事件
+	if ev.Tool == "subagent" {
+		doneEv := Event{
+			Time:     time.Now(),
+			Category: "DONE",
+			Agent:    dispatchTarget,
+			Level:    "success",
+			Duration: dispatchDuration,
+		}
+		o.emitEv(doneEv)
+		o.persistEvent(doneEv)
+		return
 	}
+
 }
 
 func (o *observer) emitStreamDelta(delta string, thinking bool) {
@@ -380,34 +480,14 @@ func (o *observer) subagentResultErrorEvent(ev agentcore.Event) (*Event, string)
 	if sub.agent != "" {
 		target = sub.agent
 	}
-	fullErr := fmt.Sprintf("coordinator → %s 失败: %s", target, errMsg)
+	fullErr := fmt.Sprintf("%s 失败: %s", target, errMsg)
 	return &Event{
 		Time:     time.Now(),
 		Category: "ERROR",
-		Summary:  fmt.Sprintf("coordinator → %s 失败: %s", target, truncate(errMsg, 120)),
+		Agent:    "coordinator",
+		Summary:  fmt.Sprintf("%s 失败: %s", target, truncate(errMsg, 120)),
 		Level:    "error",
 	}, fullErr
-}
-
-// toolSuccessEvent 从工具成功返回值中提取关键信息生成事件。
-func (o *observer) toolSuccessEvent(ev agentcore.Event) *Event {
-	if len(ev.Result) == 0 {
-		return nil
-	}
-	var payload map[string]any
-	if json.Unmarshal(ev.Result, &payload) != nil {
-		return nil
-	}
-
-	switch ev.Tool {
-	case "subagent":
-		// subagent 完成: 不在这里处理,由 coordinator 的下一个 turn 驱动
-		return nil
-
-	default:
-		// 从 subagent 内部上报的结果不走这里（走 ProgressToolStart/Error）
-		return nil
-	}
 }
 
 func (o *observer) updateAgent(name string, fn func(*agentState)) {

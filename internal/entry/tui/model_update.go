@@ -288,9 +288,20 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case eventMsg:
 		ev := host.Event(msg)
-		m.events = append(m.events, ev)
-		if len(m.events) > maxEvents {
-			m.events = m.events[len(m.events)-maxEvents:]
+		// depth-1 DONE: 回填到对应 TOOL 事件的 Duration，不追加新行
+		if ev.Category == "DONE" && ev.Depth > 0 {
+			for i := len(m.events) - 1; i >= 0; i-- {
+				e := &m.events[i]
+				if e.Category == "TOOL" && e.Agent == ev.Agent && e.Depth > 0 && e.Duration == 0 {
+					e.Duration = ev.Duration
+					break
+				}
+			}
+		} else {
+			m.events = append(m.events, ev)
+			if len(m.events) > maxEvents {
+				m.events = m.events[len(m.events)-maxEvents:]
+			}
 		}
 		m.refreshEventViewport()
 		return m, listenEvents(m.runtime), true
