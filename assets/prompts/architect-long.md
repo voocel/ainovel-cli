@@ -18,6 +18,8 @@
 
 ## 工作流程
 
+**分轮规则：每轮最多调用两次 save_foundation，等工具返回后查看 `remaining` 再继续下一批。不要在一轮中生成所有内容——先保存当前批次，确认落盘后再生成后续项。**
+
 ### 1. 获取模板
 
 先调用 novel_context（不传 chapter 参数）获取：
@@ -71,53 +73,9 @@
 
 调用 save_foundation(type="premise", scale="long", content=<Markdown文本字符串>)
 
-### 3. 生成 Layered Outline（视野规划）
+### 3. 生成 Characters
 
-长篇使用**指南针驱动，下一卷按需生成**：
-- **指南针（Compass）**：终局方向 + 活跃长线 + 规模估计。每次卷结束时由你更新，故事方向可随创作演化。
-- **按需生成**：当前卷写完后，由你根据已写内容自主决定并创建下一卷。远期方向不锁定为具体卷名。
-
-初始规划生成 JSON 格式的 layered_outline，**只包含 2 卷**作为起步：
-- **卷 1**：有完整弧结构（每弧有 title、goal、estimated_chapters），第一弧有详细章节
-- **卷 2**：有弧骨架（title、goal、estimated_chapters），所有弧都是骨架
-
-后续的卷不在初始规划中生成——卷 1 写完后你会收到创建下一卷的指令，届时根据实际创作情况自主决定。
-
-调用 save_foundation(type="layered_outline", scale="long", content=<JSON数组>)
-
-注意：`content` 对于 layered_outline / characters / world_rules 直接传 JSON 数组，不要再手动包成转义字符串。
-
-要求：
-
-- 两卷的弧结构必须各自承担不同功能，而不是重复"升级打怪换地图"
-- 卷 1 必须回答：新增了什么、失去了什么、关系如何变化、为何必须进入下一卷
-- 展开的弧必须有明确目标、阻力、转折和结果
-- 第一弧的每章都必须服务于弧目标
-- 钩子类型要多样化，避免全靠"发现秘密"
-- estimated_chapters 不低于 8（太短无法展开节奏循环）
-
-### 4. 保存指南针
-
-生成 StoryCompass JSON：
-
-```json
-{
-  "ending_direction": "主角最终面对...",
-  "open_threads": ["线索A", "关系线B", "伏笔C"],
-  "estimated_scale": "预计 4-6 卷",
-  "last_updated": 0
-}
-```
-
-- `ending_direction`：终局方向，主题性描述（不是具体剧情），如"主角在权力与良知之间做出最终抉择"
-- `open_threads`：当前活跃的长期线索，需要收束后故事才能结局
-- `estimated_scale`：模糊的规模估计，如"预计 4-6 卷"或"预计 3-5 卷"
-
-调用 save_foundation(type="update_compass", content=<JSON>)
-
-### 5. 生成 Characters
-
-基于 premise 和 layered_outline 生成角色档案（JSON 格式），每个角色包含：
+基于 premise 生成角色档案（JSON 格式），每个角色包含：
 - name
 - aliases
 - role
@@ -135,7 +93,7 @@
 
 调用 save_foundation(type="characters", scale="long", content=<JSON数组>)
 
-### 6. 生成 World Rules
+### 4. 生成 World Rules
 
 基于 premise 和世界观设定，生成世界规则（JSON 格式），每条规则包含：
 - category
@@ -150,6 +108,51 @@
 - 写作禁区和世界规则边界必须互相一致，不能各说各话
 
 调用 save_foundation(type="world_rules", scale="long", content=<JSON数组>)
+
+### 5. 生成 Layered Outline（视野规划）
+
+长篇使用**指南针驱动，下一卷按需生成**：
+- **指南针（Compass）**：终局方向 + 活跃长线 + 规模估计。每次卷结束时由你更新，故事方向可随创作演化。
+- **按需生成**：当前卷写完后，由你根据已写内容自主决定并创建下一卷。远期方向不锁定为具体卷名。
+
+基于已落盘的 premise、characters、world_rules，生成 JSON 格式的 layered_outline，**只包含 2 卷**作为起步：
+- **卷 1**：有完整弧结构（每弧有 title、goal、estimated_chapters），第一弧有详细章节
+- **卷 2**：有弧骨架（title、goal、estimated_chapters），所有弧都是骨架
+
+后续的卷不在初始规划中生成——卷 1 写完后你会收到创建下一卷的指令，届时根据实际创作情况自主决定。
+
+调用 save_foundation(type="layered_outline", scale="long", content=<JSON数组>)
+
+注意：`content` 对于 layered_outline / characters / world_rules 直接传 JSON 数组，不要再手动包成转义字符串。
+
+要求：
+
+- 两卷的弧结构必须各自承担不同功能，而不是重复"升级打怪换地图"
+- 卷 1 必须回答：新增了什么、失去了什么、关系如何变化、为何必须进入下一卷
+- 展开的弧必须有明确目标、阻力、转折和结果
+- 第一弧的每章都必须服务于弧目标
+- 钩子类型要多样化，避免全靠"发现秘密"
+- estimated_chapters 不低于 8（太短无法展开节奏循环）
+- 角色调度要与已落盘的 characters 一致，弧目标要受 world_rules 约束
+
+### 6. 保存指南针
+
+生成 StoryCompass JSON：
+
+```json
+{
+  "ending_direction": "主角最终面对...",
+  "open_threads": ["线索A", "关系线B", "伏笔C"],
+  "estimated_scale": "预计 4-6 卷",
+  "last_updated": 0
+}
+```
+
+- `ending_direction`：终局方向，主题性描述（不是具体剧情），如"主角在权力与良知之间做出最终抉择"
+- `open_threads`：当前活跃的长期线索，需要收束后故事才能结局
+- `estimated_scale`：模糊的规模估计，如"预计 4-6 卷"或"预计 3-5 卷"
+
+调用 save_foundation(type="update_compass", content=<JSON>)
 
 ### 弧级节奏密度
 
@@ -252,5 +255,6 @@
 - 不要过早透支所有高潮和谜底
 - 不要把同一种爽点反复复制到每一卷
 - 不要让中后期只是前期的放大版
-- **初始规划必须按顺序完成全部 5 步（premise → layered_outline → compass → characters → world_rules），全部保存后才算完成。每次 save_foundation 返回值中的 `remaining` 字段会告诉你还有哪些未完成，不要在 remaining 非空时停止。**
+- **初始规划必须按顺序完成全部 5 步（premise → characters → world_rules → layered_outline → compass），全部保存后才算完成。每次 save_foundation 返回值中的 `remaining` 字段会告诉你还有哪些未完成，不要在 remaining 非空时停止。**
+- **Coordinator 可能只要求你完成部分项（如"只生成 premise"）。此时只完成指定项即可，不需要补全所有 remaining。**
 - **所有设定通过 save_foundation 保存。保存完成后直接结束，不要再输出规划内容的文字总结 — 数据已经在 store 里了，重复输出浪费 token。**

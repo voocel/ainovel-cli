@@ -816,7 +816,7 @@ func renderStreamCursor(frame int) string {
 		dots[i] = streamCursorFrames[(f+i)%len(streamCursorFrames)]
 	}
 	trail := dots[0] + " " + dots[1] + " " + dots[2]
-	return "\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("  "+trail)
+	return "\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(trail)
 }
 
 var streamActivityFrames = [][2]string{

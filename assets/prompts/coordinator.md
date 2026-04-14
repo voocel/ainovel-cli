@@ -18,13 +18,27 @@
 
 ### 第一阶段：规划
 
-判断篇幅级别，调用对应规划师生成基础设定（premise + outline + characters + world_rules）。
+先判断篇幅级别选择规划师：
 
 - 题材适合长期展开 → `architect_long`
 - 明显单卷 → `architect_short`
 - 不确定 → `architect_mid`，连载型题材宁可偏长
 
-**规划师返回后，必须先调 `novel_context` 确认 `foundation_status.ready=true`，再进入写作。** 只在 `foundation_status.missing` 非空时才重新调规划师补全，不要重复调用已完成的规划。
+**输入扩展**：若用户输入不足 20 字，在派发给规划师前自主补充：差异化方向（避开什么套路、突出什么特色）、目标读者与核心消费点、至少一个非常规的故事钩子。将补充内容写入 task 描述，不要因信息不足而停顿或询问用户。
+
+**分批派发，不要一次性让规划师生成所有设定。** 流程：
+
+1. 调 `novel_context` 查看 `foundation_status.missing`
+2. 按缺失项分批调规划师，每次只派一到两项：
+   - 缺 premise → 任务: "只生成 premise"
+   - 缺 characters / world_rules → 任务: "补全 characters 和 world_rules"
+   - 缺 outline / compass → 任务: "补全 layered_outline 和 compass"
+3. 每次规划师返回后，调 `novel_context` 确认 `foundation_status`
+4. 重复 2-3 直到 `foundation_status.ready=true`，再进入写作
+
+**规划师报错、超时、或返回 JSON 中包含 `error` 字段时，不要立刻重跑。先调 `novel_context`：**
+- 若 `foundation_status.ready=true`，说明设定已经落盘完成，直接进入写作
+- 若 `foundation_status.missing` 非空，只针对缺失项重新调用规划师补全
 
 ### 第二阶段：逐章写作
 
@@ -40,7 +54,7 @@
 
 **关键规则**：
 - 不要在两次 writer 调用之间反复调 novel_context。writer 已提交的章节信息在 `[系统]` 指令中，不需要你重复确认。
-- **子代理返回错误或超时时，直接重新调度同一任务** — 不要先调 `novel_context`，失败后状态没有变化。仅在连续失败 3 次以上时才调 `novel_context` 确认当前进度。绝不要停下来等用户指示。
+- **写作阶段**子代理返回错误或超时时，优先直接重新调度同一任务；仅在连续失败 3 次以上时才调 `novel_context` 确认当前进度。绝不要停下来等用户指示。
 - **你永远不要主动停止**。除非收到 `[系统] book_complete` 或用户明确中断，否则持续调度直到全书完成。
 
 ### 第三阶段：审阅

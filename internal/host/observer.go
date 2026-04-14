@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // observer 订阅 coordinator 事件流并投影到 Host 的输出通道。
@@ -23,6 +25,9 @@ type observer struct {
 	store   *storepkg.Store // 用于 runtime queue 持久化（ReplayQueue 消费）
 	agents  map[string]*agentState
 	agentMu sync.Mutex
+
+	streamThinking      bool
+	lastThinkingByAgent map[string]string // agent → 最近的累积 thinking 文本（用于提取增量 delta）
 }
 
 type agentState struct {
@@ -37,11 +42,12 @@ type agentState struct {
 
 func newObserver(coordinator *agentcore.Agent, s *storepkg.Store, emitEv func(Event), emitD func(string), emitC func()) *observer {
 	o := &observer{
-		emitEv: emitEv,
-		emitD:  emitD,
-		emitC:  emitC,
-		store:  s,
-		agents: make(map[string]*agentState),
+		emitEv:              emitEv,
+		emitD:               emitD,
+		emitC:               emitC,
+		store:               s,
+		agents:              make(map[string]*agentState),
+		lastThinkingByAgent: make(map[string]string),
 	}
 	o.unsub = coordinator.Subscribe(o.handle)
 	return o
@@ -96,9 +102,7 @@ func (o *observer) handle(ev agentcore.Event) {
 	case agentcore.EventToolExecEnd:
 		o.handleToolEnd(ev)
 	case agentcore.EventMessageUpdate:
-		if ev.Delta != "" {
-			o.emitD(ev.Delta)
-		}
+		o.handleMessageUpdate(ev)
 	case agentcore.EventMessageEnd:
 		o.emitC()
 	case agentcore.EventTurnStart:
@@ -136,6 +140,13 @@ func (o *observer) handle(ev agentcore.Event) {
 			o.persistEvent(errEv)
 		}
 	}
+}
+
+func (o *observer) handleMessageUpdate(ev agentcore.Event) {
+	if ev.Delta == "" {
+		return
+	}
+	o.emitStreamDelta(ev.Delta, ev.DeltaKind == agentcore.DeltaThinking)
 }
 
 func (o *observer) handleToolStart(ev agentcore.Event) {
@@ -179,7 +190,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 	switch ev.Progress.Kind {
 	case agentcore.ProgressToolDelta:
 		if ev.Progress.Delta != "" {
-			o.emitD(ev.Progress.Delta)
+			o.emitStreamDelta(ev.Progress.Delta, false)
 		}
 	case agentcore.ProgressToolStart:
 		// 子代理内部的工具调用（如 writer → draft_chapter）
@@ -200,7 +211,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 			})
 		}
 	case agentcore.ProgressThinking:
-		// 思考文本暂不转发
+		o.handleThinkingProgress(ev)
 	case agentcore.ProgressRetry:
 		retryEv := Event{
 			Time:     time.Now(),
@@ -228,6 +239,25 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 	case agentcore.ProgressContext:
 		o.handleContextProgress(ev)
 	}
+}
+
+func (o *observer) handleThinkingProgress(ev agentcore.Event) {
+	agent := ev.Progress.Agent
+	thinking := ev.Progress.Thinking
+	if agent == "" || thinking == "" {
+		return
+	}
+
+	prev := o.lastThinkingByAgent[agent]
+	delta := thinking
+	if strings.HasPrefix(thinking, prev) {
+		delta = thinking[len(prev):]
+	}
+	o.lastThinkingByAgent[agent] = thinking
+	if delta == "" {
+		return
+	}
+	o.emitStreamDelta(delta, true)
 }
 
 func (o *observer) handleContextProgress(ev agentcore.Event) {
@@ -287,6 +317,7 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 	o.updateAgent(agent, func(a *agentState) {
 		a.tool = ""
 	})
+	delete(o.lastThinkingByAgent, agent)
 
 	if ev.IsError {
 		summary := fmt.Sprintf("%s → %s 失败", agent, ev.Tool)
@@ -310,11 +341,52 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		return
 	}
 
+	if errEv, fullErr := o.subagentResultErrorEvent(ev); errEv != nil {
+		slog.Error(fullErr, "module", "agent", "tool", ev.Tool)
+		o.emitEv(*errEv)
+		o.persistEvent(*errEv)
+		return
+	}
+
 	// 成功完成的关键工具 — 提取有意义的摘要
 	if successEv := o.toolSuccessEvent(ev); successEv != nil {
 		o.emitEv(*successEv)
 		o.persistEvent(*successEv)
 	}
+}
+
+func (o *observer) emitStreamDelta(delta string, thinking bool) {
+	if delta == "" {
+		return
+	}
+	if thinking != o.streamThinking {
+		o.emitD(utils.ThinkingSep)
+		o.streamThinking = thinking
+	}
+	o.emitD(delta)
+}
+
+func (o *observer) subagentResultErrorEvent(ev agentcore.Event) (*Event, string) {
+	if ev.Tool != "subagent" || len(ev.Result) == 0 {
+		return nil, ""
+	}
+	sub := parseSubagentArgs(ev.Args)
+	errMsg := parseSubagentResultError(ev.Result)
+	if errMsg == "" {
+		return nil, ""
+	}
+
+	target := "subagent"
+	if sub.agent != "" {
+		target = sub.agent
+	}
+	fullErr := fmt.Sprintf("coordinator → %s 失败: %s", target, errMsg)
+	return &Event{
+		Time:     time.Now(),
+		Category: "ERROR",
+		Summary:  fmt.Sprintf("coordinator → %s 失败: %s", target, truncate(errMsg, 120)),
+		Level:    "error",
+	}, fullErr
 }
 
 // toolSuccessEvent 从工具成功返回值中提取关键信息生成事件。
@@ -384,12 +456,16 @@ func displayToolName(tool string, args json.RawMessage) string {
 	}
 	switch tool {
 	case "save_foundation":
-		var p struct{ Type string `json:"type"` }
+		var p struct {
+			Type string `json:"type"`
+		}
 		if json.Unmarshal(args, &p) == nil && p.Type != "" {
 			return fmt.Sprintf("%s[%s]", tool, p.Type)
 		}
 	case "commit_chapter", "plan_chapter", "draft_chapter", "check_consistency":
-		var p struct{ Chapter int `json:"chapter"` }
+		var p struct {
+			Chapter int `json:"chapter"`
+		}
 		if json.Unmarshal(args, &p) == nil && p.Chapter > 0 {
 			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
 		}
@@ -405,7 +481,9 @@ func displayToolName(tool string, args json.RawMessage) string {
 			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
 		}
 	case "novel_context":
-		var p struct{ Chapter int `json:"chapter"` }
+		var p struct {
+			Chapter int `json:"chapter"`
+		}
 		if json.Unmarshal(args, &p) == nil && p.Chapter > 0 {
 			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
 		}
@@ -431,6 +509,19 @@ func displayToolName(tool string, args json.RawMessage) string {
 type subagentInvocation struct {
 	agent string
 	task  string
+}
+
+func parseSubagentResultError(result json.RawMessage) string {
+	if len(result) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(result, &payload) != nil {
+		return ""
+	}
+	return payload.Error
 }
 
 func parseSubagentArgs(args json.RawMessage) subagentInvocation {

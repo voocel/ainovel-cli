@@ -153,7 +153,7 @@ func BuildCoordinator(
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
-		agentcore.WithTools(subagentTool, contextTool, askUser),
+		agentcore.WithTools(subagentTool, contextTool),
 		agentcore.WithMaxTurns(1000),
 		agentcore.WithDefaultToolChoice("required"),
 		agentcore.WithOnMessage(store.Sessions.CoordinatorLogger()),
