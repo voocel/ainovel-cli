@@ -123,12 +123,12 @@ func RunSetup() (Config, error) {
 	printStepDone("Model", modelName)
 
 	cfg := Config{
-		Provider:      providerName,
-		ModelName:     modelName,
-		Providers:     map[string]ProviderConfig{providerName: pc},
-		Roles:         map[string]RoleConfig{},
-		Style:         "default",
-		ContextWindow: 128000,
+		Provider:  providerName,
+		ModelName: modelName,
+		Providers: map[string]ProviderConfig{providerName: pc},
+		Roles:     map[string]RoleConfig{},
+		Style:     "default",
+		// ContextWindow 留空：按模型名自动解析（见 models.DefaultRegistry）
 	}
 
 	// 保存

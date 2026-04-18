@@ -198,11 +198,13 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 	return nil
 }
 
-func modelName(m agentcore.ChatModel) string {
+// ModelName 从 ChatModel 中提取当前模型名，失败返回空字符串。
+// 支持 SwappableModel 的热切换：调用时总是返回最新值。
+func ModelName(m agentcore.ChatModel) string {
 	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
 		return info.Info().Name
 	}
-	return "unknown"
+	return ""
 }
 
 // NewModelSet 根据配置创建多模型集合。

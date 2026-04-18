@@ -26,7 +26,11 @@ func renderTopBar(snap host.UISnapshot, width int, spinnerFrame string) string {
 		infoParts = append(infoParts, snap.Provider)
 	}
 	if snap.ModelName != "" {
-		infoParts = append(infoParts, snap.ModelName)
+		if w := formatContextWindow(snap.ModelContextWindow); w != "" {
+			infoParts = append(infoParts, snap.ModelName+" ("+w+")")
+		} else {
+			infoParts = append(infoParts, snap.ModelName)
+		}
 	}
 	if snap.Style != "" && snap.Style != "default" {
 		infoParts = append(infoParts, snap.Style)
@@ -117,6 +121,14 @@ func renderStatePanel(snap host.UISnapshot, width, height int) string {
 	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
 	if snap.InProgressChapter > 0 {
 		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
+	}
+	if snap.TotalInputTokens > 0 || snap.TotalOutputTokens > 0 {
+		tokens := fmt.Sprintf("in %s · out %s",
+			formatNumber(snap.TotalInputTokens), formatNumber(snap.TotalOutputTokens))
+		if cost := formatCostUSD(snap.TotalCostUSD); cost != "" {
+			tokens = cost + " · " + tokens
+		}
+		overview.WriteString(renderField("累计", tokens))
 	}
 	if headline := snapshotHeadline(tasks, snap); headline != "" {
 		label := "当前"

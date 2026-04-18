@@ -15,6 +15,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -30,6 +31,7 @@ type Host struct {
 	askUser       *tools.AskUserTool
 	writerRestore *ctxpack.WriterRestorePack
 	observer      *observer
+	usage         *UsageTracker
 
 	events   chan Event
 	streamCh chan string
@@ -59,6 +61,9 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	}
 	slog.Info("启动", "module", "boot", "provider", cfg.Provider, "model", cfg.ModelName, "output", cfg.OutputDir)
 
+	// 起后台 goroutine 从 OpenRouter 刷新模型元数据（窗口/价格），磁盘缓存 24h。
+	modelreg.StartPricingRefresh(modelreg.DefaultRegistry(), bootstrap.DefaultConfigDir())
+
 	store := storepkg.NewStore(cfg.OutputDir)
 	if err := store.Init(); err != nil {
 		return nil, fmt.Errorf("init store: %w", err)
@@ -70,7 +75,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	}
 	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
 
-	coordinator, askUser, restore := agents.BuildCoordinator(cfg, store, models, bundle)
+	usage := NewUsageTracker(models)
+	coordinator, askUser, restore := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record)
 	store.Signals.ClearStaleSignals()
 
 	h := &Host{
@@ -80,6 +86,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		coordinator:   coordinator,
 		askUser:       askUser,
 		writerRestore: restore,
+		usage:         usage,
 		events:        make(chan Event, 100),
 		streamCh:      make(chan string, 256),
 		clearCh:       make(chan struct{}, 4),
@@ -372,12 +379,20 @@ func (h *Host) Snapshot() UISnapshot {
 	provider, model, _ := h.models.CurrentSelection("default")
 	h.mu.Unlock()
 
+	// 动态解析当前模型的上下文窗口，/model 切换后下一次 Snapshot 自动反映
+	modelWindow, _ := h.cfg.ResolveContextWindow(model)
+	cost, tokIn, tokOut := h.usage.Totals()
+
 	snap := UISnapshot{
-		Provider:     provider,
-		ModelName:    model,
-		Style:        h.cfg.Style,
-		RuntimeState: string(state),
-		IsRunning:    state == lifecycleRunning,
+		Provider:           provider,
+		ModelName:          model,
+		ModelContextWindow: modelWindow,
+		Style:              h.cfg.Style,
+		RuntimeState:       string(state),
+		IsRunning:          state == lifecycleRunning,
+		TotalInputTokens:   tokIn,
+		TotalOutputTokens:  tokOut,
+		TotalCostUSD:       cost,
 	}
 
 	progress, _ := h.store.Progress.Load()

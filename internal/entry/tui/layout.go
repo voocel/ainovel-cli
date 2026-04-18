@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -56,6 +57,38 @@ func renderContextUsageField(label string, percent float64, tokens, window int) 
 		contextUsageMetaStyle.Render(" · ") +
 		contextUsageMetaStyle.Render(fmt.Sprintf("%s/%s", formatNumber(tokens), formatNumber(window)))
 	return fieldLabelStyle.Render(label) + usage + "\n"
+}
+
+// formatContextWindow 把 token 数格式化成紧凑窗口标记："128K" / "200K" / "1M" / "2M"。
+// Gemini 的 1048576 (2^20) 等技术意义上的 1M 会展示为 "1M" 而非 "1.0M"。
+// n<=0 返回空串，调用方应据此决定是否展示。
+func formatContextWindow(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if n >= 1_000_000 {
+		m := float64(n) / 1_000_000
+		rounded := math.Round(m)
+		if rounded > 0 && math.Abs(m-rounded)/rounded < 0.05 {
+			return fmt.Sprintf("%dM", int(rounded))
+		}
+		return fmt.Sprintf("%.1fM", m)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%dK", n/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// formatCostUSD 格式化美元成本。<$0.01 用 4 位小数，否则 2 位。0 返回空。
+func formatCostUSD(usd float64) string {
+	if usd <= 0 {
+		return ""
+	}
+	if usd < 0.01 {
+		return fmt.Sprintf("$%.4f", usd)
+	}
+	return fmt.Sprintf("$%.2f", usd)
 }
 
 func formatNumber(n int) string {

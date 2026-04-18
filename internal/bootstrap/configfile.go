@@ -18,6 +18,16 @@ func DefaultConfigPath() string {
 	return filepath.Join(home, configDirName, "config.json")
 }
 
+// DefaultConfigDir 返回 ~/.ainovel 目录路径；取不到家目录时返回空字符串。
+// 仅用于读/写不强制存在的文件（如模型缓存），不会自动创建目录。
+func DefaultConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, configDirName)
+}
+
 // configDir 返回 ~/.ainovel 目录路径，不存在时创建。
 func configDir() (string, error) {
 	home, err := os.UserHomeDir()

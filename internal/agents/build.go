@@ -14,6 +14,10 @@ import (
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
+// UsageRecorder 是 BuildCoordinator 可选的用量回调；签名与 OnMessage 一致，
+// 每条 agent 消息都会调一次，由 Host 层负责聚合。nil 表示不追踪。
+type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
+
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
 // 返回 Agent、AskUserTool 和 WriterRestorePack。
 // Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
@@ -22,6 +26,7 @@ func BuildCoordinator(
 	store *store.Store,
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
+	recordUsage UsageRecorder,
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
@@ -65,7 +70,30 @@ func BuildCoordinator(
 	editorModel := models.ForRoleWithFailover("editor", reportFailover)
 	coordinatorModel := models.ForRoleWithFailover("coordinator", reportFailover)
 
-	onMsg := store.Sessions.SubAgentLogger()
+	// Coordinator 的 ContextManager 在 Agent 构造时一次性生成，按启动模型解析。
+	// 运行中 /model 切换到更小窗口的模型时，建议用户显式配置 context_window 兜底。
+	_, coordinatorModelName, _ := models.CurrentSelection("coordinator")
+	coordinatorContextWindow, coordinatorSource := cfg.ResolveContextWindow(coordinatorModelName)
+	// Writer 的 ContextManager 由工厂每次调用重建，窗口随模型 swap 动态跟随（见下方工厂）。
+	_, writerModelName, _ := models.CurrentSelection("writer")
+	writerContextWindow, writerSource := cfg.ResolveContextWindow(writerModelName)
+	logContextWindowChoice("coordinator", coordinatorModelName, coordinatorContextWindow, coordinatorSource)
+	logContextWindowChoice("writer", writerModelName, writerContextWindow, writerSource)
+
+	baseOnMsg := store.Sessions.SubAgentLogger()
+	onMsg := func(agentName, task string, msg agentcore.AgentMessage) {
+		baseOnMsg(agentName, task, msg)
+		if recordUsage != nil {
+			recordUsage(agentName, msg)
+		}
+	}
+	baseCoordinatorLog := store.Sessions.CoordinatorLogger()
+	coordinatorOnMessage := func(msg agentcore.AgentMessage) {
+		baseCoordinatorLog(msg)
+		if recordUsage != nil {
+			recordUsage("coordinator", msg)
+		}
+	}
 
 	architectShort := agentcore.SubAgentConfig{
 		Name:         "architect_short",
@@ -112,9 +140,12 @@ func BuildCoordinator(
 		MaxTurns:     10,
 		OnMessage:    onMsg,
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
+			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
+			// /model 切换 writer 后下一章自动用新窗口。
+			window, _ := cfg.ResolveContextWindow(bootstrap.ModelName(model))
 			return newContextManager(contextManagerConfig{
 				Model:            model,
-				ContextWindow:    cfg.ContextWindow,
+				ContextWindow:    window,
 				ReserveTokens:    16384,
 				KeepRecentTokens: 20000,
 				Agent:            "writer",
@@ -156,10 +187,10 @@ func BuildCoordinator(
 		agentcore.WithTools(subagentTool, contextTool),
 		agentcore.WithMaxTurns(1000),
 		agentcore.WithDefaultToolChoice("required"),
-		agentcore.WithOnMessage(store.Sessions.CoordinatorLogger()),
+		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
-			ContextWindow:    cfg.ContextWindow,
+			ContextWindow:    coordinatorContextWindow,
 			ReserveTokens:    32000,
 			KeepRecentTokens: 30000,
 			Agent:            "coordinator",
@@ -167,4 +198,14 @@ func BuildCoordinator(
 		})),
 	)
 	return agent, askUser, restore
+}
+
+// logContextWindowChoice 打印某个角色的窗口决策。source=default 时发 Warn 提示用户显式配置。
+func logContextWindowChoice(role, model string, window int, source bootstrap.ContextWindowSource) {
+	attrs := []any{"module", "agent", "role", role, "model", model, "window", window, "source", source}
+	if source == bootstrap.CtxWindowDefault {
+		slog.Warn("未识别的模型，使用默认上下文窗口（如实际不同请在 config 中设置 context_window）", attrs...)
+		return
+	}
+	slog.Info("上下文窗口", attrs...)
 }

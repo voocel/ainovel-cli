@@ -6,7 +6,11 @@ import (
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/apperr"
+	"github.com/voocel/ainovel-cli/internal/models"
 )
+
+// DefaultContextWindow 未显式配置且模型未登记时的兜底窗口大小。
+const DefaultContextWindow = 128000
 
 // ProviderConfig 定义单个 LLM 提供商的凭证。
 type ProviderConfig struct {
@@ -186,9 +190,30 @@ func (c *Config) FillDefaults() {
 	if c.Style == "" {
 		c.Style = "default"
 	}
-	if c.ContextWindow <= 0 {
-		c.ContextWindow = 128000
+	// ContextWindow 保留 0 表示"未显式配置"，交给 ResolveContextWindow 按模型名自动解析。
+}
+
+// ContextWindowSource 标记窗口取值的来源，供日志/诊断使用。
+type ContextWindowSource string
+
+const (
+	CtxWindowExplicit ContextWindowSource = "explicit" // 配置文件显式 context_window
+	CtxWindowRegistry ContextWindowSource = "registry" // OpenRouter 基线命中
+	CtxWindowDefault  ContextWindowSource = "default"  // 兜底（自定义代理/未知模型）
+)
+
+// ResolveContextWindow 按优先级确定某个模型的上下文窗口，并返回来源标记：
+//  1. 配置文件显式 context_window（全局覆盖所有角色）
+//  2. models.DefaultRegistry 按模型名查询（OpenRouter 基线 + 24h 刷新）
+//  3. 兜底 DefaultContextWindow（自定义代理 / 未知模型）
+func (c Config) ResolveContextWindow(modelName string) (int, ContextWindowSource) {
+	if c.ContextWindow > 0 {
+		return c.ContextWindow, CtxWindowExplicit
 	}
+	if w := models.DefaultRegistry().ResolveContextWindow(modelName); w > 0 {
+		return w, CtxWindowRegistry
+	}
+	return DefaultContextWindow, CtxWindowDefault
 }
 
 // CandidateModels 返回某个 provider 下可供切换的模型列表。

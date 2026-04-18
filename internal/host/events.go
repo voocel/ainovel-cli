@@ -36,12 +36,13 @@ func (e Event) Running() bool {
 
 // UISnapshot 是 TUI 渲染所需的聚合状态快照。
 type UISnapshot struct {
-	Provider          string
-	NovelName         string
-	ModelName         string
-	Style             string
-	RuntimeState      string // idle / running / pausing / paused / completed
-	StatusLabel       string
+	Provider           string
+	NovelName          string
+	ModelName          string
+	ModelContextWindow int // 当前默认模型的上下文窗口（随 /model 切换实时解析）
+	Style              string
+	RuntimeState       string // idle / running / pausing / paused / completed
+	StatusLabel        string
 	Phase             string
 	Flow              string
 	CurrentChapter    int
@@ -73,6 +74,11 @@ type UISnapshot struct {
 	ContextSummaryCount   int
 	ContextCompactedCount int
 	ContextKeptCount      int
+
+	// 累计用量（整个会话，跨所有 agent 与模型切换）
+	TotalInputTokens  int
+	TotalOutputTokens int
+	TotalCostUSD      float64
 
 	// 基础设定
 	Premise          string
