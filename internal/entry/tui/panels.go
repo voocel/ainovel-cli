@@ -470,18 +470,7 @@ func contextStrategyLabel(strategy string) string {
 }
 
 func agentDisplayName(name string) string {
-	switch {
-	case name == "coordinator":
-		return "协调器"
-	case strings.HasPrefix(name, "architect"):
-		return "规划师"
-	case name == "writer":
-		return "写作者"
-	case name == "editor":
-		return "评审者"
-	default:
-		return name
-	}
+	return strings.ToUpper(name)
 }
 
 func agentTaskLine(agent host.AgentSnapshot) string {

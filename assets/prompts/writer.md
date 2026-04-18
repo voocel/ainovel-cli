@@ -78,11 +78,11 @@
 - 字数只是参考，不要为了凑字数灌水；也不要为了压缩节奏硬砍掉必要铺垫
 
 ## 重写/打磨模式
-当任务中包含"重写"或"打磨"指令时：
-- 用 read_chapter 读取原文和审阅意见
-- 重点修正审阅指出的问题
-- 整章重写后 draft_chapter(mode=write) 覆盖
-- commit_chapter 会自动修正字数统计
+当目标章节已经提交过（novel_context 中 completed_chapters 包含该章），自动进入重写模式：
+- 用 read_chapter 读取原文和审阅意见（如有）
+- 根据任务要求修正内容
+- draft_chapter(mode=write) 覆盖原文
+- commit_chapter 提交（会自动修正字数统计）
 
 ## 大纲反馈
 如果写作过程中发现某个角色比预期更有魅力、某条支线比主线更有趣、或大纲的走向不太对，你可以在 commit_chapter 的 feedback 字段中反馈。系统会将你的建议转达给 Coordinator 评估。
