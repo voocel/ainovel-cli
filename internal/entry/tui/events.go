@@ -41,8 +41,9 @@ type (
 	}
 	steerResultMsg    struct{}
 	continueResultMsg struct{ err error }
-	spinnerTickMsg    time.Time
-	cursorTickMsg     time.Time // 流式光标独立 tick
+	spinnerTickMsg     time.Time
+	toolSpinnerTickMsg time.Time // 事件流工具 spinner 独立 tick（更快、独立于顶栏/星星）
+	cursorTickMsg      time.Time // 流式光标独立 tick
 	streamDeltaMsg    string    // 流式 token 增量
 	streamClearMsg    struct{} // 清空流式缓冲（新消息开始）
 	quitResetMsg      struct{} // 双次 Ctrl+C 超时重置
@@ -193,6 +194,13 @@ func loadReport(dir string, reqID int) tea.Cmd {
 func tickSpinner() tea.Cmd {
 	return tea.Tick(350*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
+	})
+}
+
+// tickToolSpinner 驱动事件流"进行中"行的 spinner。独立于 tickSpinner，节奏更快（150ms）。
+func tickToolSpinner() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+		return toolSpinnerTickMsg(t)
 	})
 }
 

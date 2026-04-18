@@ -266,26 +266,51 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 			o.handleSubagentDelta(ev.Progress)
 		}
 	case agentcore.ProgressToolStart:
-		// 子代理内部的工具调用（如 writer → draft_chapter）
-		if ev.Progress.Agent != "" && ev.Progress.Tool != "" {
-			toolName := displayToolName(ev.Progress.Tool, ev.Progress.Args)
-			id := nextEventID()
-			o.toolStarts[ev.Progress.Agent] = &activeCall{id: id, start: time.Now(), summary: toolName, depth: 1}
-			o.emitAndLog(Event{
-				ID:       id,
-				Time:     time.Now(),
-				Category: "TOOL",
-				Agent:    ev.Progress.Agent,
-				Summary:  toolName,
-				Level:    "info",
-				Depth:    1,
-			})
+		// 子代理内部的工具调用（如 writer → draft_chapter）。
+		// 注意：TOOL 行可能已经在流式识别阶段被 handleSubagentDelta 提前发出。
+		// 此处：若已发 → 只更新 summary（args 此时完整，能显示 "tool(第N章)"）；否则正常发。
+		if ev.Progress.Agent == "" || ev.Progress.Tool == "" {
+			break
+		}
+		toolName := displayToolName(ev.Progress.Tool, ev.Progress.Args)
+		if call, ok := o.toolStarts[ev.Progress.Agent]; ok {
+			if toolName != "" && toolName != call.summary {
+				call.summary = toolName
+				// 发 summary-only 更新事件（同 ID），TUI applyEvent 会合并
+				o.emitEv(Event{
+					ID:       call.id,
+					Time:     call.start,
+					Category: "TOOL",
+					Agent:    ev.Progress.Agent,
+					Summary:  toolName,
+					Level:    "info",
+					Depth:    call.depth,
+				})
+			}
 			o.updateAgent(ev.Progress.Agent, func(a *agentState) {
 				a.state = "working"
 				a.tool = ev.Progress.Tool
 				a.summary = fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName)
 			})
+			break
 		}
+		// 未提前发过 → 正常流程
+		id := nextEventID()
+		o.toolStarts[ev.Progress.Agent] = &activeCall{id: id, start: time.Now(), summary: toolName, depth: 1}
+		o.emitAndLog(Event{
+			ID:       id,
+			Time:     time.Now(),
+			Category: "TOOL",
+			Agent:    ev.Progress.Agent,
+			Summary:  toolName,
+			Level:    "info",
+			Depth:    1,
+		})
+		o.updateAgent(ev.Progress.Agent, func(a *agentState) {
+			a.state = "working"
+			a.tool = ev.Progress.Tool
+			a.summary = fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName)
+		})
 	case agentcore.ProgressToolEnd:
 		delete(o.streamExtractors, ev.Progress.Agent)
 		if ev.Progress.Agent == "" {
@@ -377,6 +402,12 @@ func (o *observer) handleSubagentDelta(p *agentcore.ProgressPayload) {
 	if p.Tool == "" {
 		return // 工具名未就绪，下一个 delta 再试
 	}
+
+	// 流式识别到工具名时提前发 TOOL 进行中事件，让 spinner 覆盖整段 LLM 生成期间
+	// （否则 draft_chapter 这类工具的"进行中"只在真实 Execute 的几十毫秒里显示）。
+	// 真正的 ProgressToolStart 到来时识别到 toolStarts 已有记录，只会补齐 summary。
+	o.ensureSubagentToolStarted(p.Agent, p.Tool)
+
 	cur, ok := o.streamExtractors[p.Agent]
 	// 工具名变了或上一轮已 Done（aborted / 已完成），一律重建
 	if !ok || cur.tool != p.Tool || cur.ext.Done() {
@@ -539,6 +570,21 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 	emitToolFinish := func(failed bool) {
 		emitFinish(toolCall, "TOOL", agent, failed)
 	}
+	// 兜底：若 subagent 结束时，该 subagent 内部还有未完成的 TOOL 调用（比如 ensureSubagentToolStarted
+	// 提前发了进行中事件，但随后 abort/context cancel 让 ProgressToolEnd 没来），
+	// 在这里强制发 finish，避免 TOOL 行永远"进行中"。状态跟随 dispatch 同步。
+	flushOrphanSubagentTool := func(failed bool) {
+		if dispatchTarget == "" {
+			return
+		}
+		call, ok := o.toolStarts[dispatchTarget]
+		if !ok {
+			return
+		}
+		delete(o.toolStarts, dispatchTarget)
+		delete(o.streamExtractors, dispatchTarget)
+		emitFinish(call, "TOOL", dispatchTarget, failed)
+	}
 
 	if ev.IsError {
 		depth := 0
@@ -554,6 +600,7 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 			}
 			summary += ": " + errText
 		}
+		flushOrphanSubagentTool(true)
 		emitDispatchFinish(true)
 		emitToolFinish(true)
 		errEv := Event{
@@ -574,6 +621,7 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		if dispatchTarget != "" && dispatchTarget != "subagent" {
 			errEv.Agent = dispatchTarget
 		}
+		flushOrphanSubagentTool(true)
 		emitDispatchFinish(true)
 		o.emitEv(*errEv)
 		o.persistEvent(*errEv)
@@ -582,6 +630,7 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 
 	// subagent 成功完成 → 更新原 DISPATCH 行为完成态（带耗时）
 	if ev.Tool == "subagent" {
+		flushOrphanSubagentTool(false)
 		emitDispatchFinish(false)
 		return
 	}
@@ -601,6 +650,39 @@ func (o *observer) emitStreamDelta(delta string, thinking bool) {
 	o.emitD(delta)
 	o.streamHasContent = true
 	o.streamLastByte = delta[len(delta)-1]
+}
+
+// ensureSubagentToolStarted 在流式识别到 tool_call 首次出现时，提前为该 agent
+// 登记一次进行中的 TOOL 调用，使事件流的 spinner 覆盖"LLM 流式生成 tool_call
+// 参数"这一段时间（通常占调用总耗时的 99%）。args 此时尚不完整，暂以纯工具名
+// 为 summary；等真正的 ProgressToolStart 到来时会补齐带参数的 summary。
+func (o *observer) ensureSubagentToolStarted(agent, tool string) {
+	if agent == "" || tool == "" {
+		return
+	}
+	if _, ok := o.toolStarts[agent]; ok {
+		return // 已有进行中调用，幂等
+	}
+	id := nextEventID()
+	o.toolStarts[agent] = &activeCall{
+		id:      id,
+		start:   time.Now(),
+		summary: tool, // 先用纯工具名，ProgressToolStart 到来时可能更新为 tool(第N章)
+		depth:   1,
+	}
+	o.emitAndLog(Event{
+		ID:       id,
+		Time:     time.Now(),
+		Category: "TOOL",
+		Agent:    agent,
+		Summary:  tool,
+		Level:    "info",
+		Depth:    1,
+	})
+	o.updateAgent(agent, func(a *agentState) {
+		a.state = "working"
+		a.tool = tool
+	})
 }
 
 // streamClear 通知 TUI 开启新一轮 streamRound，同时重置与段落分隔相关的状态。

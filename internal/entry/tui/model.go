@@ -31,8 +31,13 @@ const (
 	modeDone                   // 创作完成
 )
 
-// 顶栏 spinner 帧序列
+// 顶栏 / 流式活动共用的 spinner 帧序列（bubbles.Spinner.MiniDot）。
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// 事件流"进行中"行专用的 spinner 帧序列（bubbles.Spinner.Dot）。
+// 7 个点 + 1 个缺口沿 3×3 格子顺时针旋转，视觉上像完整的加载圆圈。
+// 用独立帧索引 + 更快 tick，不影响顶栏和星星动画的节奏。
+var toolSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
 // Model 是 TUI 的顶层状态。
 type Model struct {
@@ -67,8 +72,9 @@ type Model struct {
 	cocreateSeq  int
 	reportSeq    int
 	err          error
-	spinnerIdx   int
-	cursorIdx    int  // 流式光标帧索引（独立 tick）
+	spinnerIdx     int
+	toolSpinnerIdx int // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
+	cursorIdx      int // 流式光标帧索引（独立 tick）
 	streamRound  int  // 流式输出轮次计数
 	quitPending  bool // 双次 Ctrl+C 退出确认
 	abortPending bool // 等待 Done 回来的手动暂停
@@ -123,6 +129,7 @@ func (m Model) Init() tea.Cmd {
 		tickSnapshot(m.runtime),
 		bootstrapRuntime(m.runtime),
 		tickSpinner(),
+		tickToolSpinner(),
 		tickCursor(),
 	)
 }
@@ -172,7 +179,7 @@ func (m *Model) paneHighlighted(pane focusPane) bool {
 // refreshEventViewport 重新渲染事件流内容并设置 viewport。
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
-	content := renderEventContent(m.events, centerW, m.spinnerIdx)
+	content := renderEventContent(m.events, centerW, m.toolSpinnerIdx)
 	if activity := renderEventActivity(m.snapshot, m.spinnerIdx, centerW); activity != "" {
 		if strings.TrimSpace(content) != "" {
 			content += "\n" + activity

@@ -375,9 +375,17 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case spinnerTickMsg:
 		m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
 		if m.snapshot.IsRunning {
+			// 星星 / 顶栏 spinner 的视觉刷新都走这里（350ms）
 			m.refreshEventViewport()
 		}
 		return m, tickSpinner(), true
+	case toolSpinnerTickMsg:
+		m.toolSpinnerIdx = (m.toolSpinnerIdx + 1) % len(toolSpinnerFrames)
+		if m.snapshot.IsRunning {
+			// 事件流"进行中"行的 spinner 刷新（150ms，独立节奏）
+			m.refreshEventViewport()
+		}
+		return m, tickToolSpinner(), true
 	case cursorTickMsg:
 		m.cursorIdx++
 		if m.snapshot.IsRunning {
@@ -533,13 +541,9 @@ func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
 	for _, item := range items {
 		switch item.Kind {
 		case domain.RuntimeQueueUIEvent:
-			// 回放的全部视为已完成态（FinishedAt 非零）→ 不会被渲染为"进行中"
-			m.applyEvent(host.Event{
-				Time:       item.Time,
-				FinishedAt: item.Time,
-				Category:   item.Category,
-				Summary:    item.Summary,
-			})
+			// 事件流不做回放：队列里只有完成态事件，且 Agent/Depth/Duration/Level
+			// 等渲染所需字段未随 replay 还原，出来的行残缺不齐。宁可空面板也不要半截数据。
+			continue
 		case domain.RuntimeQueueStreamClear:
 			if len(m.streamRounds) == 0 {
 				m.streamRounds = append(m.streamRounds, "")

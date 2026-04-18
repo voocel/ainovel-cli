@@ -670,8 +670,8 @@ func renderEventContent(events []host.Event, width, spinnerFrame int) string {
 	return b.String()
 }
 
-// 进行中的调用类事件使用的 spinner 帧（与 topbar 同源 braille dots）。
-var eventRunningFrames = spinnerFrames
+// 进行中的调用类事件使用的 spinner 帧（bubbles.Spinner.Dot，独立于顶栏 MiniDot）。
+var eventRunningFrames = toolSpinnerFrames
 
 func runningSpinner(frame int) string {
 	return eventRunningFrames[frame%len(eventRunningFrames)]
