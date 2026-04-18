@@ -62,6 +62,9 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 			"next_step": "该章节已完成，请继续规划下一章",
 		})
 	}
+	if err := t.store.Progress.ValidateChapterWork(plan.Chapter); err != nil {
+		return nil, err
+	}
 
 	if err := t.store.Drafts.SaveChapterPlan(plan); err != nil {
 		return nil, fmt.Errorf("save chapter plan: %w", err)

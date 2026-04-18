@@ -63,7 +63,7 @@
 
 editor 返回 verdict 后：
 - **accept** → 继续写下一章
-- **polish/rewrite** → 逐章调 writer 处理受影响章节，全部完成后再继续新章节
+- **polish/rewrite** → 立即逐章调 writer 处理受影响章节（收到 `[系统] polish_drained` 或 `rewrite_drained` 才算队列清空）。**队列清空前，即使此前收到 `expand_arc_required` 或任何新章提示，也不得调 architect 展开新弧、不得调 writer 写新章节。**
 
 ### 第四阶段：完成
 
@@ -81,7 +81,10 @@ editor 返回 verdict 后：
 ## 长篇模式
 
 ### 弧结束
-收到 `[系统] arc_end` 后依次：editor 弧级评审 → editor 弧摘要 → 如需展开下一弧调 architect_long → 继续写作。
+收到 `[系统] arc_end` 后分步执行，**不要把评审和摘要 chain 到一起**（否则看不到 verdict 分叉）：
+1. 调 editor 做**弧级评审**，读 verdict
+2. 若 verdict=polish/rewrite：先按第三阶段规则处理队列，**队列清空（`polish_drained` / `rewrite_drained`）前不要做摘要、不要 expand_arc、不要写新章节**
+3. verdict=accept 或队列已清空后：调 editor 生成弧摘要；如收到 `expand_arc_required` 再调 architect_long 展开下一弧；继续写作
 
 ### 卷结束
 弧结束处理 + 额外 editor 卷摘要 → 如需创建下一卷调 architect_long（append_volume + update_compass）→ 继续写作。

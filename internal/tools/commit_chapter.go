@@ -121,7 +121,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			fmt.Sprintf("存在未恢复的章节提交：第 %d 章（阶段 %s），请先恢复或重新提交该章", existingPending.Chapter, existingPending.Stage),
 		)
 	}
-	if err := t.store.Progress.ValidateChapterCommit(a.Chapter); err != nil {
+	if err := t.store.Progress.ValidateChapterWork(a.Chapter); err != nil {
 		if apperr.CodeOf(err) != apperr.CodeUnknown {
 			return nil, err
 		}
@@ -357,24 +357,24 @@ func (t *CommitChapterTool) executeRewriteCommit(
 	)
 
 	// 7. 构造 system_hints
-	verb := "重写"
+	verb, doneKey, drainedKey := "重写", "rewrite_done", "rewrite_drained"
 	if progress.Flow == domain.FlowPolishing {
-		verb = "打磨"
+		verb, doneKey, drainedKey = "打磨", "polish_done", "polish_drained"
 	}
 	remaining := removeInt(progress.PendingRewrites, chapter)
 	var hints []string
 	if len(remaining) > 0 {
 		hints = append(hints, fmt.Sprintf(
-			"[系统] %s完成: 第 %d 章已%s并入库。剩余待处理：%v。请继续调 writer 处理下一章。",
-			verb, chapter, verb, remaining))
+			"[系统] %s: 第 %d 章已%s并入库。剩余待处理：%v。请继续调 writer 处理下一章。",
+			doneKey, chapter, verb, remaining))
 	} else {
 		next := chapter + 1
 		if p, _ := t.store.Progress.Load(); p != nil {
 			next = p.NextChapter()
 		}
 		hints = append(hints, fmt.Sprintf(
-			"[系统] %s全部完成: 第 %d 章已%s并入库。所有待%s章节已处理完毕，请继续写第 %d 章。",
-			verb, chapter, verb, verb, next))
+			"[系统] %s: 第 %d 章已%s并入库。所有待%s章节已处理完毕，请继续写第 %d 章。",
+			drainedKey, chapter, verb, verb, next))
 	}
 
 	return json.Marshal(map[string]any{
@@ -400,19 +400,19 @@ func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progre
 
 	// 重写/打磨流程中的章节完成
 	if progress != nil && (progress.Flow == domain.FlowRewriting || progress.Flow == domain.FlowPolishing) {
-		verb := "重写"
+		verb, doneKey, drainedKey := "重写", "rewrite_done", "rewrite_drained"
 		if progress.Flow == domain.FlowPolishing {
-			verb = "打磨"
+			verb, doneKey, drainedKey = "打磨", "polish_done", "polish_drained"
 		}
 		remaining := removeInt(progress.PendingRewrites, result.Chapter)
 		if len(remaining) > 0 {
 			hints = append(hints, fmt.Sprintf(
-				"[系统] %s完成: 第 %d 章已完成%s。剩余待处理章节: %v。请继续处理下一章。",
-				verb, result.Chapter, verb, remaining))
+				"[系统] %s: 第 %d 章已完成%s。剩余待处理章节: %v。请继续处理下一章。",
+				doneKey, result.Chapter, verb, remaining))
 		} else {
 			hints = append(hints, fmt.Sprintf(
-				"[系统] %s全部完成: 第 %d 章已完成%s。所有待%s章节已处理完毕，继续写第 %d 章。",
-				verb, result.Chapter, verb, verb, result.NextChapter))
+				"[系统] %s: 第 %d 章已完成%s。所有待%s章节已处理完毕，继续写第 %d 章。",
+				drainedKey, result.Chapter, verb, verb, result.NextChapter))
 		}
 		return hints
 	}

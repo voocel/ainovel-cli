@@ -330,8 +330,9 @@ func (s *ProgressStore) ClearPendingRewrites() error {
 	})
 }
 
-// ValidateChapterCommit 校验当前章节是否允许提交。
-func (s *ProgressStore) ValidateChapterCommit(chapter int) error {
+// ValidateChapterWork 校验当前章节是否允许被规划或提交。
+// 打磨/重写流程下，只允许处理 PendingRewrites 中的章节。
+func (s *ProgressStore) ValidateChapterWork(chapter int) error {
 	p, err := s.Load()
 	if err != nil {
 		return err
@@ -352,7 +353,7 @@ func (s *ProgressStore) ValidateChapterCommit(chapter int) error {
 	}
 	return apperr.New(
 		apperr.CodeToolConflict,
-		"store.validate_chapter_commit",
-		fmt.Sprintf("第 %d 章不在待%s队列中，当前队列：%v", chapter, verb, p.PendingRewrites),
+		"store.validate_chapter_work",
+		fmt.Sprintf("第 %d 章不在待%s队列中，当前队列：%v。请先处理队列内章节，再动新章节。", chapter, verb, p.PendingRewrites),
 	)
 }

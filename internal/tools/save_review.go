@@ -108,18 +108,20 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		}
 		flow := domain.FlowRewriting
 		verb := "重写"
+		key := "rewrite_required"
 		if finalVerdict == "polish" {
 			flow = domain.FlowPolishing
 			verb = "打磨"
+			key = "polish_required"
 		}
 		_ = t.store.Progress.SetPendingRewrites(affected, r.Summary)
 		_ = t.store.Progress.SetFlow(flow)
 
-		hint := fmt.Sprintf("[系统] %s_required: 审阅结论为 %s，受影响章节 %v。", verb, finalVerdict, affected)
+		hint := fmt.Sprintf("[系统] %s: 审阅结论为 %s，受影响章节 %v。", key, finalVerdict, affected)
 		if escalationReason != "" {
 			hint += fmt.Sprintf(" （升级原因：%s）", escalationReason)
 		}
-		hint += fmt.Sprintf(" 请逐章调用 writer 执行%s，全部完成后再继续写新章节。", verb)
+		hint += fmt.Sprintf(" 请立即逐章调 writer 执行%s；队列清空前，即使此前收到 expand_arc_required 或其他提示，也不要调 architect 展开新弧、不要调 writer 写新章节。", verb)
 		hints = append(hints, hint)
 	} else {
 		_ = t.store.Progress.SetFlow(domain.FlowWriting)
