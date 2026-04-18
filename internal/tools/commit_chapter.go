@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/voocel/agentcore/schema"
@@ -95,6 +96,12 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		// 清理可能残留的 PendingCommit（崩溃发生在 ProgressMarked 之后、ClearPendingCommit 之前）
 		if pending, _ := t.store.Signals.LoadPendingCommit(); pending != nil && pending.Chapter == a.Chapter {
 			_ = t.store.Signals.ClearPendingCommit()
+		}
+		// 打磨/重写路径：章节虽已完成，但仍在 pending_rewrites 中，允许覆盖并 drain 队列
+		progress, _ := t.store.Progress.Load()
+		if progress != nil && slices.Contains(progress.PendingRewrites, a.Chapter) {
+			return t.executeRewriteCommit(a.Chapter, a.Summary, a.Characters, a.KeyEvents,
+				a.HookType, a.DominantStrand, progress)
 		}
 		return json.Marshal(map[string]any{
 			"chapter":   a.Chapter,
@@ -293,6 +300,90 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	)
 
 	return json.Marshal(result)
+}
+
+// executeRewriteCommit 处理打磨/重写章节的提交：覆盖终稿与摘要、更新字数、drain 队列。
+// 跳过所有世界状态追加（timeline / foreshadow / relationship / state_changes）与弧边界检测，
+// 这些已在章节原始提交时应用。
+func (t *CommitChapterTool) executeRewriteCommit(
+	chapter int,
+	summary string,
+	characters, keyEvents []string,
+	hookType, dominantStrand string,
+	progress *domain.Progress,
+) (json.RawMessage, error) {
+	// 1. 加载打磨后的正文
+	content, wordCount, err := t.store.Drafts.LoadChapterContent(chapter)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.CodeStoreReadFailed, "tools.commit_chapter.rewrite.load_content", "load chapter content")
+	}
+	if content == "" {
+		return nil, apperr.New(
+			apperr.CodeToolPreconditionFailed,
+			"tools.commit_chapter.rewrite.load_content",
+			fmt.Sprintf("no content found for chapter %d", chapter),
+		)
+	}
+
+	// 2. 覆盖终稿
+	if err := t.store.Drafts.SaveFinalChapter(chapter, content); err != nil {
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.rewrite.save_final", "save final chapter")
+	}
+
+	// 3. 覆盖摘要
+	if err := t.store.Summaries.SaveSummary(domain.ChapterSummary{
+		Chapter:    chapter,
+		Summary:    summary,
+		Characters: characters,
+		KeyEvents:  keyEvents,
+	}); err != nil {
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.rewrite.save_summary", "save summary")
+	}
+
+	// 4. 更新字数（MarkChapterComplete 对已完成章节是幂等的：replaces word count, slice.Contains 防止重复入队）
+	if err := t.store.Progress.MarkChapterComplete(chapter, wordCount, hookType, dominantStrand); err != nil {
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.rewrite.mark_complete", "update word count")
+	}
+
+	// 5. Drain 待处理队列；队列空时 CompleteRewrite 会自动把 flow 切回 writing
+	if err := t.store.Progress.CompleteRewrite(chapter); err != nil {
+		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.rewrite.complete_rewrite", "complete rewrite")
+	}
+
+	// 6. Checkpoint
+	_, _ = t.store.Checkpoints.Append(
+		domain.ChapterScope(chapter), "commit",
+		fmt.Sprintf("chapters/ch%02d.md", chapter), "",
+	)
+
+	// 7. 构造 system_hints
+	verb := "重写"
+	if progress.Flow == domain.FlowPolishing {
+		verb = "打磨"
+	}
+	remaining := removeInt(progress.PendingRewrites, chapter)
+	var hints []string
+	if len(remaining) > 0 {
+		hints = append(hints, fmt.Sprintf(
+			"[系统] %s完成: 第 %d 章已%s并入库。剩余待处理：%v。请继续调 writer 处理下一章。",
+			verb, chapter, verb, remaining))
+	} else {
+		next := chapter + 1
+		if p, _ := t.store.Progress.Load(); p != nil {
+			next = p.NextChapter()
+		}
+		hints = append(hints, fmt.Sprintf(
+			"[系统] %s全部完成: 第 %d 章已%s并入库。所有待%s章节已处理完毕，请继续写第 %d 章。",
+			verb, chapter, verb, verb, next))
+	}
+
+	return json.Marshal(map[string]any{
+		"chapter":         chapter,
+		"rewritten":       true,
+		"word_count":      wordCount,
+		"remaining_queue": remaining,
+		"system_hints":    hints,
+	})
 }
 
 // buildSystemHints 内联原 orchestrator/policy/commit.go 的决策逻辑，

@@ -76,9 +76,11 @@ type UISnapshot struct {
 	ContextKeptCount      int
 
 	// 累计用量（整个会话，跨所有 agent 与模型切换）
-	TotalInputTokens  int
-	TotalOutputTokens int
-	TotalCostUSD      float64
+	TotalInputTokens      int
+	TotalOutputTokens     int
+	TotalCacheReadTokens  int
+	TotalCacheWriteTokens int
+	TotalCostUSD          float64
 
 	// 基础设定
 	Premise          string

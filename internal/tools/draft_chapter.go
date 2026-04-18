@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/voocel/agentcore/schema"
@@ -51,12 +52,17 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 		return nil, fmt.Errorf("content must not be empty")
 	}
 	if t.store.Progress.IsChapterCompleted(a.Chapter) {
-		return json.Marshal(map[string]any{
-			"chapter":   a.Chapter,
-			"skipped":   true,
-			"reason":    fmt.Sprintf("第 %d 章已提交完成，不能覆盖", a.Chapter),
-			"next_step": "该章节已完成，请继续写下一章",
-		})
+		// 打磨/重写路径：章节虽已完成，但仍在 pending_rewrites 中，允许覆盖草稿
+		progress, _ := t.store.Progress.Load()
+		inRewriteQueue := progress != nil && slices.Contains(progress.PendingRewrites, a.Chapter)
+		if !inRewriteQueue {
+			return json.Marshal(map[string]any{
+				"chapter":   a.Chapter,
+				"skipped":   true,
+				"reason":    fmt.Sprintf("第 %d 章已提交完成，不能覆盖", a.Chapter),
+				"next_step": "该章节已完成，请继续写下一章",
+			})
+		}
 	}
 	if err := t.store.Progress.StartChapter(a.Chapter); err != nil {
 		return nil, fmt.Errorf("mark chapter in progress: %w", err)

@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ func renderTopBar(snap host.UISnapshot, width int, spinnerFrame string) string {
 	}
 	if snap.ModelName != "" {
 		if w := formatContextWindow(snap.ModelContextWindow); w != "" {
-			infoParts = append(infoParts, snap.ModelName+" ("+w+")")
+			infoParts = append(infoParts, snap.ModelName+"("+w+")")
 		} else {
 			infoParts = append(infoParts, snap.ModelName)
 		}
@@ -119,16 +120,17 @@ func renderStatePanel(snap host.UISnapshot, width, height int) string {
 		}
 	}
 	overview.WriteString(renderField("字数", formatNumber(snap.TotalWordCount)))
-	if snap.InProgressChapter > 0 {
-		overview.WriteString(renderField("写作中", fmt.Sprintf("第 %d 章", snap.InProgressChapter)))
+	if label, ch := inProgressDisplay(snap); label != "" {
+		overview.WriteString(renderField(label, fmt.Sprintf("第 %d 章", ch)))
 	}
 	if snap.TotalInputTokens > 0 || snap.TotalOutputTokens > 0 {
 		tokens := fmt.Sprintf("in %s · out %s",
 			formatNumber(snap.TotalInputTokens), formatNumber(snap.TotalOutputTokens))
-		if cost := formatCostUSD(snap.TotalCostUSD); cost != "" {
-			tokens = cost + " · " + tokens
+		if snap.TotalCacheReadTokens > 0 || snap.TotalCacheWriteTokens > 0 {
+			tokens += fmt.Sprintf(" · cache %s",
+				formatNumber(snap.TotalCacheReadTokens+snap.TotalCacheWriteTokens))
 		}
-		overview.WriteString(renderField("累计", tokens))
+		overview.WriteString(renderField("用量", tokens))
 	}
 	if headline := snapshotHeadline(tasks, snap); headline != "" {
 		label := "当前"
@@ -330,6 +332,37 @@ func sidebarTasks(tasks []host.TaskSnapshot) []host.TaskSnapshot {
 		return concrete
 	}
 	return active
+}
+
+// inProgressDisplay 计算"进行中"字段的标签和章节号。
+// 根据 flow 选择动词（打磨/重写/写作）；in_progress_chapter 与 flow 不匹配时视为 stale：
+//   - polishing/rewriting 模式下章节不在 pending_rewrites 中 → 回退到队列首章
+//   - 字段为 0 时不渲染
+func inProgressDisplay(snap host.UISnapshot) (label string, chapter int) {
+	ch := snap.InProgressChapter
+	switch snap.Flow {
+	case "polishing":
+		if ch <= 0 || !slices.Contains(snap.PendingRewrites, ch) {
+			if len(snap.PendingRewrites) == 0 {
+				return "", 0
+			}
+			ch = snap.PendingRewrites[0]
+		}
+		return "打磨中", ch
+	case "rewriting":
+		if ch <= 0 || !slices.Contains(snap.PendingRewrites, ch) {
+			if len(snap.PendingRewrites) == 0 {
+				return "", 0
+			}
+			ch = snap.PendingRewrites[0]
+		}
+		return "重写中", ch
+	default:
+		if ch <= 0 {
+			return "", 0
+		}
+		return "写作中", ch
+	}
 }
 
 func snapshotHeadline(tasks []host.TaskSnapshot, snap host.UISnapshot) string {

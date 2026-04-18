@@ -20,11 +20,13 @@ import (
 //
 // 线程安全。
 type UsageTracker struct {
-	mu          sync.Mutex
-	totalInput  int
-	totalOutput int
-	totalCost   float64
-	modelSet    *bootstrap.ModelSet
+	mu              sync.Mutex
+	totalInput      int
+	totalOutput     int
+	totalCacheRead  int
+	totalCacheWrite int
+	totalCost       float64
+	modelSet        *bootstrap.ModelSet
 }
 
 func NewUsageTracker(set *bootstrap.ModelSet) *UsageTracker {
@@ -47,17 +49,19 @@ func (t *UsageTracker) Record(agentName string, msg agentcore.AgentMessage) {
 	defer t.mu.Unlock()
 	t.totalInput += m.Usage.Input
 	t.totalOutput += m.Usage.Output
+	t.totalCacheRead += m.Usage.CacheRead
+	t.totalCacheWrite += m.Usage.CacheWrite
 	t.totalCost += cost
 }
 
 // Totals 返回累计总量的快照。
-func (t *UsageTracker) Totals() (cost float64, input, output int) {
+func (t *UsageTracker) Totals() (cost float64, input, output, cacheRead, cacheWrite int) {
 	if t == nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.totalCost, t.totalInput, t.totalOutput
+	return t.totalCost, t.totalInput, t.totalOutput, t.totalCacheRead, t.totalCacheWrite
 }
 
 func (t *UsageTracker) resolveCost(agentName string, u agentcore.Usage) float64 {

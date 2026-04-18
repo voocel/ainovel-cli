@@ -381,18 +381,20 @@ func (h *Host) Snapshot() UISnapshot {
 
 	// 动态解析当前模型的上下文窗口，/model 切换后下一次 Snapshot 自动反映
 	modelWindow, _ := h.cfg.ResolveContextWindow(model)
-	cost, tokIn, tokOut := h.usage.Totals()
+	cost, tokIn, tokOut, cacheRead, cacheWrite := h.usage.Totals()
 
 	snap := UISnapshot{
-		Provider:           provider,
-		ModelName:          model,
-		ModelContextWindow: modelWindow,
-		Style:              h.cfg.Style,
-		RuntimeState:       string(state),
-		IsRunning:          state == lifecycleRunning,
-		TotalInputTokens:   tokIn,
-		TotalOutputTokens:  tokOut,
-		TotalCostUSD:       cost,
+		Provider:              provider,
+		ModelName:             model,
+		ModelContextWindow:    modelWindow,
+		Style:                 h.cfg.Style,
+		RuntimeState:          string(state),
+		IsRunning:             state == lifecycleRunning,
+		TotalInputTokens:      tokIn,
+		TotalOutputTokens:     tokOut,
+		TotalCacheReadTokens:  cacheRead,
+		TotalCacheWriteTokens: cacheWrite,
+		TotalCostUSD:          cost,
 	}
 
 	progress, _ := h.store.Progress.Load()

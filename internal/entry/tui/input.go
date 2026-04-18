@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -43,7 +42,8 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 	return inputBlock + "\n" + hintBlock + "\n"
 }
 
-// buildRightInfo 构建右侧进度和目录信息。
+// buildRightInfo 构建右侧信息：provider · model(window) · 花费 · 目录。
+// 章节/字数等进度信息由左侧"概览"面板承载，这里不再重复。
 func buildRightInfo(snap host.UISnapshot, outputDir string) string {
 	var parts []string
 
@@ -51,31 +51,14 @@ func buildRightInfo(snap host.UISnapshot, outputDir string) string {
 		parts = append(parts, snap.Provider)
 	}
 	if snap.ModelName != "" {
-		parts = append(parts, snap.ModelName)
-	}
-	if snap.Layered {
-		if snap.CompletedCount > 0 {
-			parts = append(parts, fmt.Sprintf("Done %d", snap.CompletedCount))
-		}
-		if snap.TotalChapters > 0 {
-			parts = append(parts, fmt.Sprintf("Planned %d", snap.TotalChapters))
-		}
-	} else if snap.TotalChapters > 0 {
-		parts = append(parts, fmt.Sprintf("Ch %d/%d", snap.CompletedCount, snap.TotalChapters))
-	} else if snap.CompletedCount > 0 {
-		parts = append(parts, fmt.Sprintf("Done %d", snap.CompletedCount))
-	}
-	if snap.TotalWordCount > 0 {
-		parts = append(parts, formatNumber(snap.TotalWordCount)+"字")
-	}
-	runningTasks := 0
-	for _, task := range snap.Tasks {
-		if task.Status == "running" || task.Status == "queued" {
-			runningTasks++
+		if w := formatContextWindow(snap.ModelContextWindow); w != "" {
+			parts = append(parts, snap.ModelName+"("+w+")")
+		} else {
+			parts = append(parts, snap.ModelName)
 		}
 	}
-	if runningTasks > 0 {
-		parts = append(parts, fmt.Sprintf("Tasks %d", runningTasks))
+	if cost := formatCostUSD(snap.TotalCostUSD); cost != "" {
+		parts = append(parts, cost)
 	}
 	if outputDir != "" {
 		parts = append(parts, "./"+filepath.Base(outputDir))

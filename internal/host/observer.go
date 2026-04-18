@@ -798,13 +798,28 @@ func displayToolName(tool string, args json.RawMessage) string {
 	case "save_review":
 		var p struct {
 			Chapter int    `json:"chapter"`
+			Scope   string `json:"scope"`
 			Verdict string `json:"verdict"`
 		}
-		if json.Unmarshal(args, &p) == nil && p.Chapter > 0 {
-			if p.Verdict != "" {
-				return fmt.Sprintf("%s(第%d章·%s)", tool, p.Chapter, p.Verdict)
+		if json.Unmarshal(args, &p) == nil {
+			label := ""
+			switch p.Scope {
+			case "arc":
+				label = "本弧"
+			case "global":
+				label = "全局"
+			default:
+				if p.Chapter > 0 {
+					label = fmt.Sprintf("第%d章", p.Chapter)
+				}
 			}
-			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
+			if label == "" {
+				return tool
+			}
+			if p.Verdict != "" {
+				return fmt.Sprintf("%s(%s·%s)", tool, label, p.Verdict)
+			}
+			return fmt.Sprintf("%s(%s)", tool, label)
 		}
 	case "novel_context":
 		var p struct {
