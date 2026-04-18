@@ -105,13 +105,11 @@ func (m Model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		m.acceptCommandCompletion()
 		return m, nil, true
 	case tea.KeyEnter:
-		text := strings.TrimSpace(m.textarea.Value())
-		itemCount := len(m.compItems)
 		item, ok := m.acceptCommandCompletion()
 		if !ok {
 			return m, nil, true
 		}
-		if item.AutoExecute && (itemCount == 1 || strings.EqualFold(text, "/"+item.Name)) {
+		if item.AutoExecute {
 			m.textarea.Reset()
 			next, cmd := m.handleSlashCommand(slashCommand{name: item.Name})
 			return next, cmd, true
@@ -288,21 +286,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case eventMsg:
 		ev := host.Event(msg)
-		// depth-1 DONE: 回填到对应 TOOL 事件的 Duration，不追加新行
-		if ev.Category == "DONE" && ev.Depth > 0 {
-			for i := len(m.events) - 1; i >= 0; i-- {
-				e := &m.events[i]
-				if e.Category == "TOOL" && e.Agent == ev.Agent && e.Depth > 0 && e.Duration == 0 {
-					e.Duration = ev.Duration
-					break
-				}
-			}
-		} else {
-			m.events = append(m.events, ev)
-			if len(m.events) > maxEvents {
-				m.events = m.events[len(m.events)-maxEvents:]
-			}
-		}
+		m.applyEvent(ev)
 		m.refreshEventViewport()
 		return m, listenEvents(m.runtime), true
 	case bootstrapMsg:
@@ -320,7 +304,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case askUserMsg:
 		m.askState = newAskUserState(askUserRequest(msg))
 		m.textarea.Blur()
-		m.events = append(m.events, host.Event{
+		m.applyEvent(host.Event{
 			Time: time.Now(), Category: "SYSTEM", Summary: "等待用户补充关键信息", Level: "info",
 		})
 		m.refreshEventViewport()
@@ -379,7 +363,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case continueResultMsg:
 		if msg.err != nil {
 			m.err = msg.err
-			m.events = append(m.events, host.Event{
+			m.applyEvent(host.Event{
 				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
 			})
 			m.refreshEventViewport()
@@ -434,7 +418,7 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.err = msg.err
 		if m.mode != modeNew {
-			m.events = append(m.events, host.Event{
+			m.applyEvent(host.Event{
 				Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error",
 			})
 			m.refreshEventViewport()
@@ -485,8 +469,57 @@ func (m Model) handleTextareaMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// applyEvent 把一条事件应用到 m.events：
+// - 带 ID 且已存在 → 原地更新（合并完成态字段，保留首次的 Time / Summary）
+// - 新事件 → 追加，必要时记录到 eventIndex
+// - 超过 maxEvents 时做滑动截断并重建索引
+func (m *Model) applyEvent(ev host.Event) {
+	if ev.ID != "" {
+		if idx, ok := m.eventIndex[ev.ID]; ok && idx >= 0 && idx < len(m.events) {
+			existing := &m.events[idx]
+			if !ev.FinishedAt.IsZero() {
+				existing.FinishedAt = ev.FinishedAt
+			}
+			if ev.Duration > 0 {
+				existing.Duration = ev.Duration
+			}
+			if ev.Failed {
+				existing.Failed = true
+			}
+			if ev.Level != "" {
+				existing.Level = ev.Level
+			}
+			// Summary 非空时允许覆盖（结束态可能带补充信息）；否则保留首次
+			if ev.Summary != "" {
+				existing.Summary = ev.Summary
+			}
+			return
+		}
+	}
+
+	m.events = append(m.events, ev)
+	if ev.ID != "" {
+		m.eventIndex[ev.ID] = len(m.events) - 1
+	}
+	if len(m.events) > maxEvents {
+		drop := len(m.events) - maxEvents
+		m.events = m.events[drop:]
+		m.rebuildEventIndex()
+	}
+}
+
+func (m *Model) rebuildEventIndex() {
+	m.eventIndex = make(map[string]int, len(m.events))
+	for i, e := range m.events {
+		if e.ID != "" {
+			m.eventIndex[e.ID] = i
+		}
+	}
+}
+
 func (m *Model) resetOutputPanels() {
 	m.events = nil
+	m.eventIndex = make(map[string]int)
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 	m.streamBuf.Reset()
@@ -500,14 +533,13 @@ func (m *Model) applyRuntimeReplay(items []domain.RuntimeQueueItem) {
 	for _, item := range items {
 		switch item.Kind {
 		case domain.RuntimeQueueUIEvent:
-			m.events = append(m.events, host.Event{
-				Time:     item.Time,
-				Category: item.Category,
-				Summary:  item.Summary,
+			// 回放的全部视为已完成态（FinishedAt 非零）→ 不会被渲染为"进行中"
+			m.applyEvent(host.Event{
+				Time:       item.Time,
+				FinishedAt: item.Time,
+				Category:   item.Category,
+				Summary:    item.Summary,
 			})
-			if len(m.events) > maxEvents {
-				m.events = m.events[len(m.events)-maxEvents:]
-			}
 		case domain.RuntimeQueueStreamClear:
 			if len(m.streamRounds) == 0 {
 				m.streamRounds = append(m.streamRounds, "")

@@ -8,14 +8,30 @@ import (
 )
 
 // Event 是 TUI 消费的结构化事件。
+//
+// 对于 TOOL / DISPATCH 两类调用事件，同一次调用的开始与结束共用一个 ID：
+// 开始时先发 FinishedAt 为零值的事件（TUI 渲染为"进行中"样式）；
+// 结束时再发一条同 ID 的事件，填入 FinishedAt + Duration（+ Failed），
+// TUI 按 ID 定位原行原地更新，避免"开始一行、完成又一行"的冗余。
+//
+// SYSTEM / ERROR / CONTEXT 等非调用类事件 ID 为空，每条独立追加。
 type Event struct {
-	Time     time.Time
-	Category string        // DISPATCH / TOOL / DONE / SYSTEM / REVIEW / CHECK / ERROR
-	Agent    string        // 产生事件的 agent
-	Summary  string
-	Level    string        // info / warn / error / success
-	Depth    int           // 0 = coordinator 层, 1 = sub-agent 层
-	Duration time.Duration // 执行耗时（DONE=总耗时, depth-1 TOOL=自派发经过时间）
+	ID         string        // 同一次调用的开始/结束共用；非调用事件为空
+	Time       time.Time     // 首次发出时间（开始时刻）
+	FinishedAt time.Time     // 零值 = 进行中；非零 = 已完成
+	Failed     bool          // 已完成但失败（仅完成态有意义）
+	Category   string        // DISPATCH / TOOL / SYSTEM / REVIEW / CHECK / ERROR / CONTEXT
+	Agent      string        // 产生事件的 agent
+	Summary    string
+	Level      string        // info / warn / error / success
+	Depth      int           // 0 = coordinator 层, 1 = sub-agent 层
+	Duration   time.Duration // 完成时的执行耗时
+}
+
+// Running 返回事件是否处于进行中。
+// 仅调用类事件（有 ID 的 TOOL / DISPATCH）可能进行中；其它类型总是返回 false。
+func (e Event) Running() bool {
+	return e.ID != "" && e.FinishedAt.IsZero()
 }
 
 // UISnapshot 是 TUI 渲染所需的聚合状态快照。

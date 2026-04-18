@@ -590,6 +590,19 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 	if role == "" || role == "default" {
 		h.cfg.Provider = provider
 		h.cfg.ModelName = model
+	} else {
+		if h.cfg.Roles == nil {
+			h.cfg.Roles = make(map[string]bootstrap.RoleConfig)
+		}
+		rc := h.cfg.Roles[role]
+		rc.Provider = provider
+		rc.Model = model
+		h.cfg.Roles[role] = rc
+	}
+	if path := bootstrap.DefaultConfigPath(); path != "" {
+		if err := bootstrap.SaveConfig(path, h.cfg); err != nil {
+			slog.Warn("保存配置失败", "module", "host", "err", err)
+		}
 	}
 	h.emitEvent(Event{
 		Time:     time.Now(),

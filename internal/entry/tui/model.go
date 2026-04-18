@@ -48,6 +48,7 @@ type Model struct {
 	compActive   bool
 	snapshot     host.UISnapshot
 	events       []host.Event
+	eventIndex   map[string]int // event.ID → m.events 下标；调用类事件到达时原地更新
 	viewport     viewport.Model   // 事件流 viewport
 	streamVP     viewport.Model   // 流式输出 viewport
 	detailVP     viewport.Model   // 右侧详情 viewport
@@ -107,6 +108,7 @@ func NewModel(rt *host.Host, bridge *askUserBridge) Model {
 		streamVP:     svp,
 		detailVP:     dvp,
 		streamBuf:    &strings.Builder{},
+		eventIndex:   make(map[string]int),
 	}
 }
 
@@ -170,7 +172,7 @@ func (m *Model) paneHighlighted(pane focusPane) bool {
 // refreshEventViewport 重新渲染事件流内容并设置 viewport。
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
-	content := renderEventContent(m.events, centerW)
+	content := renderEventContent(m.events, centerW, m.spinnerIdx)
 	if activity := renderEventActivity(m.snapshot, m.spinnerIdx, centerW); activity != "" {
 		if strings.TrimSpace(content) != "" {
 			content += "\n" + activity

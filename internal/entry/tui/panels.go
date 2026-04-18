@@ -658,10 +658,11 @@ func taskListTitle(task host.TaskSnapshot) string {
 
 // renderEventContent 将事件列表渲染为层次化事件流。
 // DISPATCH 作为顶级标题，子代理工具缩进显示，形成清晰的调度树。
-func renderEventContent(events []host.Event, width int) string {
+// spinnerFrame 用于给"进行中"的行渲染动态图标（跟 topbar spinner 同步）。
+func renderEventContent(events []host.Event, width, spinnerFrame int) string {
 	var b strings.Builder
 	for i, ev := range events {
-		b.WriteString(renderEventLine(ev, width))
+		b.WriteString(renderEventLine(ev, width, spinnerFrame))
 		if i < len(events)-1 {
 			b.WriteString("\n")
 		}
@@ -669,7 +670,14 @@ func renderEventContent(events []host.Event, width int) string {
 	return b.String()
 }
 
-func renderEventLine(ev host.Event, width int) string {
+// 进行中的调用类事件使用的 spinner 帧（与 topbar 同源 braille dots）。
+var eventRunningFrames = spinnerFrames
+
+func runningSpinner(frame int) string {
+	return eventRunningFrames[frame%len(eventRunningFrames)]
+}
+
+func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 	tsStr := lipgloss.NewStyle().Foreground(colorDim).Render(ev.Time.Format("15:04:05"))
 	indent := ""
 	if ev.Depth > 0 {
@@ -677,29 +685,78 @@ func renderEventLine(ev host.Event, width int) string {
 	}
 	maxSumW := max(20, width-12-ev.Depth*2)
 
+	running := ev.Running()
 	durStr := renderEventDuration(ev.Duration)
 
 	switch {
 	case ev.Category == "DISPATCH":
-		icon := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("▶")
+		// 三态：进行中（accent spinner + 加粗）/ 失败（红 ✕）/ 完成（绿 ✓）
+		var icon string
+		switch {
+		case running:
+			icon = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(runningSpinner(spinnerFrame))
+		case ev.Failed:
+			icon = lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
+		default:
+			icon = lipgloss.NewStyle().Foreground(colorSuccess).Render("✓")
+		}
 		sum := renderDispatchSummary(ev.Summary, maxSumW)
-		return tsStr + " " + icon + " " + sum
+		if running {
+			// 进行中保持原样但加粗
+			sum = lipgloss.NewStyle().Bold(true).Render(sum)
+		}
+		line := tsStr + " " + icon + " " + sum
+		if !running {
+			line += durStr
+		}
+		return line
 
 	case ev.Category == "DONE":
+		// 兼容旧 replay 数据；新流程不再产生 DONE 独立事件
 		icon := lipgloss.NewStyle().Foreground(colorSuccess).Render("✓")
 		color := eventAgentColor(ev.Agent)
 		name := lipgloss.NewStyle().Foreground(color).Render(agentDisplayName(ev.Agent))
 		return tsStr + " " + icon + " " + name + durStr
 
 	case ev.Category == "TOOL" && ev.Depth == 0:
-		icon := lipgloss.NewStyle().Foreground(colorTool).Render("◇")
-		sum := lipgloss.NewStyle().Foreground(colorTool).Render(truncate(ev.Summary, maxSumW))
-		return tsStr + " " + icon + " " + sum
+		// coordinator 自身工具
+		var icon, sum string
+		switch {
+		case running:
+			icon = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(runningSpinner(spinnerFrame))
+			sum = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(truncate(ev.Summary, maxSumW))
+		case ev.Failed:
+			icon = lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
+			sum = lipgloss.NewStyle().Foreground(colorError).Render(truncate(ev.Summary, maxSumW))
+		default:
+			icon = lipgloss.NewStyle().Foreground(colorTool).Render("◇")
+			sum = lipgloss.NewStyle().Foreground(colorTool).Render(truncate(ev.Summary, maxSumW))
+		}
+		line := tsStr + " " + icon + " " + sum
+		if !running {
+			line += durStr
+		}
+		return line
 
 	case ev.Category == "TOOL":
-		icon := lipgloss.NewStyle().Foreground(colorDim).Render("├")
-		sum := lipgloss.NewStyle().Foreground(colorMuted).Render(truncate(ev.Summary, maxSumW))
-		return tsStr + " " + indent + icon + " " + sum + durStr
+		// subagent 内部工具（Depth=1）
+		var icon, sum string
+		switch {
+		case running:
+			icon = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(runningSpinner(spinnerFrame))
+			sum = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(truncate(ev.Summary, maxSumW))
+		case ev.Failed:
+			icon = lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
+			sum = lipgloss.NewStyle().Foreground(colorError).Render(truncate(ev.Summary, maxSumW))
+		default:
+			icon = lipgloss.NewStyle().Foreground(colorDim).Render("├")
+			sum = lipgloss.NewStyle().Foreground(colorMuted).Render(truncate(ev.Summary, maxSumW))
+		}
+		line := tsStr + " " + indent + icon + " " + sum
+		if !running {
+			line += durStr
+		}
+		return line
 
 	case ev.Category == "ERROR":
 		icon := lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")
