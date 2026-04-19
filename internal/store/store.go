@@ -49,6 +49,30 @@ func NewStore(dir string) *Store {
 // Dir 返回输出根目录。
 func (s *Store) Dir() string { return s.dir }
 
+// FoundationMissing 返回基础设定中尚缺的项，按用于 Prompt/Reminder 的稳定顺序排列。
+// 长篇模式（已有 layered_outline）额外要求 compass。
+func (s *Store) FoundationMissing() []string {
+	var missing []string
+	if p, _ := s.Outline.LoadPremise(); p == "" {
+		missing = append(missing, "premise")
+	}
+	if o, _ := s.Outline.LoadOutline(); len(o) == 0 {
+		missing = append(missing, "outline")
+	}
+	if c, _ := s.Characters.Load(); len(c) == 0 {
+		missing = append(missing, "characters")
+	}
+	if r, _ := s.World.LoadWorldRules(); len(r) == 0 {
+		missing = append(missing, "world_rules")
+	}
+	if layered, _ := s.Outline.LoadLayeredOutline(); len(layered) > 0 {
+		if c, _ := s.Outline.LoadCompass(); c == nil {
+			missing = append(missing, "compass")
+		}
+	}
+	return missing
+}
+
 // Init 创建所需的子目录结构。
 func (s *Store) Init() error {
 	return s.Progress.io.EnsureDirs([]string{

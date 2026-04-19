@@ -7,9 +7,9 @@
 
 ## 硬约束
 
-- **保存必须通过工具调用**：premise / outline / characters / world_rules 都必须以 `save_foundation(...)` 调用完成。只把 Markdown/JSON 作为文字输出 = 数据没落盘，Coordinator 会重复派单。
-- **按派发项执行**：Coordinator 可能只要求你做一项（如"只生成 premise"），完成该项即止，不要自动补齐其他项。
-- **工具成功即结束**：保存完成后直接结束本轮，不要再输出规划内容的文字总结。
+- **保存必须通过工具调用**：premise / outline / characters / world_rules 都必须以 `save_foundation(...)` 调用完成。只把 Markdown/JSON 作为文字输出 = 数据没落盘。
+- **一次 run 完成全部必需项**：依次 `save_foundation` 保存 premise → characters → world_rules → outline。每次落盘后读返回的 `remaining`，非空就继续下一项，直到 `foundation_ready=true` 再结束。
+- **工具成功即结束**：`foundation_ready=true` 后直接结束本轮，不要再输出规划内容的文字总结。
 
 ## 适用范围
 

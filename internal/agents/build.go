@@ -105,7 +105,7 @@ func BuildCoordinator(
 		Model:            architectModel,
 		SystemPrompt:     bundle.Prompts.ArchitectShort,
 		Tools:            architectTools,
-		MaxTurns:         8,
+		MaxTurns:         12,
 		OnMessage:        onMsg,
 		StopGuardFactory: architectStopGuardFactory,
 	}
@@ -115,7 +115,7 @@ func BuildCoordinator(
 		Model:            architectModel,
 		SystemPrompt:     bundle.Prompts.ArchitectMid,
 		Tools:            architectTools,
-		MaxTurns:         10,
+		MaxTurns:         15,
 		OnMessage:        onMsg,
 		StopGuardFactory: architectStopGuardFactory,
 	}
@@ -125,7 +125,7 @@ func BuildCoordinator(
 		Model:            architectModel,
 		SystemPrompt:     bundle.Prompts.ArchitectLong,
 		Tools:            architectTools,
-		MaxTurns:         14,
+		MaxTurns:         20,
 		OnMessage:        onMsg,
 		StopGuardFactory: architectStopGuardFactory,
 	}
@@ -200,7 +200,6 @@ func BuildCoordinator(
 		agentcore.WithTools(subagentTool, contextTool),
 		agentcore.WithMaxTurns(1000),
 		agentcore.WithOnMaxTurns(agentcore.MaxTurnsSoftRestart),
-		agentcore.WithDefaultToolChoice("required"),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,

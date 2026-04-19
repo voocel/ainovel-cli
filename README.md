@@ -446,7 +446,7 @@ output/{novel_name}/
 工具只返事实，指令由 Reminder 每轮从事实层重算：
 
 - `commit_chapter` / `save_review` 返回结构化事实（`final_verdict` / `pending_rewrites` / `arc_end_reached` / `next_chapter`），不夹带任何 `[系统]` 字符串
-- `internal/host/reminder/` 下的纯函数 generator 读 `Progress` + `Outline`，每轮 pre-turn 生成 `<system-reminder>`：`flow`（当前该做什么）/ `queue_guard`（队列未清禁止新章）/ `arc_handoff`（弧末刹车）/ `never_stop`（禁止主动结束）/ `book_complete`（全书完成才放行）
+- `internal/host/reminder/` 下的纯函数 generator 读 `Progress` + `Outline`，每轮 pre-turn 生成 `<system-reminder>`：`flow`（当前该做什么 / 弧末刹车）/ `queue_guard`（队列未清禁止新章）/ `book_complete`（全书完成才放行）。物理兜底由 `StopGuard` 在 `phase≠Complete` 时拒绝 `end_turn` 承担
 - Reminder 只存活一轮，不进历史、不参与压缩；规则有单元测试，退化可被回归捕获
 
 这样指令不会被链式调用吞掉，也不会在工具产物里漂移。改 bug 只需加一个 generator + 一个测试。

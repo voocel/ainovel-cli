@@ -409,23 +409,13 @@ func (t *ContextTool) architectReferences() map[string]string {
 }
 
 // foundationStatus 检查基础设定的完备性，返回缺失项列表。
+// 与 save_foundation 工具共用 store.FoundationMissing 判定逻辑，保证 LLM 从
+// novel_context 看到的 ready/missing 与 save_foundation 返回的 foundation_ready
+// 永远一致（长篇 compass 必需项等细节不会漂移）。
 func (t *ContextTool) foundationStatus() map[string]any {
-	status := map[string]any{"ready": true}
-	var missing []string
-	if p, _ := t.store.Outline.LoadPremise(); p == "" {
-		missing = append(missing, "premise")
-	}
-	if o, _ := t.store.Outline.LoadOutline(); len(o) == 0 {
-		missing = append(missing, "outline")
-	}
-	if c, _ := t.store.Characters.Load(); len(c) == 0 {
-		missing = append(missing, "characters")
-	}
-	if r, _ := t.store.World.LoadWorldRules(); len(r) == 0 {
-		missing = append(missing, "world_rules")
-	}
+	missing := t.store.FoundationMissing()
+	status := map[string]any{"ready": len(missing) == 0}
 	if len(missing) > 0 {
-		status["ready"] = false
 		status["missing"] = missing
 	}
 	return status

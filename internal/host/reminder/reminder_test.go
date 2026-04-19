@@ -30,7 +30,7 @@ func TestAggregate_NoProgress_EmitsOnlyTurnAgnosticReminders(t *testing.T) {
 	}
 }
 
-func TestAggregate_WritingFlow_EmitsNeverStopAndFlow(t *testing.T) {
+func TestAggregate_WritingFlow_EmitsFlowReminder(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Progress.Init("test", 20); err != nil {
 		t.Fatalf("init progress: %v", err)
@@ -46,9 +46,6 @@ func TestAggregate_WritingFlow_EmitsNeverStopAndFlow(t *testing.T) {
 	for _, r := range got {
 		sources[r.Source] = r.Content
 	}
-	if _, ok := sources["never_stop"]; !ok {
-		t.Fatalf("missing never_stop; got: %+v", got)
-	}
 	if flow, ok := sources["flow"]; !ok || !strings.Contains(flow, "next_chapter=1") {
 		t.Fatalf("flow reminder missing/incorrect: %q", flow)
 	}
@@ -57,6 +54,85 @@ func TestAggregate_WritingFlow_EmitsNeverStopAndFlow(t *testing.T) {
 	}
 	if _, ok := sources["queue_guard"]; ok {
 		t.Fatal("queue_guard should not fire when pending_rewrites is empty")
+	}
+}
+
+// TestAggregate_OutlinePhase_FoundationReady_PointsToNextChapter 验证脏状态兜底：
+// phase 还停在 outline 但 foundation 已齐（可能跨进程恢复或上个 run 崩在推进 phase 前），
+// reminder 必须指向正确的 NextChapter 而不是写死第 1 章。
+func TestAggregate_OutlinePhase_FoundationReady_PointsToNextChapter(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Progress.Init("test", 10); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseOutline); err != nil {
+		t.Fatalf("update phase: %v", err)
+	}
+	// 凑齐 foundation：premise / outline / characters / world_rules
+	if err := s.Outline.SavePremise("# 测试书\n\n## 题材和基调\n试"); err != nil {
+		t.Fatalf("save premise: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "c1"}}); err != nil {
+		t.Fatalf("save outline: %v", err)
+	}
+	if err := s.Characters.Save([]domain.Character{{Name: "A"}}); err != nil {
+		t.Fatalf("save characters: %v", err)
+	}
+	if err := s.World.SaveWorldRules([]domain.WorldRule{{Category: "c", Rule: "r"}}); err != nil {
+		t.Fatalf("save world: %v", err)
+	}
+	// 模拟已完成 2 章但 phase 错在 outline
+	for _, ch := range []int{1, 2} {
+		if err := s.Progress.MarkChapterComplete(ch, 1000, "d", "q"); err != nil {
+			t.Fatalf("mark ch%d: %v", ch, err)
+		}
+	}
+
+	gen := Aggregate(s, Default()...)
+	got := gen(context.Background(), agentcore.TurnInfo{})
+
+	var flow string
+	for _, r := range got {
+		if r.Source == "flow" {
+			flow = r.Content
+		}
+	}
+	if !strings.Contains(flow, "写第 3 章") {
+		t.Fatalf("flow should use NextChapter() fallback, got: %q", flow)
+	}
+}
+
+// TestAggregate_OutlinePhase_ReaffirmsMissingFacts 验证：outline 阶段 reminder
+// 只重申"还缺什么"的事实，不再教 LLM 路由分发流程。
+func TestAggregate_OutlinePhase_ReaffirmsMissingFacts(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseOutline); err != nil {
+		t.Fatalf("update phase: %v", err)
+	}
+
+	gen := Aggregate(s, Default()...)
+	got := gen(context.Background(), agentcore.TurnInfo{})
+
+	var flow string
+	for _, r := range got {
+		if r.Source == "flow" {
+			flow = r.Content
+		}
+	}
+	if flow == "" {
+		t.Fatalf("flow reminder missing in outline phase: %+v", got)
+	}
+	// 必须列出具体缺项；不应再出现"每次只补一项"这类路由指令
+	for _, item := range []string{"premise", "characters", "world_rules"} {
+		if !strings.Contains(flow, item) {
+			t.Fatalf("flow should list missing %q, got: %q", item, flow)
+		}
+	}
+	if strings.Contains(flow, "每次只补一项") {
+		t.Fatalf("flow must not prescribe routing details, got: %q", flow)
 	}
 }
 
@@ -113,9 +189,6 @@ func TestAggregate_BookComplete_MutesOthers(t *testing.T) {
 	}
 	if _, ok := sources["book_complete"]; !ok {
 		t.Fatalf("book_complete should fire; got: %+v", got)
-	}
-	if _, ok := sources["never_stop"]; ok {
-		t.Fatal("never_stop must NOT fire when Phase=Complete")
 	}
 	if _, ok := sources["flow"]; ok {
 		t.Fatal("flow must NOT fire when Phase=Complete")

@@ -212,10 +212,19 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 	}
 	_, _ = t.store.Checkpoints.Append(scope, a.Type, "", "")
 
-	// 返回剩余未完成项，引导 Architect 继续或结束
-	remaining := t.remaining()
+	// 返回剩余未完成项，引导 Architect 继续或结束；
+	// 齐全时一次性把 phase 推进到 writing，避免 Coordinator 再回来派单。
+	remaining := t.store.FoundationMissing()
+	ready := len(remaining) == 0
 	result["remaining"] = remaining
-	result["foundation_ready"] = len(remaining) == 0
+	result["foundation_ready"] = ready
+	if ready {
+		if p, _ := t.store.Progress.Load(); p != nil &&
+			p.Phase != domain.PhaseWriting && p.Phase != domain.PhaseComplete {
+			_ = t.store.Progress.UpdatePhase(domain.PhaseWriting)
+			result["phase"] = string(domain.PhaseWriting)
+		}
+	}
 	return json.Marshal(result)
 }
 
@@ -272,28 +281,4 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 func (t *SaveFoundationTool) isWriting() bool {
 	p, _ := t.store.Progress.Load()
 	return p != nil && p.Phase == domain.PhaseWriting
-}
-
-// remaining 检查基础设定中还缺少哪些必要项。
-func (t *SaveFoundationTool) remaining() []string {
-	var missing []string
-	if p, _ := t.store.Outline.LoadPremise(); p == "" {
-		missing = append(missing, "premise")
-	}
-	if o, _ := t.store.Outline.LoadOutline(); len(o) == 0 {
-		missing = append(missing, "outline")
-	}
-	// 长篇模式下 compass 也是必须项
-	if layered, _ := t.store.Outline.LoadLayeredOutline(); len(layered) > 0 {
-		if c, _ := t.store.Outline.LoadCompass(); c == nil {
-			missing = append(missing, "compass")
-		}
-	}
-	if c, _ := t.store.Characters.Load(); len(c) == 0 {
-		missing = append(missing, "characters")
-	}
-	if r, _ := t.store.World.LoadWorldRules(); len(r) == 0 {
-		missing = append(missing, "world_rules")
-	}
-	return missing
 }

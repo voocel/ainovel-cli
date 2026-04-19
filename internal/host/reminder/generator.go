@@ -33,6 +33,8 @@ type State struct {
 	// ArcHandoffPending 为 true 表示当前弧已全部写完但 arc_summary 尚未归档，
 	// 此时 Coordinator 必须先按 coordinator.md 的弧结束流程交接，再派写下一章。
 	ArcHandoffPending bool
+	// FoundationMissing 是基础设定中尚缺的项（premise/outline/characters/world_rules/compass）。
+	FoundationMissing []string
 	TurnIndex         int
 }
 
@@ -70,7 +72,6 @@ func Default() []Generator {
 		bookCompleteGen{},
 		queueGuardGen{},
 		flowGen{},
-		neverStopGen{},
 	}
 }
 
@@ -81,6 +82,7 @@ func loadState(st *store.Store, turn agentcore.TurnInfo) State {
 		Progress:               progress,
 		LatestGlobalCheckpoint: latest,
 		ArcHandoffPending:      isArcHandoffPending(st, progress),
+		FoundationMissing:      st.FoundationMissing(),
 		TurnIndex:              turn.TurnIndex,
 	}
 }

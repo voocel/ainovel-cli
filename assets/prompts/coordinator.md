@@ -32,21 +32,14 @@
 
 **输入扩展**：若用户输入不足 20 字，在派发给规划师前自主补充：差异化方向、目标读者与核心消费点、至少一个非常规的故事钩子。直接写入 task 描述。
 
-**分批派发，不要一次性让规划师生成所有设定。** 流程：
+**一次派发，让规划师在同一 run 里完成全部基础设定。** 流程：
 
-1. 调 `novel_context` 查看 `foundation_status.missing`
-2. 按缺失项分批调规划师，**每次只派一项**：
-   - 缺 premise → 任务: "只生成 premise"
-   - 缺 characters → 任务: "只补全 characters"
-   - 缺 world_rules → 任务: "只补全 world_rules"
-   - 缺 outline → 任务: "只补全 layered_outline"
-   - 缺 compass → 任务: "只补全 compass"
-3. 每次规划师返回后，调 `novel_context` 确认 `foundation_status`
-4. 重复 2-3 直到 `foundation_status.ready=true`，再进入写作
+1. 一次调 `subagent(architect_*, "完成完整规划（premise + characters + world_rules + outline/layered_outline + compass 如需）")`
+2. 规划师返回后读最后一次 `save_foundation` 的 `foundation_ready`：
+   - `true` → 直接进入写作（此时工具已自动把 phase 推进到 writing）
+   - `false` → 看返回的 `remaining`，再派一次同一规划师补齐缺项
 
-**规划师报错、超时、或返回 JSON 中包含 `error` 字段时，不要立刻重跑。先调 `novel_context`：**
-- 若 `foundation_status.ready=true`，设定已落盘，直接进入写作
-- 若 `foundation_status.missing` 非空，只针对缺失项重新调
+**规划师报错或超时**：直接重派同一任务。连续失败 3 次以上才调 `novel_context` 核对。
 
 ### 第二阶段：逐章写作
 

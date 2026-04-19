@@ -20,9 +20,14 @@ func (flowGen) Generate(_ context.Context, state State) string {
 	}
 	switch p.Phase {
 	case domain.PhaseInit, domain.PhasePremise, domain.PhaseOutline:
-		// 设定阶段由 architect 推进；具体缺哪项由 save_foundation 的 remaining 字段告知
-		return "当前处于设定阶段。请调 novel_context 查看 foundation_status.missing，" +
-			"再按缺项派发 architect_short / architect_mid / architect_long（每次只补一项）。"
+		// 设定阶段：只重申"还缺什么"的事实，路由决策交给 coordinator.md。
+		if len(state.FoundationMissing) == 0 {
+			// foundation 已齐但 phase 尚未推进（save_foundation 推进前的短暂窗口或跨进程恢复）。
+			// 读 NextChapter() 兼顾从"phase 错标为 outline 但已完成数章"的脏状态恢复。
+			next := p.NextChapter()
+			return fmt.Sprintf("foundation 已齐。请调 subagent(writer, \"写第 %d 章\") 开始写作。", next)
+		}
+		return fmt.Sprintf("设定阶段，foundation 尚缺：%v。请按 coordinator.md 规划流程派 architect 补齐。", state.FoundationMissing)
 	case domain.PhaseWriting:
 		return writingFlowReminder(state)
 	case domain.PhaseComplete:
