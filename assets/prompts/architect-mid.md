@@ -85,17 +85,17 @@
 
 调用 save_foundation(type="outline", scale="mid", content=<JSON数组>)
 
-注意：`content` 对于 outline / characters / world_rules 直接传 JSON 数组，不要再手动包成转义字符串。
+注意：`content` 对于 outline / characters / world_rules 直接传 JSON 数组，不要再手动包成转义字符串。JSON 字符串值内部**所有**双引号必须转义为 `\"`、换行为 `\n`、制表符为 `\t`，禁止出现字面双引号或控制字符。工具解析失败会返回 `parse xxx JSON (line L col C)` 精确定位错误位置，看到此错误时**完整重写**该段 JSON，不要尝试局部打补丁。
 
 ### 4. 生成 Characters
 
-基于 premise 和 outline 生成角色档案（JSON 格式），每个角色包含：
-- name
-- aliases
-- role
-- description
-- arc
-- traits
+基于 premise 和 outline 生成角色档案（JSON 格式），每个角色字段类型**严格如下**，不得改写为 object：
+- `name`: string
+- `aliases`: string[]（无则省略）
+- `role`: string
+- `description`: string（整体描述）
+- `arc`: **string**（整段角色弧线描述，不是 `{start/middle/end}` 对象；用"前期…中期…后期…"表述）
+- `traits`: **string[]**（特质字符串数组，如 `["冷静","多疑"]`，不是 object）
 
 要求：
 

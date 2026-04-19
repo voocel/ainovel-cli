@@ -69,9 +69,7 @@ func (t *ReadChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 			"samples":   samples,
 		}
 		if len(samples) == 0 {
-			result["system_hints"] = map[string]string{
-				"note": "该角色暂无对话样本，无需重试，直接进入下一步",
-			}
+			result["hint"] = "该角色暂无对话样本，无需重试，直接进入下一步"
 		}
 		return json.Marshal(result)
 	}

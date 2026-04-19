@@ -35,7 +35,15 @@ Markdown 格式。第一行必须是 `# 书名`，其后必须用 `## 标题名`
 
 ### 3. 生成 Characters
 
-JSON 数组，每角色含：name、aliases、role、description、arc、traits。
+JSON 数组，每角色字段类型**严格如下**，不得改写为 object：
+
+- `name`: string
+- `aliases`: string[]（别名/称号，无则省略）
+- `role`: string（主角 / 反派 / 导师 / 配角 等）
+- `description`: string（一段整体描述，跨卷弧线也揉进这里讲完）
+- `arc`: **string**（整段角色弧线描述，不是 `{start/middle/end}` 对象。跨卷弧线在同一段文字里用"前期…中期…后期…"表述）
+- `traits`: **string[]**（特质字符串数组，如 `["冷静","多疑","重情"]`，不是 `{trait: ...}` 对象）
+- `tier`: string（可选，`core` / `important` / `secondary` / `decorative`）
 
 要求：主角和重要配角的弧线能跨卷演化；关系线要有长期张力；围绕核心兑现承诺设计，避免堆设定名词。
 
@@ -66,7 +74,7 @@ JSON 数组，每条含：category、rule、boundary。
 
 调用 `save_foundation(type="layered_outline", scale="long", content=<JSON数组>)`。
 
-**注意**：layered_outline / characters / world_rules 的 content 直接传 JSON 数组，不要手动转义成字符串。
+**注意**：layered_outline / characters / world_rules 的 content 直接传 JSON 数组，不要手动转义成字符串。JSON 字符串值内部**所有**双引号必须转义为 `\"`、换行为 `\n`、制表符为 `\t`，禁止出现字面双引号或控制字符。工具解析失败会返回 `parse xxx JSON (line L col C)` 精确定位错误位置，看到此错误时**完整重写**该段 JSON，不要尝试局部打补丁。
 
 ### 6. 保存指南针
 

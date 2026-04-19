@@ -97,32 +97,13 @@ func (o *observer) finalize() {
 }
 
 // emitAndLog 用于调用类事件的"开始"态：发给 TUI 但不写入 runtime queue，
-// 避免 replay 时"开始一行、完成又一行"重复。只记一条 slog 用于追溯。
+// 避免 replay 时"开始一行、完成又一行"重复。slog 由 host.emitEvent 统一记录。
 func (o *observer) emitAndLog(ev Event) {
-	level := slog.LevelInfo
-	switch ev.Level {
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	}
-	slog.Log(context.Background(), level, ev.Summary, "module", "event", "category", ev.Category, "agent", ev.Agent)
 	o.emitEv(ev)
 }
 
-// persistEvent 将事件写入 runtime queue 和 slog 日志。
+// persistEvent 把事件写入 runtime queue（slog 由 host.emitEvent 统一记录）。
 func (o *observer) persistEvent(ev Event) {
-	// slog 日志 — 所有关键事件都记录,出问题时可追溯
-	level := slog.LevelInfo
-	switch ev.Level {
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	}
-	slog.Log(context.Background(), level, ev.Summary, "module", "event", "category", ev.Category, "agent", ev.Agent)
-
-	// runtime queue — headless 恢复用
 	if o.store == nil || o.store.Runtime == nil {
 		return
 	}

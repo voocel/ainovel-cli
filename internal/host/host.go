@@ -333,6 +333,20 @@ func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
 
 func (h *Host) emitEvent(ev Event) {
 	defer func() { recover() }()
+	// 所有事件的唯一 slog 入口。observer 翻译的 agentcore 事件和 Host 自发的
+	// SYSTEM 事件（Start/Abort/Resume…）都在这里落日志，避免 ESC abort 与外部
+	// 终止在 tui.log 上无法区分。
+	if ev.Summary != "" {
+		level := slog.LevelInfo
+		switch ev.Level {
+		case "warn":
+			level = slog.LevelWarn
+		case "error":
+			level = slog.LevelError
+		}
+		slog.Log(context.Background(), level, ev.Summary,
+			"module", "event", "category", ev.Category, "agent", ev.Agent)
+	}
 	select {
 	case h.events <- ev:
 	default:

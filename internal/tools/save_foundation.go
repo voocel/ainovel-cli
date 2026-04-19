@@ -71,6 +71,10 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 			"写作阶段禁止使用 %s 全量覆盖大纲。请使用 expand_arc 展开骨架弧，或 append_volume 追加新卷", a.Type)
 	}
 
+	decode := func(typeName string, out any) error {
+		return decodeFoundationJSON(typeName, content, out)
+	}
+
 	switch a.Type {
 	case "premise":
 		name := domain.ExtractNovelNameFromPremise(content)
@@ -85,8 +89,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "outline":
 		var entries []domain.OutlineEntry
-		if err := json.Unmarshal([]byte(content), &entries); err != nil {
-			return nil, fmt.Errorf("parse outline JSON: %w", err)
+		if err := decode("outline", &entries); err != nil {
+			return nil, err
 		}
 		if err := t.store.Outline.SaveOutline(entries); err != nil {
 			return nil, fmt.Errorf("save outline: %w", err)
@@ -102,8 +106,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "layered_outline":
 		var volumes []domain.VolumeOutline
-		if err := json.Unmarshal([]byte(content), &volumes); err != nil {
-			return nil, fmt.Errorf("parse layered_outline JSON: %w", err)
+		if err := decode("layered_outline", &volumes); err != nil {
+			return nil, err
 		}
 		if err := t.store.Outline.SaveLayeredOutline(volumes); err != nil {
 			return nil, fmt.Errorf("save layered_outline: %w", err)
@@ -124,8 +128,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "characters":
 		var chars []domain.Character
-		if err := json.Unmarshal([]byte(content), &chars); err != nil {
-			return nil, fmt.Errorf("parse characters JSON: %w", err)
+		if err := decode("characters", &chars); err != nil {
+			return nil, err
 		}
 		if err := t.store.Characters.Save(chars); err != nil {
 			return nil, fmt.Errorf("save characters: %w", err)
@@ -134,8 +138,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "world_rules":
 		var rules []domain.WorldRule
-		if err := json.Unmarshal([]byte(content), &rules); err != nil {
-			return nil, fmt.Errorf("parse world_rules JSON: %w", err)
+		if err := decode("world_rules", &rules); err != nil {
+			return nil, err
 		}
 		if err := t.store.World.SaveWorldRules(rules); err != nil {
 			return nil, fmt.Errorf("save world_rules: %w", err)
@@ -147,8 +151,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 			return nil, fmt.Errorf("expand_arc requires volume and arc parameters")
 		}
 		var chapters []domain.OutlineEntry
-		if err := json.Unmarshal([]byte(content), &chapters); err != nil {
-			return nil, fmt.Errorf("parse expand_arc chapters JSON: %w", err)
+		if err := decode("expand_arc chapters", &chapters); err != nil {
+			return nil, err
 		}
 		if err := t.store.ExpandArc(a.Volume, a.Arc, chapters); err != nil {
 			return nil, fmt.Errorf("expand arc: %w", err)
@@ -159,8 +163,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "append_volume":
 		var vol domain.VolumeOutline
-		if err := json.Unmarshal([]byte(content), &vol); err != nil {
-			return nil, fmt.Errorf("parse append_volume JSON: %w", err)
+		if err := decode("append_volume", &vol); err != nil {
+			return nil, err
 		}
 		if err := t.store.AppendVolume(vol); err != nil {
 			return nil, fmt.Errorf("append volume: %w", err)
@@ -187,8 +191,8 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	case "update_compass":
 		var compass domain.StoryCompass
-		if err := json.Unmarshal([]byte(content), &compass); err != nil {
-			return nil, fmt.Errorf("parse compass JSON: %w", err)
+		if err := decode("compass", &compass); err != nil {
+			return nil, err
 		}
 		if err := t.store.Outline.SaveCompass(compass); err != nil {
 			return nil, fmt.Errorf("save compass: %w", err)
@@ -211,12 +215,42 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 	// 返回剩余未完成项，引导 Architect 继续或结束
 	remaining := t.remaining()
 	result["remaining"] = remaining
-	if len(remaining) == 0 {
-		result["system_hints"] = map[string]string{
-			"next_step": "所有基础设定已完成，直接返回结果给 Coordinator",
+	result["foundation_ready"] = len(remaining) == 0
+	return json.Marshal(result)
+}
+
+// decodeFoundationJSON 解析 save_foundation 的 content 字段，失败时附上行列位置
+// 和最常见的修复提示，让 LLM 下一次重试能直接定位而不是盲猜。
+func decodeFoundationJSON(typeName, content string, out any) error {
+	err := json.Unmarshal([]byte(content), out)
+	if err == nil {
+		return nil
+	}
+	hint := `常见原因：字符串值中的双引号未转义为 \", 换行未转义为 \n, 或对象字段间漏了逗号。请整段重新生成一次。`
+	if se, ok := err.(*json.SyntaxError); ok {
+		line, col := offsetToLineCol(content, int(se.Offset))
+		return fmt.Errorf("parse %s JSON (line %d col %d): %w — %s", typeName, line, col, err, hint)
+	}
+	return fmt.Errorf("parse %s JSON: %w — %s", typeName, err, hint)
+}
+
+func offsetToLineCol(s string, offset int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(s) {
+		offset = len(s)
+	}
+	line, col := 1, 1
+	for i := 0; i < offset; i++ {
+		if s[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
 		}
 	}
-	return json.Marshal(result)
+	return line, col
 }
 
 func normalizeFoundationContent(raw json.RawMessage) (string, error) {

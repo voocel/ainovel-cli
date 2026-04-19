@@ -26,7 +26,7 @@ func NewCommitChapterTool(store *store.Store) *CommitChapterTool {
 func (t *CommitChapterTool) Name() string { return "commit_chapter" }
 func (t *CommitChapterTool) Description() string {
 	return "提交章节终稿。加载草稿正文保存为终稿，更新时间线、伏笔、关系、角色状态和进度。" +
-		"返回值包含 next_chapter、review_required、arc_end 等字段和 system_hints（[系统] 前缀的下一步指令）"
+		"返回结构化事实：next_chapter / review_required / arc_end / volume_end / needs_expansion / book_complete / flow 等"
 }
 func (t *CommitChapterTool) Label() string { return "提交章节" }
 
@@ -275,8 +275,13 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		NextArc:        nextArc,
 	}
 
-	// 8. 生成 [系统] 提示 — 替代 orchestrator/policy 层的 FollowUp
-	result.SystemHints = t.buildSystemHints(&result, progress)
+	// 8. 完成态判定：非分层写完最后一章 / 分层最终卷最后一章 → MarkComplete
+	if t.applyCompletion(&result, progress) {
+		result.BookComplete = true
+	}
+	if p, _ := t.store.Progress.Load(); p != nil {
+		result.Flow = string(p.Flow)
+	}
 
 	pending.Stage = domain.CommitStageProgressMarked
 	pending.Result = &result
@@ -356,143 +361,49 @@ func (t *CommitChapterTool) executeRewriteCommit(
 		fmt.Sprintf("chapters/ch%02d.md", chapter), "",
 	)
 
-	// 7. 构造 system_hints
-	verb, doneKey, drainedKey := "重写", "rewrite_done", "rewrite_drained"
+	// 7. 读取 drain 后的 Progress 快照，作为事实返回
+	mode := "rewrite"
 	if progress.Flow == domain.FlowPolishing {
-		verb, doneKey, drainedKey = "打磨", "polish_done", "polish_drained"
+		mode = "polish"
 	}
-	remaining := removeInt(progress.PendingRewrites, chapter)
-	var hints []string
-	if len(remaining) > 0 {
-		hints = append(hints, fmt.Sprintf(
-			"[系统] %s: 第 %d 章已%s并入库。剩余待处理：%v。请继续调 writer 处理下一章。",
-			doneKey, chapter, verb, remaining))
-	} else {
-		next := chapter + 1
-		if p, _ := t.store.Progress.Load(); p != nil {
-			next = p.NextChapter()
-		}
-		hints = append(hints, fmt.Sprintf(
-			"[系统] %s: 第 %d 章已%s并入库。所有待%s章节已处理完毕，请继续写第 %d 章。",
-			drainedKey, chapter, verb, verb, next))
+	latest, _ := t.store.Progress.Load()
+	remaining := []int{}
+	nextChapter := chapter + 1
+	flow := string(domain.FlowWriting)
+	if latest != nil {
+		remaining = append(remaining, latest.PendingRewrites...)
+		nextChapter = latest.NextChapter()
+		flow = string(latest.Flow)
 	}
+	drained := len(remaining) == 0
 
 	return json.Marshal(map[string]any{
 		"chapter":         chapter,
 		"rewritten":       true,
+		"mode":            mode,
 		"word_count":      wordCount,
 		"remaining_queue": remaining,
-		"system_hints":    hints,
+		"queue_drained":   drained,
+		"next_chapter":    nextChapter,
+		"flow":            flow,
 	})
 }
 
-// buildSystemHints 内联原 orchestrator/policy/commit.go 的决策逻辑，
-// 把确定性的下一步指令嵌入返回值，由 Coordinator 直接读取执行。
-func (t *CommitChapterTool) buildSystemHints(result *domain.CommitResult, progress *domain.Progress) []string {
-	var hints []string
-
-	// Writer 大纲偏离反馈
-	if result.Feedback != nil && result.Feedback.Deviation != "" {
-		hints = append(hints, fmt.Sprintf(
-			"[系统] writer_feedback: Writer 在第 %d 章发现大纲偏离。偏离：%s。建议：%s。请评估是否需要调用规划师调整后续大纲。",
-			result.Chapter, result.Feedback.Deviation, result.Feedback.Suggestion))
+// applyCompletion 检查本次 commit 是否使整本书完成；若是则 MarkComplete。
+// 返回 true 表示全书已完成。
+func (t *CommitChapterTool) applyCompletion(result *domain.CommitResult, progress *domain.Progress) bool {
+	if progress == nil {
+		return false
 	}
-
-	// 重写/打磨流程中的章节完成
-	if progress != nil && (progress.Flow == domain.FlowRewriting || progress.Flow == domain.FlowPolishing) {
-		verb, doneKey, drainedKey := "重写", "rewrite_done", "rewrite_drained"
-		if progress.Flow == domain.FlowPolishing {
-			verb, doneKey, drainedKey = "打磨", "polish_done", "polish_drained"
-		}
-		remaining := removeInt(progress.PendingRewrites, result.Chapter)
-		if len(remaining) > 0 {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] %s: 第 %d 章已完成%s。剩余待处理章节: %v。请继续处理下一章。",
-				doneKey, result.Chapter, verb, remaining))
-		} else {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] %s: 第 %d 章已完成%s。所有待%s章节已处理完毕，继续写第 %d 章。",
-				drainedKey, result.Chapter, verb, verb, result.NextChapter))
-		}
-		return hints
-	}
-
-	// 全书完成 — 仅非分层模式。分层模式由下方 arc_end/volume_end 逻辑驱动。
-	if progress != nil && !progress.Layered && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
+	// 非分层模式：写完约定总章数
+	if !progress.Layered && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
 		_ = t.store.Progress.MarkComplete()
-		hints = append(hints, fmt.Sprintf(
-			"[系统] book_complete: 全部 %d 章已写完（共 %d 字）。请输出全书总结并结束，不要再调用 writer。",
-			progress.TotalChapters, progress.TotalWordCount+result.WordCount))
-		return hints
+		return true
 	}
-
-	// 长篇弧/卷结束
-	if result.ArcEnd {
-		if result.VolumeEnd {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] arc_end: 第 %d 卷第 %d 弧结束（卷结束）。请依次：1) 调用 editor 对本弧进行评审 2) 调用 editor 生成弧摘要 3) 调用 editor 生成卷摘要。",
-				result.Volume, result.Arc))
-		} else {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] arc_end: 第 %d 卷第 %d 弧结束。请依次：1) 调用 editor 对本弧进行评审 2) 调用 editor 生成弧摘要。",
-				result.Volume, result.Arc))
-		}
-		if result.VolumeEnd && result.IsFinalVolume {
-			// 最终卷结束 = 全书完成
-			_ = t.store.Progress.MarkComplete()
-			totalWords := 0
-			if progress != nil {
-				totalWords = progress.TotalWordCount + result.WordCount
-			}
-			hints = append(hints, fmt.Sprintf(
-				"[系统] book_complete: 最终卷（第 %d 卷）全部完成（共 %d 字）。完成评审和摘要后，请输出全书总结并结束，不要再调用 writer。",
-				result.Volume, totalWords))
-		} else if result.NeedsNewVolume {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] new_volume_required: 评审和摘要完成后，请调用 architect_long 决定下一步："+
-					"如果故事应该继续，规划下一卷（save_foundation type=append_volume）并更新指南针（type=update_compass）；"+
-					"如果故事应该在第 %d 卷结束，标记为最终卷（save_foundation type=mark_final, volume=%d）并更新指南针。",
-				result.Volume, result.Volume))
-		} else if result.NeedsExpansion {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] expand_arc_required: 评审和摘要完成后，请调用 architect_long 为第 %d 卷第 %d 弧展开详细章节规划（save_foundation type=expand_arc），然后继续写作。",
-				result.NextVolume, result.NextArc))
-		}
-		return hints
+	// 分层模式：最终卷最后一弧结束 = 全书完成
+	if result.ArcEnd && result.VolumeEnd && result.IsFinalVolume {
+		_ = t.store.Progress.MarkComplete()
+		return true
 	}
-
-	// 非弧结束的审阅触发
-	if result.ReviewRequired {
-		hints = append(hints, fmt.Sprintf(
-			"[系统] review_required: %s。请调用 editor 进行全局审阅。",
-			result.ReviewReason))
-		return hints
-	}
-
-	// 默认：继续写下一章
-	if progress != nil {
-		if progress.Layered {
-			// 分层模式：章节数动态增长，不报固定总数
-			hints = append(hints, fmt.Sprintf(
-				"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章。",
-				result.Chapter, result.WordCount, result.NextChapter))
-		} else if progress.TotalChapters > 0 {
-			hints = append(hints, fmt.Sprintf(
-				"[系统] continue: 第 %d 章提交成功（%d 字）。请继续写第 %d 章（共 %d 章）。",
-				result.Chapter, result.WordCount, result.NextChapter, progress.TotalChapters))
-		}
-	}
-
-	return hints
-}
-
-// removeInt 从 slice 中移除指定值。
-func removeInt(s []int, v int) []int {
-	var result []int
-	for _, x := range s {
-		if x != v {
-			result = append(result, x)
-		}
-	}
-	return result
+	return false
 }

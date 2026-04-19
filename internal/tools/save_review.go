@@ -24,7 +24,7 @@ func (t *SaveReviewTool) Name() string { return "save_review" }
 func (t *SaveReviewTool) Description() string {
 	return "保存审阅结果并更新流程状态。verdict 为 accept/polish/rewrite 之一。" +
 		"工具内部执行评分卡门禁（可能升级 verdict），直接更新 Progress 的 flow 和 pending_rewrites。" +
-		"返回 system_hints 指示下一步（重写/打磨/继续写作）"
+		"返回结构化事实：final_verdict / affected_chapters / escalation_reason / next_flow / next_chapter"
 }
 func (t *SaveReviewTool) Label() string { return "保存审阅" }
 
@@ -99,38 +99,29 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 	}
 
 	// 根据最终 verdict 更新 Progress
-	var hints []string
 	progress, _ := t.store.Progress.Load()
+	affected := r.AffectedChapters
 	if finalVerdict == "rewrite" || finalVerdict == "polish" {
-		affected := r.AffectedChapters
 		if len(affected) == 0 && r.Chapter > 0 {
 			affected = []int{r.Chapter}
 		}
 		flow := domain.FlowRewriting
-		verb := "重写"
-		key := "rewrite_required"
 		if finalVerdict == "polish" {
 			flow = domain.FlowPolishing
-			verb = "打磨"
-			key = "polish_required"
 		}
 		_ = t.store.Progress.SetPendingRewrites(affected, r.Summary)
 		_ = t.store.Progress.SetFlow(flow)
-
-		hint := fmt.Sprintf("[系统] %s: 审阅结论为 %s，受影响章节 %v。", key, finalVerdict, affected)
-		if escalationReason != "" {
-			hint += fmt.Sprintf(" （升级原因：%s）", escalationReason)
-		}
-		hint += fmt.Sprintf(" 请立即逐章调 writer 执行%s；队列清空前，即使此前收到 expand_arc_required 或其他提示，也不要调 architect 展开新弧、不要调 writer 写新章节。", verb)
-		hints = append(hints, hint)
 	} else {
 		_ = t.store.Progress.SetFlow(domain.FlowWriting)
-		nextCh := 0
-		if progress != nil {
-			nextCh = progress.NextChapter()
-		}
-		hints = append(hints, fmt.Sprintf(
-			"[系统] review_accepted: 审阅通过，继续写第 %d 章。", nextCh))
+	}
+
+	// 读取更新后的 Progress 快照作为事实
+	latest, _ := t.store.Progress.Load()
+	nextFlow := string(domain.FlowWriting)
+	nextChapter := 0
+	if latest != nil {
+		nextFlow = string(latest.Flow)
+		nextChapter = latest.NextChapter()
 	}
 
 	// 追加 checkpoint
@@ -145,14 +136,16 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 	_, _ = t.store.Checkpoints.Append(scope, "review", "", "")
 
 	return json.Marshal(map[string]any{
-		"saved":        true,
-		"chapter":      r.Chapter,
-		"scope":        r.Scope,
-		"verdict":      r.Verdict,
-		"final_verdict": finalVerdict,
-		"escalation":   escalationReason,
-		"issues":       len(r.Issues),
-		"system_hints": hints,
+		"saved":              true,
+		"chapter":            r.Chapter,
+		"scope":              r.Scope,
+		"verdict":            r.Verdict,
+		"final_verdict":      finalVerdict,
+		"escalation_reason":  escalationReason,
+		"affected_chapters":  affected,
+		"issues":             len(r.Issues),
+		"next_flow":          nextFlow,
+		"next_chapter":       nextChapter,
 	})
 }
 

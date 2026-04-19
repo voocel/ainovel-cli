@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/host/reminder"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -137,7 +138,7 @@ func BuildCoordinator(
 		Model:        writerModel,
 		SystemPrompt: writerPrompt,
 		Tools:        writerTools,
-		MaxTurns:     10,
+		MaxTurns:     20,
 		OnMessage:    onMsg,
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
@@ -186,6 +187,7 @@ func BuildCoordinator(
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool),
 		agentcore.WithMaxTurns(1000),
+		agentcore.WithOnMaxTurns(agentcore.MaxTurnsSoftRestart),
 		agentcore.WithDefaultToolChoice("required"),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
@@ -196,6 +198,8 @@ func BuildCoordinator(
 			Agent:            "coordinator",
 			CommitOnProject:  true,
 		})),
+		agentcore.WithReminderGenerator(reminder.Aggregate(store, reminder.Default()...)),
+		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
 	)
 	return agent, askUser, restore
 }

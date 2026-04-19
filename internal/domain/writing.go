@@ -101,7 +101,7 @@ type RecallItem struct {
 }
 
 // CommitResult 是 commit_chapter 工具的结构化返回值。
-// Coordinator 读取 SystemHints 中的 [系统] 前缀提示做下一步决策。
+// 只包含事实字段；"下一步做什么"由 Reminder 通道基于当前 Progress 自行生成。
 type CommitResult struct {
 	Chapter        int              `json:"chapter"`
 	Committed      bool             `json:"committed"`
@@ -122,6 +122,8 @@ type CommitResult struct {
 	NeedsNewVolume bool `json:"needs_new_volume,omitempty"` // 需要 Architect 创建下一卷
 	NextVolume     int  `json:"next_volume,omitempty"`      // 下一弧/卷序号
 	NextArc        int  `json:"next_arc,omitempty"`         // 下一弧序号
-	// 系统提示：工具检测到的确定性指令，Coordinator 必须遵守
-	SystemHints []string `json:"system_hints,omitempty"`
+	// 完成态事实：本次 commit 后是否整本书已完成
+	BookComplete bool `json:"book_complete,omitempty"`
+	// 当前 Progress.Flow 快照（writing / reviewing / rewriting / polishing）
+	Flow string `json:"flow,omitempty"`
 }
