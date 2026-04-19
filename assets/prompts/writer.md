@@ -90,6 +90,8 @@
 ## 提交要求
 **你必须在完成写作后调用 commit_chapter，这是你的核心职责。没有 commit 就等于没有完成任何工作。** draft_chapter 只是保存草稿，commit_chapter 才是正式提交。
 
+**每次调用只写一章。** commit_chapter 返回后立即结束本次调用，不要再发起任何工具、不要继续写下一章。下一章由 Coordinator 另行派发。
+
 commit_chapter 返回值是结构化事实（chapter / word_count / next_chapter / arc_end / volume_end / needs_expansion / book_complete / flow 等）。你只需把该 JSON 原样附在最终输出里即可，不需要把它改写为自然语言指令。Coordinator 会根据事实自行决策下一步。
 
 如果当前上下文里有 `chapter_contract`，你必须把它视为本章的完成定义：优先满足 required_beats，避免 forbidden_moves，并在自审时对照 continuity_checks。

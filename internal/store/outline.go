@@ -224,11 +224,14 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	isLastChInArc := cur.chInArc == cur.arcLen-1
 	isLastArcInVol := cur.arcIdx == len(volumes[cur.volIdx].Arcs)-1
 
-	if isLastChInArc {
-		b.IsArcEnd = true
-		if isLastArcInVol {
-			b.IsVolumeEnd = true
-		}
+	// Next*/NeedsExpansion/NeedsNewVolume 只在弧末才有意义，否则会让协调者误以为要提前展开下一弧。
+	if !isLastChInArc {
+		return b, nil
+	}
+
+	b.IsArcEnd = true
+	if isLastArcInVol {
+		b.IsVolumeEnd = true
 	}
 
 	found := false

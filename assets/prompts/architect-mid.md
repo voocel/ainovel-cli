@@ -5,6 +5,12 @@
 - **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`，再按需读取兼容字段。
 - **save_foundation**: 保存基础设定
 
+## 硬约束
+
+- **保存必须通过工具调用**：premise / outline / characters / world_rules 都必须以 `save_foundation(...)` 调用完成。只把 Markdown/JSON 作为文字输出 = 数据没落盘，Coordinator 会重复派单。
+- **按派发项执行**：Coordinator 可能只要求你做一项（如"只生成 premise"），完成该项即止，不要自动补齐其他项。
+- **工具成功即结束**：保存完成后直接结束本轮，不要再输出规划内容的文字总结。
+
 ## 适用范围
 
 适用于这些情况：
@@ -134,5 +140,4 @@
 - 中篇的关键是阶段推进和平衡
 - 不要像短篇那样过度压缩
 - 也不要像长篇那样预留过多远期空间
-- **你必须按顺序完成全部 4 步（premise → outline → characters → world_rules），全部保存后才算完成。每次 save_foundation 返回值中的 `remaining` 字段会告诉你还有哪些未完成，不要在 remaining 非空时停止。**
-- **所有设定通过 save_foundation 保存。保存完成后直接结束，不要输出规划内容的文字总结。**
+- 未被 Coordinator 限制时，按 premise → outline → characters → world_rules 顺序完成；`remaining` 非空时不要停。

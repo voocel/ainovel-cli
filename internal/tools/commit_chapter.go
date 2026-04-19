@@ -103,12 +103,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			return t.executeRewriteCommit(a.Chapter, a.Summary, a.Characters, a.KeyEvents,
 				a.HookType, a.DominantStrand, progress)
 		}
-		return json.Marshal(map[string]any{
-			"chapter":   a.Chapter,
-			"skipped":   true,
-			"reason":    fmt.Sprintf("第 %d 章已提交完成，无需重复提交", a.Chapter),
-			"next_step": "该章节已完成，请继续写下一章",
-		})
+		return t.buildSkipResult(a.Chapter, progress)
 	}
 	existingPending, err := t.store.Signals.LoadPendingCommit()
 	if err != nil {
@@ -387,6 +382,45 @@ func (t *CommitChapterTool) executeRewriteCommit(
 		"next_chapter":    nextChapter,
 		"flow":            flow,
 	})
+}
+
+// buildSkipResult 为"章节已完成的重复提交"构造与正常 commit 对齐的事实返回。
+// 协调者据此做后续决策（writer/editor/architect 派发），而不会因为拿到 prose 提示而幻觉。
+func (t *CommitChapterTool) buildSkipResult(chapter int, progress *domain.Progress) (json.RawMessage, error) {
+	_, wordCount, _ := t.store.Drafts.LoadChapterContent(chapter)
+
+	result := domain.CommitResult{
+		Chapter:     chapter,
+		Committed:   true,
+		WordCount:   wordCount,
+		NextChapter: chapter + 1,
+	}
+
+	if progress != nil && progress.Layered {
+		if boundary, _ := t.store.Outline.CheckArcBoundary(chapter); boundary != nil {
+			result.ArcEnd = boundary.IsArcEnd
+			result.VolumeEnd = boundary.IsVolumeEnd
+			result.IsFinalVolume = boundary.IsFinalVolume
+			result.Volume = boundary.Volume
+			result.Arc = boundary.Arc
+			result.NeedsExpansion = boundary.NeedsExpansion
+			result.NeedsNewVolume = boundary.NeedsNewVolume
+			result.NextVolume = boundary.NextVolume
+			result.NextArc = boundary.NextArc
+		}
+		result.ReviewRequired, result.ReviewReason = domain.ShouldArcReview(result.ArcEnd, result.VolumeEnd, result.Volume, result.Arc)
+	} else if progress != nil {
+		result.ReviewRequired, result.ReviewReason = domain.ShouldReview(len(progress.CompletedChapters))
+	}
+
+	if progress != nil {
+		if progress.Phase == domain.PhaseComplete {
+			result.BookComplete = true
+		}
+		result.Flow = string(progress.Flow)
+	}
+
+	return json.Marshal(result)
 }
 
 // applyCompletion 检查本次 commit 是否使整本书完成；若是则 MarkComplete。

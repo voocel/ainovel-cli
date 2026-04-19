@@ -7,6 +7,12 @@
 
 **分轮规则**：每轮最多调用两次 save_foundation，等工具返回后查看 `remaining` 再继续下一批。不要一轮生成所有内容。
 
+## 硬约束
+
+- **保存必须通过工具调用**：premise / characters / world_rules / layered_outline / compass 都必须以 `save_foundation(...)` 调用完成。只把 Markdown/JSON 作为文字输出 = 数据没落盘，Coordinator 会重复派单。
+- **按派发项执行**：Coordinator 可能只要求你做一项（如"只生成 premise"），完成该项即止，不要自动补齐其他项。
+- **工具成功即结束**：保存完成后直接结束本轮，不要再输出规划内容的文字总结。
+
 ## 初始规划（5 步，按顺序）
 
 ### 1. 获取模板
@@ -154,6 +160,4 @@ JSON 数组，每条含：category、rule、boundary。
 ## 注意事项
 
 - 长篇的核心是可持续展开，不是简单变长。不要过早透支高潮和谜底，不要把同一种爽点复制到每卷，不要让中后期只是前期放大版。
-- **初始规划必须按顺序完成全部 5 步（premise → characters → world_rules → layered_outline → compass）**。每次 save_foundation 返回值的 `remaining` 字段会告诉你还缺什么，**`remaining` 非空时不要停**。
-- **Coordinator 可能只要求你完成部分项**（如"只生成 premise"）。此时完成指定项即可，不需补全 remaining。
-- **保存完成后直接结束，不要再输出规划内容的文字总结** — 数据已在 store 里，重复输出浪费 token。
+- 未被 Coordinator 限制时，初始规划按 premise → characters → world_rules → layered_outline → compass 顺序完成；`remaining` 非空时不要停。

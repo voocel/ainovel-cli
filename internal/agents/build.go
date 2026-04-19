@@ -96,32 +96,38 @@ func BuildCoordinator(
 		}
 	}
 
+	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
+		return reminder.NewArchitectStopGuard(store)
+	}
 	architectShort := agentcore.SubAgentConfig{
-		Name:         "architect_short",
-		Description:  "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
-		Model:        architectModel,
-		SystemPrompt: bundle.Prompts.ArchitectShort,
-		Tools:        architectTools,
-		MaxTurns:     8,
-		OnMessage:    onMsg,
+		Name:             "architect_short",
+		Description:      "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
+		Model:            architectModel,
+		SystemPrompt:     bundle.Prompts.ArchitectShort,
+		Tools:            architectTools,
+		MaxTurns:         8,
+		OnMessage:        onMsg,
+		StopGuardFactory: architectStopGuardFactory,
 	}
 	architectMid := agentcore.SubAgentConfig{
-		Name:         "architect_mid",
-		Description:  "中篇规划师：为多阶段但篇幅受控的故事生成可推进的设定与阶段化大纲",
-		Model:        architectModel,
-		SystemPrompt: bundle.Prompts.ArchitectMid,
-		Tools:        architectTools,
-		MaxTurns:     10,
-		OnMessage:    onMsg,
+		Name:             "architect_mid",
+		Description:      "中篇规划师：为多阶段但篇幅受控的故事生成可推进的设定与阶段化大纲",
+		Model:            architectModel,
+		SystemPrompt:     bundle.Prompts.ArchitectMid,
+		Tools:            architectTools,
+		MaxTurns:         10,
+		OnMessage:        onMsg,
+		StopGuardFactory: architectStopGuardFactory,
 	}
 	architectLong := agentcore.SubAgentConfig{
-		Name:         "architect_long",
-		Description:  "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
-		Model:        architectModel,
-		SystemPrompt: bundle.Prompts.ArchitectLong,
-		Tools:        architectTools,
-		MaxTurns:     14,
-		OnMessage:    onMsg,
+		Name:             "architect_long",
+		Description:      "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
+		Model:            architectModel,
+		SystemPrompt:     bundle.Prompts.ArchitectLong,
+		Tools:            architectTools,
+		MaxTurns:         14,
+		OnMessage:        onMsg,
+		StopGuardFactory: architectStopGuardFactory,
 	}
 
 	writerPrompt := bundle.Prompts.Writer
@@ -140,6 +146,9 @@ func BuildCoordinator(
 		Tools:        writerTools,
 		MaxTurns:     20,
 		OnMessage:    onMsg,
+		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
+			return reminder.NewWriterStopGuard(store)
+		},
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
 			// /model 切换 writer 后下一章自动用新窗口。
@@ -178,6 +187,9 @@ func BuildCoordinator(
 		Tools:        editorTools,
 		MaxTurns:     10,
 		OnMessage:    onMsg,
+		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
+			return reminder.NewEditorStopGuard(store)
+		},
 	}
 
 	subagentTool := agentcore.NewSubAgentTool(architectShort, architectMid, architectLong, writer, editor)
