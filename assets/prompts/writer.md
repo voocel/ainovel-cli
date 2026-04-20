@@ -16,6 +16,9 @@
 ### 步骤（严格顺序）
 
 1. **读上下文** — 调用 novel_context(chapter=N)；先读 `working_memory`（本章工作记忆）、`episodic_memory`（长期连续性状态）和 `memory_policy`（当前窗口与刷新策略），再看前情、大纲、角色、伏笔
+   - **断点续跑**：若 `working_memory.chapter_draft.exists=true`，说明上次本章草稿已落盘（可能因 LLM 中断/超时未完成自审和提交）。先用 `read_chapter(chapter=N, source=draft)` 读回草稿，自行判断：
+     - 内容完整且对题（覆盖了 `chapter_plan` 的 required_beats，无明显偏离） → 跳过下面第 3-4 步，直接进入第 5 步自审
+     - 内容残缺、跑题、或与最新 chapter_plan 不一致 → 按正常流程走第 4 步 `draft_chapter(mode=write)` 覆盖重写
 2. **回读前文** — 调用 read_chapter 读前一章结尾（找回语气和节奏），读关键角色的对话片段（保持声音一致）。如果上下文中有 related_chapters 推荐（如伏笔埋设章、久未出场角色），也用 read_chapter 回读关键段落
 3. **构思** — 如果上下文中已有 `chapter_plan`（前次调用已保存），直接跳到第 4 步写作，不要重复规划。否则调用 plan_chapter 保存本章构思和验收契约（chapter contract）
    contract 字段说明：

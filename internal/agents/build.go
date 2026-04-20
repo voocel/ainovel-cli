@@ -109,16 +109,6 @@ func BuildCoordinator(
 		OnMessage:        onMsg,
 		StopGuardFactory: architectStopGuardFactory,
 	}
-	architectMid := agentcore.SubAgentConfig{
-		Name:             "architect_mid",
-		Description:      "中篇规划师：为多阶段但篇幅受控的故事生成可推进的设定与阶段化大纲",
-		Model:            architectModel,
-		SystemPrompt:     bundle.Prompts.ArchitectMid,
-		Tools:            architectTools,
-		MaxTurns:         15,
-		OnMessage:        onMsg,
-		StopGuardFactory: architectStopGuardFactory,
-	}
 	architectLong := agentcore.SubAgentConfig{
 		Name:             "architect_long",
 		Description:      "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
@@ -192,7 +182,7 @@ func BuildCoordinator(
 		},
 	}
 
-	subagentTool := agentcore.NewSubAgentTool(architectShort, architectMid, architectLong, writer, editor)
+	subagentTool := agentcore.NewSubAgentTool(architectShort, architectLong, writer, editor)
 
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(coordinatorModel),

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"sync"
 
@@ -48,6 +49,47 @@ func NewStore(dir string) *Store {
 
 // Dir 返回输出根目录。
 func (s *Store) Dir() string { return s.dir }
+
+// CheckConsistency 对事实层做一次浅层校验，用于启动/恢复时生成 warning。
+// 纯只读：不修正数据，仅返回可读的问题描述。调用方决定如何展示（log / UI）。
+// 为避免扫全目录带来的 IO 开销，只校验 Progress 的关键点：
+//   - 最后一个完成章节必须在 chapters/ 下存在终稿
+//   - Layered 模式下，当前 Volume/Arc 必须能在 layered_outline 中找到
+func (s *Store) CheckConsistency() []string {
+	var warnings []string
+	progress, err := s.Progress.Load()
+	if err != nil || progress == nil {
+		return warnings
+	}
+	if n := len(progress.CompletedChapters); n > 0 {
+		lastCh := progress.CompletedChapters[n-1]
+		if text, err := s.Drafts.LoadChapterText(lastCh); err == nil && text == "" {
+			warnings = append(warnings, fmt.Sprintf("progress 标记第 %d 章已完成，但 chapters/%02d.md 不存在或为空", lastCh, lastCh))
+		}
+	}
+	if progress.Layered && progress.CurrentVolume > 0 && progress.CurrentArc > 0 {
+		volumes, err := s.Outline.LoadLayeredOutline()
+		if err == nil && len(volumes) > 0 {
+			found := false
+			for _, v := range volumes {
+				if v.Index != progress.CurrentVolume {
+					continue
+				}
+				for _, a := range v.Arcs {
+					if a.Index == progress.CurrentArc {
+						found = true
+						break
+					}
+				}
+				break
+			}
+			if !found {
+				warnings = append(warnings, fmt.Sprintf("progress 当前 V%d A%d 在分层大纲中找不到对应条目", progress.CurrentVolume, progress.CurrentArc))
+			}
+		}
+	}
+	return warnings
+}
 
 // FoundationMissing 返回基础设定中尚缺的项，按用于 Prompt/Reminder 的稳定顺序排列。
 // 长篇模式（已有 layered_outline）额外要求 compass。

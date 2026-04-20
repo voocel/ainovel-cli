@@ -325,7 +325,23 @@ func (t *CommitChapterTool) executeRewriteCommit(
 		)
 	}
 
-	// 2. 覆盖终稿
+	// 2. 硬校验：drafts 与现终稿完全相同 → 判定为未真正打磨/重写（writer 跳过了 draft_chapter）
+	// 拒绝 commit，强制 writer 先调 draft_chapter(mode=write) 写入新版本。
+	existingFinal, _ := t.store.Drafts.LoadChapterText(chapter)
+	if existingFinal != "" && existingFinal == content {
+		mode := "重写"
+		if progress != nil && progress.Flow == domain.FlowPolishing {
+			mode = "打磨"
+		}
+		return nil, apperr.New(
+			apperr.CodeToolPreconditionFailed,
+			"tools.commit_chapter.rewrite.no_changes",
+			fmt.Sprintf("第 %d 章 drafts 与 chapters 内容完全相同，未检测到%s改动。请先调 draft_chapter(mode=write, chapter=%d) 写入%s后的新正文，再 commit_chapter。",
+				chapter, mode, chapter, mode),
+		)
+	}
+
+	// 3. 覆盖终稿
 	if err := t.store.Drafts.SaveFinalChapter(chapter, content); err != nil {
 		return nil, apperr.Wrap(err, apperr.CodeStoreWriteFailed, "tools.commit_chapter.rewrite.save_final", "save final chapter")
 	}

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -1136,10 +1135,6 @@ func wrapStreamText(text string, width int) []string {
 			out = append(out, "")
 			continue
 		}
-		if compact, ok := compactJSONLine(raw, width); ok {
-			out = append(out, compact)
-			continue
-		}
 		prefix, rest, nextPrefix := parseWrapPrefix(raw)
 		wrapped := wrapRunes(rest, max(4, width-lipgloss.Width(prefix)))
 		for i, line := range wrapped {
@@ -1151,34 +1146,6 @@ func wrapStreamText(text string, width int) []string {
 		}
 	}
 	return out
-}
-
-func compactJSONLine(line string, width int) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return "", false
-	}
-	if !(strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")) {
-		return "", false
-	}
-
-	var value any
-	if err := json.Unmarshal([]byte(trimmed), &value); err != nil {
-		return "", false
-	}
-
-	compact, err := json.Marshal(value)
-	if err != nil {
-		return "", false
-	}
-
-	text := string(compact)
-	limit := max(24, width-2)
-	if lipgloss.Width(text) > limit {
-		text = truncate(text, limit-1)
-	}
-	return lipgloss.NewStyle().Foreground(colorDim).Render("JSON: ") +
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#8fb7c9")).Render(text), true
 }
 
 func parseWrapPrefix(line string) (prefix, content, nextPrefix string) {

@@ -285,6 +285,13 @@ func (s *WorldStore) SaveReview(r domain.ReviewEntry) error {
 	return s.io.WriteJSON(rel, r)
 }
 
+// HasArcReview 检查指定章节（弧末章）是否已保存 scope=arc 的评审。
+// 读失败按"未保存"处理，让 Router 倾向于重派而不是跳过。
+func (s *WorldStore) HasArcReview(chapter int) bool {
+	rv, err := s.LoadReview(chapter)
+	return err == nil && rv != nil && rv.Scope == "arc"
+}
+
 // LoadReview 读取章节审阅结果。
 func (s *WorldStore) LoadReview(chapter int) (*domain.ReviewEntry, error) {
 	var r domain.ReviewEntry

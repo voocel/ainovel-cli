@@ -43,7 +43,7 @@ type observer struct {
 	agents  map[string]*agentState
 	agentMu sync.Mutex
 
-	streamThinking      bool
+	streamThinking        bool
 	lastThinkingByAgent   map[string]string          // agent → 最近的累积 thinking 文本（用于提取增量 delta）
 	dispatchStarts        map[string]*activeCall     // dispatched agent → 进行中的 DISPATCH 调用
 	currentDispatchTarget string                     // 当前正在执行的 subagent 名（handleToolEnd 时 Args 可能为空）
@@ -487,8 +487,11 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 
 func (o *observer) handleToolEnd(ev agentcore.Event) {
 	agent := agentFromEvent(ev)
+	// 工具结束：把状态切回 idle，否则侧边栏会永远停在 working。
+	// 子代理派遣结束时 dispatchTarget 的状态会在下方另行清除。
 	o.updateAgent(agent, func(a *agentState) {
 		a.tool = ""
+		a.state = "idle"
 	})
 	delete(o.lastThinkingByAgent, agent)
 
@@ -509,6 +512,13 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		if call, ok := o.dispatchStarts[dispatchTarget]; ok {
 			dispatchCall = call
 			delete(o.dispatchStarts, dispatchTarget)
+		}
+		// 派遣结束：把子代理状态复位为 idle（成功/失败/错误路径都需要此清理）
+		if dispatchTarget != "subagent" {
+			o.updateAgent(dispatchTarget, func(a *agentState) {
+				a.state = "idle"
+				a.tool = ""
+			})
 		}
 	}
 
@@ -664,6 +674,30 @@ func (o *observer) ensureSubagentToolStarted(agent, tool string) {
 		a.state = "working"
 		a.tool = tool
 	})
+	// 无 extractor 的工具（read_chapter / check_consistency 等）在流式面板上
+	// 补一行 header，避免面板在这类调用期间空白让用户觉得卡住。
+	// 有 extractor 的工具由 extractor 在首个字段匹配时自行输出 header。
+	if _, has := toolDisplays[tool]; !has {
+		o.ensureStreamParagraphBreak()
+		o.emitStreamDelta(streamHeaderFallback(tool)+"\n", false)
+	}
+}
+
+// streamHeaderFallback 为未配置 extractor 的工具生成流式 header 文本，
+// 让用户即使对轻量读取类工具也能看到"在调用什么"。
+func streamHeaderFallback(tool string) string {
+	label := tool
+	switch tool {
+	case "read_chapter":
+		label = "读章节"
+	case "novel_context":
+		label = "查询上下文"
+	case "check_consistency":
+		label = "一致性检查"
+	case "ask_user":
+		label = "向用户提问"
+	}
+	return "【" + label + "】"
 }
 
 // streamClear 通知 TUI 开启新一轮 streamRound，同时重置与段落分隔相关的状态。

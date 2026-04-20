@@ -21,7 +21,6 @@ var stylesFS embed.FS
 type Prompts struct {
 	Coordinator    string
 	ArchitectShort string
-	ArchitectMid   string
 	ArchitectLong  string
 	Writer         string
 	Editor         string
@@ -76,7 +75,6 @@ func loadPrompts() Prompts {
 	return Prompts{
 		Coordinator:    mustRead(promptsFS, "prompts/coordinator.md"),
 		ArchitectShort: mustRead(promptsFS, "prompts/architect-short.md"),
-		ArchitectMid:   mustRead(promptsFS, "prompts/architect-mid.md"),
 		ArchitectLong:  mustRead(promptsFS, "prompts/architect-long.md"),
 		Writer:         mustRead(promptsFS, "prompts/writer.md"),
 		Editor:         mustRead(promptsFS, "prompts/editor.md"),

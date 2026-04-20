@@ -15,6 +15,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/host/flow"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
@@ -31,6 +32,8 @@ type Host struct {
 	askUser       *tools.AskUserTool
 	writerRestore *ctxpack.WriterRestorePack
 	observer      *observer
+	router        *flow.Dispatcher
+	routerDetach  func()
 	usage         *UsageTracker
 
 	events   chan Event
@@ -94,6 +97,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		lifecycle:     lifecycleIdle,
 	}
 	h.observer = newObserver(coordinator, store, h.emitEvent, h.emitDelta, h.emitClear)
+	h.router = flow.NewDispatcher(coordinator, store)
+	h.routerDetach = h.router.Attach()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
@@ -131,9 +136,15 @@ func (h *Host) StartPrepared(promptText string) error {
 
 	slog.Info("开始创作", "module", "host", "prompt_len", len(promptText))
 	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "开始创作", Level: "info"})
+	// 先重置去重并启用路由，再启动 Prompt，避免首轮事件先于 Enable 抵达
+	h.router.ResetDedupe()
+	h.router.Enable()
 	if err := h.coordinator.Prompt(promptText); err != nil {
 		return fmt.Errorf("prompt: %w", err)
 	}
+	// 主动派发一次首条指令：若已进入写作阶段（Phase=Writing），Host 立即下达；
+	// 规划阶段 Route 返回 nil，无副作用。
+	h.router.Dispatch()
 
 	h.mu.Lock()
 	h.lifecycle = lifecycleRunning
@@ -162,10 +173,18 @@ func (h *Host) Resume() (string, error) {
 
 	slog.Info("恢复创作", "module", "host", "label", label)
 	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "恢复创作: " + label, Level: "info"})
+	for _, w := range h.store.CheckConsistency() {
+		slog.Warn("一致性告警", "module", "host", "detail", w)
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "一致性告警: " + w, Level: "warn"})
+	}
 	h.refreshWriterRestore()
+	h.router.ResetDedupe()
+	h.router.Enable()
 	if err := h.coordinator.Prompt(prompt); err != nil {
 		return "", fmt.Errorf("resume prompt: %w", err)
 	}
+	// 主动派发一次首条指令，避免 Coordinator 对恢复 prompt 只回文字而 StopGuard 反复拦截。
+	h.router.Dispatch()
 
 	h.mu.Lock()
 	h.lifecycle = lifecycleRunning
@@ -240,6 +259,10 @@ func (h *Host) Abort() bool {
 // Close 终止 coordinator 并关闭事件通道。
 func (h *Host) Close() {
 	h.coordinator.AbortSilent()
+	if h.routerDetach != nil {
+		h.routerDetach()
+		h.routerDetach = nil
+	}
 	h.closeOnce.Do(func() {
 		close(h.done)
 		close(h.events)
@@ -322,12 +345,12 @@ func (h *Host) waitDone() {
 
 // ── 通道 ──
 
-func (h *Host) Events() <-chan Event       { return h.events }
-func (h *Host) Stream() <-chan string       { return h.streamCh }
+func (h *Host) Events() <-chan Event         { return h.events }
+func (h *Host) Stream() <-chan string        { return h.streamCh }
 func (h *Host) StreamClear() <-chan struct{} { return h.clearCh }
-func (h *Host) Done() <-chan struct{}       { return h.done }
-func (h *Host) Dir() string                { return h.store.Dir() }
-func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
+func (h *Host) Done() <-chan struct{}        { return h.done }
+func (h *Host) Dir() string                  { return h.store.Dir() }
+func (h *Host) AskUser() *tools.AskUserTool  { return h.askUser }
 
 // ── 事件发射 ──
 

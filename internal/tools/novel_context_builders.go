@@ -180,6 +180,17 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	}
 	state.chapterPlan = chapterPlan
 
+	// 暴露 draft 是否已存在的事实：让 writer 被重派时能自行判断跳过重写还是覆盖。
+	// 只暴露 exists + word_count，不注入正文（正文让 writer 按需用 read_chapter 拉）。
+	if _, draftWords, draftErr := t.store.Drafts.LoadChapterContent(chapter); draftErr == nil && draftWords > 0 {
+		envelope.Working["chapter_draft"] = map[string]any{
+			"exists":     true,
+			"word_count": draftWords,
+		}
+	} else if draftErr != nil {
+		warn("chapter_draft", draftErr)
+	}
+
 	foreshadow, foreshadowErr := t.store.World.LoadActiveForeshadow()
 	warn("foreshadow_ledger", foreshadowErr)
 	state.foreshadow = foreshadow
