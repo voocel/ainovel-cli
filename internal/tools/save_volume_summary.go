@@ -25,6 +25,10 @@ func (t *SaveVolumeSummaryTool) Description() string {
 }
 func (t *SaveVolumeSummaryTool) Label() string { return "保存卷摘要" }
 
+// 写工具，禁止并发。
+func (t *SaveVolumeSummaryTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *SaveVolumeSummaryTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *SaveVolumeSummaryTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("volume", schema.Int("卷号")).Required(),

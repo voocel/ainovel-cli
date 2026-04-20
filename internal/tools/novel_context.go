@@ -51,6 +51,10 @@ func (t *ContextTool) Description() string {
 }
 func (t *ContextTool) Label() string { return "加载上下文" }
 
+// 纯读工具，可被并发调度。
+func (t *ContextTool) ReadOnly(_ json.RawMessage) bool        { return true }
+func (t *ContextTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
+
 func (t *ContextTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Coordinator 用于判断下一步）；传入则额外返回该章的写作上下文（Writer 用）")),

@@ -26,6 +26,10 @@ func (t *CheckConsistencyTool) Description() string {
 }
 func (t *CheckConsistencyTool) Label() string { return "一致性检查" }
 
+// 只读工具（仅追加 checkpoint 事件，不改状态），可被并发调度。
+func (t *CheckConsistencyTool) ReadOnly(_ json.RawMessage) bool        { return true }
+func (t *CheckConsistencyTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
+
 func (t *CheckConsistencyTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("要检查的章节号")).Required(),

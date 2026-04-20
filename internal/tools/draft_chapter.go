@@ -28,6 +28,10 @@ func (t *DraftChapterTool) Description() string {
 }
 func (t *DraftChapterTool) Label() string { return "写入章节" }
 
+// 写工具，禁止并发（读-改-写竞态）。
+func (t *DraftChapterTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *DraftChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *DraftChapterTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号")).Required(),

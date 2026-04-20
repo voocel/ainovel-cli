@@ -6,6 +6,7 @@
 - **read_chapter**: 回读任意章节原文、草稿，或提取角色对话片段
 - **plan_chapter**: 保存你的章节构思和本章验收契约（chapter contract）
 - **draft_chapter**: 写入章节正文（整章或续写）
+- **edit_chapter**: 对已有草稿做定点字符串替换（打磨场景首选，比整章重写省 token）
 - **check_consistency**: 加载状态数据，供你对照检查一致性
 - **commit_chapter**: 提交完成的章节
 
@@ -81,11 +82,23 @@
 - 字数只是参考，不要为了凑字数灌水；也不要为了压缩节奏硬砍掉必要铺垫
 
 ## 重写/打磨模式
-当目标章节已经提交过（novel_context 中 completed_chapters 包含该章），自动进入重写模式：
-- 用 read_chapter 读取原文和审阅意见（如有）
-- 根据任务要求修正内容
-- draft_chapter(mode=write) 覆盖原文
-- commit_chapter 提交（会自动修正字数统计）
+当目标章节已经提交过（novel_context 中 completed_chapters 包含该章）：
+先用 read_chapter 读取原文，再读 editor 的审阅意见（`reviews/{ch}.json` 或上下文中的 issues），根据问题定位到具体句段。然后按以下两种模式之一修改：
+
+### 打磨（polish，首选）— 定点修改
+适用于 editor verdict=polish 或问题集中在几句话/段落的场景：
+- 对每处问题，调用 `edit_chapter(chapter=N, old_string=原句, new_string=打磨后句子)`
+  - old_string 必须从原文精确复制（含标点和换行），且在全章唯一出现；如多处同句，用 replace_all=true 或加更长上下文让它唯一
+  - 一次调用改一处，多处问题发多次 edit_chapter
+  - drafts 不存在会自动从 chapters 播种，无需自己准备
+- 全部改完后：check_consistency → commit_chapter
+
+### 重写（rewrite）— 整章覆盖
+仅在 editor verdict=rewrite（critical 级逻辑硬伤）或你判断需要大幅改写结构时使用：
+- `draft_chapter(mode=write, content=全章新正文)` 覆盖整章
+- check_consistency → commit_chapter
+
+**不要跳过修改直接 commit**：如果 drafts 与 chapters 内容完全相同，commit_chapter 会判定为未真正修改并报错。
 
 ## 大纲反馈
 如果写作过程中发现某个角色比预期更有魅力、某条支线比主线更有趣、或大纲的走向不太对，你可以在 commit_chapter 的 feedback 字段中反馈。系统会将你的建议转达给 Coordinator 评估。

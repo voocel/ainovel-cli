@@ -26,6 +26,10 @@ func (t *SaveArcSummaryTool) Description() string {
 }
 func (t *SaveArcSummaryTool) Label() string { return "保存弧摘要" }
 
+// 写工具，禁止并发。
+func (t *SaveArcSummaryTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *SaveArcSummaryTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *SaveArcSummaryTool) Schema() map[string]any {
 	snapshotSchema := schema.Object(
 		schema.Property("name", schema.String("角色名")).Required(),

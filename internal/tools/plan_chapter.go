@@ -25,6 +25,10 @@ func (t *PlanChapterTool) Description() string {
 }
 func (t *PlanChapterTool) Label() string { return "规划章节" }
 
+// 写工具，禁止并发。
+func (t *PlanChapterTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *PlanChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *PlanChapterTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号")).Required(),

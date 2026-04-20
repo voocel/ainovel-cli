@@ -28,6 +28,10 @@ func (t *SaveReviewTool) Description() string {
 }
 func (t *SaveReviewTool) Label() string { return "保存审阅" }
 
+// 写工具（同时更新 reviews/ 与 Progress 的 PendingRewrites/Flow），禁止并发。
+func (t *SaveReviewTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *SaveReviewTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *SaveReviewTool) Schema() map[string]any {
 	issueSchema := schema.Object(
 		schema.Property("type", schema.Enum("问题维度", "consistency", "character", "pacing", "continuity", "foreshadow", "hook", "aesthetic")).Required(),

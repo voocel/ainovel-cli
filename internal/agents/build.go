@@ -43,6 +43,7 @@ func BuildCoordinator(
 		readChapter,
 		tools.NewPlanChapterTool(store),
 		tools.NewDraftChapterTool(store),
+		tools.NewEditChapterTool(store),
 		tools.NewCheckConsistencyTool(store),
 		tools.NewCommitChapterTool(store),
 	}

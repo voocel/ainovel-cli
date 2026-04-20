@@ -30,6 +30,10 @@ func (t *CommitChapterTool) Description() string {
 }
 func (t *CommitChapterTool) Label() string { return "提交章节" }
 
+// 写工具（跨域原子操作：草稿→终稿→摘要→进度→checkpoint），禁止并发。
+func (t *CommitChapterTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *CommitChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *CommitChapterTool) Schema() map[string]any {
 	timelineSchema := schema.Object(
 		schema.Property("time", schema.String("故事内时间")).Required(),

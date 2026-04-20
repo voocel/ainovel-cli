@@ -25,6 +25,10 @@ func (t *ReadChapterTool) Description() string {
 }
 func (t *ReadChapterTool) Label() string { return "读取章节" }
 
+// 纯读工具，可被并发调度（editor 审阅时常一次读多章）。
+func (t *ReadChapterTool) ReadOnly(_ json.RawMessage) bool        { return true }
+func (t *ReadChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
+
 func (t *ReadChapterTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号（读单章时必填）")),

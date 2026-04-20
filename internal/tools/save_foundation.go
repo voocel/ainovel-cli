@@ -25,6 +25,10 @@ func (t *SaveFoundationTool) Description() string {
 }
 func (t *SaveFoundationTool) Label() string { return "保存设定" }
 
+// 写工具（跨域更新 Outline/Progress/Characters），禁止并发。
+func (t *SaveFoundationTool) ReadOnly(_ json.RawMessage) bool        { return false }
+func (t *SaveFoundationTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
+
 func (t *SaveFoundationTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "expand_arc", "append_volume", "update_compass", "mark_final")).Required(),
