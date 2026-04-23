@@ -871,13 +871,36 @@ func parseSubagentResultError(result json.RawMessage) string {
 	if len(result) == 0 {
 		return ""
 	}
-	var payload struct {
+	// 主流错误：{"error": "..."} 对象（unknown agent / invalid model / 子代理执行失败）
+	var obj struct {
 		Error string `json:"error"`
 	}
-	if json.Unmarshal(result, &payload) != nil {
-		return ""
+	if err := json.Unmarshal(result, &obj); err == nil && obj.Error != "" {
+		return obj.Error
 	}
-	return payload.Error
+	// 兼容 agentcore SubAgentTool 的裸字符串错误返回：
+	// "Invalid parameters: ..." / "background mode requires ..." / "Too many parallel tasks ..."
+	// 这些是 tool 层参数校验失败，is_error=false 但内容是错误说明，需识别为错误避免误判为成功。
+	var s string
+	if json.Unmarshal(result, &s) == nil && isSubagentErrorString(s) {
+		return s
+	}
+	return ""
+}
+
+var subagentErrorPrefixes = []string{
+	"Invalid parameters",
+	"background mode requires",
+	"Too many parallel tasks",
+}
+
+func isSubagentErrorString(s string) bool {
+	for _, p := range subagentErrorPrefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseSubagentArgs(args json.RawMessage) subagentInvocation {
