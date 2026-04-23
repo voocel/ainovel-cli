@@ -45,10 +45,22 @@ func renderTopBar(snap host.UISnapshot, width int, spinnerFrame string) string {
 	if !ok {
 		color = colorDim
 	}
-	capsule := statusCapsule.Foreground(lipgloss.Color("#1c1a14")).Background(color).Render(label)
-
+	disp, ok := statusDisplay[label]
+	if !ok {
+		disp = struct {
+			icon  string
+			label string
+		}{"○", strings.ToLower(label)}
+	}
+	icon := disp.icon
 	if snap.IsRunning && spinnerFrame != "" {
-		capsule = lipgloss.NewStyle().Foreground(colorAccent).Render(spinnerFrame) + " " + capsule
+		icon = spinnerFrame
+	}
+	var status string
+	if icon != "" {
+		status = statusIconStyle.Foreground(color).Render(icon) + " " + statusLabelStyle.Render(disp.label)
+	} else {
+		status = statusLabelStyle.Render(disp.label)
 	}
 
 	innerW := max(12, width-2)
@@ -79,7 +91,7 @@ func renderTopBar(snap host.UISnapshot, width int, spinnerFrame string) string {
 	rightCell := lipgloss.NewStyle().
 		Width(rightW).
 		AlignHorizontal(lipgloss.Right).
-		Render(capsule)
+		Render(status)
 
 	content := leftCell + centerCell + rightCell
 	return topBarStyle.Width(width).

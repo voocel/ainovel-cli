@@ -30,6 +30,22 @@ var statusColors = map[string]lipgloss.AdaptiveColor{
 	"ERROR":    colorError,
 }
 
+// 状态展示：图标 + 中文标签。与整体暖调主题一致，避免实心色块突兀。
+// RUNNING 的 icon 留空，由 spinner frame 动态填充，让动态感融入状态指示本身。
+var statusDisplay = map[string]struct {
+	icon  string
+	label string
+}{
+	"READY":    {"○", "就绪"},
+	"RUNNING":  {"", "运行中"},
+	"REVIEW":   {"◆", "审阅"},
+	"REWRITE":  {"◆", "返工"},
+	"COMPLETE": {"●", "完成"},
+	"PAUSED":   {"⏸", "暂停"},
+	"PAUSING":  {"⏸", "暂停中"},
+	"ERROR":    {"✕", "错误"},
+}
+
 // 事件分类颜色映射
 var categoryColors = map[string]lipgloss.AdaptiveColor{
 	"DISPATCH": colorAccent,
@@ -52,9 +68,11 @@ var (
 			Foreground(colorText).
 			Padding(0, 1)
 
-	statusCapsule = lipgloss.NewStyle().
-			Padding(0, 1).
+	statusIconStyle = lipgloss.NewStyle().
 			Bold(true)
+
+	statusLabelStyle = lipgloss.NewStyle().
+				Foreground(colorText)
 
 	panelTitleStyle = lipgloss.NewStyle().
 			Foreground(colorAccent).
