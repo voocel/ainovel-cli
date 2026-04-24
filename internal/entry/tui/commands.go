@@ -99,6 +99,27 @@ func commandRegistryInstance() commandRegistry {
 				return m, loadReport(m.runtime.Dir(), m.reportSeq)
 			},
 		},
+		{
+			Name:        "import",
+			Group:       "writing",
+			Usage:       "/import <path> [from=N] [regex=...]",
+			Description: "导入外部 txt/md 章节，反推 foundation 后续写。Coordinator 必须空闲。",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.importSeq++
+				state, listenCmd, err := startImport(m.runtime, m.importSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "导入启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.importer = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
 	})
 }
 

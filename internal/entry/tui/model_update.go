@@ -8,6 +8,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/host/imp"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -64,6 +65,8 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleModelSwitchKey)
 	case m.report != nil:
 		return m.handleBlockingModalKey(msg, m.handleReportKey)
+	case m.importer != nil:
+		return m.handleBlockingModalKey(msg, m.handleImportKey)
 	default:
 		return m, nil, false
 	}
@@ -346,6 +349,16 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		boxW, _ := reportModalSize(m.width, m.height)
 		m.report.load(msg.report, paddedModalContentWidth(boxW), msg.finishedAt)
 		return m, nil, true
+	case importEventMsg:
+		if m.importer == nil || msg.reqID != m.importer.reqID {
+			return m, nil, true
+		}
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.importer.appendEvent(msg.ev, paddedModalContentWidth(boxW))
+		if msg.ev.Stage == imp.StageDone || msg.ev.Stage == imp.StageError {
+			return m, nil, true
+		}
+		return m, listenImportEvent(msg.reqID, msg.ch), true
 	case startResultMsg:
 		next, cmd := m.handleStartResultMsg(msg)
 		return next, cmd, true

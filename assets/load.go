@@ -19,11 +19,13 @@ var stylesFS embed.FS
 
 // Prompts 表示嵌入的提示词集合。
 type Prompts struct {
-	Coordinator    string
-	ArchitectShort string
-	ArchitectLong  string
-	Writer         string
-	Editor         string
+	Coordinator      string
+	ArchitectShort   string
+	ArchitectLong    string
+	Writer           string
+	Editor           string
+	ImportFoundation string
+	ImportAnalyzer   string
 }
 
 // Bundle 表示运行所需的静态资源集合。
@@ -73,11 +75,13 @@ func loadReferences(style string) tools.References {
 
 func loadPrompts() Prompts {
 	return Prompts{
-		Coordinator:    mustRead(promptsFS, "prompts/coordinator.md"),
-		ArchitectShort: mustRead(promptsFS, "prompts/architect-short.md"),
-		ArchitectLong:  mustRead(promptsFS, "prompts/architect-long.md"),
-		Writer:         mustRead(promptsFS, "prompts/writer.md"),
-		Editor:         mustRead(promptsFS, "prompts/editor.md"),
+		Coordinator:      mustRead(promptsFS, "prompts/coordinator.md"),
+		ArchitectShort:   mustRead(promptsFS, "prompts/architect-short.md"),
+		ArchitectLong:    mustRead(promptsFS, "prompts/architect-long.md"),
+		Writer:           mustRead(promptsFS, "prompts/writer.md"),
+		Editor:           mustRead(promptsFS, "prompts/editor.md"),
+		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
+		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
 	}
 }
 

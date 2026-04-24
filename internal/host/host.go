@@ -16,6 +16,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/host/flow"
+	"github.com/voocel/ainovel-cli/internal/host/imp"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
@@ -26,6 +27,7 @@ import (
 // 不做任何调度决策，不做空闲续跑。
 type Host struct {
 	cfg           bootstrap.Config
+	bundle        assets.Bundle
 	store         *storepkg.Store
 	models        *bootstrap.ModelSet
 	coordinator   *agentcore.Agent
@@ -84,6 +86,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 
 	h := &Host{
 		cfg:           cfg,
+		bundle:        bundle,
 		store:         store,
 		models:        models,
 		coordinator:   coordinator,
@@ -696,4 +699,27 @@ func truncate(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + "..."
+}
+
+// ImportFrom 启动一次外部小说反推导入：切分 → 反推 foundation → 逐章分析落盘。
+// 与 Coordinator 互斥；导入完成后调用方可立即 Resume() 续写。
+// 返回的事件通道由 imp.Run 关闭，调用方负责消费（满则丢弃以防阻塞分析协程）。
+func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Event, error) {
+	h.mu.Lock()
+	if h.lifecycle == lifecycleRunning {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("coordinator 运行中，请先暂停后再导入")
+	}
+	h.mu.Unlock()
+
+	deps := imp.Deps{
+		Store:      h.store,
+		CommitTool: tools.NewCommitChapterTool(h.store),
+		LLM:        h.models.ForRole("architect"),
+		Prompts: imp.Prompts{
+			Foundation: h.bundle.Prompts.ImportFoundation,
+			Analyzer:   h.bundle.Prompts.ImportAnalyzer,
+		},
+	}
+	return imp.Run(ctx, deps, opts)
 }
