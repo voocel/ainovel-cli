@@ -11,10 +11,28 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/apperr"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/utils"
+	"github.com/voocel/litellm"
 )
+
+// errorKind classifies a runtime error into a stable, short label for log
+// filtering and alert routing. Returns "" when no special tag applies.
+//
+// err is the live error chain (may be nil after JSON serialization); msg is
+// the rendered string fallback used when the chain has been flattened
+// (e.g. inside sub-agent JSON results).
+func errorKind(err error, msg string) string {
+	if err != nil && litellm.IsStreamIdleError(err) {
+		return "stream_idle"
+	}
+	if msg != "" && apperr.IsStreamIdleMessage(msg) {
+		return "stream_idle"
+	}
+	return ""
+}
 
 // 单调递增的事件 ID 计数器；配合时间戳生成稳定 ID。
 var eventIDCounter uint64
@@ -158,7 +176,11 @@ func (o *observer) handle(ev agentcore.Event) {
 	case agentcore.EventError:
 		if ev.Err != nil {
 			fullMsg := ev.Err.Error()
-			slog.Error(fullMsg, "module", "agent", "category", "ERROR")
+			fields := []any{"module", "agent", "category", "ERROR"}
+			if kind := errorKind(ev.Err, fullMsg); kind != "" {
+				fields = append(fields, "kind", kind)
+			}
+			slog.Error(fullMsg, fields...)
 			errEv := Event{
 				Time:     time.Now(),
 				Category: "ERROR",
@@ -585,7 +607,11 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 		summary := fmt.Sprintf("%s 失败", ev.Tool)
 		if len(ev.Result) > 0 {
 			errText := string(ev.Result)
-			slog.Error(fmt.Sprintf("%s → %s: %s", agent, ev.Tool, errText), "module", "agent", "tool", ev.Tool)
+			fields := []any{"module", "agent", "tool", ev.Tool}
+			if kind := errorKind(nil, errText); kind != "" {
+				fields = append(fields, "kind", kind)
+			}
+			slog.Error(fmt.Sprintf("%s → %s: %s", agent, ev.Tool, errText), fields...)
 			if len(errText) > 120 {
 				errText = errText[:120] + "..."
 			}
@@ -608,7 +634,11 @@ func (o *observer) handleToolEnd(ev agentcore.Event) {
 	}
 
 	if errEv, fullErr := o.subagentResultErrorEvent(ev); errEv != nil {
-		slog.Error(fullErr, "module", "agent", "tool", ev.Tool)
+		fields := []any{"module", "agent", "tool", ev.Tool}
+		if kind := errorKind(nil, fullErr); kind != "" {
+			fields = append(fields, "kind", kind)
+		}
+		slog.Error(fullErr, fields...)
 		if dispatchTarget != "" && dispatchTarget != "subagent" {
 			errEv.Agent = dispatchTarget
 		}

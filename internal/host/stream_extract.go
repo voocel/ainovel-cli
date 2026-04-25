@@ -1,275 +1,395 @@
 package host
 
-import "strings"
-
-// toolDisplay 配置一个工具的流式展示：
-// - header: 首个字段输出前打印一次（如"【规划】"）
-// - fields: JSON key → 展示标签；label 为空表示裸流，适合纯内容（draft_chapter.content）
-//
-// 非字符串字段（int / bool / array / object）和未列出的字段一律跳过。
-type toolDisplay struct {
-	header string
-	fields map[string]string
-}
-
-// toolDisplays 定义每个工具在流式面板上展示哪些字段。
-// 只覆盖 Writer/Editor/Architect 写作循环中产生的工具；读类工具和 coordinator 工具不展示。
-var toolDisplays = map[string]*toolDisplay{
-	"draft_chapter": {
-		// 无 header、无 label，整章正文以 markdown 流出
-		fields: map[string]string{"content": ""},
-	},
-	"plan_chapter": {
-		header: "【规划】",
-		fields: map[string]string{
-			"title":       "标题",
-			"goal":        "目标",
-			"conflict":    "冲突",
-			"hook":        "钩子",
-			"emotion_arc": "情绪",
-		},
-	},
-	"commit_chapter": {
-		header: "【章节提交】",
-		fields: map[string]string{
-			"summary": "摘要",
-		},
-	},
-	"save_review": {
-		header: "【审阅】",
-		fields: map[string]string{
-			"verdict": "结论",
-			"summary": "摘要",
-		},
-	},
-	"save_arc_summary": {
-		header: "【弧摘要】",
-		fields: map[string]string{
-			"title":   "标题",
-			"summary": "摘要",
-		},
-	},
-	"save_volume_summary": {
-		header: "【卷摘要】",
-		fields: map[string]string{
-			"title":   "标题",
-			"summary": "摘要",
-		},
-	},
-	// Architect 的主力工具。content 为 Markdown 时（premise）流式输出；
-	// content 为数组 / 对象时（outline / characters / world_rules 等）被状态机自动跳过，
-	// 用户仍能看到 type / scale 标签，知道正在生成什么。
-	"save_foundation": {
-		header: "【设定】",
-		fields: map[string]string{
-			"type":    "类型",
-			"scale":   "规模",
-			"content": "",
-		},
-	},
-}
-
-// jsonFieldExtractor 是一个单遍流式 JSON 解析器，针对扁平对象。
-// 它根据 toolDisplay 配置把目标字段的字符串值以"【标签】 值"的形式流式输出。
-// 非目标字段（无论是 string / 数组 / 对象 / 数值）都被跳过。
-type jsonFieldExtractor struct {
-	display *toolDisplay
-
-	phase  parsePhase
-	keyBuf strings.Builder
-
-	// 跳过结构化值的状态
-	depth      int
-	inInnerStr bool // 跳过结构体时遇到的内部字符串
-	escape     bool
-
-	// \uXXXX 解析缓存
-	uHex []byte
-
-	headerEmitted bool
-	activeLabel   string
-}
-
-type parsePhase int
-
-const (
-	phaseObjectStart  parsePhase = iota // 等待顶层 {
-	phaseBeforeKey                      // 等待下一个 key 的 "
-	phaseInKey                          // 在 key 字符串内
-	phaseAfterKey                       // 等待 :
-	phaseBeforeValue                    // 等待 value 起始字符
-	phaseStreamValue                    // 在目标字段的 string 值内（流式输出）
-	phaseSkipString                     // 在非目标字段的 string 值内（跳过）
-	phaseSkipStruct                     // 在 { 或 [ 值内（深度跳过）
-	phaseSkipPrimitive                  // 在数字 / bool / null 值内
-	phaseDone                           // 顶层 } 已出现
+import (
+	"strings"
+	"unicode/utf8"
 )
 
-// newToolExtractor 为已知工具返回抽取器；未知工具返回 nil。
+// toolDisplays 配置每个工具在流面板上的展示策略。不在此表中的工具不参与流式
+// 渲染（observer 直接丢弃 DeltaToolCall）。
+//
+// 通用模式（nakedKey 为空）：tokenizer 把 LLM 输出的 args JSON 渲染成缩进式
+// "key: value" 文本，嵌套对象/数组按层级缩进，string/number/bool 流式输出。
+// 与 schema 完全解耦——LLM 多输出一个字段就在面板上多一行，不需要任何代码改动。
+//
+// 裸流模式（nakedKey 非空）：仅把目标顶层字段的 string 值原样流出，其它字段
+// 全部跳过。给 draft_chapter 用，让整章 markdown 不被装饰成 "content: # …"。
+var toolDisplays = map[string]toolDisplay{
+	"draft_chapter": {nakedKey: "content"},
+
+	"plan_chapter":        {header: "【规划】"},
+	"commit_chapter":      {header: "【章节提交】"},
+	"save_review":         {header: "【审阅】"},
+	"save_arc_summary":    {header: "【弧摘要】"},
+	"save_volume_summary": {header: "【卷摘要】"},
+	"save_foundation":     {header: "【设定】"},
+}
+
+type toolDisplay struct {
+	header   string
+	nakedKey string
+}
+
+// jsonFieldExtractor 是流式 JSON tokenizer。逐字节驱动状态机，把 LLM 的工具
+// args 流转成可读文本。同一实例只服务一次工具调用，顶层容器闭合后 Done()=true。
+type jsonFieldExtractor struct {
+	cfg toolDisplay
+
+	state pState
+	stack []byte // 容器栈：'O' obj / 'A' arr
+
+	keyBuf strings.Builder
+
+	escape bool
+	uHex   []byte
+
+	started bool // 是否已 emit 过任何字符（用于 header 与 第一个 key 之间的换行）
+
+	done bool
+}
+
+type pState int
+
+const (
+	psRoot         pState = iota
+	psBeforeKey           // obj 内：等待下一个 key 或 }
+	psInKey               // obj 内：解析 key
+	psAfterKey            // obj 内：等待 :
+	psBeforeValue         // 等待 value 起始字符
+	psStringStream        // string 值，流式 emit cooked 字符
+	psStringSkip          // string 值，跳过（裸流模式下非目标字段）
+	psNumberStream        // 数字，流式 emit
+	psNumberSkip          // 数字，跳过
+	psPrimStream          // true/false/null，流式 emit
+	psPrimSkip            // true/false/null，跳过
+	psDone                // 顶层容器已闭合
+)
+
 func newToolExtractor(tool string) *jsonFieldExtractor {
 	cfg, ok := toolDisplays[tool]
 	if !ok {
 		return nil
 	}
-	return &jsonFieldExtractor{display: cfg}
+	return &jsonFieldExtractor{cfg: cfg}
 }
 
-// Done 报告是否已完成整个对象的解析。
-func (e *jsonFieldExtractor) Done() bool { return e.phase == phaseDone }
+func (e *jsonFieldExtractor) Done() bool { return e.done }
 
-// Feed 消费 delta，返回应该输出到面板的字符（已去转义、带标签装饰）。
 func (e *jsonFieldExtractor) Feed(chunk string) string {
-	if e.phase == phaseDone || chunk == "" {
+	if e.done || chunk == "" {
 		return ""
 	}
 	var out strings.Builder
 	for i := 0; i < len(chunk); i++ {
-		c := chunk[i]
-		switch e.phase {
-		case phaseObjectStart:
-			if c == '{' {
-				e.phase = phaseBeforeKey
-			}
-		case phaseBeforeKey:
-			switch c {
-			case '"':
-				e.keyBuf.Reset()
-				e.phase = phaseInKey
-				e.escape = false
-			case '}':
-				e.phase = phaseDone
-				return out.String()
-			}
-		case phaseInKey:
-			if e.escape {
-				e.keyBuf.WriteByte(c)
-				e.escape = false
-			} else if c == '\\' {
-				e.escape = true
-			} else if c == '"' {
-				e.phase = phaseAfterKey
-			} else {
-				e.keyBuf.WriteByte(c)
-			}
-		case phaseAfterKey:
-			if c == ':' {
-				e.phase = phaseBeforeValue
-			}
-		case phaseBeforeValue:
-			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-				continue
-			}
-			key := e.keyBuf.String()
-			label, isTarget := e.display.fields[key]
-			switch c {
-			case '"':
-				if isTarget {
-					e.activeLabel = label
-					e.emitFieldOpen(&out)
-					e.phase = phaseStreamValue
-				} else {
-					e.phase = phaseSkipString
-				}
-				e.escape = false
-			case '{', '[':
-				e.phase = phaseSkipStruct
-				e.depth = 1
-				e.inInnerStr = false
-				e.escape = false
-			default:
-				e.phase = phaseSkipPrimitive
-			}
-		case phaseStreamValue:
-			if e.uHex != nil {
-				e.uHex = append(e.uHex, c)
-				if len(e.uHex) == 4 {
-					if r, ok := parseHex4(e.uHex); ok {
-						out.WriteRune(r)
-					}
-					e.uHex = nil
-				}
-				continue
-			}
-			if e.escape {
-				e.writeUnescaped(&out, c)
-				e.escape = false
-				continue
-			}
-			if c == '\\' {
-				e.escape = true
-				continue
-			}
-			if c == '"' {
-				if e.activeLabel != "" {
-					out.WriteByte('\n')
-				}
-				e.activeLabel = ""
-				e.phase = phaseBeforeKey
-				continue
-			}
-			out.WriteByte(c)
-		case phaseSkipString:
-			if e.escape {
-				e.escape = false
-			} else if c == '\\' {
-				e.escape = true
-			} else if c == '"' {
-				e.phase = phaseBeforeKey
-			}
-		case phaseSkipStruct:
-			if e.inInnerStr {
-				if e.escape {
-					e.escape = false
-				} else if c == '\\' {
-					e.escape = true
-				} else if c == '"' {
-					e.inInnerStr = false
-				}
-			} else {
-				switch c {
-				case '"':
-					e.inInnerStr = true
-				case '{', '[':
-					e.depth++
-				case '}', ']':
-					e.depth--
-					if e.depth == 0 {
-						e.phase = phaseBeforeKey
-					}
-				}
-			}
-		case phaseSkipPrimitive:
-			if c == ',' {
-				e.phase = phaseBeforeKey
-			} else if c == '}' {
-				e.phase = phaseDone
-				return out.String()
-			}
-		case phaseDone:
-			return out.String()
+		e.step(chunk[i], &out)
+		if e.done {
+			break
 		}
 	}
 	return out.String()
 }
 
-// emitFieldOpen 在一个目标字段的值开始时输出 header（一次性）+ 标签前缀。
-func (e *jsonFieldExtractor) emitFieldOpen(out *strings.Builder) {
-	if !e.headerEmitted {
-		if e.display.header != "" {
-			out.WriteString(e.display.header)
-			out.WriteByte('\n')
-		}
-		e.headerEmitted = true
+// ── 容器栈 / 缩进 ──
+
+func (e *jsonFieldExtractor) push(kind byte) {
+	e.stack = append(e.stack, kind)
+}
+
+func (e *jsonFieldExtractor) pop() {
+	if len(e.stack) == 0 {
+		return
 	}
-	if e.activeLabel != "" {
-		out.WriteString("【")
-		out.WriteString(e.activeLabel)
-		out.WriteString("】 ")
+	e.stack = e.stack[:len(e.stack)-1]
+}
+
+func (e *jsonFieldExtractor) parent() byte {
+	if len(e.stack) == 0 {
+		return 0
+	}
+	return e.stack[len(e.stack)-1]
+}
+
+// writeIndent 写当前缩进。深度 = 嵌套层数 = len(stack)-1（root 容器内部不缩进）。
+func (e *jsonFieldExtractor) writeIndent(out *strings.Builder) {
+	depth := len(e.stack) - 1
+	for range depth {
+		out.WriteString("  ")
 	}
 }
 
-// writeUnescaped 处理 JSON 转义序列。
-func (e *jsonFieldExtractor) writeUnescaped(out *strings.Builder, c byte) {
+// ── 状态机 ──
+
+func (e *jsonFieldExtractor) step(c byte, out *strings.Builder) {
+	switch e.state {
+	case psRoot:
+		switch c {
+		case '{':
+			e.push('O')
+			e.state = psBeforeKey
+		case '[':
+			// 实际不会发生（tool args 总是 obj）；容忍：当 root arr
+			e.push('A')
+			e.state = psBeforeValue
+		}
+	case psBeforeKey:
+		switch c {
+		case '"':
+			e.keyBuf.Reset()
+			e.escape = false
+			e.state = psInKey
+		case '}':
+			e.closeContainer(out)
+		case ' ', '\t', '\n', '\r', ',':
+		}
+	case psInKey:
+		if e.escape {
+			e.keyBuf.WriteByte(c)
+			e.escape = false
+			return
+		}
+		if c == '\\' {
+			e.escape = true
+			return
+		}
+		if c == '"' {
+			e.emitKeyLine(out, e.keyBuf.String())
+			e.state = psAfterKey
+			return
+		}
+		e.keyBuf.WriteByte(c)
+	case psAfterKey:
+		if c == ':' {
+			e.state = psBeforeValue
+		}
+	case psBeforeValue:
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' {
+			return
+		}
+		switch c {
+		case '"':
+			e.beginString(out)
+		case '{':
+			e.beginNested('O', out)
+		case '[':
+			e.beginNested('A', out)
+		case ']', '}':
+			e.closeContainer(out)
+		case 't', 'f', 'n':
+			e.beginPrim(c, out)
+		default:
+			if c == '-' || (c >= '0' && c <= '9') {
+				e.beginNumber(c, out)
+			}
+		}
+	case psStringStream:
+		e.handleStringByte(c, out, false)
+	case psStringSkip:
+		e.handleStringByte(c, out, true)
+	case psNumberStream:
+		if isNumberByte(c) {
+			out.WriteByte(c)
+			return
+		}
+		e.afterValueChar(c, out)
+	case psNumberSkip:
+		if isNumberByte(c) {
+			return
+		}
+		e.afterValueChar(c, out)
+	case psPrimStream:
+		if c >= 'a' && c <= 'z' {
+			out.WriteByte(c)
+			return
+		}
+		e.afterValueChar(c, out)
+	case psPrimSkip:
+		if c >= 'a' && c <= 'z' {
+			return
+		}
+		e.afterValueChar(c, out)
+	case psDone:
+	}
+}
+
+// ── 行渲染 ──
+
+// emitKeyLine 在 obj 内 key 解析完毕时调用，写出 "<lf><indent>key:" 前缀。
+// 裸流模式下不写 key 前缀（key 被记录在 keyBuf 中供 beginString 判断）。
+func (e *jsonFieldExtractor) emitKeyLine(out *strings.Builder, key string) {
+	if e.cfg.nakedKey != "" {
+		return
+	}
+	if !e.started {
+		if e.cfg.header != "" {
+			out.WriteString(e.cfg.header)
+			out.WriteByte('\n')
+		}
+		e.started = true
+	} else {
+		out.WriteByte('\n')
+	}
+	e.writeIndent(out)
+	out.WriteString(key)
+	out.WriteByte(':')
+}
+
+// emitArrayItem 在 arr 内每个元素起始时调用，写出 "<lf><indent>-"。primitive
+// 元素紧跟空格再 emit 值；struct 元素由后续嵌套自然换行处理。
+func (e *jsonFieldExtractor) emitArrayItem(out *strings.Builder) {
+	if e.cfg.nakedKey != "" {
+		return
+	}
+	if !e.started {
+		if e.cfg.header != "" {
+			out.WriteString(e.cfg.header)
+			out.WriteByte('\n')
+		}
+		e.started = true
+	} else {
+		out.WriteByte('\n')
+	}
+	e.writeIndent(out)
+	out.WriteByte('-')
+}
+
+// ── value 起始 ──
+
+func (e *jsonFieldExtractor) beginString(out *strings.Builder) {
+	if e.cfg.nakedKey != "" {
+		// 裸流：仅顶层 obj 中目标 key 的 string 值才输出
+		if e.cfg.nakedKey == e.keyBuf.String() && len(e.stack) == 1 && e.stack[0] == 'O' {
+			e.state = psStringStream
+		} else {
+			e.state = psStringSkip
+		}
+		e.escape = false
+		e.uHex = nil
+		return
+	}
+	// 通用：obj 字段紧跟 "key: "（已 emit "key:"，再补空格）；arr 元素紧跟 "- "
+	if e.parent() == 'A' {
+		e.emitArrayItem(out)
+		out.WriteByte(' ')
+	} else {
+		out.WriteByte(' ')
+	}
+	e.state = psStringStream
+	e.escape = false
+	e.uHex = nil
+}
+
+func (e *jsonFieldExtractor) beginNumber(first byte, out *strings.Builder) {
+	if e.cfg.nakedKey != "" {
+		e.state = psNumberSkip
+		return
+	}
+	if e.parent() == 'A' {
+		e.emitArrayItem(out)
+		out.WriteByte(' ')
+	} else {
+		out.WriteByte(' ')
+	}
+	out.WriteByte(first)
+	e.state = psNumberStream
+}
+
+func (e *jsonFieldExtractor) beginPrim(first byte, out *strings.Builder) {
+	if e.cfg.nakedKey != "" {
+		e.state = psPrimSkip
+		return
+	}
+	if e.parent() == 'A' {
+		e.emitArrayItem(out)
+		out.WriteByte(' ')
+	} else {
+		out.WriteByte(' ')
+	}
+	out.WriteByte(first)
+	e.state = psPrimStream
+}
+
+func (e *jsonFieldExtractor) beginNested(kind byte, out *strings.Builder) {
+	if e.cfg.nakedKey != "" {
+		// 裸流模式不展开嵌套；用栈深度跟踪到匹配 } / ]
+		e.push(kind)
+		if kind == 'O' {
+			e.state = psBeforeKey
+		} else {
+			e.state = psBeforeValue
+		}
+		return
+	}
+	// 通用模式：arr 元素是嵌套结构时，先 emit 单独一行的 "<indent>-"
+	// （obj key 的 ":" 之后无空格，让嵌套的子 key 自然换行到下一行）
+	if e.parent() == 'A' {
+		e.emitArrayItem(out)
+	}
+	e.push(kind)
+	if kind == 'O' {
+		e.state = psBeforeKey
+	} else {
+		e.state = psBeforeValue
+	}
+}
+
+// closeContainer 处理 } 或 ]。
+func (e *jsonFieldExtractor) closeContainer(out *strings.Builder) {
+	e.pop()
+	if len(e.stack) == 0 {
+		// 收尾换行让面板与下一段输出之间有清晰边界
+		if e.started {
+			out.WriteByte('\n')
+		}
+		e.state = psDone
+		e.done = true
+		return
+	}
+	if e.parent() == 'O' {
+		e.state = psBeforeKey
+	} else {
+		e.state = psBeforeValue
+	}
+}
+
+// ── string 流式 ──
+
+func (e *jsonFieldExtractor) handleStringByte(c byte, out *strings.Builder, skipping bool) {
+	if e.uHex != nil {
+		e.uHex = append(e.uHex, c)
+		if len(e.uHex) == 4 {
+			if r, ok := parseHex4(e.uHex); ok && !skipping {
+				var buf [4]byte
+				n := utf8.EncodeRune(buf[:], r)
+				out.Write(buf[:n])
+			}
+			e.uHex = nil
+		}
+		return
+	}
+	if e.escape {
+		e.escape = false
+		if !skipping {
+			writeEscapedByte(out, c)
+		}
+		if c == 'u' {
+			e.uHex = make([]byte, 0, 4)
+		}
+		return
+	}
+	if c == '\\' {
+		e.escape = true
+		return
+	}
+	if c == '"' {
+		e.afterValueDone()
+		return
+	}
+	if !skipping {
+		out.WriteByte(c)
+	}
+}
+
+func writeEscapedByte(out *strings.Builder, c byte) {
 	switch c {
 	case 'n':
 		out.WriteByte('\n')
@@ -283,16 +403,63 @@ func (e *jsonFieldExtractor) writeUnescaped(out *strings.Builder, c byte) {
 		out.WriteByte('\\')
 	case '/':
 		out.WriteByte('/')
-	case 'b':
-		out.WriteByte('\b')
-	case 'f':
-		out.WriteByte('\f')
+	case 'b', 'f':
+		// 退格 / 换页：忽略
 	case 'u':
-		e.uHex = make([]byte, 0, 4)
+		// 由调用方建立 uHex 缓冲；此处不输出
 	default:
 		out.WriteByte('\\')
 		out.WriteByte(c)
 	}
+}
+
+// ── 收尾 ──
+
+// afterValueDone string 闭合（读到结尾的 `"`）后转移到下一态。
+func (e *jsonFieldExtractor) afterValueDone() {
+	e.escape = false
+	e.uHex = nil
+	if len(e.stack) == 0 {
+		e.state = psDone
+		e.done = true
+		return
+	}
+	if e.parent() == 'O' {
+		e.state = psBeforeKey
+	} else {
+		e.state = psBeforeValue
+	}
+}
+
+// afterValueChar number / primitive 的"结束字符"已被读到时按字符决定下一态。
+// 这个字符可能是 , / } / ] / 空白，由本函数转发分发。
+func (e *jsonFieldExtractor) afterValueChar(c byte, out *strings.Builder) {
+	switch c {
+	case '}', ']':
+		e.closeContainer(out)
+	case ',', ' ', '\t', '\n', '\r':
+		if len(e.stack) == 0 {
+			e.state = psDone
+			e.done = true
+			return
+		}
+		if e.parent() == 'O' {
+			e.state = psBeforeKey
+		} else {
+			e.state = psBeforeValue
+		}
+	}
+}
+
+// ── 工具 ──
+
+func isNumberByte(c byte) bool {
+	switch c {
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+		'-', '+', '.', 'e', 'E':
+		return true
+	}
+	return false
 }
 
 func parseHex4(b []byte) (rune, bool) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/voocel/litellm"
 )
 
 const (
@@ -11,10 +13,23 @@ const (
 	CodeProviderAuth            Code = "PROVIDER_AUTH"
 	CodeProviderRateLimit       Code = "PROVIDER_RATE_LIMIT"
 	CodeProviderTimeout         Code = "PROVIDER_TIMEOUT"
+	CodeProviderStreamIdle      Code = "PROVIDER_STREAM_IDLE"
 	CodeProviderNetwork         Code = "PROVIDER_NETWORK"
 	CodeProviderContextOverflow Code = "PROVIDER_CONTEXT_OVERFLOW"
 	CodeProviderResponseInvalid Code = "PROVIDER_RESPONSE_INVALID"
 )
+
+// streamIdleMsgPattern matches the rendered message of a stream-idle abort.
+// Used as a fallback when the original error chain has been serialized away
+// (e.g. inside a sub-agent JSON result).
+const streamIdleMsgPattern = "stream idle timeout"
+
+// IsStreamIdleMessage reports whether s contains the rendered marker of a
+// stream idle-timeout abort. Useful for paths where only the error string
+// survives (sub-agent JSON results, structured event payloads).
+func IsStreamIdleMessage(s string) bool {
+	return strings.Contains(strings.ToLower(s), streamIdleMsgPattern)
+}
 
 // ClassifyProviderError 为运行时 provider 错误补充稳定错误码。
 // 如果错误本身已经带 code，则原样返回。
@@ -37,6 +52,11 @@ func classifyProviderCode(err error) Code {
 	if err == nil {
 		return CodeUnknown
 	}
+	// 流式空闲超时优先于通用 timeout：它是连接卡死，failover 一般能救回，
+	// 而通用 timeout 可能是模型确实在思考。
+	if litellm.IsStreamIdleError(err) {
+		return CodeProviderStreamIdle
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return CodeProviderTimeout
 	}
@@ -44,6 +64,8 @@ func classifyProviderCode(err error) Code {
 	msg := strings.ToLower(err.Error())
 
 	switch {
+	case strings.Contains(msg, streamIdleMsgPattern):
+		return CodeProviderStreamIdle
 	case containsAny(msg, "rate limit", "too many requests", "429"):
 		return CodeProviderRateLimit
 	case containsAny(msg, "deadline exceeded", "timeout", "timed out"):

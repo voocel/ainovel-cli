@@ -15,9 +15,10 @@ import (
 )
 
 var failoverEligibleCodes = map[apperr.Code]bool{
-	apperr.CodeProviderRateLimit: true,
-	apperr.CodeProviderTimeout:   true,
-	apperr.CodeProviderNetwork:   true,
+	apperr.CodeProviderRateLimit:  true,
+	apperr.CodeProviderTimeout:    true,
+	apperr.CodeProviderNetwork:    true,
+	apperr.CodeProviderStreamIdle: true,
 }
 
 // FailoverEvent 表示一次显式 provider 切换。
