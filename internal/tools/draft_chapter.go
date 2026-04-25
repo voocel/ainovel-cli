@@ -33,12 +33,22 @@ func (t *DraftChapterTool) ReadOnly(_ json.RawMessage) bool        { return fals
 func (t *DraftChapterTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
 
 func (t *DraftChapterTool) Schema() map[string]any {
+	// mode 标 required 是为了兼容 OpenAI strict tool calling——strict 模式
+	// 要求所有 properties 都在 required 列表中。原来的"省略 mode 走 write
+	// 默认"行为现在需要模型显式传 mode="write"，Execute 的 default 分支不变。
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号")).Required(),
 		schema.Property("content", schema.String("章节正文")).Required(),
-		schema.Property("mode", schema.Enum("写入模式", "write", "append")),
+		schema.Property("mode", schema.Enum("写入模式", "write", "append")).Required(),
 	)
 }
+
+// StrictSchema 启用 OpenAI 的 strict tool calling，让模型必须严格遵守
+// schema：所有 required 字段必填，arguments 不能"提前 EOT"出现空对象。
+// litellm 透传 strict 字段；OpenAI / xAI 等支持的后端会强制执行，其他后端
+// 按 HTTP/JSON 惯例忽略未知字段。Anthropic/Gemini/Bedrock 走各自的转换链路
+// 自然不会看到这个字段。
+func (t *DraftChapterTool) StrictSchema() bool { return true }
 
 func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var a struct {

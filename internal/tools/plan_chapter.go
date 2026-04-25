@@ -85,6 +85,6 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	return json.Marshal(map[string]any{
 		"planned":   true,
 		"chapter":   plan.Chapter,
-		"next_step": "立即调用 draft_chapter 写入正文，不要重复规划同一章",
+		"next_step": "立即调用 draft_chapter(chapter=本章节号, content=完整正文字符串) 写入正文，不要重复规划同一章",
 	})
 }
