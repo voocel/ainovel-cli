@@ -18,6 +18,7 @@ var toolDisplays = map[string]toolDisplay{
 	"draft_chapter": {nakedKey: "content"},
 
 	"plan_chapter":        {header: "【规划】"},
+	"edit_chapter":        {header: "【打磨】"},
 	"commit_chapter":      {header: "【章节提交】"},
 	"save_review":         {header: "【审阅】"},
 	"save_arc_summary":    {header: "【弧摘要】"},

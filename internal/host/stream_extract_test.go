@@ -154,6 +154,18 @@ func TestExtract_CommitChapter(t *testing.T) {
 	mustContain(t, out, "new_value: 矿场杂役")
 }
 
+// ── edit_chapter：通用模式 + 多行 string ──
+
+func TestExtract_EditChapter(t *testing.T) {
+	in := `{"chapter":24,"old_string":"沈砺低头不语。\n他攥紧了拳头。","new_string":"沈砺没有抬头，喉结滚动一下。\n指节攥得发白。","replace_all":false}`
+	out := feedAll(t, "edit_chapter", in)
+	mustContain(t, out, "【打磨】")
+	mustContain(t, out, "chapter: 24")
+	mustContain(t, out, "old_string: 沈砺低头不语。\n他攥紧了拳头。")
+	mustContain(t, out, "new_string: 沈砺没有抬头，喉结滚动一下。\n指节攥得发白。")
+	mustContain(t, out, "replace_all: false")
+}
+
 // ── 裸流模式 ──
 
 func TestExtract_DraftChapterRawMarkdown(t *testing.T) {

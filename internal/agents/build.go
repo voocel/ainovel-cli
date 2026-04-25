@@ -15,6 +15,12 @@ import (
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
+// subagentMaxRetries 给所有 SubAgentConfig 统一的 LLM retry 上限。
+// 配合 ToolsAreIdempotent=true 让 stream-idle / 503 / 短暂网络抖动这类 retryable
+// 错误能在 subagent 层就近重试，而不是把整个 subagent 抛回 coordinator 重派发。
+// 项目铁律一保证写类工具走 checkpoint+digest 幂等，重试是安全的。
+const subagentMaxRetries = 3
+
 // UsageRecorder 是 BuildCoordinator 可选的用量回调；签名与 OnMessage 一致，
 // 每条 agent 消息都会调一次，由 Host 层负责聚合。nil 表示不追踪。
 type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
@@ -101,24 +107,28 @@ func BuildCoordinator(
 		return reminder.NewArchitectStopGuard(store)
 	}
 	architectShort := agentcore.SubAgentConfig{
-		Name:             "architect_short",
-		Description:      "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
-		Model:            architectModel,
-		SystemPrompt:     bundle.Prompts.ArchitectShort,
-		Tools:            architectTools,
-		MaxTurns:         12,
-		OnMessage:        onMsg,
-		StopGuardFactory: architectStopGuardFactory,
+		Name:               "architect_short",
+		Description:        "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
+		Model:              architectModel,
+		SystemPrompt:       bundle.Prompts.ArchitectShort,
+		Tools:              architectTools,
+		MaxTurns:           12,
+		MaxRetries:         subagentMaxRetries,
+		ToolsAreIdempotent: true,
+		OnMessage:          onMsg,
+		StopGuardFactory:   architectStopGuardFactory,
 	}
 	architectLong := agentcore.SubAgentConfig{
-		Name:             "architect_long",
-		Description:      "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
-		Model:            architectModel,
-		SystemPrompt:     bundle.Prompts.ArchitectLong,
-		Tools:            architectTools,
-		MaxTurns:         20,
-		OnMessage:        onMsg,
-		StopGuardFactory: architectStopGuardFactory,
+		Name:               "architect_long",
+		Description:        "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
+		Model:              architectModel,
+		SystemPrompt:       bundle.Prompts.ArchitectLong,
+		Tools:              architectTools,
+		MaxTurns:           20,
+		MaxRetries:         subagentMaxRetries,
+		ToolsAreIdempotent: true,
+		OnMessage:          onMsg,
+		StopGuardFactory:   architectStopGuardFactory,
 	}
 
 	writerPrompt := bundle.Prompts.Writer
@@ -130,13 +140,15 @@ func BuildCoordinator(
 	restore.Refresh(store)
 
 	writer := agentcore.SubAgentConfig{
-		Name:         "writer",
-		Description:  "创作者：自主完成一章的构思、写作、自审和提交",
-		Model:        writerModel,
-		SystemPrompt: writerPrompt,
-		Tools:        writerTools,
-		MaxTurns:     20,
-		OnMessage:    onMsg,
+		Name:               "writer",
+		Description:        "创作者：自主完成一章的构思、写作、自审和提交",
+		Model:              writerModel,
+		SystemPrompt:       writerPrompt,
+		Tools:              writerTools,
+		MaxTurns:           20,
+		MaxRetries:         subagentMaxRetries,
+		ToolsAreIdempotent: true,
+		OnMessage:          onMsg,
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
 			return reminder.NewWriterStopGuard(store)
 		},
@@ -171,13 +183,15 @@ func BuildCoordinator(
 	}
 
 	editor := agentcore.SubAgentConfig{
-		Name:         "editor",
-		Description:  "审阅者：阅读原文，从结构和审美两个层面发现问题",
-		Model:        editorModel,
-		SystemPrompt: bundle.Prompts.Editor,
-		Tools:        editorTools,
-		MaxTurns:     10,
-		OnMessage:    onMsg,
+		Name:               "editor",
+		Description:        "审阅者：阅读原文，从结构和审美两个层面发现问题",
+		Model:              editorModel,
+		SystemPrompt:       bundle.Prompts.Editor,
+		Tools:              editorTools,
+		MaxTurns:           10,
+		MaxRetries:         subagentMaxRetries,
+		ToolsAreIdempotent: true,
+		OnMessage:          onMsg,
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
 			return reminder.NewEditorStopGuard(store)
 		},
@@ -192,6 +206,7 @@ func BuildCoordinator(
 		agentcore.WithMaxTurns(1000),
 		agentcore.WithOnMaxTurns(agentcore.MaxTurnsSoftRestart),
 		agentcore.WithOnMessage(coordinatorOnMessage),
+		agentcore.WithToolsAreIdempotent(true),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    coordinatorContextWindow,
