@@ -8,6 +8,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/agentcore/subagent"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
@@ -108,7 +109,7 @@ func BuildCoordinator(
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
 		return reminder.NewArchitectStopGuard(store)
 	}
-	architectShort := agentcore.SubAgentConfig{
+	architectShort := subagent.Config{
 		Name:               "architect_short",
 		Description:        "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
 		Model:              architectModel,
@@ -124,7 +125,7 @@ func BuildCoordinator(
 		},
 		StopGuardFactory: architectStopGuardFactory,
 	}
-	architectLong := agentcore.SubAgentConfig{
+	architectLong := subagent.Config{
 		Name:               "architect_long",
 		Description:        "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
 		Model:              architectModel,
@@ -154,7 +155,7 @@ func BuildCoordinator(
 	restore := &ctxpack.WriterRestorePack{}
 	restore.Refresh(store)
 
-	writer := agentcore.SubAgentConfig{
+	writer := subagent.Config{
 		Name:               "writer",
 		Description:        "创作者：自主完成一章的构思、写作、自审和提交",
 		Model:              writerModel,
@@ -198,7 +199,7 @@ func BuildCoordinator(
 		},
 	}
 
-	editor := agentcore.SubAgentConfig{
+	editor := subagent.Config{
 		Name:               "editor",
 		Description:        "审阅者：阅读原文，从结构和审美两个层面发现问题",
 		Model:              editorModel,
@@ -214,14 +215,13 @@ func BuildCoordinator(
 		},
 	}
 
-	subagentTool := agentcore.NewSubAgentTool(architectShort, architectLong, writer, editor)
+	subagentTool := subagent.New(architectShort, architectLong, writer, editor)
 
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
 		agentcore.WithTools(subagentTool, contextTool),
-		agentcore.WithMaxTurns(1000),
-		agentcore.WithOnMaxTurns(agentcore.MaxTurnsSoftRestart),
+		agentcore.WithMaxTurns(100_000),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithToolsAreIdempotent(true),
 		// subagent 是流程主通道；真实错误应显式返回给 Host，而不是在单次 run 内永久禁用工具。
