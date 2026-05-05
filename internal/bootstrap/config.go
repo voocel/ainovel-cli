@@ -14,6 +14,36 @@ import (
 // DefaultContextWindow 模型未在 registry 登记时的兜底窗口大小。
 const DefaultContextWindow = 128000
 
+// CompactRatio 触发上下文压缩的相对阈值：tokens >= window * CompactRatio 时压缩。
+// 0.85 是经验值，给"下一轮 prompt + 大工具结果"留 15% 头部空间，同时让大窗口
+// 模型也能在 85% 主动压缩，避免在 1M 名义窗口下吃满才压（注意力衰退区）。
+//
+// 不暴露给用户配置：与已删除的 context_window 同源——多模型架构下让用户调
+// 数字旋钮反复横跳，不如代码内固定一个合理值。
+const CompactRatio = 0.85
+
+// MinCompactReserve 是 ReserveTokens 的下限。小窗口模型（如 32k 本地 qwen3:8b）
+// 按 0.15 比例算 reserve 仅 4800，单次 commit_chapter 工具响应就能塞 5-8k，
+// 一章正文 8-15k——会出现"压完立刻又超"。8000 兜底保证最坏场景下还有半轮缓冲。
+const MinCompactReserve = 8000
+
+// CompactReserveTokens 按 CompactRatio 反算 ReserveTokens 并应用 MinCompactReserve floor：
+//
+//	threshold = window - reserve = window * CompactRatio
+//	reserve   = max(MinCompactReserve, window * (1 - CompactRatio))
+//
+// 给 agentcore.context.Engine 的 EngineConfig.ReserveTokens 用。
+func CompactReserveTokens(window int) int {
+	if window <= 0 {
+		return 0
+	}
+	reserve := window - int(float64(window)*CompactRatio)
+	if reserve < MinCompactReserve {
+		return MinCompactReserve
+	}
+	return reserve
+}
+
 // ProviderConfig 定义单个 LLM 提供商的凭证。
 type ProviderConfig struct {
 	Type    string   `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini），自定义代理时指定
@@ -107,6 +137,12 @@ type Config struct {
 
 	// 创作参数
 	Style string `json:"style,omitempty"`
+
+	// CompactWindow 是上下文压缩使用的窗口上限：effective = min(模型实际窗口, CompactWindow)。
+	// 用途：1M 名义窗口模型在 200k+ 通常已经注意力衰退，配置 300000 让压缩按 300k 触发，
+	// 提前介入避免性能塌方。0 表示不限上限（用模型真窗口）。
+	// 该配置永远不会让 effective 超过模型真窗口，因此切到小窗口模型也安全。
+	CompactWindow int `json:"compact_window,omitempty"`
 }
 
 // ValidateBase 校验基础配置。
@@ -266,20 +302,28 @@ type ContextWindowSource string
 const (
 	CtxWindowRegistry ContextWindowSource = "registry" // OpenRouter 基线命中
 	CtxWindowDefault  ContextWindowSource = "default"  // 兜底（自定义代理/未知模型）
+	CtxWindowCapped   ContextWindowSource = "capped"   // 模型真窗口被 compact_window 上限收紧
 )
 
-// ResolveContextWindow 按模型名解析上下文窗口：
+// ResolveContextWindow 按模型名解析上下文压缩使用的有效窗口：
 //  1. models.DefaultRegistry 按模型名查询（OpenRouter 基线 + 24h 刷新）
 //  2. 兜底 DefaultContextWindow（自定义代理 / 未知模型）
+//  3. 若配置了 CompactWindow > 0 且小于上一步结果，按 CompactWindow 收紧
 //
-// 不再支持配置文件全局覆盖：本应用是多模型架构，运行时随 /model 切换；
-// 用一个静态 context_window 钉死所有模型违背设计意图。自定义代理 / 未登记
-// 模型如需精确窗口，应在 models.DefaultRegistry 注册条目，而非配置全局值。
+// 注意：返回值仅用于压缩阈值计算，不会缩小 LLM API 真实可发请求长度。
+// CompactWindow 永远不会让 effective 超过模型真窗口，因此切到小窗口模型也安全。
 func (c Config) ResolveContextWindow(modelName string) (int, ContextWindowSource) {
-	if w := models.DefaultRegistry().ResolveContextWindow(modelName); w > 0 {
-		return w, CtxWindowRegistry
+	w := DefaultContextWindow
+	src := CtxWindowDefault
+	if rw := models.DefaultRegistry().ResolveContextWindow(modelName); rw > 0 {
+		w = rw
+		src = CtxWindowRegistry
 	}
-	return DefaultContextWindow, CtxWindowDefault
+	if c.CompactWindow > 0 && c.CompactWindow < w {
+		w = c.CompactWindow
+		src = CtxWindowCapped
+	}
+	return w, src
 }
 
 // LogContextWindowChoice 打印某个角色的窗口决策。source=default 时发 Warn 提示
@@ -287,11 +331,14 @@ func (c Config) ResolveContextWindow(modelName string) (int, ContextWindowSource
 // 触发——若模型实际窗口更大，长篇可能被提前压缩、丢史。
 func LogContextWindowChoice(role, model string, window int, source ContextWindowSource) {
 	attrs := []any{"module", "context", "role", role, "model", model, "window", window, "source", source}
-	if source == CtxWindowDefault {
+	switch source {
+	case CtxWindowDefault:
 		slog.Warn("未识别的模型，使用 128k 兜底窗口（自定义代理或 OpenRouter 未收录）", attrs...)
-		return
+	case CtxWindowCapped:
+		slog.Info("上下文窗口（已被 compact_window 上限收紧）", attrs...)
+	default:
+		slog.Info("上下文窗口", attrs...)
 	}
-	slog.Info("上下文窗口", attrs...)
 }
 
 // CandidateModels 返回某个 provider 下可供切换的模型列表。

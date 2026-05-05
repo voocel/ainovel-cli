@@ -29,7 +29,10 @@ const subagentMaxRetries = 5
 type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
-// 返回 Agent、AskUserTool 和 WriterRestorePack。
+// 返回 Agent、AskUserTool、WriterRestorePack 以及 Coordinator 的 ContextEngine
+// 引用——Host 层 /model 切换时需要直接调 SetContextWindow + SetReserveTokens
+// 联动新模型的窗口（writer/architect/editor 走 ContextManagerFactory 自动重建，
+// 不需要 ref；只有常驻的 coordinator 需要）。
 // Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
 func BuildCoordinator(
 	cfg bootstrap.Config,
@@ -37,7 +40,7 @@ func BuildCoordinator(
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
 	recordUsage UsageRecorder,
-) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack) {
+) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
 	readChapter := tools.NewReadChapterTool(store)
@@ -176,7 +179,7 @@ func BuildCoordinator(
 			return newContextManager(contextManagerConfig{
 				Model:            model,
 				ContextWindow:    window,
-				ReserveTokens:    16384,
+				ReserveTokens:    bootstrap.CompactReserveTokens(window),
 				KeepRecentTokens: 20000,
 				Agent:            "writer",
 				ToolMicrocompact: &corecontext.ToolResultMicrocompactConfig{
@@ -217,6 +220,15 @@ func BuildCoordinator(
 
 	subagentTool := subagent.New(architectShort, architectLong, writer, editor)
 
+	coordinatorEngine := newContextManager(contextManagerConfig{
+		Model:            coordinatorModel,
+		ContextWindow:    coordinatorContextWindow,
+		ReserveTokens:    bootstrap.CompactReserveTokens(coordinatorContextWindow),
+		KeepRecentTokens: 30000,
+		Agent:            "coordinator",
+		CommitOnProject:  true,
+	})
+
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
@@ -227,18 +239,11 @@ func BuildCoordinator(
 		// subagent 是流程主通道；真实错误应显式返回给 Host，而不是在单次 run 内永久禁用工具。
 		agentcore.WithMaxToolErrors(0),
 		agentcore.WithMaxRetries(subagentMaxRetries),
-		agentcore.WithContextManager(newContextManager(contextManagerConfig{
-			Model:            coordinatorModel,
-			ContextWindow:    coordinatorContextWindow,
-			ReserveTokens:    32000,
-			KeepRecentTokens: 30000,
-			Agent:            "coordinator",
-			CommitOnProject:  true,
-		})),
+		agentcore.WithContextManager(coordinatorEngine),
 		agentcore.WithReminderGenerator(reminder.Aggregate(store, reminder.Default()...)),
 		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
 	)
-	return agent, askUser, restore
+	return agent, askUser, restore, coordinatorEngine
 }
 
 type saveFoundationResult struct {

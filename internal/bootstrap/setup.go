@@ -220,6 +220,11 @@ func saveExampleConfig() {
 
   // 上下文窗口由模型名自动解析（见 ~/.ainovel/models-cache.json，每 24h 从
   // OpenRouter 刷新）。自定义代理 / 未登记模型兜底为 128k。
+  //
+  // 可选：上下文压缩使用的窗口上限。effective = min(模型真窗口, compact_window)。
+  // 用途：1M 名义窗口模型在 200k+ 通常已经注意力衰退，配置 300000 让压缩按 300k
+  // 提前触发，避免性能塌方。仅影响压缩阈值，不会缩小 LLM API 实际请求长度。
+  // "compact_window": 300000
 }
 `
 	_ = os.WriteFile(filepath.Join(dir, "config.example.jsonc"), []byte(example), 0o644)

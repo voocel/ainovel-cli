@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
@@ -26,17 +27,18 @@ import (
 // 职责：启动/恢复/干预注入/事件投影/模型管理。
 // 不做任何调度决策，不做空闲续跑。
 type Host struct {
-	cfg           bootstrap.Config
-	bundle        assets.Bundle
-	store         *storepkg.Store
-	models        *bootstrap.ModelSet
-	coordinator   *agentcore.Agent
-	askUser       *tools.AskUserTool
-	writerRestore *ctxpack.WriterRestorePack
-	observer      *observer
-	router        *flow.Dispatcher
-	routerDetach  func()
-	usage         *UsageTracker
+	cfg              bootstrap.Config
+	bundle           assets.Bundle
+	store            *storepkg.Store
+	models           *bootstrap.ModelSet
+	coordinator      *agentcore.Agent
+	coordinatorCtxMgr *corecontext.ContextEngine // 切 default/coordinator 模型时联动 SetContextWindow + SetReserveTokens
+	askUser          *tools.AskUserTool
+	writerRestore    *ctxpack.WriterRestorePack
+	observer         *observer
+	router           *flow.Dispatcher
+	routerDetach     func()
+	usage            *UsageTracker
 
 	events   chan Event
 	streamCh chan string
@@ -79,22 +81,23 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	slog.Info("模型就绪", "module", "boot", "summary", models.Summary())
 
 	usage := NewUsageTracker(models)
-	coordinator, askUser, restore := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record)
+	coordinator, askUser, restore, coordinatorCtxMgr := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record)
 	store.Signals.ClearStaleSignals()
 
 	h := &Host{
-		cfg:           cfg,
-		bundle:        bundle,
-		store:         store,
-		models:        models,
-		coordinator:   coordinator,
-		askUser:       askUser,
-		writerRestore: restore,
-		usage:         usage,
-		events:        make(chan Event, 100),
-		streamCh:      make(chan string, 256),
-		done:          make(chan struct{}, 4),
-		lifecycle:     lifecycleIdle,
+		cfg:               cfg,
+		bundle:            bundle,
+		store:             store,
+		models:            models,
+		coordinator:       coordinator,
+		coordinatorCtxMgr: coordinatorCtxMgr,
+		askUser:           askUser,
+		writerRestore:     restore,
+		usage:             usage,
+		events:            make(chan Event, 100),
+		streamCh:          make(chan string, 256),
+		done:              make(chan struct{}, 4),
+		lifecycle:         lifecycleIdle,
 	}
 	h.observer = newObserver(coordinator, store, h.emitEvent, h.emitDelta, h.emitClear)
 	h.router = flow.NewDispatcher(coordinator, store)
@@ -660,6 +663,29 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 	}
 	window, source := h.cfg.ResolveContextWindow(model)
 	bootstrap.LogContextWindowChoice(logRole, model, window, source)
+
+	// 切到 default/coordinator 时，联动 coordinator engine 的窗口与 reserve。
+	// writer/architect/editor 走 ContextManagerFactory 自动按新模型重建，不需要联动。
+	// 不联动会导致：1M→128k 切换时 coordinator engine 仍按 1M 算 threshold，
+	// 累积 messages 超过 128k 就 API 报错；128k→1M 时阈值被钉在 96k，浪费长上下文。
+	//
+	// 关键：必须用 models.CurrentSelection("coordinator") 拿"coordinator 实际使用"的模型
+	// 算窗口——而不是直接用切换目标的 model。当用户配了 roles.coordinator 单独模型时，
+	// 切 default 不影响 coordinator 实际模型；用切换目标的窗口去 SetContextWindow 会错
+	// 把 coordinator 阈值调到不相干的值（例：default 切 1M 模型时把 200k 的 coordinator
+	// engine 阈值拉到 891k，写超 200k 直接爆 API）。
+	if h.coordinatorCtxMgr != nil && (role == "" || role == "default" || role == "coordinator") {
+		_, coordinatorModel, _ := h.models.CurrentSelection("coordinator")
+		coordinatorWindow, coordSource := h.cfg.ResolveContextWindow(coordinatorModel)
+		h.coordinator.SetContextWindow(coordinatorWindow)
+		h.coordinatorCtxMgr.SetContextWindow(coordinatorWindow)
+		h.coordinatorCtxMgr.SetReserveTokens(bootstrap.CompactReserveTokens(coordinatorWindow))
+		// coordinator 实际模型与切换目标不同（用户切 default 但 coordinator 有专属 role）时，
+		// 上面 LogContextWindowChoice 打的是 default 的窗口，与实际生效值不一致；补一行。
+		if coordinatorModel != model {
+			bootstrap.LogContextWindowChoice("coordinator", coordinatorModel, coordinatorWindow, coordSource)
+		}
+	}
 
 	h.emitEvent(Event{
 		Time:     time.Now(),

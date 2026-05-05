@@ -20,7 +20,7 @@ type contextManagerConfig struct {
 	ExtraStrategies  []corecontext.Strategy
 }
 
-func newContextManager(cfg contextManagerConfig) agentcore.ContextManager {
+func newContextManager(cfg contextManagerConfig) *corecontext.ContextEngine {
 	var sc corecontext.FullSummaryConfig
 	if cfg.Summary != nil {
 		sc = *cfg.Summary
