@@ -52,12 +52,13 @@ func TestCheckArcBoundaryNeedsNewVolume(t *testing.T) {
 	}
 }
 
-func TestCheckArcBoundaryFinalVolume(t *testing.T) {
-	// Final 卷最后一章 → 不触发 NeedsNewVolume（全书结束）
+func TestCheckArcBoundaryLastVolumeRequiresDecision(t *testing.T) {
+	// 单卷最后一章 → 触发 NeedsNewVolume，让 Router 让架构师二选一：
+	// append_volume 续写 / complete_book 收尾。
 	s := setupLayered(t, []domain.VolumeOutline{{
-		Index: 1, Title: "最终卷", Theme: "终局", Final: true,
+		Index: 1, Title: "唯一卷", Theme: "主题",
 		Arcs: []domain.ArcOutline{{
-			Index: 1, Title: "终弧", Goal: "收束",
+			Index: 1, Title: "唯一弧", Goal: "收束",
 			Chapters: []domain.OutlineEntry{{Title: "终章", CoreEvent: "结局", Hook: "无"}},
 		}},
 	}})
@@ -66,11 +67,11 @@ func TestCheckArcBoundaryFinalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckArcBoundary: %v", err)
 	}
-	if b.NeedsNewVolume {
-		t.Fatal("expected NeedsNewVolume=false for Final volume")
+	if !b.NeedsNewVolume {
+		t.Fatal("expected NeedsNewVolume=true at last expanded chapter")
 	}
 	if b.HasNextArc() {
-		t.Fatal("expected no next arc for Final volume")
+		t.Fatal("expected no next arc")
 	}
 }
 
@@ -149,23 +150,9 @@ func TestAppendVolumeValidation(t *testing.T) {
 	}
 }
 
-func TestAppendVolumeBlockedByFinal(t *testing.T) {
-	s := setupLayered(t, []domain.VolumeOutline{{
-		Index: 1, Title: "最终卷", Theme: "终局", Final: true,
-		Arcs: []domain.ArcOutline{{
-			Index: 1, Title: "终弧", Goal: "收束",
-			Chapters: []domain.OutlineEntry{{Title: "终章", CoreEvent: "结局", Hook: "无"}},
-		}},
-	}})
-
-	err := s.AppendVolume(domain.VolumeOutline{
-		Index: 2, Title: "不应存在", Theme: "x",
-		Arcs: []domain.ArcOutline{{Index: 1, Title: "弧", Goal: "g", Chapters: []domain.OutlineEntry{{Title: "ch", CoreEvent: "e", Hook: "h"}}}},
-	})
-	if err == nil {
-		t.Fatal("expected error when appending after Final volume")
-	}
-}
+// 注：原先用 Final 卷拒绝 append 的语义已下沉到 save_foundation 层（Phase=Complete 拒绝），
+// 见 save_foundation_test.go::TestSaveFoundationAppendVolumeRejectsAfterComplete。
+// store 层只保留结构性校验（Index 递增 / 首弧含章节等）。
 
 func TestSaveAndLoadCompass(t *testing.T) {
 	s := NewStore(t.TempDir())

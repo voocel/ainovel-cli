@@ -454,7 +454,9 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 		envelope.Planning["planning_tier"] = runMeta.PlanningTier
 	}
 
-	if layered, err := t.store.Outline.LoadLayeredOutline(); err == nil && len(layered) > 0 {
+	var layered []domain.VolumeOutline
+	if l, err := t.store.Outline.LoadLayeredOutline(); err == nil && len(l) > 0 {
+		layered = l
 		envelope.Planning["layered_outline"] = layered
 		var skeletonArcs []map[string]any
 		for _, v := range layered {
@@ -477,7 +479,9 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 		warn("layered_outline", err)
 	}
 
-	if compass, err := t.store.Outline.LoadCompass(); err == nil && compass != nil {
+	var compass *domain.StoryCompass
+	if c, err := t.store.Outline.LoadCompass(); err == nil && c != nil {
+		compass = c
 		envelope.Planning["compass"] = compass
 	} else {
 		warn("compass", err)
@@ -487,6 +491,34 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 	} else {
 		warn("volume_summaries", err)
 	}
+
+	// completion_signals 把"全书是否该结尾"的关键事实集中呈现，
+	// 让架构师在裁定 complete_book / append_volume 时一眼看到对照面。
+	// 散落在 progress / compass / foreshadow / layered_outline 里靠 LLM 脑算容易漏。
+	envelope.Planning["completion_signals"] = t.completionSignals(layered, compass)
+}
+
+func (t *ContextTool) completionSignals(layered []domain.VolumeOutline, compass *domain.StoryCompass) map[string]any {
+	signals := map[string]any{}
+	if progress, _ := t.store.Progress.Load(); progress != nil {
+		signals["completed_chapters"] = len(progress.CompletedChapters)
+		signals["total_word_count"] = progress.TotalWordCount
+		signals["phase"] = string(progress.Phase)
+	}
+	if len(layered) > 0 {
+		signals["planned_chapters"] = len(domain.FlattenOutline(layered))
+		signals["volumes_total"] = len(layered)
+	}
+	if compass != nil {
+		if compass.EstimatedScale != "" {
+			signals["compass_estimated_scale"] = compass.EstimatedScale
+		}
+		signals["open_threads_count"] = len(compass.OpenThreads)
+	}
+	if active, err := t.store.World.LoadActiveForeshadow(); err == nil {
+		signals["active_foreshadow_count"] = len(active)
+	}
+	return signals
 }
 
 func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelope, warn func(string, error)) {

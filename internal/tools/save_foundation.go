@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -23,7 +22,7 @@ func NewSaveFoundationTool(store *store.Store) *SaveFoundationTool {
 
 func (t *SaveFoundationTool) Name() string { return "save_foundation" }
 func (t *SaveFoundationTool) Description() string {
-	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是唯一持久化入口**：未经此工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / mark_final。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 展开骨架弧的详细章节（需 volume + arc）；append_volume 追加新卷（content 为完整 VolumeOutline JSON，含弧结构）；update_compass 更新终局方向（content 为 StoryCompass JSON）；mark_final 标记指定卷为最终卷（需 volume，content 传空对象 {}）。scale 可选，仅允许 short / mid / long。"
+	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是唯一持久化入口**：未经此工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 展开骨架弧的详细章节（需 volume + arc）；append_volume 追加新卷（content 为完整 VolumeOutline JSON，含弧结构）；update_compass 更新终局方向（content 为 StoryCompass JSON）；complete_book 宣告全书完结（content 传空对象 {}，直接推 Phase=Complete；调用前必须先通过终卷判定清单，且无返工队列）。scale 可选，仅允许 short / mid / long。"
 }
 func (t *SaveFoundationTool) Label() string { return "保存设定" }
 
@@ -33,7 +32,7 @@ func (t *SaveFoundationTool) ConcurrencySafe(_ json.RawMessage) bool { return fa
 
 func (t *SaveFoundationTool) Schema() map[string]any {
 	return schema.Object(
-		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "expand_arc", "append_volume", "update_compass", "mark_final")).Required(),
+		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "expand_arc", "append_volume", "update_compass", "complete_book")).Required(),
 		schema.Property("content", map[string]any{
 			"description": "内容。premise 传 Markdown 字符串；其他类型直接传 JSON 数组或对象即可，也兼容传 JSON 字符串。expand_arc 时传章节数组。",
 		}).Required(),
@@ -168,6 +167,9 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		result["chapters"] = len(chapters)
 
 	case "append_volume":
+		if p, _ := t.store.Progress.Load(); p != nil && p.Phase == domain.PhaseComplete {
+			return nil, fmt.Errorf("全书已完结（phase=complete），不允许追加新卷: %w", errs.ErrToolPrecondition)
+		}
 		var vol domain.VolumeOutline
 		if err := decode("append_volume", &vol); err != nil {
 			return nil, err
@@ -185,26 +187,28 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 			result["chapters"] = chCount
 		}
 
-	case "mark_final":
-		if a.Volume <= 0 {
-			return nil, fmt.Errorf("mark_final requires volume parameter: %w", errs.ErrToolArgs)
+	case "complete_book":
+		// 全书完结的唯一入口：直接推 Phase=Complete。
+		// 仅 Writing 阶段允许，防止规划阶段误调跳过整本写作。
+		// 拒绝有返工队列时调用——保证 PendingRewrites 跑完才能结束。
+		progress, perr := t.store.Progress.Load()
+		if perr != nil {
+			return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, perr)
 		}
-		if err := t.store.Outline.MarkVolumeFinal(a.Volume); err != nil {
-			return nil, fmt.Errorf("mark volume final: %w: %w", errs.ErrStoreWrite, err)
+		if progress == nil {
+			return nil, fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
 		}
-		result["volume"] = a.Volume
-		result["final"] = true
-		// 已展开章节全部写完且无返工时立即推 Phase=Complete；否则让返工流程跑完后
-		// 最后一次 commit 由 applyCompletion 接住（届时 IsFinalVolume 已为 true）。
-		if complete, perr := t.checkBookComplete(); perr != nil {
-			slog.Warn("mark_final 后完成态检查失败", "module", "tool.save_foundation", "err", perr)
-		} else if complete {
-			if cerr := t.store.Progress.MarkComplete(); cerr != nil {
-				return nil, fmt.Errorf("mark complete after mark_final: %w: %w", errs.ErrStoreWrite, cerr)
-			}
-			result["book_complete"] = true
-			result["phase"] = string(domain.PhaseComplete)
+		if progress.Phase != domain.PhaseWriting {
+			return nil, fmt.Errorf("complete_book 仅在 writing 阶段可调用（当前 phase=%s）: %w", progress.Phase, errs.ErrToolPrecondition)
 		}
+		if len(progress.PendingRewrites) > 0 {
+			return nil, fmt.Errorf("还有 %d 章在返工队列中，处理完再调 complete_book: %w", len(progress.PendingRewrites), errs.ErrToolPrecondition)
+		}
+		if err := t.store.Progress.MarkComplete(); err != nil {
+			return nil, fmt.Errorf("mark complete: %w: %w", errs.ErrStoreWrite, err)
+		}
+		result["book_complete"] = true
+		result["phase"] = string(domain.PhaseComplete)
 
 	case "update_compass":
 		var compass domain.StoryCompass
@@ -223,7 +227,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		result["last_updated"] = compass.LastUpdated
 
 	default:
-		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/expand_arc/append_volume/update_compass/mark_final: %w", a.Type, errs.ErrToolArgs)
+		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/expand_arc/append_volume/update_compass/complete_book: %w", a.Type, errs.ErrToolArgs)
 	}
 
 	// checkpoint
@@ -259,8 +263,10 @@ func foundationArtifact(t string) string {
 		return "premise.md"
 	case "outline":
 		return "outline.json"
-	case "layered_outline", "expand_arc", "append_volume", "mark_final":
+	case "layered_outline", "expand_arc", "append_volume":
 		return "layered_outline.json"
+	case "complete_book":
+		return "meta/progress.json"
 	case "characters":
 		return "characters.json"
 	case "world_rules":
@@ -320,30 +326,6 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid content: expected Markdown string or valid JSON value: %w", errs.ErrToolArgs)
 	}
 	return string(raw), nil
-}
-
-// checkBookComplete 判断全书是否已完成：至少一卷标 Final、所有展开章节已写完、
-// 且无返工队列。供 mark_final 落盘后立即推 Phase=Complete。
-func (t *SaveFoundationTool) checkBookComplete() (bool, error) {
-	volumes, err := t.store.Outline.LoadLayeredOutline()
-	if err != nil || !hasFinalVolume(volumes) {
-		return false, err
-	}
-	progress, err := t.store.Progress.Load()
-	if err != nil || progress == nil || len(progress.PendingRewrites) > 0 {
-		return false, err
-	}
-	expanded := len(domain.FlattenOutline(volumes))
-	return expanded > 0 && len(progress.CompletedChapters) >= expanded, nil
-}
-
-func hasFinalVolume(volumes []domain.VolumeOutline) bool {
-	for _, v := range volumes {
-		if v.Final {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *SaveFoundationTool) isWriting() bool {

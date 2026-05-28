@@ -57,7 +57,7 @@ type State struct {
 //  8. 卷末弧摘要有但卷摘要缺失 → editor(volume summary)
 //  9. 下一弧是骨架           → architect_long(expand_arc)
 //
-// 10. 卷末需决策下一卷       → architect_long(append_volume / mark_final)
+// 10. 卷末需决策下一卷       → architect_long(append_volume / complete_book)
 // 11. 其它                  → writer(写 next_chapter)
 func Route(s State) *Instruction {
 	p := s.Progress
@@ -131,8 +131,8 @@ func Route(s State) *Instruction {
 		case b.NeedsNewVolume:
 			return &Instruction{
 				Agent:  "architect_long",
-				Task:   "评估后调用 save_foundation type=append_volume 或 mark_final",
-				Reason: "卷末需决定追加新卷",
+				Task:   "评估后调用 save_foundation type=append_volume（继续写）或 type=complete_book（全书结束）",
+				Reason: "卷末需决定追加新卷或结束全书",
 			}
 		}
 	}

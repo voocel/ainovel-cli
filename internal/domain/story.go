@@ -30,8 +30,7 @@ type Character struct {
 type VolumeOutline struct {
 	Index int          `json:"index"`
 	Title string       `json:"title"`
-	Theme string       `json:"theme"`           // 本卷核心冲突/主题
-	Final bool         `json:"final,omitempty"` // 标记为最终卷
+	Theme string       `json:"theme"` // 本卷核心冲突/主题
 	Arcs  []ArcOutline `json:"arcs"`
 }
 

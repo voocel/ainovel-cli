@@ -225,7 +225,7 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	layeredArgs, _ := json.Marshal(map[string]any{
 		"type": "layered_outline",
 		"content": []map[string]any{{
-			"index": 1, "title": "第一卷", "theme": "起步", "final": true,
+			"index": 1, "title": "第一卷", "theme": "起步",
 			"arcs": []map[string]any{{
 				"index": 1, "title": "首弧", "goal": "目标",
 				"chapters": []map[string]any{{"title": "第一章", "core_event": "开局", "hook": "继续"}},
@@ -235,11 +235,11 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	})
 	tool.Execute(context.Background(), layeredArgs)
 
-	// 尝试在 Final 卷后追加 → 应失败
+	// Index 不递增 → 应失败（结构性校验）
 	appendArgs, _ := json.Marshal(map[string]any{
 		"type": "append_volume",
 		"content": map[string]any{
-			"index": 2, "title": "第二卷", "theme": "不应存在",
+			"index": 1, "title": "重复 Index", "theme": "x",
 			"arcs": []map[string]any{{
 				"index": 1, "title": "弧一", "goal": "目标",
 				"chapters": []map[string]any{{"title": "章", "core_event": "事件", "hook": "钩子"}},
@@ -248,7 +248,38 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	})
 	_, err := tool.Execute(context.Background(), appendArgs)
 	if err == nil {
-		t.Fatal("expected error when appending after Final volume")
+		t.Fatal("expected error when appending volume with non-increasing index")
+	}
+}
+
+// TestSaveFoundationAppendVolumeRejectsAfterComplete 验证 Phase=Complete 后不允许 append_volume。
+// 取代旧的"Final 卷拒绝追加"语义（Final 字段已删除）。
+func TestSaveFoundationAppendVolumeRejectsAfterComplete(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := s.Progress.MarkComplete(); err != nil {
+		t.Fatalf("MarkComplete: %v", err)
+	}
+
+	tool := NewSaveFoundationTool(s)
+	appendArgs, _ := json.Marshal(map[string]any{
+		"type": "append_volume",
+		"content": map[string]any{
+			"index": 1, "title": "尝试续写", "theme": "x",
+			"arcs": []map[string]any{{
+				"index": 1, "title": "弧", "goal": "g",
+				"chapters": []map[string]any{{"title": "章", "core_event": "e", "hook": "h"}},
+			}},
+		},
+	})
+	if _, err := tool.Execute(context.Background(), appendArgs); err == nil {
+		t.Fatal("expected error when appending after Phase=Complete")
 	}
 }
 
@@ -377,8 +408,10 @@ func TestSaveFoundationAcceptsDirectJSONArrayContent(t *testing.T) {
 	}
 }
 
-// markFinalSetup 建一份只有 1 卷 1 弧 2 章的分层大纲，用于 mark_final 系列测试。
-func markFinalSetup(t *testing.T) *store.Store {
+// completeBookSetup 建一份处于 writing 阶段的最小 Store，用于 complete_book 系列测试。
+// complete_book 不校验 layered_outline 章节齐全（判定责任在 LLM 的"完结判定清单"），
+// 工具层只校验 PendingRewrites 为空、progress 已初始化。
+func completeBookSetup(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -388,122 +421,73 @@ func markFinalSetup(t *testing.T) *store.Store {
 	if err := s.Progress.Init("test", 0); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	tool := NewSaveFoundationTool(s)
-	layeredArgs, _ := json.Marshal(map[string]any{
-		"type": "layered_outline",
-		"content": []map[string]any{{
-			"index": 1, "title": "卷一", "theme": "终结",
-			"arcs": []map[string]any{{
-				"index": 1, "title": "唯一弧", "goal": "收束",
-				"chapters": []map[string]any{
-					{"title": "首章", "core_event": "起", "hook": "续"},
-					{"title": "尾章", "core_event": "终", "hook": "完"},
-				},
-			}},
-		}},
-		"scale": "long",
-	})
-	if _, err := tool.Execute(context.Background(), layeredArgs); err != nil {
-		t.Fatalf("Execute layered: %v", err)
-	}
 	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
 	return s
 }
 
-func TestSaveFoundationMarkFinalCompletesBookWhenAllChaptersDone(t *testing.T) {
-	s := markFinalSetup(t)
-
-	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
-		t.Fatalf("MarkChapterComplete 1: %v", err)
-	}
-	if err := s.Progress.MarkChapterComplete(2, 1000, "normal", "main"); err != nil {
-		t.Fatalf("MarkChapterComplete 2: %v", err)
-	}
-
+func TestSaveFoundationCompleteBookPushesPhaseComplete(t *testing.T) {
+	s := completeBookSetup(t)
 	tool := NewSaveFoundationTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"type": "mark_final", "volume": 1, "content": map[string]any{},
+		"type": "complete_book", "content": map[string]any{},
 	})
 	res, err := tool.Execute(context.Background(), args)
 	if err != nil {
-		t.Fatalf("Execute mark_final: %v", err)
+		t.Fatalf("Execute complete_book: %v", err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal(res, &result); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
+	_ = json.Unmarshal(res, &result)
 	if result["book_complete"] != true {
 		t.Fatalf("expected book_complete=true, got %+v", result)
 	}
 	if result["phase"] != string(domain.PhaseComplete) {
-		t.Fatalf("expected phase=%s, got %v", domain.PhaseComplete, result["phase"])
+		t.Fatalf("expected phase=complete, got %v", result["phase"])
 	}
-
-	progress, err := s.Progress.Load()
-	if err != nil {
-		t.Fatalf("LoadProgress: %v", err)
-	}
+	progress, _ := s.Progress.Load()
 	if progress.Phase != domain.PhaseComplete {
 		t.Fatalf("expected progress.Phase=complete, got %s", progress.Phase)
 	}
 }
 
-func TestSaveFoundationMarkFinalSkipsCompleteWhenChaptersMissing(t *testing.T) {
-	s := markFinalSetup(t)
-
-	// 只写了 1 章，layered 共 2 章 → 不应推 Complete
-	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
-		t.Fatalf("MarkChapterComplete: %v", err)
+func TestSaveFoundationCompleteBookRejectsBeforeWriting(t *testing.T) {
+	// 规划阶段误调 complete_book 必须被拒，否则会直接跳过整本写作。
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
-
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	_ = s.Progress.UpdatePhase(domain.PhasePremise)
+	_ = s.Progress.UpdatePhase(domain.PhaseOutline)
 	tool := NewSaveFoundationTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"type": "mark_final", "volume": 1, "content": map[string]any{},
+		"type": "complete_book", "content": map[string]any{},
 	})
-	res, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatalf("Execute mark_final: %v", err)
-	}
-	var result map[string]any
-	_ = json.Unmarshal(res, &result)
-	if _, ok := result["book_complete"]; ok {
-		t.Fatalf("expected no book_complete when chapters incomplete, got %+v", result)
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("expected error when phase != writing")
 	}
 	progress, _ := s.Progress.Load()
-	if progress.Phase == domain.PhaseComplete {
-		t.Fatalf("phase should not be Complete: %s", progress.Phase)
+	if progress.Phase != domain.PhaseOutline {
+		t.Fatalf("phase should remain outline, got %s", progress.Phase)
 	}
 }
 
-func TestSaveFoundationMarkFinalSkipsCompleteWhenPendingRewrites(t *testing.T) {
-	s := markFinalSetup(t)
-
-	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
-		t.Fatalf("MarkChapterComplete 1: %v", err)
-	}
-	if err := s.Progress.MarkChapterComplete(2, 1000, "normal", "main"); err != nil {
-		t.Fatalf("MarkChapterComplete 2: %v", err)
-	}
-	// 模拟 editor 把最后一章打回返工
+func TestSaveFoundationCompleteBookRejectsWithPendingRewrites(t *testing.T) {
+	s := completeBookSetup(t)
 	if err := s.Progress.SetPendingRewrites([]int{2}, "尾章节奏过快"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
-
 	tool := NewSaveFoundationTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"type": "mark_final", "volume": 1, "content": map[string]any{},
+		"type": "complete_book", "content": map[string]any{},
 	})
-	res, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatalf("Execute mark_final: %v", err)
-	}
-	var result map[string]any
-	_ = json.Unmarshal(res, &result)
-	if _, ok := result["book_complete"]; ok {
-		t.Fatalf("expected no book_complete with PendingRewrites, got %+v", result)
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("expected error when PendingRewrites non-empty")
 	}
 	progress, _ := s.Progress.Load()
 	if progress.Phase == domain.PhaseComplete {
-		t.Fatalf("phase should not be Complete while rewrites pending: %s", progress.Phase)
+		t.Fatalf("phase should not be Complete with PendingRewrites: %s", progress.Phase)
 	}
 }

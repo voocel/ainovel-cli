@@ -161,7 +161,7 @@ func BuildCoordinator(
 		StopAfterToolResult: func(toolName string, result json.RawMessage) bool {
 			r := decodeSaveFoundationResult(toolName, result)
 			switch r.Type {
-			case "update_compass", "expand_arc", "mark_final":
+			case "update_compass", "expand_arc", "complete_book":
 				return true
 			default:
 				return false

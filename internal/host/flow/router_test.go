@@ -177,8 +177,8 @@ func TestRoute_NeedsNewVolume(t *testing.T) {
 		HasVolumeSummary: true,
 	}
 	got := Route(s)
-	if got == nil || got.Agent != "architect_long" || got.Reason != "卷末需决定追加新卷" {
-		t.Fatalf("expected append_volume dispatch, got %+v", got)
+	if got == nil || got.Agent != "architect_long" || got.Reason != "卷末需决定追加新卷或结束全书" {
+		t.Fatalf("expected append_volume/complete_book dispatch, got %+v", got)
 	}
 }
 

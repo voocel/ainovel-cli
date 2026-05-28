@@ -235,7 +235,7 @@ func TestCommitChapterRejectsPolishWithoutDraftChange(t *testing.T) {
 
 // TestCommitChapterLayeredRejectsOutOfRangeChapter 验证分层模式下，
 // 章号越出 layered_outline 的 commit 必须硬失败，而不是 slog.Warn 放行。
-// 这是阻止"mark_final 后 writer 一路裸跑"的物理刹车（《凡骨》ch204..347 案例）。
+// 这是阻止"裁定误判后 writer 一路裸跑"的物理刹车（《凡骨》ch204..347 案例）。
 func TestCommitChapterLayeredRejectsOutOfRangeChapter(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)

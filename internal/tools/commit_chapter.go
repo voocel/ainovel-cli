@@ -156,7 +156,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		}
 		if b == nil {
 			return nil, fmt.Errorf(
-				"第 %d 章不在分层大纲范围内：写作必须先 expand_arc 扩展弧或 append_volume 追加卷；若全书已完结请调 save_foundation type=mark_final: %w",
+				"第 %d 章不在分层大纲范围内：写作必须先 expand_arc 扩展弧或 append_volume 追加卷；若全书已完结请调 save_foundation type=complete_book: %w",
 				a.Chapter, errs.ErrToolPrecondition)
 		}
 		boundary = b
@@ -263,12 +263,11 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	}
 
 	// 6b. 长篇模式弧/卷信号：boundary 已在入口前置校验，Layered 时保证非 nil
-	var arcEnd, volumeEnd, isFinalVolume, needsExpansion, needsNewVolume bool
+	var arcEnd, volumeEnd, needsExpansion, needsNewVolume bool
 	var vol, arc, nextVol, nextArc int
 	if progress != nil && progress.Layered && boundary != nil {
 		arcEnd = boundary.IsArcEnd
 		volumeEnd = boundary.IsVolumeEnd
-		isFinalVolume = boundary.IsFinalVolume
 		vol = boundary.Volume
 		arc = boundary.Arc
 		needsExpansion = boundary.NeedsExpansion
@@ -299,7 +298,6 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		Feedback:       a.Feedback,
 		ArcEnd:         arcEnd,
 		VolumeEnd:      volumeEnd,
-		IsFinalVolume:  isFinalVolume,
 		Volume:         vol,
 		Arc:            arc,
 		NeedsExpansion: needsExpansion,
@@ -462,7 +460,6 @@ func (t *CommitChapterTool) buildSkipResult(chapter int, progress *domain.Progre
 		if boundary, _ := t.store.Outline.CheckArcBoundary(chapter); boundary != nil {
 			result.ArcEnd = boundary.IsArcEnd
 			result.VolumeEnd = boundary.IsVolumeEnd
-			result.IsFinalVolume = boundary.IsFinalVolume
 			result.Volume = boundary.Volume
 			result.Arc = boundary.Arc
 			result.NeedsExpansion = boundary.NeedsExpansion
@@ -507,19 +504,13 @@ func loadCoreCharacterNameSet(s *store.Store) map[string]bool {
 	return set
 }
 
-// applyCompletion 检查本次 commit 是否使整本书完成；若是则 MarkComplete。
-// 返回 true 表示全书已完成。
+// applyCompletion 仅处理非分层模式：写完约定总章数 → MarkComplete。
+// 分层模式的全书完结统一走 architect 显式调用 save_foundation type=complete_book。
 func (t *CommitChapterTool) applyCompletion(result *domain.CommitResult, progress *domain.Progress) bool {
-	if progress == nil {
+	if progress == nil || progress.Layered {
 		return false
 	}
-	// 非分层模式：写完约定总章数
-	if !progress.Layered && progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
-		_ = t.store.Progress.MarkComplete()
-		return true
-	}
-	// 分层模式：最终卷最后一弧结束 = 全书完成
-	if result.ArcEnd && result.VolumeEnd && result.IsFinalVolume {
+	if progress.TotalChapters > 0 && result.NextChapter > progress.TotalChapters {
 		_ = t.store.Progress.MarkComplete()
 		return true
 	}

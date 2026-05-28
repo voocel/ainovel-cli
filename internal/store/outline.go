@@ -85,30 +85,6 @@ func (s *OutlineStore) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	return volumes, nil
 }
 
-// MarkVolumeFinal 将指定卷标记为最终卷（Final=true）。
-func (s *OutlineStore) MarkVolumeFinal(volumeIdx int) error {
-	return s.io.WithWriteLock(func() error {
-		var volumes []domain.VolumeOutline
-		if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
-			return fmt.Errorf("load layered_outline: %w", err)
-		}
-		found := false
-		for i := range volumes {
-			if volumes[i].Index == volumeIdx {
-				volumes[i].Final = true
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("volume %d not found", volumeIdx)
-		}
-		if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
-			return err
-		}
-		return s.io.WriteMarkdownUnlocked("layered_outline.md", renderLayeredOutline(volumes))
-	})
-}
-
 // ClearLayeredOutline 清理分层大纲文件。
 func (s *OutlineStore) ClearLayeredOutline() error {
 	return s.io.WithWriteLock(func() error {
@@ -165,13 +141,12 @@ func (s *OutlineStore) LocateChapter(chapter int) (volume, arc int, err error) {
 type ArcBoundary struct {
 	IsArcEnd       bool
 	IsVolumeEnd    bool
-	IsFinalVolume  bool // 当前卷标记为 Final（全书最终卷）
 	Volume         int
 	Arc            int
 	NextVolume     int
 	NextArc        int
 	NeedsExpansion bool
-	NeedsNewVolume bool
+	NeedsNewVolume bool // 卷末且当前 layered_outline 没有下一卷
 }
 
 // HasNextArc 是否还有后续弧。
@@ -252,11 +227,8 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		}
 	}
 
-	if b.IsVolumeEnd {
-		b.IsFinalVolume = volumes[cur.volIdx].Final
-		if !found && !b.IsFinalVolume {
-			b.NeedsNewVolume = true
-		}
+	if b.IsVolumeEnd && !found {
+		b.NeedsNewVolume = true
 	}
 
 	return b, nil
@@ -332,11 +304,6 @@ func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.
 }
 
 func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutline) error {
-	for _, v := range existing {
-		if v.Final {
-			return fmt.Errorf("已有最终卷（第 %d 卷），不允许继续追加", v.Index)
-		}
-	}
 	if len(existing) > 0 {
 		maxIdx := existing[len(existing)-1].Index
 		if vol.Index <= maxIdx {
@@ -379,9 +346,6 @@ func renderLayeredOutline(volumes []domain.VolumeOutline) string {
 	for _, v := range volumes {
 		fmt.Fprintf(&b, "## 第 %d 卷：%s\n\n", v.Index, v.Title)
 		fmt.Fprintf(&b, "**主题**：%s\n\n", v.Theme)
-		if v.Final {
-			b.WriteString("*（最终卷）*\n\n")
-		}
 		for _, a := range v.Arcs {
 			fmt.Fprintf(&b, "### 第 %d 弧：%s\n\n", a.Index, a.Title)
 			fmt.Fprintf(&b, "**目标**：%s\n\n", a.Goal)
