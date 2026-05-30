@@ -590,7 +590,7 @@ func (m Model) View() string {
 	_, inputH, bodyH := m.layoutHeights()
 
 	var body string
-	if m.mode == modeNew && len(m.events) == 0 {
+	if m.mode == modeNew {
 		errMsg := ""
 		if m.err != nil {
 			errMsg = m.err.Error()

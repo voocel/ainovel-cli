@@ -16,17 +16,6 @@ func renderField(label, value string) string {
 	return fieldLabelStyle.Render(label) + fieldValueStyle.Render(value) + "\n"
 }
 
-func renderFlowField(flow string) string {
-	if flow == "" {
-		flow = "-"
-	}
-	label := fieldLabelStyle.Render("Flow")
-	if flow != "writing" && flow != "-" && flow != "" {
-		return label + highlightValueStyle.Render(flow) + "\n"
-	}
-	return label + fieldValueStyle.Render(flow) + "\n"
-}
-
 func renderHighlightField(label, value string) string {
 	return fieldLabelStyle.Render(label) + highlightValueStyle.Render(value) + "\n"
 }
