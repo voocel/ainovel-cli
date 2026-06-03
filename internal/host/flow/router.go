@@ -11,17 +11,26 @@ package flow
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
+// SubTask 是 parallel 批量指令中的单个子任务（一次 subagent(tasks=[...]) 调用的元素）。
+type SubTask struct {
+	Agent   string
+	Task    string
+	Chapter int
+}
+
 // Instruction 指示 Host 下一步要求 Coordinator 调用的子代理与任务。
 type Instruction struct {
-	Agent   string // architect_long / architect_short / writer / editor
-	Task    string // 给子代理的任务描述
-	Reason  string // 给 Coordinator 看的理由（可选，方便调试与日志）
-	Chapter int    // writer 任务涉及的章节号（续写/重写/打磨）；0 表示不涉及（editor/architect 任务）
+	Agent   string    // architect_long / architect_short / writer / editor；批量时为 ""
+	Task    string    // 给子代理的任务描述
+	Reason  string    // 给 Coordinator 看的理由（可选，方便调试与日志）
+	Chapter int       // writer 任务涉及的章节号；0 表示不涉及
+	Batch   []SubTask // 非空 = parallel 批量指令；空 = 原单派语义
 }
 
 // State 是 Route 的输入：所有事实必须在此显式声明，禁止 Route 内部读 Store。
@@ -44,15 +53,17 @@ type State struct {
 	FoundationMissing []string
 
 	// 竞稿事实（ContestEnabled=false 时其余字段无意义）。
-	ContestEnabled  bool            // 是否启用多人格竞稿
-	Personas        []string        // persona slug 列表，顺序即写作顺序
-	ContestChapter  int             // 当前竞稿目标章（= NextChapter），0 表示不适用
-	CandidatesReady map[string]bool // 各 persona 候选稿是否到位
-	HasVerdict      bool            // 本章是否已有裁定
-	VerdictWinner   string          // 中选 persona slug
-	IsPromoted      bool            // 中选稿是否已提升为正式 draft.md
-
-	VerdictRevisionNotes string // 中选稿的修改意见（来自 verdict，供润色 writer 参考）
+	ContestEnabled       bool            // 是否启用多人格竞稿
+	Personas             []string        // persona slug 列表，顺序即写作顺序
+	ContestChapter       int             // 当前竞稿目标章（= NextChapter），0 表示不适用
+	CandidatesReady      map[string]bool // 各 persona 候选稿是否到位
+	HasVerdict           bool            // 本章是否已有裁定
+	VerdictWinner        string          // 中选 persona slug
+	IsPromoted           bool            // 中选稿是否已提升为正式 draft.md
+	VerdictRevisionNotes string          // 中选稿的修改意见（来自 verdict，供润色 writer 参考）
+	ContestConcurrent    bool            // 候选生成是否并发（true=一次 parallel 批量派发）
+	// Abandoned: nil 表示读取失败（已降级处理），空 map 表示本章无弃权
+	Abandoned map[string]bool // 本章已弃权 persona slug（并发失败收敛）
 }
 
 // Route 根据事实返回下一步指令；返回 nil 表示让 Coordinator LLM 自主裁定。
@@ -168,26 +179,78 @@ func Route(s State) *Instruction {
 	}
 }
 
+// PendingCandidates 返回本章尚未就绪且未弃权的 persona（保持 Personas 顺序）。
+// dispatcher 与 routeContest 共用，避免"待补候选"判定逻辑漂移。
+func PendingCandidates(s State) []string {
+	var pending []string
+	for _, p := range s.Personas {
+		if s.Abandoned[p] {
+			continue
+		}
+		if !s.CandidatesReady[p] {
+			pending = append(pending, p)
+		}
+	}
+	return pending
+}
+
 // routeContest 计算竞稿章的下一步指令；返回 nil 表示"无 writer/judge 指令需要派"
 // （要么等 dispatcher 内联提升，要么本章已完成）。
 func routeContest(s State) *Instruction {
 	ch := s.ContestChapter
-	// 1. 候选稿未齐 → 逐个派 persona writer 写候选
-	for _, persona := range s.Personas {
-		if !s.CandidatesReady[persona] {
+
+	// 非弃权 persona 计数（用于"全弃权降级"与 judge 文案）。
+	nonAbandoned := 0
+	for _, p := range s.Personas {
+		if !s.Abandoned[p] {
+			nonAbandoned++
+		}
+	}
+
+	// 全部弃权 → 降级单 writer 直接写 draft.md（不再竞稿）。
+	if nonAbandoned == 0 {
+		return &Instruction{
+			Agent:   "writer",
+			Task:    fmt.Sprintf("写第 %d 章", ch),
+			Reason:  "竞稿：全部候选 persona 弃权，降级单 writer",
+			Chapter: ch,
+		}
+	}
+
+	// 1. 候选未齐 → 派候选（并发批量 / 串行逐个）。
+	pending := PendingCandidates(s)
+	if len(pending) > 0 {
+		if s.ContestConcurrent {
+			// 并发模式：一次批量下发全部 pending persona 的候选任务。
+			batch := make([]SubTask, 0, len(pending))
+			for _, p := range pending {
+				batch = append(batch, SubTask{
+					Agent:   "writer_" + p,
+					Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
+					Chapter: ch,
+				})
+			}
 			return &Instruction{
-				Agent:   "writer_" + persona,
-				Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
-				Reason:  fmt.Sprintf("竞稿：persona %s 候选稿未完成", persona),
+				Batch:   batch,
+				Reason:  fmt.Sprintf("竞稿：并行补齐 %d 份候选稿", len(batch)),
 				Chapter: ch,
 			}
 		}
+		// 串行：逐个补齐（与现状逐字节一致）。
+		p := pending[0]
+		return &Instruction{
+			Agent:   "writer_" + p,
+			Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
+			Reason:  fmt.Sprintf("竞稿：persona %s 候选稿未完成", p),
+			Chapter: ch,
+		}
 	}
-	// 2. 候选齐、无裁定 → 派 judge
+
+	// 2. 候选齐、无裁定 → 派 judge（评审份数 = 非弃权 persona 数）。
 	if !s.HasVerdict {
 		return &Instruction{
 			Agent:   "judge",
-			Task:    fmt.Sprintf("评审第 %d 章的 %d 份候选稿，选优并给修改意见（save_verdict）", ch, len(s.Personas)),
+			Task:    fmt.Sprintf("评审第 %d 章的 %d 份候选稿，选优并给修改意见（save_verdict）", ch, nonAbandoned),
 			Reason:  "竞稿：候选稿已齐，待选优",
 			Chapter: ch,
 		}
@@ -196,11 +259,11 @@ func routeContest(s State) *Instruction {
 	if !s.IsPromoted {
 		return nil
 	}
-	// 数据不一致（IsPromoted 但无 winner），保守降级返回 nil 交上层裁定，不派 writer_ 坏指令
+	// 数据不一致（IsPromoted 但无 winner），保守降级返回 nil 交上层裁定。
 	if s.VerdictWinner == "" {
 		return nil
 	}
-	// 4. 已提升 → 派中选 writer 润色（Task 文本与候选不同，规避 dedupe）
+	// 4. 已提升 → 派中选 writer 润色（Task 文本与候选不同，规避 dedupe）。
 	return &Instruction{
 		Agent:   "writer_" + s.VerdictWinner,
 		Task:    fmt.Sprintf("按选优意见润色并提交第 %d 章。选优意见：%s", ch, s.VerdictRevisionNotes),
@@ -210,8 +273,23 @@ func routeContest(s State) *Instruction {
 }
 
 // FormatMessage 把 Instruction 格式化为发给 Coordinator 的用户消息。
-// 格式固定，便于 Coordinator prompt 识别与 LLM 直接响应。
+// 批量指令（Batch 非空）渲染为"单次 subagent(tasks=[...])"并行话术；
+// 单派指令保持原 subagent(agent, task) 话术。
 func FormatMessage(i *Instruction) string {
+	if len(i.Batch) > 0 {
+		var b strings.Builder
+		b.WriteString("[Host 下达指令] 下一步：一次性并行调用 subagent，在单次调用里用 tasks 数组并行下发全部候选：tasks=[")
+		for k, t := range i.Batch {
+			if k > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "{agent:%q, task:%q}", t.Agent, t.Task)
+		}
+		b.WriteString("]。\n理由：")
+		b.WriteString(i.Reason)
+		b.WriteString("\n必须用一次 subagent(tasks=[...]) 调用并行下发全部候选，禁止逐个串行调用，禁止先调 novel_context，禁止先输出推理。")
+		return b.String()
+	}
 	return fmt.Sprintf(
 		"[Host 下达指令] 下一步：调用 subagent(%s, %q)\n理由：%s\n这是流程层的明确指令，请立即执行，不要先调 novel_context，不要先输出推理。",
 		i.Agent, i.Task, i.Reason,

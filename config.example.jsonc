@@ -51,7 +51,10 @@
   // "writing_contest": {
   //   "personas": ["乌贼", "卖报小郎君", "土豆"],
   //   // judge 字段当前预留（暂复用 editor 模型，配置不生效）
-  //   "judge": { "provider": "openrouter", "model": "google/gemini-2.5-flash" }
+  //   "judge": { "provider": "openrouter", "model": "google/gemini-2.5-flash" },
+  //   // concurrency=true：候选生成并发（一次 parallel subagent 调用，受 maxConcurrency=4 限流）。
+  //   // 缺省/false 为串行逐个写。judge/润色始终串行。
+  //   "concurrency": false
   // }
 
   // 可选。显式指定上下文压缩使用的窗口大小。省略 / 0 = 按模型名自动解析

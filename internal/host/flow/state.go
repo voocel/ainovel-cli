@@ -43,7 +43,8 @@ func LoadState(store *storepkg.Store) State {
 
 // ContestConfig 是 LoadStateWithContest 需要的竞稿静态配置（来自 bootstrap.Config 解析后的 slug 列表）。
 type ContestConfig struct {
-	Personas []string // persona slug，顺序即写作顺序；len<2 视为未启用
+	Personas    []string // persona slug，顺序即写作顺序；len<2 视为未启用
+	Concurrency bool     // 候选生成是否并发
 }
 
 // LoadStateWithContest 在 LoadState 基础上补齐竞稿事实。
@@ -55,6 +56,7 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 	}
 	s.ContestEnabled = true
 	s.Personas = cfg.Personas
+	s.ContestConcurrent = cfg.Concurrency // 透传并发开关
 
 	if s.Progress == nil || s.Progress.Phase != domain.PhaseWriting {
 		return s
@@ -77,6 +79,12 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 		s.VerdictWinner = v.Winner
 		s.IsPromoted = v.Promoted
 		s.VerdictRevisionNotes = v.RevisionNotes
+	}
+	// 读取本章弃权名单；失败时保持 nil（并发失败收敛路径在 dispatch 层自行降级）
+	if ab, err := store.Contest.AbandonedPersonas(next); err == nil {
+		s.Abandoned = ab
+	} else {
+		slog.Warn("contest AbandonedPersonas failed", "module", "host.flow", "chapter", next, "err", err)
 	}
 	return s
 }

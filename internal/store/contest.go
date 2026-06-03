@@ -117,3 +117,73 @@ func (s *ContestStore) PromoteCandidate(chapter int, winner string) error {
 	v.Promoted = true
 	return s.SaveVerdict(*v)
 }
+
+// contestProgressPath 返回某章竞稿进度文件的相对路径。
+func contestProgressPath(chapter int) string {
+	return fmt.Sprintf("drafts/%02d.contest.json", chapter)
+}
+
+// LoadContestProgress 读取竞稿进度；不存在返回 nil。
+func (s *ContestStore) LoadContestProgress(chapter int) (*domain.ContestProgress, error) {
+	var cp domain.ContestProgress
+	if err := s.io.ReadJSON(contestProgressPath(chapter), &cp); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &cp, nil
+}
+
+// AbandonedPersonas 返回本章已弃权 persona 集合；无记录返回空 map。
+func (s *ContestStore) AbandonedPersonas(chapter int) (map[string]bool, error) {
+	cp, err := s.LoadContestProgress(chapter)
+	if err != nil || cp == nil {
+		return map[string]bool{}, err
+	}
+	out := make(map[string]bool, len(cp.Abandoned))
+	for _, p := range cp.Abandoned {
+		out[p] = true
+	}
+	return out, nil
+}
+
+// RecordAttempts 为每个 failed persona 的失败计数 +1，达到 threshold 的移入弃权名单。
+// 已弃权的 persona 跳过。返回是否有新 persona 被弃权（调用方据此决定是否重载 State）。
+// 单进程假设：调用方需保证同一章节的调用在单进程内串行（依赖 IO 互斥锁），
+// 多进程并发会丢失计数更新（read-modify-write 无跨进程原子保护）。
+func (s *ContestStore) RecordAttempts(chapter int, failed []string, threshold int) (bool, error) {
+	if threshold <= 0 {
+		return false, fmt.Errorf("RecordAttempts: threshold 必须 > 0, got %d", threshold)
+	}
+	cp, err := s.LoadContestProgress(chapter)
+	if err != nil {
+		return false, err
+	}
+	if cp == nil {
+		cp = &domain.ContestProgress{Chapter: chapter}
+	}
+	if cp.Attempts == nil {
+		cp.Attempts = map[string]int{}
+	}
+	abandoned := make(map[string]bool, len(cp.Abandoned))
+	for _, p := range cp.Abandoned {
+		abandoned[p] = true
+	}
+	newly := false
+	for _, p := range failed {
+		if abandoned[p] {
+			continue
+		}
+		cp.Attempts[p]++
+		if cp.Attempts[p] >= threshold {
+			cp.Abandoned = append(cp.Abandoned, p)
+			abandoned[p] = true
+			newly = true
+		}
+	}
+	if err := s.io.WriteJSON(contestProgressPath(chapter), cp); err != nil {
+		return false, err
+	}
+	return newly, nil
+}

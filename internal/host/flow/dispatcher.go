@@ -10,11 +10,20 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
+// maxCandidateAttempts 是单个 persona 候选连续失败的弃权阈值（并发失败收敛）。
+const maxCandidateAttempts = 3
+
+// dispatchCoordinator 是 Dispatcher 依赖的 coordinator 能力子集，便于测试注入 fake。
+type dispatchCoordinator interface {
+	Subscribe(fn func(agentcore.Event)) func()
+	FollowUp(msg agentcore.AgentMessage)
+}
+
 // Dispatcher 订阅 Coordinator 事件，在子代理返回时计算路由并下达 Host 指令。
 //
 // 生命周期：Attach 返回一个 detach 函数；关闭 Host 时调用释放订阅。
 type Dispatcher struct {
-	coordinator *agentcore.Agent
+	coordinator dispatchCoordinator
 	store       *storepkg.Store
 
 	enabled atomic.Bool // 由 Host 控制是否派发（启动完成前应关）
@@ -22,13 +31,21 @@ type Dispatcher struct {
 	// 竞稿配置；零值（nil Personas）表示未启用，降级为原 LoadState 路径。
 	contest ContestConfig
 
-	// 去重：记住最近一次派发的 Agent+Task，完全相同时跳过。
+	// 去重：记住最近一次派发指令的键，完全相同时跳过。
 	// 主要挡两种情况：
 	//   1. LLM 纯文字 turn 偶尔也会触发 ToolExecEnd?（防御）
 	//   2. 多次 subagent 调用间状态未推进（例：subagent 报错后 coordinator 重派，Router 也会再次派同一章）
 	// FollowUp 语义是 append，若不去重会把同一条指令重复压进 followUpQ，污染 Coordinator 上下文。
-	lastMu   sync.Mutex
-	lastSent *Instruction
+	//
+	// lastMu 同时保护 lastKey、lastCandChapter、lastCandPersonas 三者：
+	// Dispatch 可能被事件 goroutine（consumeLoop 投递）与 Host 主动调用并发进入。
+	lastMu  sync.Mutex
+	lastKey string
+
+	// 无进展失败收敛（仅并发候选用，内存态、重启清空）：
+	// 上一批并发派出的 pending persona 及其所属章。
+	lastCandChapter  int
+	lastCandPersonas []string
 }
 
 // NewDispatcher 创建 Dispatcher。使用前需调用 Attach 订阅事件。
@@ -66,13 +83,42 @@ func (d *Dispatcher) handle(ev agentcore.Event) {
 
 // Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
 func (d *Dispatcher) Dispatch() {
-	// 竞稿：用带竞稿事实的 State；提升点在此内联完成。
 	state := LoadStateWithContest(d.store, d.contest)
+
+	// 竞稿提升：有 verdict 未提升时内联提升，再重读。
 	if state.ContestEnabled && state.ContestChapter > 0 && state.HasVerdict && !state.IsPromoted {
 		if PromoteIfNeeded(d.store, d.contest, state.ContestChapter) {
-			state = LoadStateWithContest(d.store, d.contest) // 重读，得到 IsPromoted=true
+			state = LoadStateWithContest(d.store, d.contest)
 		}
 	}
+
+	// 并发候选失败收敛：上一批仍缺候选者计失败，超阈值弃权后重读。
+	if state.ContestEnabled && state.ContestConcurrent && state.ContestChapter > 0 && !state.HasVerdict {
+		// 持锁快照内存态，避免与本函数末尾的写入并发（Dispatch 可能被事件 goroutine 与
+		// Host 主动调用并发进入）。快照后立即释放锁，绝不持锁调 store。
+		d.lastMu.Lock()
+		lastChapter := d.lastCandChapter
+		lastPersonas := d.lastCandPersonas
+		d.lastMu.Unlock()
+		if lastChapter == state.ContestChapter {
+			if failed := failedFromLastBatch(lastPersonas, state); len(failed) > 0 {
+				changed, err := d.store.Contest.RecordAttempts(state.ContestChapter, failed, maxCandidateAttempts)
+				if err != nil {
+					slog.Warn("contest record attempts failed", "module", "host.flow", "chapter", state.ContestChapter, "err", err)
+				} else if changed {
+					state = LoadStateWithContest(d.store, d.contest)
+				}
+				// 无进展失败：清空去重键，让本轮候选批作为"显式重试"重新下发。
+				// 否则相同批次会被 dedupe 拦截、不发 FollowUp，弃权计数只能靠 StopGuard
+				// 非确定性唤醒推进（终审 I-1）。清空后由 Host 确定性驱动重试，累计到阈值
+				// 触发弃权、reload 后 Route 产出更小批/降级指令，循环有界收敛。
+				d.lastMu.Lock()
+				d.lastKey = ""
+				d.lastMu.Unlock()
+			}
+		}
+	}
+
 	inst := Route(state)
 	if inst == nil {
 		return
@@ -81,36 +127,81 @@ func (d *Dispatcher) Dispatch() {
 		slog.Debug("flow router skip duplicate", "module", "host.flow", "agent", inst.Agent, "task", inst.Task)
 		return
 	}
-	// Writer 任务：在派发同一刻把章节标为进行中，UI 右侧大纲立即反映"▸ 进行中"，
-	// 不用等 plan_chapter 真正执行（plan_chapter 会再调一次 StartChapter，幂等）。
-	if strings.HasPrefix(inst.Agent, "writer") && inst.Chapter > 0 && d.store != nil {
+
+	// 记录本次并发候选批的 pending，供下次失败收敛判定；
+	// 非批量派发（单派/judge）清零内存态，防止陈旧 lastCand 误判失败。
+	d.lastMu.Lock()
+	if len(inst.Batch) > 0 {
+		personas := make([]string, 0, len(inst.Batch))
+		for _, t := range inst.Batch {
+			personas = append(personas, strings.TrimPrefix(t.Agent, "writer_"))
+		}
+		d.lastCandChapter = inst.Chapter
+		d.lastCandPersonas = personas
+	} else {
+		d.lastCandChapter = 0
+		d.lastCandPersonas = nil
+	}
+	d.lastMu.Unlock()
+
+	// Writer / 批量 writer 任务：派发同刻把章节标为进行中（UI 即时反映）。
+	if (strings.HasPrefix(inst.Agent, "writer") || len(inst.Batch) > 0) && inst.Chapter > 0 && d.store != nil {
 		if err := d.store.Progress.StartChapter(inst.Chapter); err != nil {
 			slog.Warn("flow router pre-mark in-progress failed", "module", "host.flow", "chapter", inst.Chapter, "err", err)
 		}
 	}
+
 	msg := FormatMessage(inst)
 	slog.Debug("flow router dispatch", "module", "host.flow", "agent", inst.Agent, "reason", inst.Reason)
 	d.coordinator.FollowUp(agentcore.UserMsg(msg))
 }
 
+// dedupeKey 为指令生成去重键：批量按全部 (Agent,Task) 有序拼接，单派按 Agent+Task。
+func dedupeKey(i *Instruction) string {
+	if len(i.Batch) > 0 {
+		parts := make([]string, len(i.Batch))
+		for k, t := range i.Batch {
+			parts[k] = t.Agent + "\x00" + t.Task
+		}
+		return "batch\x01" + strings.Join(parts, "\x02")
+	}
+	return i.Agent + "\x00" + i.Task
+}
+
+// failedFromLastBatch 返回上一批派出但仍缺候选且未弃权的 persona（视为本轮失败）。
+// 与 PendingCandidates 的区别：本函数作用于上一批 dispatcher 实际派出的 persona 子集，而非全量 Personas。
+func failedFromLastBatch(lastPersonas []string, s State) []string {
+	var failed []string
+	for _, p := range lastPersonas {
+		if s.Abandoned[p] {
+			continue
+		}
+		if !s.CandidatesReady[p] {
+			failed = append(failed, p)
+		}
+	}
+	return failed
+}
+
 // dedupe 返回 true 表示本次指令与上次相同，应跳过。
-// 用 Agent+Task 相等性（不比 Reason，因为 Reason 是给人看的辅助文本）。
 func (d *Dispatcher) dedupe(next *Instruction) bool {
 	d.lastMu.Lock()
 	defer d.lastMu.Unlock()
-	if d.lastSent != nil && d.lastSent.Agent == next.Agent && d.lastSent.Task == next.Task {
+	key := dedupeKey(next)
+	if d.lastKey != "" && d.lastKey == key {
 		return true
 	}
-	copy := *next
-	d.lastSent = &copy
+	d.lastKey = key
 	return false
 }
 
-// ResetDedupe 清空去重缓存。Resume / 新 Start 时 Host 调用，确保恢复或新建后能派发首条指令。
+// ResetDedupe 清空去重缓存与无进展状态。Resume / 新 Start 时 Host 调用。
 func (d *Dispatcher) ResetDedupe() {
 	d.lastMu.Lock()
 	defer d.lastMu.Unlock()
-	d.lastSent = nil
+	d.lastKey = ""
+	d.lastCandChapter = 0
+	d.lastCandPersonas = nil
 }
 
 // PromoteIfNeeded 在"有 verdict 且未提升"时执行中选稿提升，返回是否发生了提升。

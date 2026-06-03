@@ -392,6 +392,10 @@ ainovel-cli
 - **向下兼容** — 不配置该字段、或 `personas` 少于 2 个时，退回普通单 Writer 模式，行为与旧版完全一致
 - **judge 字段** — 当前预留，暂复用 `editor` 模型，配置不生效
 
+### 候选并发
+
+配置 `writing_contest.concurrency: true` 后，同一章的多个 persona 候选稿并发生成（一次 `subagent(tasks=[...])` 调用，受 agentcore `maxConcurrency=4` 限流），judge 选优、中选稿提升与润色仍串行。某 persona 候选连续失败 3 次自动弃权，候选数减一继续；全部弃权降级为单 Writer。崩溃恢复由磁盘事实（候选槽 / verdict / contest.json）驱动，幂等。
+
 ## 输出结构
 
 所有创作数据（章节、大纲、角色、进度等）保存在output目录中。中断后重新运行会自动从上次进度续写。删除output目录将重新开始创作。

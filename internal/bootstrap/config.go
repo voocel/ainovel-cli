@@ -138,6 +138,9 @@ type WritingContest struct {
 	Personas []string `json:"personas,omitempty"`
 	// Judge 可选，指定选优裁判模型；缺省复用 editor 角色模型。
 	Judge *ModelRef `json:"judge,omitempty"`
+	// Concurrency=true 时候选生成阶段并发（一次 parallel subagent 调用）；
+	// 缺省/false 为串行（逐个补齐，现状行为）。personas<2 时此开关无意义。
+	Concurrency bool `json:"concurrency,omitempty"`
 }
 
 // Normalize 去空白、去重、保序，返回规整后的副本。
@@ -155,7 +158,7 @@ func (w WritingContest) Normalize() WritingContest {
 		seen[p] = struct{}{}
 		out = append(out, p)
 	}
-	return WritingContest{Personas: out, Judge: w.Judge}
+	return WritingContest{Personas: out, Judge: w.Judge, Concurrency: w.Concurrency}
 }
 
 // Enabled 报告是否启用竞稿（至少 2 个 persona）。

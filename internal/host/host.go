@@ -131,7 +131,10 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	// 竞稿模式：向 Dispatcher 注入 persona slug 列表，与 build.go 注册的 agent 命名保持一致。
 	// Slugs 与 EnsurePersonas 内部共用同一个 slugFor，保证 writer_<slug> 名字匹配。
 	if wc := cfg.WritingContest.Normalize(); wc.Enabled() {
-		h.router.SetContest(flow.ContestConfig{Personas: persona.Slugs(wc.Personas)})
+		h.router.SetContest(flow.ContestConfig{
+			Personas:    persona.Slugs(wc.Personas), // persona slug 列表
+			Concurrency: wc.Concurrency,             // 并发开关透传
+		})
 	}
 	h.routerDetach = h.router.Attach()
 

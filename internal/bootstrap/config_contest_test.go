@@ -28,6 +28,19 @@ func TestWritingContest_Enabled(t *testing.T) {
 	}
 }
 
+// TestWritingContest_Normalize_KeepsConcurrency 验证归一化保留 concurrency 开关。
+func TestWritingContest_Normalize_KeepsConcurrency(t *testing.T) {
+	wc := WritingContest{Personas: []string{"乌贼", "土豆"}, Concurrency: true}
+	got := wc.Normalize()
+	if !got.Concurrency {
+		t.Fatal("Normalize 丢失了 Concurrency=true")
+	}
+	off := WritingContest{Personas: []string{"乌贼", "土豆"}}.Normalize()
+	if off.Concurrency {
+		t.Fatal("未设置时 Concurrency 应为 false")
+	}
+}
+
 // TestMergeConfig_WritingContest 防止 mergeConfig 丢失 writing_contest：
 // 项目级 ./ainovel.json 与 --config 覆盖都走 mergeConfig，若不合并该字段，
 // 竞稿配置会在合并时被静默丢弃（仅全局 ~/.ainovel/config.json 直接赋值不受影响）。

@@ -34,3 +34,10 @@ func (v Verdict) WinnerScore() float64 {
 	}
 	return 0
 }
+
+// ContestProgress 记录某章候选生成的尝试与弃权状态（并发失败收敛用）。
+type ContestProgress struct {
+	Chapter   int            `json:"chapter"`
+	Attempts  map[string]int `json:"attempts"`  // persona slug → 累计失败计数
+	Abandoned []string       `json:"abandoned"` // 超阈值弃权的 persona slug（去重）
+}

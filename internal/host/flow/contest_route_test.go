@@ -103,3 +103,79 @@ func TestRoute_Contest_PromotedButEmptyWinner_ReturnsNil(t *testing.T) {
 		t.Fatalf("winner 为空应返回 nil 降级，got %+v", got)
 	}
 }
+
+// 并发：候选未齐时返回携带全部 pending 的 Batch。
+func TestRoute_Contest_Concurrent_BatchAllPending(t *testing.T) {
+	s := contestWritingState(1)
+	s.ContestConcurrent = true
+	s.CandidatesReady = map[string]bool{"wuzei": false, "tudou": false}
+	got := Route(s)
+	if got == nil || len(got.Batch) != 2 {
+		t.Fatalf("应返回 2 元素 Batch, got %+v", got)
+	}
+	if got.Agent != "" {
+		t.Fatalf("批量指令 Agent 应为空, got %q", got.Agent)
+	}
+	if got.Batch[0].Agent != "writer_wuzei" || got.Batch[1].Agent != "writer_tudou" {
+		t.Fatalf("Batch 顺序/命名错: %+v", got.Batch)
+	}
+	if got.Chapter != 1 {
+		t.Fatalf("Chapter=%d", got.Chapter)
+	}
+}
+
+// 并发：部分就绪时 Batch 只含剩余 pending。
+func TestRoute_Contest_Concurrent_BatchPartial(t *testing.T) {
+	s := contestWritingState(1)
+	s.ContestConcurrent = true
+	s.CandidatesReady = map[string]bool{"wuzei": true, "tudou": false}
+	got := Route(s)
+	if got == nil || len(got.Batch) != 1 || got.Batch[0].Agent != "writer_tudou" {
+		t.Fatalf("应只补 tudou, got %+v", got)
+	}
+}
+
+// 并发：弃权的 persona 不进 Batch；其余就绪则进 judge。
+func TestRoute_Contest_Concurrent_AbandonedExcluded(t *testing.T) {
+	s := contestWritingState(1)
+	s.ContestConcurrent = true
+	s.CandidatesReady = map[string]bool{"wuzei": true, "tudou": false}
+	s.Abandoned = map[string]bool{"tudou": true}
+	got := Route(s)
+	if got == nil || got.Agent != "judge" {
+		t.Fatalf("tudou 弃权 + wuzei 就绪应进 judge, got %+v", got)
+	}
+}
+
+// 并发：全部弃权 → 降级单 writer 写 draft.md。
+func TestRoute_Contest_AllAbandoned_DegradeSingleWriter(t *testing.T) {
+	s := contestWritingState(1)
+	s.ContestConcurrent = true
+	s.CandidatesReady = map[string]bool{"wuzei": false, "tudou": false}
+	s.Abandoned = map[string]bool{"wuzei": true, "tudou": true}
+	got := Route(s)
+	if got == nil || got.Agent != "writer" || len(got.Batch) != 0 {
+		t.Fatalf("全弃权应降级单 writer（基础 writer，无 Batch）, got %+v", got)
+	}
+	if got.Task != "写第 1 章" {
+		t.Fatalf("降级 Task 应是普通续写, got %q", got.Task)
+	}
+}
+
+// FormatMessage 批量渲染：含 tasks=[...] 与单次调用约束。
+func TestFormatMessage_Batch(t *testing.T) {
+	inst := &Instruction{
+		Batch: []SubTask{
+			{Agent: "writer_wuzei", Task: "写第 1 章候选稿", Chapter: 1},
+			{Agent: "writer_tudou", Task: "写第 1 章候选稿", Chapter: 1},
+		},
+		Reason:  "竞稿：并行补齐 2 份候选稿",
+		Chapter: 1,
+	}
+	msg := FormatMessage(inst)
+	for _, want := range []string{"tasks=[", "writer_wuzei", "writer_tudou", "一次 subagent(tasks=[...])"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("批量话术缺 %q:\n%s", want, msg)
+		}
+	}
+}
