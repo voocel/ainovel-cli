@@ -151,6 +151,12 @@ func mergeConfig(base, overlay Config) Config {
 		}
 	}
 
+	// WritingContest: overlay 配了 personas 则整体覆盖（含 Judge）。
+	// 没有这一步，项目级 ./ainovel.json 或 --config 里的竞稿配置会在合并时丢失。
+	if len(overlay.WritingContest.Personas) > 0 {
+		base.WritingContest = overlay.WritingContest
+	}
+
 	return base
 }
 

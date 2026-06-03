@@ -126,7 +126,40 @@ type Config struct {
 	// 或把大窗口模型钉在更小的值上提前触发压缩（1M 名义窗口在 200k+ 通常已注意力衰退）。
 	// 仅影响压缩阈值，不改变 LLM API 实际请求长度；配置值由用户自负其责。
 	ContextWindow int `json:"context_window,omitempty"`
+
+	// 多人格竞稿配置；为空或 personas < 2 时退回单 Writer 行为（完全向后兼容）。
+	WritingContest WritingContest `json:"writing_contest,omitempty"`
 }
+
+// WritingContest 多人格竞稿配置。
+type WritingContest struct {
+	// Personas 是作者名列表（如 ["乌贼","卖报小郎君","土豆"]）。
+	// 数量即并行 Writer 数；< 2 时不启用竞稿。文风由启动时 LLM 依作者名生成。
+	Personas []string `json:"personas,omitempty"`
+	// Judge 可选，指定选优裁判模型；缺省复用 editor 角色模型。
+	Judge *ModelRef `json:"judge,omitempty"`
+}
+
+// Normalize 去空白、去重、保序，返回规整后的副本。
+func (w WritingContest) Normalize() WritingContest {
+	seen := make(map[string]struct{}, len(w.Personas))
+	out := make([]string, 0, len(w.Personas))
+	for _, p := range w.Personas {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return WritingContest{Personas: out, Judge: w.Judge}
+}
+
+// Enabled 报告是否启用竞稿（至少 2 个 persona）。
+func (w WritingContest) Enabled() bool { return len(w.Personas) >= 2 }
 
 // ValidateBase 校验基础配置。
 func (c *Config) ValidateBase() error {

@@ -1,6 +1,9 @@
 package flow
 
 import (
+	"log/slog"
+
+	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -35,5 +38,45 @@ func LoadState(store *storepkg.Store) State {
 		}
 	}
 
+	return s
+}
+
+// ContestConfig 是 LoadStateWithContest 需要的竞稿静态配置（来自 bootstrap.Config 解析后的 slug 列表）。
+type ContestConfig struct {
+	Personas []string // persona slug，顺序即写作顺序；len<2 视为未启用
+}
+
+// LoadStateWithContest 在 LoadState 基础上补齐竞稿事实。
+// 非竞稿场景（cfg.Personas<2）等价于原 LoadState。
+func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
+	s := LoadState(store)
+	if len(cfg.Personas) < 2 {
+		return s
+	}
+	s.ContestEnabled = true
+	s.Personas = cfg.Personas
+
+	if s.Progress == nil || s.Progress.Phase != domain.PhaseWriting {
+		return s
+	}
+	// 只在"正常续写"语义下编排竞稿：有重写队列/审阅/弧末后处理时不介入。
+	next := s.Progress.NextChapter()
+	if next <= 0 {
+		return s
+	}
+	s.ContestChapter = next
+	if ready, err := store.Contest.ListCandidates(next, cfg.Personas); err == nil {
+		s.CandidatesReady = ready
+	} else {
+		// 出错时 CandidatesReady 保持 nil；routeContest 读 nil map 安全（不 panic），
+		// 但会让全 persona 显示未就绪 → 重复派第一个 writer。磁盘错误本就该暴露，记日志使其可见。
+		slog.Warn("contest ListCandidates failed", "module", "host.flow", "chapter", next, "err", err)
+	}
+	if v, err := store.Contest.LoadVerdict(next); err == nil && v != nil {
+		s.HasVerdict = true
+		s.VerdictWinner = v.Winner
+		s.IsPromoted = v.Promoted
+		s.VerdictRevisionNotes = v.RevisionNotes
+	}
 	return s
 }

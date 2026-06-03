@@ -25,6 +25,7 @@ type Store struct {
 	Checkpoints *CheckpointStore
 	Sessions    *SessionStore
 	Usage       *UsageStore
+	Contest     *ContestStore
 
 	crossMu sync.Mutex // 保护跨域原子操作
 }
@@ -48,6 +49,7 @@ func NewStore(dir string) *Store {
 		Checkpoints: NewCheckpointStore(io),
 		Sessions:    NewSessionStore(newIO(dir)),
 		Usage:       NewUsageStore(newIO(dir)),
+		Contest:     NewContestStore(newIO(dir)),
 	}
 }
 

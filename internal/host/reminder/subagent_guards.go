@@ -97,3 +97,20 @@ func NewEditorStopGuard(st *store.Store) agentcore.StopGuard {
 		"你必须调用 save_review / save_arc_summary / save_volume_summary 之一落盘结果后才能结束。",
 	)
 }
+
+// NewCandidateStopGuard 要求竞稿候选 writer 本轮至少产生一次成功的 draft_chapter
+// （写候选稿），而非 commit_chapter —— 候选阶段不提交终稿。
+func NewCandidateStopGuard(st *store.Store) agentcore.StopGuard {
+	return newCheckpointDeltaGuard(st, "writer-candidate",
+		[]string{"draft"},
+		"你必须调用 draft_chapter 写完本章候选稿后才能结束。竞稿候选阶段不要调用 commit_chapter。",
+	)
+}
+
+// NewJudgeStopGuard 要求 judge 本轮至少落盘一次 save_verdict。
+func NewJudgeStopGuard(st *store.Store) agentcore.StopGuard {
+	return newCheckpointDeltaGuard(st, "judge",
+		[]string{"verdict"},
+		"你必须调用 save_verdict 保存选优裁定后才能结束。",
+	)
+}

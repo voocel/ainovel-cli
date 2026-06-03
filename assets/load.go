@@ -28,6 +28,7 @@ type Prompts struct {
 	ArchitectLong    string
 	Writer           string
 	Editor           string
+	Judge            string
 	ImportFoundation string
 	ImportAnalyzer   string
 }
@@ -98,6 +99,7 @@ func loadPrompts() Prompts {
 		ArchitectLong:    mustRead(promptsFS, "prompts/architect-long.md"),
 		Writer:           mustRead(promptsFS, "prompts/writer.md"),
 		Editor:           mustRead(promptsFS, "prompts/editor.md"),
+		Judge:            mustRead(promptsFS, "prompts/judge.md"),
 		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
 		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
 	}

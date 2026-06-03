@@ -2,6 +2,7 @@ package flow
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -17,6 +18,9 @@ type Dispatcher struct {
 	store       *storepkg.Store
 
 	enabled atomic.Bool // 由 Host 控制是否派发（启动完成前应关）
+
+	// 竞稿配置；零值（nil Personas）表示未启用，降级为原 LoadState 路径。
+	contest ContestConfig
 
 	// 去重：记住最近一次派发的 Agent+Task，完全相同时跳过。
 	// 主要挡两种情况：
@@ -37,6 +41,9 @@ func NewDispatcher(coordinator *agentcore.Agent, store *storepkg.Store) *Dispatc
 // Host 在 Start/Resume 完成首条 prompt 之后启用，避免与启动流程冲突。
 func (d *Dispatcher) Enable()  { d.enabled.Store(true) }
 func (d *Dispatcher) Disable() { d.enabled.Store(false) }
+
+// SetContest 注入竞稿配置；Host 在启用竞稿时调用。
+func (d *Dispatcher) SetContest(cfg ContestConfig) { d.contest = cfg }
 
 // Attach 订阅 Coordinator 事件；返回的函数在关闭时调用以解绑。
 func (d *Dispatcher) Attach() func() {
@@ -59,7 +66,13 @@ func (d *Dispatcher) handle(ev agentcore.Event) {
 
 // Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
 func (d *Dispatcher) Dispatch() {
-	state := LoadState(d.store)
+	// 竞稿：用带竞稿事实的 State；提升点在此内联完成。
+	state := LoadStateWithContest(d.store, d.contest)
+	if state.ContestEnabled && state.ContestChapter > 0 && state.HasVerdict && !state.IsPromoted {
+		if PromoteIfNeeded(d.store, d.contest, state.ContestChapter) {
+			state = LoadStateWithContest(d.store, d.contest) // 重读，得到 IsPromoted=true
+		}
+	}
 	inst := Route(state)
 	if inst == nil {
 		return
@@ -70,7 +83,7 @@ func (d *Dispatcher) Dispatch() {
 	}
 	// Writer 任务：在派发同一刻把章节标为进行中，UI 右侧大纲立即反映"▸ 进行中"，
 	// 不用等 plan_chapter 真正执行（plan_chapter 会再调一次 StartChapter，幂等）。
-	if inst.Agent == "writer" && inst.Chapter > 0 && d.store != nil {
+	if strings.HasPrefix(inst.Agent, "writer") && inst.Chapter > 0 && d.store != nil {
 		if err := d.store.Progress.StartChapter(inst.Chapter); err != nil {
 			slog.Warn("flow router pre-mark in-progress failed", "module", "host.flow", "chapter", inst.Chapter, "err", err)
 		}
@@ -98,4 +111,21 @@ func (d *Dispatcher) ResetDedupe() {
 	d.lastMu.Lock()
 	defer d.lastMu.Unlock()
 	d.lastSent = nil
+}
+
+// PromoteIfNeeded 在"有 verdict 且未提升"时执行中选稿提升，返回是否发生了提升。
+// 纯 store 操作，幂等：已提升或无 verdict 时返回 false。
+func PromoteIfNeeded(store *storepkg.Store, cfg ContestConfig, chapter int) bool {
+	if len(cfg.Personas) < 2 || chapter <= 0 {
+		return false
+	}
+	v, err := store.Contest.LoadVerdict(chapter)
+	if err != nil || v == nil || v.Promoted {
+		return false
+	}
+	if err := store.Contest.PromoteCandidate(chapter, v.Winner); err != nil {
+		slog.Warn("contest promote failed", "module", "host.flow", "chapter", chapter, "winner", v.Winner, "err", err)
+		return false
+	}
+	return true
 }

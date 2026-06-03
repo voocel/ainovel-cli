@@ -377,3 +377,20 @@ func Test_UsageTracker_AccumulatesAnyRoleWithUsage(t *testing.T) {
 		t.Errorf("有 Usage 不应计入 missing")
 	}
 }
+
+// TestAgentRoleName_ContestWriters 验证竞稿写手 writer_<slug> 归并到 writer role，
+// 与 build.go 的 agentToRole 对齐；architect_/editor 回归。
+func TestAgentRoleName_ContestWriters(t *testing.T) {
+	if got := agentRoleName("writer_persona1"); got != "writer" {
+		t.Fatalf("writer_persona1 → %q, want writer", got)
+	}
+	if got := agentRoleName("writer_乌贼"); got != "writer" {
+		t.Fatalf("writer_乌贼 → %q, want writer", got)
+	}
+	if got := agentRoleName("architect_short"); got != "architect" {
+		t.Fatalf("architect_short → %q, want architect(回归)", got)
+	}
+	if got := agentRoleName("editor"); got != "editor" {
+		t.Fatalf("editor → %q, want editor(回归)", got)
+	}
+}

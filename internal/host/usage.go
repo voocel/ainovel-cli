@@ -573,10 +573,17 @@ func (t *UsageTracker) resolveCost(modelName string, u agentcore.Usage) (cost, s
 }
 
 // agentRoleName 把 subagent 名字归一到 role 名。
-// architect_short/mid/long 都归到 architect；其他原样返回。
+// 与 internal/agents/build.go 的 agentToRole 对齐：
+//   - architect_short/mid/long → architect
+//   - 竞稿写手 writer_<slug> → writer（否则各自成孤儿桶，writer 成本统计偏低）
+//
+// judge 是独立角色，有自己的成本桶，原样返回。
 func agentRoleName(agentName string) string {
 	if strings.HasPrefix(agentName, "architect_") {
 		return "architect"
+	}
+	if strings.HasPrefix(agentName, "writer_") {
+		return "writer"
 	}
 	return agentName
 }

@@ -42,7 +42,17 @@
   // },
 
   // 写作风格：default / suspense / fantasy / romance。
-  "style": "default"
+  "style": "default",
+
+  // 多人格竞稿（可选）。配置 ≥2 个作者名即开启：每章由各人格各写一稿，
+  // Judge 选优后中选者按意见润色再提交。不配置或 <2 个 → 普通单 Writer 模式（零额外成本）。
+  // 文风由启动时 LLM 依作者名自动生成并缓存（personas.json），全书一致。
+  // 注意：串行执行，写作开销约为 persona 数量的倍数。
+  // "writing_contest": {
+  //   "personas": ["乌贼", "卖报小郎君", "土豆"],
+  //   // judge 字段当前预留（暂复用 editor 模型，配置不生效）
+  //   "judge": { "provider": "openrouter", "model": "google/gemini-2.5-flash" }
+  // }
 
   // 可选。显式指定上下文压缩使用的窗口大小。省略 / 0 = 按模型名自动解析
   //（registry 命中用真实窗口，未命中兜底 200k）。配了就优先用：既能给 registry

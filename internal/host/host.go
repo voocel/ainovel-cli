@@ -19,6 +19,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host/exp"
 	"github.com/voocel/ainovel-cli/internal/host/flow"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
+	"github.com/voocel/ainovel-cli/internal/host/persona"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
@@ -127,6 +128,11 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	}
 	h.observer = newObserver(coordinator, store, h.emitEvent, h.emitDelta, h.emitClear)
 	h.router = flow.NewDispatcher(coordinator, store)
+	// 竞稿模式：向 Dispatcher 注入 persona slug 列表，与 build.go 注册的 agent 命名保持一致。
+	// Slugs 与 EnsurePersonas 内部共用同一个 slugFor，保证 writer_<slug> 名字匹配。
+	if wc := cfg.WritingContest.Normalize(); wc.Enabled() {
+		h.router.SetContest(flow.ContestConfig{Personas: persona.Slugs(wc.Personas)})
+	}
 	h.routerDetach = h.router.Attach()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {

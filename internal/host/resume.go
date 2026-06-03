@@ -76,6 +76,8 @@ func describeResume(store *storepkg.Store, progress *domain.Progress) string {
 			return "恢复：审阅中断"
 		}
 		if progress.InProgressChapter > 0 {
+			// TODO(竞稿): 竞稿中间态可在此补更精确的 UI 标签（候选中/已裁定/润色中）；
+			// 当前 fallthrough 到"第 N 章进行中"，不影响恢复正确性（恢复由 flow.Route 事实驱动）。
 			return fmt.Sprintf("恢复：第 %d 章进行中", progress.InProgressChapter)
 		}
 		if label := describeArcEndLabel(store, progress); label != "" {
