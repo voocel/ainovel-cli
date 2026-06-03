@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // SubTask 是 parallel 批量指令中的单个子任务（一次 subagent(tasks=[...]) 调用的元素）。

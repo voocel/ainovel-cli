@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 )
 
 type contextBuildState struct {

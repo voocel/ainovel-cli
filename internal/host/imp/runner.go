@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
-	"github.com/voocel/ainovel-cli/internal/tools"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
 )
 
 // Deps 把 runner 需要的可插拔依赖一次性传入，方便测试 mock。

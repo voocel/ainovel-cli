@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 )
 
 // PrepareQuick 将直接输入整理为可进入 Engine 的快速启动计划。

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // CastStore 管理配角名册（meta/cast_ledger.json）。

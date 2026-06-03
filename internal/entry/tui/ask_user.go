@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/tools"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 type askUserRequest struct {

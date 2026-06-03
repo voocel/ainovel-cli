@@ -6,7 +6,7 @@
 // 第一版只支持 TXT；EPUB 留待下一轮。
 package exp
 
-import "github.com/voocel/ainovel-cli/internal/store"
+import "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 
 // Format 标识导出格式。
 type Format string

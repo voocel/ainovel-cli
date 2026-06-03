@@ -3,8 +3,8 @@ package flow
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // TestLoadStateWithContest_ConcurrencyAndAbandoned 验证 concurrency 开关与弃权名单进入 State。

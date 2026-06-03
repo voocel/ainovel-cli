@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/errs"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // DraftPersonaTool 是竞稿模式下的章节草稿工具。它绑定一个 persona slug，

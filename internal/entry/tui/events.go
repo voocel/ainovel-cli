@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/diag"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/startup"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/diag"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // 消息类型
@@ -45,15 +45,15 @@ type (
 		reply host.CoCreateReply
 		err   error
 	}
-	steerResultMsg    struct{}
-	continueResultMsg struct{ err error }
+	steerResultMsg     struct{}
+	continueResultMsg  struct{ err error }
 	spinnerTickMsg     time.Time
 	toolSpinnerTickMsg time.Time // 事件流工具 spinner 独立 tick（更快、独立于顶栏/星星）
 	cursorTickMsg      time.Time // 流式光标独立 tick
-	streamDeltaMsg    string    // 流式 token 增量
-	streamClearMsg    struct{} // 清空流式缓冲（新消息开始）
-	streamFlushTickMsg struct{} // 60fps 节流刷新流式面板（合并 token 级 delta）
-	quitResetMsg      struct{} // 双次 Ctrl+C 超时重置
+	streamDeltaMsg     string    // 流式 token 增量
+	streamClearMsg     struct{}  // 清空流式缓冲（新消息开始）
+	streamFlushTickMsg struct{}  // 60fps 节流刷新流式面板（合并 token 级 delta）
+	quitResetMsg       struct{}  // 双次 Ctrl+C 超时重置
 )
 
 // --- Cmd 函数 ---

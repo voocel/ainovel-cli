@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // SaveVerdictTool 保存 Judge 对多人格候选稿的选优裁定。

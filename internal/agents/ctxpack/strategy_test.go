@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
 func TestStoreSummaryCompactApplyUsesPersistentStoreData(t *testing.T) {

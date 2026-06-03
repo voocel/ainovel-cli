@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // renderTopBar 渲染顶部状态栏。

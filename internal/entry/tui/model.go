@@ -5,14 +5,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/tools"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 const maxEvents = 500
@@ -77,8 +77,8 @@ type Model struct {
 	width          int
 	height         int
 	autoScroll     bool
-	streamScroll   bool // 流式面板自动跟随
-	streamDirty    bool // streamRounds 有未刷新的 delta；由 streamFlushTick 60fps 合并
+	streamScroll   bool      // 流式面板自动跟随
+	streamDirty    bool      // streamRounds 有未刷新的 delta；由 streamFlushTick 60fps 合并
 	lastKeyAt      time.Time // 上次非 Enter 按键时间；KeyEnter 节流防粘贴 \n 流误触发提交
 	inputHistory   []string  // 已提交的输入历史（去重：相邻不重复）
 	historyIdx     int       // 当前浏览索引；== len(inputHistory) 表示"未浏览，正在编辑草稿"

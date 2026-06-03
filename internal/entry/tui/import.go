@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/host/imp"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host/imp"
 )
 
 // importState 是 /import 命令运行期间的模态状态。

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
 // maxCandidateAttempts 是单个 persona 候选连续失败的弃权阈值（并发失败收敛）。

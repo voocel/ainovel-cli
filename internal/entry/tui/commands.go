@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type slashCommandSpec struct {

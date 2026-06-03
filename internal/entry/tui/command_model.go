@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type modelSwitchFocus int

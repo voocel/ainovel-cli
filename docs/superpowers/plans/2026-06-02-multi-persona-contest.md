@@ -417,7 +417,7 @@ func TestContest_PromoteCandidate(t *testing.T) {
 }
 ```
 
-在 `contest_test.go` 顶部 import 块加入 `"github.com/voocel/ainovel-cli/internal/domain"`。
+在 `contest_test.go` 顶部 import 块加入 `"github.com/Accelerator-mzq/ainovel-cli/internal/domain"`。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -426,7 +426,7 @@ Expected: FAIL（`SaveVerdict undefined`）
 
 - [ ] **Step 3: 写实现（追加到 contest.go）**
 
-在 `contest.go` import 块加入 `"github.com/voocel/ainovel-cli/internal/domain"`，并追加：
+在 `contest.go` import 块加入 `"github.com/Accelerator-mzq/ainovel-cli/internal/domain"`，并追加：
 
 ```go
 func verdictPath(chapter int) string {
@@ -512,7 +512,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestSaveVerdict_Execute(t *testing.T) {
@@ -567,8 +567,8 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // SaveVerdictTool 保存 Judge 对多人格候选稿的选优裁定。
@@ -686,8 +686,8 @@ import (
 	"testing"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestCandidateStopGuard_BlocksWithoutDraft(t *testing.T) {
@@ -777,8 +777,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestDraftPersona_CandidatePhase(t *testing.T) {
@@ -856,9 +856,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/errs"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // DraftPersonaTool 是竞稿模式下的章节草稿工具。它绑定一个 persona slug，
@@ -988,7 +988,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestGenerate_UsesCacheOnSecondCall(t *testing.T) {
@@ -1053,8 +1053,8 @@ import (
 	"fmt"
 	"unicode"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // StyleGenFunc 依作者名生成文风 prompt 片段。注入以便测试与解耦具体 LLM。
@@ -1183,7 +1183,7 @@ package flow
 import (
 	"testing"
 
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestLoadState_ContestFacts(t *testing.T) {
@@ -1259,7 +1259,7 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 }
 ```
 
-`state.go` 需要判断 Writing 阶段。直接 import domain 并用 `domain.PhaseWriting`，把上面 `domainPhaseWriting(s)` 替换为 `domain.PhaseWriting`，并在 `state.go` import 块加入 `"github.com/voocel/ainovel-cli/internal/domain"`。即该行写作：
+`state.go` 需要判断 Writing 阶段。直接 import domain 并用 `domain.PhaseWriting`，把上面 `domainPhaseWriting(s)` 替换为 `domain.PhaseWriting`，并在 `state.go` import 块加入 `"github.com/Accelerator-mzq/ainovel-cli/internal/domain"`。即该行写作：
 
 ```go
 	if s.Progress == nil || s.Progress.Phase != domain.PhaseWriting {
@@ -1302,7 +1302,7 @@ package flow
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 func contestWritingState(next int) State {
@@ -1507,8 +1507,8 @@ package flow
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestPromoteIfNeeded_PromotesAfterVerdict(t *testing.T) {
@@ -1716,7 +1716,7 @@ git commit -m "feat: dispatcher 竞稿内联提升"
 	subagentTool := subagent.New(allSubagents...)
 ```
 
-在 `build.go` import 块加入 `"context"` 与 `"github.com/voocel/ainovel-cli/internal/host/persona"`。
+在 `build.go` import 块加入 `"context"` 与 `"github.com/Accelerator-mzq/ainovel-cli/internal/host/persona"`。
 
 - [ ] **Step 2: 新增 judge 系统提示词与 persona 文风生成函数**
 

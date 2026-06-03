@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/entry/headless"
-	"github.com/voocel/ainovel-cli/internal/entry/tui"
+	"github.com/Accelerator-mzq/ainovel-cli/assets"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/headless"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/tui"
 )
 
 var (

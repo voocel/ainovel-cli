@@ -3,8 +3,8 @@ package flow
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // helper：构造一个处于 Writing 阶段、分层模式的 Progress。

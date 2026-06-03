@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 )
 
 // CoCreateSession 承载共创模式的非 UI 状态。

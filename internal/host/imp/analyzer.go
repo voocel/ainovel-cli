@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
-	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // validHookTypes / validStrands 与 commit_chapter schema 保持一致。

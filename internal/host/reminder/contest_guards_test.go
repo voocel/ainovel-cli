@@ -5,9 +5,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // TestCandidateStopGuard_BlocksWithoutDraft 验证：没有 draft checkpoint 时应拦截 end_turn。

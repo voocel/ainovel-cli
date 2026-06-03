@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 // renderInputBox 渲染底部输入区。

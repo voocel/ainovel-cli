@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/startup"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type startupMode int
@@ -193,7 +193,7 @@ func renderCoCreateBody(width, height int, state *cocreateState, errMsg, inputVi
 	innerW := leftW - 1 // 给外层右竖线留 1 列
 
 	inputBox := lipgloss.NewStyle().
-		Width(innerW - 6). // -2 margin -2 padding -2 border
+		Width(innerW-6). // -2 margin -2 padding -2 border
 		Border(baseBorder).
 		BorderForeground(colorDim).
 		Padding(0, 1).
@@ -279,7 +279,7 @@ func renderCoCreateSuggestions(width int, state *cocreateState) string {
 
 	// 与 inputBox 左右 margin/padding 对齐：左 2 列（margin1+padding1）、右同。
 	return lipgloss.NewStyle().
-		Width(width - 2).
+		Width(width-2).
 		Padding(0, 2).
 		Render(strings.Join(lines, "\n"))
 }

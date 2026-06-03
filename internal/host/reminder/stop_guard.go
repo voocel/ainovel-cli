@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"sync/atomic"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // StopGuard 是"物理不可停机"的最后防线。
@@ -62,4 +62,3 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 		return agentcore.StopDecision{Allow: false, InjectMessage: inject}
 	}
 }
-

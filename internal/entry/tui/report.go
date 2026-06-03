@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/voocel/ainovel-cli/internal/diag"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/diag"
 )
 
 type reportState struct {
@@ -162,7 +162,7 @@ func renderReportText(report diag.Report, width int, startedAt, finishedAt time.
 		actionStyle := lipgloss.NewStyle().Foreground(colorSuccess)
 		for _, a := range report.Actions {
 			b.WriteString("\n")
-			b.WriteString(actionStyle.Render("["+string(a.Kind)+"]"))
+			b.WriteString(actionStyle.Render("[" + string(a.Kind) + "]"))
 			b.WriteString(" ")
 			b.WriteString(a.Summary)
 			b.WriteString("\n")

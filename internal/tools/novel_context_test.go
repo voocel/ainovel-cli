@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/rules"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestContextToolReportsWarningsForCorruptedState(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -43,7 +43,7 @@ func TestLoadEmpty(t *testing.T) {
 	if v, err := s.World.LoadReview(99); err != nil || v != nil {
 		t.Errorf("Review: want (nil, nil), got (%v, %v)", v, err)
 	}
-if v, err := s.World.LoadLastReview(10); err != nil || v != nil {
+	if v, err := s.World.LoadLastReview(10); err != nil || v != nil {
 		t.Errorf("LastReview: want (nil, nil), got (%v, %v)", v, err)
 	}
 }
@@ -297,4 +297,3 @@ func TestRenderWorldRules(t *testing.T) {
 		t.Error("empty boundary rendered")
 	}
 }
-

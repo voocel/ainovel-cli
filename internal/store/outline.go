@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // OutlineStore 管理故事前提、大纲（扁平/分层）和指南针。

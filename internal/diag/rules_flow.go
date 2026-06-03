@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // RewritePendingPressure 检测存在待改写章节（当前仅检测状态存在，不判定停滞）。

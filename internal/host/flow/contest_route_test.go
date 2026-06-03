@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // contestWritingState 构造一个处于 Writing 阶段、竞稿模式的 State，目标章为 next。

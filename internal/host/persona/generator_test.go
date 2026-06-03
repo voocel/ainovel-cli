@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 func TestGenerate_UsesCacheOnSecondCall(t *testing.T) {

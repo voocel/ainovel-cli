@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // Store 是状态管理的组合根，持有所有子存储。

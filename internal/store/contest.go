@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // ContestStore 管理多人格竞稿的候选稿与裁定文件。

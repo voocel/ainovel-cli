@@ -1,4 +1,4 @@
-module github.com/voocel/ainovel-cli
+module github.com/Accelerator-mzq/ainovel-cli
 
 go 1.25.5
 

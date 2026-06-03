@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // NeedsSetup 检查是否需要首次引导（配置文件不存在时触发）。

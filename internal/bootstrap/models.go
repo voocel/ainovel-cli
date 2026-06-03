@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/errs"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
-	"github.com/voocel/ainovel-cli/internal/errs"
 )
 
 // 长输出 + 长 ctx 场景下，reasoning-aware provider（mimo / deepseek-r1 等）

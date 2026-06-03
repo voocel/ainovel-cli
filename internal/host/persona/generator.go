@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // StyleGenFunc 依作者名生成文风 prompt 片段。注入以便测试与解耦具体 LLM。

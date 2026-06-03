@@ -4,7 +4,7 @@ package store
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // 注：store 包内已有 NewStore(dir) *Store（单返回值，无 error），见 cast_test.go:11。

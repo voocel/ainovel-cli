@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // ReadChapterTool 读取章节原文，让 Agent 能回读自己和前文的文字。

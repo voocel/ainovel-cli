@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/tools"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
 )
 
 //go:embed prompts/*.md

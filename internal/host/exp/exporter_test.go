@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // newTestStore 构造一个 t.TempDir() 之上的最小 store，已写入 1..n 章终稿与 progress。
@@ -236,11 +236,11 @@ func TestRun_UnknownExtension(t *testing.T) {
 
 func TestSanitizeFileName(t *testing.T) {
 	cases := map[string]string{
-		"":              "novel",
-		"   ":           "novel",
-		"normal":        "normal",
-		"a/b":           "a_b",
-		"a\\b":          "a_b",
+		"":                     "novel",
+		"   ":                  "novel",
+		"normal":               "normal",
+		"a/b":                  "a_b",
+		"a\\b":                 "a_b",
 		"a:b*c?\"d<e>f|g\x00h": "a_b_c__d_e_f_g_h",
 	}
 	for in, want := range cases {

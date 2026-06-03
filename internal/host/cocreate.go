@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不是直接开始写小说，而是通过多轮简短对话帮助用户澄清创作需求，并持续整理出一段可直接交给创作引擎的中文创作指令。
@@ -218,10 +218,10 @@ func splitCoCreateMarkers(s string) (reply, draft string, ready bool, suggestion
 
 // extractTagContent 从 s 中抠出 <tag>...</tag> 之间的文本。
 // 三种偶发故障场景兜底，避免直接走降级丢字段：
-//   1. 有开无闭（流式中段）→ 切到下一个已知开标签前
-//   2. 无开有闭（模型 typo，如 <suggestions> 写成 <uggestions>）→ 从最近一个已知
-//      完整闭合标签的结束位置开始，到 </tag> 之前
-//   3. reply 完全无开标签（模型直接以自然语言开篇，末尾贴 </reply>）→ 从开头到 </reply>
+//  1. 有开无闭（流式中段）→ 切到下一个已知开标签前
+//  2. 无开有闭（模型 typo，如 <suggestions> 写成 <uggestions>）→ 从最近一个已知
+//     完整闭合标签的结束位置开始，到 </tag> 之前
+//  3. reply 完全无开标签（模型直接以自然语言开篇，末尾贴 </reply>）→ 从开头到 </reply>
 func extractTagContent(s, tag string) string {
 	open := "<" + tag + ">"
 	closeTag := "</" + tag + ">"

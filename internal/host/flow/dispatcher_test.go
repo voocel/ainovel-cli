@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
 // TestDedupeKey_BatchVsSingle 验证批量指令与单派指令、以及不同批次之间的去重键行为。

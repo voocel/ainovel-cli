@@ -196,7 +196,7 @@ ToolResultMicrocompact → LightTrim → StoreSummaryCompact → FullSummary
 
 ```bash
 # 安装
-go install github.com/voocel/ainovel-cli/cmd/ainovel-cli@latest
+go install github.com/Accelerator-mzq/ainovel-cli/cmd/ainovel-cli@latest
 
 # 本地开发运行
 go run ./cmd/ainovel-cli

@@ -3,7 +3,7 @@ package store
 import (
 	"os"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 )
 
 // UsageStore 持久化 token / cost 累计用量到 meta/usage.json。

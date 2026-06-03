@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // ReadCandidatesTool 让 judge 读取某章所有 persona 的候选稿用于对比选优。

@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/assets"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/agents/ctxpack"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host/persona"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host/reminder"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/agentcore/subagent"
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/host/persona"
-	"github.com/voocel/ainovel-cli/internal/host/reminder"
-	"github.com/voocel/ainovel-cli/internal/rules"
-	"github.com/voocel/ainovel-cli/internal/store"
-	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
 // agentToRole 把 subagent name 归一为 ModelSet 认得的 role 名。
