@@ -26,6 +26,7 @@ type Store struct {
 	Sessions    *SessionStore
 	Usage       *UsageStore
 	Contest     *ContestStore
+	Simulation  *SimulationStore
 
 	crossMu sync.Mutex // 保护跨域原子操作
 }
@@ -50,6 +51,7 @@ func NewStore(dir string) *Store {
 		Sessions:    NewSessionStore(newIO(dir)),
 		Usage:       NewUsageStore(newIO(dir)),
 		Contest:     NewContestStore(newIO(dir)),
+		Simulation:  NewSimulationStore(newIO(dir)),
 	}
 }
 

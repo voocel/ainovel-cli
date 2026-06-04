@@ -104,6 +104,12 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 	// 注入 working_memory.user_rules（canonical 路径）。架构师路径原本没有 working_memory，
 	// 由 buildUserRules 按需新建只装 user_rules 的容器。rulesOpts 为空时 Bundle 是空对象，
 	// 但仍输出，避免 LLM 看到 user_rules=null 走异常分支。
+	if a.Chapter > 0 {
+		t.buildSimulationProfile(result, "working_memory", warn)
+	} else {
+		t.buildSimulationProfile(result, "planning_memory", warn)
+	}
+
 	t.buildUserRules(result)
 
 	if len(warnings) > 0 {
@@ -227,6 +233,9 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 	}
 	if _, ok := result["memory_policy"]; ok {
 		items = append(items, "记忆策略:ok")
+	}
+	if _, ok := result["simulation_profile"]; ok {
+		items = append(items, "仿写画像:ok")
 	}
 	if warnings, ok := result["_warnings"].([]string); ok && len(warnings) > 0 {
 		items = append(items, fmt.Sprintf("告警:%d", len(warnings)))

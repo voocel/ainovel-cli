@@ -3,6 +3,7 @@ package reminder
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 
 	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
@@ -90,12 +91,27 @@ func NewArchitectStopGuard(st *store.Store) agentcore.StopGuard {
 	)
 }
 
-// NewEditorStopGuard 要求 editor 本轮至少落盘一次审阅或摘要。
-func NewEditorStopGuard(st *store.Store) agentcore.StopGuard {
-	return newCheckpointDeltaGuard(st, "editor",
-		[]string{"review", "arc_summary", "volume_summary"},
-		"你必须调用 save_review / save_arc_summary / save_volume_summary 之一落盘结果后才能结束。",
-	)
+// NewEditorStopGuard 要求 editor 本轮落盘与"任务"匹配的产物后才能结束。
+//
+// 任务感知：被派去生成摘要时，仅 save_review（复核）不算完成——必须产出对应摘要。
+// 否则"被派生成弧摘要却先复核"的 editor 会满足旧的宽松判据提前结束，弧摘要永不落盘
+// （配合 dispatcher 去重哑火曾导致卷中骨架弧死循环，详见 outline-exhaustion-livelock）。
+// StopAfterTool 退出会绕过 StopGuard（loop.go），故 build.go 同步把 save_review 移出硬停，
+// 让复核后能继续走到摘要工具，再由本 guard 把关收尾。
+func NewEditorStopGuard(st *store.Store, task string) agentcore.StopGuard {
+	switch {
+	case strings.Contains(task, "save_volume_summary") || strings.Contains(task, "卷摘要"):
+		return newCheckpointDeltaGuard(st, "editor", []string{"volume_summary"},
+			"本次任务是生成卷摘要：你必须调用 save_volume_summary 落盘后才能结束，save_review 复核不算完成。")
+	case strings.Contains(task, "save_arc_summary") || strings.Contains(task, "弧摘要"):
+		return newCheckpointDeltaGuard(st, "editor", []string{"arc_summary"},
+			"本次任务是生成弧摘要：你必须调用 save_arc_summary 落盘后才能结束，save_review 复核不算完成。")
+	default:
+		// 评审或临时任务：任一审阅/摘要落盘即可（保持既有宽松行为）。
+		return newCheckpointDeltaGuard(st, "editor",
+			[]string{"review", "arc_summary", "volume_summary"},
+			"你必须调用 save_review / save_arc_summary / save_volume_summary 之一落盘结果后才能结束。")
+	}
 }
 
 // NewCandidateStopGuard 要求竞稿候选 writer 本轮至少产生一次成功的 draft_chapter

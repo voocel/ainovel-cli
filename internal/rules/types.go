@@ -88,19 +88,19 @@ const (
 //
 // 永远不会阻断加载——所有异常都在这里暴露给 LLM 与 /report，不静默处理。
 type Conflict struct {
-	Source string       `json:"source"`           // 文件路径（绝对或相对，按来源记录）
-	Kind   ConflictKind `json:"kind"`             // 冲突类型
-	Field  string       `json:"field,omitempty"`  // 受影响字段名（如 forbidden_chars）；parse_error 时为空
-	Detail string       `json:"detail"`           // 人类可读的详情（含来源列表 / 错误信息）
+	Source string       `json:"source"`          // 文件路径（绝对或相对，按来源记录）
+	Kind   ConflictKind `json:"kind"`            // 冲突类型
+	Field  string       `json:"field,omitempty"` // 受影响字段名（如 forbidden_chars）；parse_error 时为空
+	Detail string       `json:"detail"`          // 人类可读的详情（含来源列表 / 错误信息）
 }
 
 // Parsed 是单份 rules.md 解析后的结果。
 type Parsed struct {
-	Source     string       // 文件路径
-	Kind       SourceKind   // 来源类型，用于合并优先级
-	Structured Structured   // 该文件声明的 front matter 字段
-	Preference string       // 该文件的 Markdown 正文（front matter 之外的部分）
-	Conflicts  []Conflict   // 该文件解析期间产生的 conflicts（未知字段 / 类型错误）
+	Source     string     // 文件路径
+	Kind       SourceKind // 来源类型，用于合并优先级
+	Structured Structured // 该文件声明的 front matter 字段
+	Preference string     // 该文件的 Markdown 正文（front matter 之外的部分）
+	Conflicts  []Conflict // 该文件解析期间产生的 conflicts（未知字段 / 类型错误）
 }
 
 // Bundle 是合并后注入 working_memory.user_rules 的最终形态。

@@ -11,10 +11,10 @@ type CastEntry struct {
 	Name string `json:"name"`
 	// Aliases 当前没有写入通道；预留给将来的"用户 steer 合并别名"工具
 	// （如把'李掌柜'与'老李'声明为同一人）。MergeAppearances 已支持别名查找。
-	Aliases            []string `json:"aliases,omitempty"`
-	BriefRole          string   `json:"brief_role,omitempty"` // 一句话定位（首次出场由 Writer 填，可后续补全；不被覆盖）
-	FirstSeenChapter   int      `json:"first_seen_chapter"`
-	LastSeenChapter    int      `json:"last_seen_chapter"`
+	Aliases          []string `json:"aliases,omitempty"`
+	BriefRole        string   `json:"brief_role,omitempty"` // 一句话定位（首次出场由 Writer 填，可后续补全；不被覆盖）
+	FirstSeenChapter int      `json:"first_seen_chapter"`
+	LastSeenChapter  int      `json:"last_seen_chapter"`
 	// AppearanceCount 派生自 len(AppearanceChapters)，merge 时保持同步。
 	// 保留显式字段方便 UI/JSON 直接读，无需每次重算。
 	AppearanceCount    int   `json:"appearance_count"`

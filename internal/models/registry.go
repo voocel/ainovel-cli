@@ -171,4 +171,3 @@ func (r *ModelRegistry) MergeModels(fetched []ModelEntry) {
 		}
 	}
 }
-

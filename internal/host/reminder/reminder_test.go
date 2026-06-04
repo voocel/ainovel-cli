@@ -161,3 +161,45 @@ func TestStopGuard_NonConsecutiveTurnResetsCounter(t *testing.T) {
 		t.Fatal("resume (TurnIndex backflow) must NOT escalate")
 	}
 }
+
+// TestEditorStopGuard_TaskAware 验证任务感知：被派生成弧摘要时，仅 save_review（复核）
+// 不算完成，必须产出 arc_summary 才放行——封堵卷中骨架弧死循环的起点 Defect C。
+func TestEditorStopGuard_TaskAware(t *testing.T) {
+	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+
+	// 摘要任务 + 只存了 review → 必须阻拦（review 不满足 arc_summary 要求）。
+	t.Run("summary task blocks on review only", func(t *testing.T) {
+		s := newTestStore(t)
+		guard := NewEditorStopGuard(s, "生成第 5 卷第 1 弧摘要（save_arc_summary）")
+		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "review", "reviews/v05a01.json", "d1"); err != nil {
+			t.Fatalf("append review: %v", err)
+		}
+		if d := guard(context.Background(), normalStop); d.Allow {
+			t.Fatal("summary task must NOT be satisfied by a review checkpoint")
+		}
+	})
+
+	// 摘要任务 + 已存 arc_summary → 放行。
+	t.Run("summary task allows on arc_summary", func(t *testing.T) {
+		s := newTestStore(t)
+		guard := NewEditorStopGuard(s, "生成第 5 卷第 1 弧摘要（save_arc_summary）")
+		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "arc_summary", "summaries/arc-v05a01.json", "d1"); err != nil {
+			t.Fatalf("append arc_summary: %v", err)
+		}
+		if d := guard(context.Background(), normalStop); !d.Allow {
+			t.Fatal("summary task must be satisfied by an arc_summary checkpoint")
+		}
+	})
+
+	// 评审任务 + 存了 review → 放行（默认宽松行为不变）。
+	t.Run("review task allows on review", func(t *testing.T) {
+		s := newTestStore(t)
+		guard := NewEditorStopGuard(s, "对第 5 卷第 1 弧做弧级评审（scope=arc）")
+		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "review", "reviews/v05a01.json", "d1"); err != nil {
+			t.Fatalf("append review: %v", err)
+		}
+		if d := guard(context.Background(), normalStop); !d.Allow {
+			t.Fatal("review task must be satisfied by a review checkpoint")
+		}
+	})
+}

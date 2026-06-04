@@ -61,6 +61,8 @@ type Model struct {
 	report         *reportState
 	importer       *importState
 	importSeq      int
+	simulator      *simulationState
+	simSeq         int
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
@@ -583,6 +585,9 @@ func (m Model) View() string {
 	}
 	if m.importer != nil {
 		return renderImportModal(m.width, m.height, m.importer)
+	}
+	if m.simulator != nil {
+		return renderSimulationModal(m.width, m.height, m.simulator)
 	}
 
 	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame())

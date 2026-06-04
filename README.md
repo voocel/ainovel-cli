@@ -265,6 +265,25 @@ ainovel-cli
 
 每条发现包含：问题描述、数据证据、改进建议（指向具体的 prompt/flow/config）。
 
+## 仿写画像
+
+把参考文章放到当前启动目录的 `simulate/` 文件夹中，然后在 TUI 输入 `/simulate`。系统会递归读取 `.txt`、`.md`、`.markdown` 文件，用 architect 模型分析语料，并写入：
+
+```text
+output/novel/meta/simulation_profile.json
+```
+
+再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示“画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
+
+也可以导入之前生成的画像，避免重复分析同一批文章：
+
+```text
+/simulate
+/importsim ./profile.json
+```
+
+`/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Coordinator、Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
+
 ## 导入
 
 在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 大纲，逐章落盘。导入完成后状态等同于"已写完 N 章"，输入"继续创作"即可让 Coordinator 接力续写。

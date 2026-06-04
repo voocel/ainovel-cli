@@ -69,6 +69,8 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleReportKey)
 	case m.importer != nil:
 		return m.handleBlockingModalKey(msg, m.handleImportKey)
+	case m.simulator != nil:
+		return m.handleBlockingModalKey(msg, m.handleSimulationKey)
 	default:
 		return m, nil, false
 	}
@@ -478,6 +480,16 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m, listenImportEvent(msg.reqID, msg.ch), true
+	case simEventMsg:
+		if m.simulator == nil || msg.reqID != m.simulator.reqID {
+			return m, nil, true
+		}
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.simulator.appendEvent(msg.ev, paddedModalContentWidth(boxW))
+		if msg.terminal() {
+			return m, nil, true
+		}
+		return m, listenSimulationEvent(msg.reqID, msg.ch), true
 	case exportDoneMsg:
 		if msg.err != nil {
 			m.applyEvent(host.Event{

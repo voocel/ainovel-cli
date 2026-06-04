@@ -334,4 +334,3 @@ func typeErr(source, field, expected string, got any) Conflict {
 		Detail: fmt.Sprintf("字段 %s 类型错误，期望 %s，收到 %T（%v）；已丢弃", field, expected, got, got),
 	}
 }
-

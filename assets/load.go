@@ -31,6 +31,8 @@ type Prompts struct {
 	Judge            string
 	ImportFoundation string
 	ImportAnalyzer   string
+	SimulationSource string
+	SimulationMerge  string
 }
 
 // Bundle 表示运行所需的静态资源集合。
@@ -94,16 +96,28 @@ func loadReferences(style string) tools.References {
 
 func loadPrompts() Prompts {
 	return Prompts{
-		Coordinator:      mustRead(promptsFS, "prompts/coordinator.md"),
-		ArchitectShort:   mustRead(promptsFS, "prompts/architect-short.md"),
-		ArchitectLong:    mustRead(promptsFS, "prompts/architect-long.md"),
-		Writer:           mustRead(promptsFS, "prompts/writer.md"),
-		Editor:           mustRead(promptsFS, "prompts/editor.md"),
+		Coordinator:      withSimulationGuidance(mustRead(promptsFS, "prompts/coordinator.md"), "coordinator"),
+		ArchitectShort:   withSimulationGuidance(mustRead(promptsFS, "prompts/architect-short.md"), "architect"),
+		ArchitectLong:    withSimulationGuidance(mustRead(promptsFS, "prompts/architect-long.md"), "architect"),
+		Writer:           withSimulationGuidance(mustRead(promptsFS, "prompts/writer.md"), "writer"),
+		Editor:           withSimulationGuidance(mustRead(promptsFS, "prompts/editor.md"), "editor"),
 		Judge:            mustRead(promptsFS, "prompts/judge.md"),
 		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
 		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
+		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
+		SimulationMerge:  mustRead(promptsFS, "prompts/simulation-merge.md"),
 	}
 }
+
+func withSimulationGuidance(prompt, role string) string {
+	return prompt + "\n\n" + strings.ReplaceAll(simulationGuidance, "{{role}}", role)
+}
+
+const simulationGuidance = `## 仿写画像
+
+当 novel_context 返回 simulation_profile 时，必须把它视为当前作品的仿写方向约束。{{role}} 应读取其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
+
+使用原则：借鉴结构、节奏、钩子、信息释放和吸引读者的手法；不要复制原文句子、人物、地名、专有设定或固定桥段。若 simulation_profile 与用户显式要求冲突，优先服从用户要求。`
 
 func loadStyles() map[string]string {
 	styles := make(map[string]string)

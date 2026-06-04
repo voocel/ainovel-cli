@@ -121,6 +121,48 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "simulate",
+			Group:       "writing",
+			Usage:       "/simulate",
+			Description: "读取 ./simulate 生成或增量更新仿写画像",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.simSeq++
+				state, listenCmd, err := startSimulate(m.runtime, m.simSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "仿写画像启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.simulator = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
+		{
+			Name:        "importsim",
+			Group:       "writing",
+			Usage:       "/importsim <profile.json>",
+			Description: "导入已有仿写画像并按语料指纹合并",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.simSeq++
+				state, listenCmd, err := startImportSimulation(m.runtime, m.simSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "导入仿写画像失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.simulator = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
+		{
 			Name:        "export",
 			Group:       "writing",
 			Usage:       "/export [path] [from=N] [to=M] [--overwrite]",

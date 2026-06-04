@@ -144,7 +144,7 @@ func BuildCoordinator(
 		Model:              architectModel,
 		SystemPrompt:       bundle.Prompts.ArchitectShort,
 		Tools:              architectTools,
-		MaxTurns:           12,
+		MaxTurns:           15,
 		MaxRetries:         subagentMaxRetries,
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
@@ -238,9 +238,15 @@ func BuildCoordinator(
 		MaxRetries:         subagentMaxRetries,
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
-		StopAfterTools:     []string{"save_review", "save_arc_summary", "save_volume_summary"},
-		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-			return reminder.NewEditorStopGuard(store)
+		// 仅摘要类终态产物命中即停；save_review 不再硬停——StopAfterTool 退出会绕过
+		// StopGuard（agentcore loop.go），若 save_review 硬停，"被派生成弧摘要却先复核"
+		// 的 editor 会在 save_review 处被砍断、够不到 save_arc_summary。评审/摘要任务的
+		// 收尾改由任务感知的 NewEditorStopGuard 把关。
+		StopAfterToolResult: func(toolName string, _ json.RawMessage) bool {
+			return toolName == "save_arc_summary" || toolName == "save_volume_summary"
+		},
+		StopGuardFactory: func(_, task string) agentcore.StopGuard {
+			return reminder.NewEditorStopGuard(store, task)
 		},
 	}
 
