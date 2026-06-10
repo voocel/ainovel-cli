@@ -417,6 +417,8 @@ output/novel/meta/simulation_profile.json
 
 配置 `writing_contest.concurrency: true` 后，同一章的多个 persona 候选稿并发生成（一次 `subagent(tasks=[...])` 调用，受 agentcore `maxConcurrency=4` 限流），judge 选优、中选稿提升与润色仍串行。某 persona 候选连续失败 3 次自动弃权，候选数减一继续；全部弃权降级为单 Writer。崩溃恢复由磁盘事实（候选槽 / verdict / contest.json）驱动，幂等。
 
+**两段式竞稿（成本优化）**：`writing_contest.mode: "synopsis"` 时候选阶段只写「500-800 字梗概 + 300 字开头试写」，Judge 在梗概层面选优，中选 persona 再写全章正文。全章 token 只花一份，竞稿成本约降为 full 模式的 1/N，文风与故事走向的差异在梗概阶段已可判别。
+
 ### 去 AI 味与自定义规则
 
 内置一份去 AI 味基线（`assets/` 下，出厂默认）：机械黑名单 `rules/default.md`（套句 / 疲劳词，commit 时确定性检查）+ 语义判据 `references/anti-ai-tone.md`（注入 writer / editor 规避与举证）。
