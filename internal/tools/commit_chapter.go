@@ -210,11 +210,15 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			return nil, fmt.Errorf("append timeline: %w: %w", errs.ErrStoreWrite, err)
 		}
 	}
+	var foreshadowUnknown []string
 	if len(a.ForeshadowUpdates) > 0 {
-		if err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates); err != nil {
+		unknown, err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates)
+		if err != nil {
 			return nil, fmt.Errorf("update foreshadow: %w: %w", errs.ErrStoreWrite, err)
 		}
+		foreshadowUnknown = unknown
 	}
+	_ = foreshadowUnknown // Task 3 透传进 commitOutput 后删除此行
 	if len(a.RelationshipChanges) > 0 {
 		for i := range a.RelationshipChanges {
 			a.RelationshipChanges[i].Chapter = a.Chapter

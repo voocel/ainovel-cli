@@ -103,12 +103,12 @@ func TestForeshadow_UpdateLifecycle(t *testing.T) {
 	s := newTestStore(t)
 
 	// plant
-	_ = s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{
+	_, _ = s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{
 		{ID: "f1", Action: "plant", Description: "黑影"},
 		{ID: "f2", Action: "plant", Description: "断剑"},
 	})
 	// advance f1, resolve f2
-	_ = s.World.UpdateForeshadow(3, []domain.ForeshadowUpdate{
+	_, _ = s.World.UpdateForeshadow(3, []domain.ForeshadowUpdate{
 		{ID: "f1", Action: "advance"},
 		{ID: "f2", Action: "resolve"},
 	})
@@ -128,6 +128,31 @@ func TestForeshadow_UpdateLifecycle(t *testing.T) {
 	active, _ := s.World.LoadActiveForeshadow()
 	if len(active) != 1 || active[0].ID != "f1" {
 		t.Errorf("active: want [f1], got %v", active)
+	}
+}
+
+// TestUpdateForeshadow_DeadlineAndUnknownIDs 验证 deadline 写入/顺延与未知 ID 返回。
+func TestUpdateForeshadow_DeadlineAndUnknownIDs(t *testing.T) {
+	s := NewStore(t.TempDir())
+	unknown, err := s.World.UpdateForeshadow(1, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "plant", Description: "神秘玉佩", Deadline: 20},
+	})
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("plant: unknown=%v err=%v", unknown, err)
+	}
+	unknown, err = s.World.UpdateForeshadow(5, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "advance", Deadline: 30},
+		{ID: "ghost", Action: "resolve"},
+	})
+	if err != nil {
+		t.Fatalf("advance err=%v", err)
+	}
+	if len(unknown) != 1 || unknown[0] != "ghost" {
+		t.Fatalf("unknown = %v, want [ghost]", unknown)
+	}
+	entries, _ := s.World.LoadForeshadowLedger()
+	if len(entries) != 1 || entries[0].Deadline != 30 || entries[0].Status != "advanced" {
+		t.Fatalf("entries = %+v, want f1 deadline=30 advanced", entries)
 	}
 }
 

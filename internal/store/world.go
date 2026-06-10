@@ -95,8 +95,11 @@ func (s *WorldStore) LoadForeshadowLedger() ([]domain.ForeshadowEntry, error) {
 }
 
 // UpdateForeshadow 批量应用伏笔增量操作。
-func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUpdate) error {
-	return s.io.WithWriteLock(func() error {
+// 返回 advance/resolve 引用了不存在 ID 的列表（未知 ID 静默丢弃曾导致台账漂移不可见，
+// 现作为事实返回给调用方透传，不阻断）。
+func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUpdate) ([]string, error) {
+	var unknown []string
+	err := s.io.WithWriteLock(func() error {
 		var entries []domain.ForeshadowEntry
 		if err := s.io.ReadJSONUnlocked("foreshadow_ledger.json", &entries); err != nil {
 			if !os.IsNotExist(err) {
@@ -116,15 +119,23 @@ func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUp
 					Description: u.Description,
 					PlantedAt:   chapter,
 					Status:      "planted",
+					Deadline:    u.Deadline,
 				})
 			case "advance":
 				if i, ok := idx[u.ID]; ok {
 					entries[i].Status = "advanced"
+					if u.Deadline > 0 {
+						entries[i].Deadline = u.Deadline // 允许顺延
+					}
+				} else {
+					unknown = append(unknown, u.ID)
 				}
 			case "resolve":
 				if i, ok := idx[u.ID]; ok {
 					entries[i].Status = "resolved"
 					entries[i].ResolvedAt = chapter
+				} else {
+					unknown = append(unknown, u.ID)
 				}
 			}
 		}
@@ -133,6 +144,7 @@ func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUp
 		}
 		return s.io.WriteMarkdownUnlocked("foreshadow_ledger.md", renderForeshadow(entries))
 	})
+	return unknown, err
 }
 
 // LoadActiveForeshadow 返回未回收的伏笔条目。
