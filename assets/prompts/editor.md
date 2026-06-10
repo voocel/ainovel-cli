@@ -88,6 +88,7 @@
 | `fatigue_words` | aesthetic | severity=warning → issue 一条，evidence 引用原文 |
 | `chapter_words` | pacing | severity=error → polish/rewrite；warning → 视情况 |
 | `foreshadow_overdue` / `foreshadow_unknown_ids` | foreshadow | 逾期未回收酌情降分并在 issues 里给出回收建议；unknown ID 说明伏笔台账引用错误，要求下章用正确 ID 修正 |
+| `character_violations` | character / consistency | 确认非闪回/回忆后应升级 verdict（至少 polish）；已死角色无复活记录仍出场属于 critical，应升级为 rewrite |
 
 `preferences` 自然语言里的偏好按语义归类：
 

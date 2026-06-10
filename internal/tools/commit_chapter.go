@@ -40,6 +40,7 @@ type commitOutput struct {
 	RuleViolations       []rules.Violation        `json:"rule_violations,omitempty"`
 	ForeshadowUnknownIDs []string                 `json:"foreshadow_unknown_ids,omitempty"`
 	ForeshadowOverdue    []domain.ForeshadowEntry `json:"foreshadow_overdue,omitempty"`
+	CharacterViolations  []string                 `json:"character_violations,omitempty"`
 }
 
 func (t *CommitChapterTool) Name() string { return "commit_chapter" }
@@ -247,6 +248,28 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		}
 	}
 
+	// 4c. 角色硬状态对照：本章出场角色若最新状态为死亡且死于更早章节，返回事实告警。
+	// 仅返事实不阻断（铁律一）：误报场景（闪回/回忆）由 editor 语义评审豁免。
+	// 注意本步在 4 之后执行：本章 state_changes 已落盘，"本章复活"会使最新状态非死亡而自动豁免。
+	var characterViolations []string
+	if len(a.Characters) > 0 {
+		if changes, _ := t.store.World.LoadStateChanges(); len(changes) > 0 {
+			if dead := domain.DeadEntities(changes, a.Chapter); len(dead) > 0 {
+				alias := loadAliasToCanonical(t.store)
+				for _, name := range a.Characters {
+					canon := name
+					if c, ok := alias[name]; ok {
+						canon = c
+					}
+					if ch, ok := dead[canon]; ok {
+						characterViolations = append(characterViolations,
+							fmt.Sprintf("角色「%s」已于第 %d 章记录死亡，本章仍出场（若为闪回/复活请补 state_changes 修正）", canon, ch))
+					}
+				}
+			}
+		}
+	}
+
 	pending.Stage = domain.CommitStageStateApplied
 	pending.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err := t.store.Signals.SavePendingCommit(pending); err != nil {
@@ -362,6 +385,7 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		RuleViolations:       violations,
 		ForeshadowUnknownIDs: foreshadowUnknown,
 		ForeshadowOverdue:    overdueFs,
+		CharacterViolations:  characterViolations,
 	})
 }
 
@@ -599,4 +623,21 @@ func (t *CommitChapterTool) layeredBookComplete(progress *domain.Progress) bool 
 		return false
 	}
 	return true
+}
+
+// loadAliasToCanonical 构建 别名→正名 映射；加载失败返回 nil（按原名匹配）。
+func loadAliasToCanonical(s *store.Store) map[string]string {
+	chars, err := s.Characters.Load()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, c := range chars {
+		for _, alias := range c.Aliases {
+			if alias != "" && c.Name != "" {
+				m[alias] = c.Name
+			}
+		}
+	}
+	return m
 }

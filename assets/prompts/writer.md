@@ -96,3 +96,4 @@ commit 返回中的伏笔事实（只返事实不阻断，需要你消费）：
 
 - `foreshadow_unknown_ids`：本次 `advance` / `resolve` 引用了台账中不存在的伏笔 ID。核对 ID 拼写，在下一章 commit 时用正确 ID 修正
 - `foreshadow_overdue`：已过建议回收章仍未回收的伏笔。在近期章节安排回收；若剧情确需推迟，交由 Architect 评估后用 `advance` 携带新 `deadline` 顺延
+- `character_violations`：本章 `characters` 中出现了 `state_changes` 里已记录死亡的角色。若该角色是在闪回/回忆场景中出现，属正常情节，在自审说明中注明即可；若为剧情复活，应在本章 `state_changes` 中补写复活状态条目（系统自动豁免）；否则需修正正文，移除已死角色
