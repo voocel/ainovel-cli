@@ -61,20 +61,21 @@ func DeadEntities(changes []StateChange, currentChapter int) map[string]int {
 	return out
 }
 
-// NormalizeDeadEntities 把 DeadEntities 结果的 key 经 别名→正名 表归一化（同正名取最早死亡章）。
-// state_changes.entity 由 LLM 自由填写，可能记别名；出场名单也可能用别名——
-// 两侧都折算到正名后比对，消除单向归一化的漏报缺口。
-func NormalizeDeadEntities(dead map[string]int, aliasToCanonical map[string]string) map[string]int {
-	out := make(map[string]int, len(dead))
-	for entity, ch := range dead {
-		canon := entity
-		if c, ok := aliasToCanonical[entity]; ok {
-			canon = c
+// DeadEntitiesNormalized 是"fold 前先别名归一"的增强版本：
+// 在按实体分桶（FoldStateChanges）之前，先把每条 StateChange 的 Entity 经
+// aliasToCanonical 折算成正名，再走原有 fold + 死亡判定逻辑。
+// 这样「别名死亡 + 正名复活」也能正确豁免，与 diag.DeadCharacterAppears 的实现一致。
+// aliasToCanonical 为 nil 时退化为等价 DeadEntities。
+func DeadEntitiesNormalized(changes []StateChange, aliasToCanonical map[string]string, currentChapter int) map[string]int {
+	// 先把每条 change 的 Entity 归一化为正名，再走 fold 路径。
+	normalized := make([]StateChange, len(changes))
+	for i, c := range changes {
+		if aliasToCanonical != nil {
+			if canon, ok := aliasToCanonical[c.Entity]; ok {
+				c.Entity = canon
+			}
 		}
-		// 同一正名命中多条（别名+正名分记）时取最早死亡章
-		if prev, exists := out[canon]; !exists || ch < prev {
-			out[canon] = ch
-		}
+		normalized[i] = c
 	}
-	return out
+	return DeadEntities(normalized, currentChapter)
 }

@@ -251,14 +251,17 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	// 4c. 角色硬状态对照：本章出场角色若最新状态为死亡且死于更早章节，返回事实告警。
 	// 仅返事实不阻断（铁律一）：误报场景（闪回/回忆）由 editor 语义评审豁免。
 	// 注意本步在 4 之后执行：本章 state_changes 已落盘，"本章复活"会使最新状态非死亡而自动豁免。
+	// 死亡判定在 fold 前先归一别名（DeadEntitiesNormalized），覆盖"别名死亡+正名复活"的跨名豁免；
+	// 机械检查保守（宁漏不误），闪回/回忆等语义误报场景仍由 editor 七维评审兜底。
 	var characterViolations []string
 	if len(a.Characters) > 0 {
 		if changes, _ := t.store.World.LoadStateChanges(); len(changes) > 0 {
-			if rawDead := domain.DeadEntities(changes, a.Chapter); len(rawDead) > 0 {
-				// 双向归一化：dead key（state_changes.entity 可能记别名）与出场名都折算到正名再比对
-				alias := loadAliasToCanonical(t.store)
-				dead := domain.NormalizeDeadEntities(rawDead, alias)
+			// fold 前归一化：别名死亡+正名复活也能正确豁免
+			alias := loadAliasToCanonical(t.store)
+			dead := domain.DeadEntitiesNormalized(changes, alias, a.Chapter)
+			if len(dead) > 0 {
 				for _, name := range a.Characters {
+					// 出场名同样折算正名后比对
 					canon := name
 					if c, ok := alias[name]; ok {
 						canon = c

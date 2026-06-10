@@ -37,28 +37,17 @@ func TestDeadEntities(t *testing.T) {
 	}
 }
 
-// TestNormalizeDeadEntities 验证：别名 key 折算到正名；同正名多条取最早死亡章。
-func TestNormalizeDeadEntities(t *testing.T) {
-	alias := map[string]string{"五爷": "王老五", "老五": "王老五"}
-	dead := map[string]int{
-		"五爷":  7, // 别名 → 折到 王老五
-		"老五":  3, // 同正名另一别名，章更早 → 取 3
-		"王老五": 5, // 正名直记
-		"李四":  2, // 无别名映射 → 原样保留
+// TestDeadEntitiesNormalized_AliasDeathCanonRevive 验证：
+// 别名死亡（五爷 ch2 死亡）+ 正名复活（王老五 ch4 复活）→ fold 前归一后豁免，返回空。
+func TestDeadEntitiesNormalized_AliasDeathCanonRevive(t *testing.T) {
+	changes := []StateChange{
+		{Chapter: 2, Entity: "五爷", Field: "status", NewValue: "战死"},    // 别名死亡
+		{Chapter: 4, Entity: "王老五", Field: "status", NewValue: "复活归来"}, // 正名复活（最新非死亡）
 	}
-	got := NormalizeDeadEntities(dead, alias)
-	if len(got) != 2 {
-		t.Fatalf("got = %v, want 2 个正名", got)
-	}
-	if got["王老五"] != 3 {
-		t.Fatalf("got[王老五] = %d, want 最早章 3", got["王老五"])
-	}
-	if got["李四"] != 2 {
-		t.Fatalf("got[李四] = %d, want 2", got["李四"])
-	}
-	// alias 表为 nil 时原样返回
-	if got := NormalizeDeadEntities(dead, nil); len(got) != len(dead) {
-		t.Fatalf("nil alias: got = %v, want 原样", got)
+	alias := map[string]string{"五爷": "王老五"}
+	dead := DeadEntitiesNormalized(changes, alias, 5)
+	if len(dead) != 0 {
+		t.Fatalf("别名死亡+正名复活应完全豁免，got %v", dead)
 	}
 }
 
