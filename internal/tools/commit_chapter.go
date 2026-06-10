@@ -254,8 +254,10 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	var characterViolations []string
 	if len(a.Characters) > 0 {
 		if changes, _ := t.store.World.LoadStateChanges(); len(changes) > 0 {
-			if dead := domain.DeadEntities(changes, a.Chapter); len(dead) > 0 {
+			if rawDead := domain.DeadEntities(changes, a.Chapter); len(rawDead) > 0 {
+				// 双向归一化：dead key（state_changes.entity 可能记别名）与出场名都折算到正名再比对
 				alias := loadAliasToCanonical(t.store)
+				dead := domain.NormalizeDeadEntities(rawDead, alias)
 				for _, name := range a.Characters {
 					canon := name
 					if c, ok := alias[name]; ok {

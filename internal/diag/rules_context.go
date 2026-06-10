@@ -22,11 +22,16 @@ func DeadCharacterAppears(snap *Snapshot) []Finding {
 			alias[a] = c.Name
 		}
 	}
-	// 每个实体按时间序的 status 变化（切片顺序即追加顺序）
+	// 每个实体按时间序的 status 变化（切片顺序即追加顺序）。
+	// Entity 由 LLM 自由填写，可能记别名——分桶时先归一到正名，与出场名双向对齐。
 	statusSeq := make(map[string][]domain.StateChange)
 	for _, sc := range snap.StateChanges {
 		if sc.Field == "status" {
-			statusSeq[sc.Entity] = append(statusSeq[sc.Entity], sc)
+			canon := sc.Entity
+			if c, ok := alias[sc.Entity]; ok {
+				canon = c
+			}
+			statusSeq[canon] = append(statusSeq[canon], sc)
 		}
 	}
 	var hits []string
