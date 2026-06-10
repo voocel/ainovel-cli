@@ -262,7 +262,7 @@ func routeContest(s State) *Instruction {
 		return &Instruction{
 			Agent:   "judge",
 			Task:    fmt.Sprintf("评审第 %d 章的 %d 份%s，选优并给修改意见（save_verdict）", ch, nonAbandoned, form),
-			Reason:  "竞稿：候选已齐，待选优",
+			Reason:  "竞稿：候选稿已齐，待选优",
 			Chapter: ch,
 		}
 	}
