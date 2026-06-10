@@ -2,6 +2,23 @@ package bootstrap
 
 import "testing"
 
+// TestWritingContest_SynopsisMode 验证 mode 解析与 Normalize 保留。
+func TestWritingContest_SynopsisMode(t *testing.T) {
+	if (WritingContest{}).SynopsisMode() {
+		t.Fatal("空 mode 不应为 synopsis")
+	}
+	if !(WritingContest{Mode: "synopsis"}).SynopsisMode() {
+		t.Fatal("mode=synopsis 应生效")
+	}
+	if !(WritingContest{Mode: " Synopsis "}).SynopsisMode() {
+		t.Fatal("应忽略大小写与空白")
+	}
+	got := WritingContest{Personas: []string{"乌贼", "土豆"}, Mode: "synopsis"}.Normalize()
+	if !got.SynopsisMode() {
+		t.Fatal("Normalize 丢失了 Mode")
+	}
+}
+
 func TestWritingContest_Normalize_DedupTrim(t *testing.T) {
 	wc := WritingContest{Personas: []string{" 乌贼 ", "土豆", "乌贼", "", "  "}}
 	got := wc.Normalize()

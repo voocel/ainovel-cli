@@ -145,6 +145,14 @@ type WritingContest struct {
 	// Concurrency=true 时候选生成阶段并发（一次 parallel subagent 调用）；
 	// 缺省/false 为串行（逐个补齐，现状行为）。personas<2 时此开关无意义。
 	Concurrency bool `json:"concurrency,omitempty"`
+	// Mode 竞稿模式：""/"full"（默认，候选写全章）或 "synopsis"（两段式：候选只写
+	// 梗概+开头试写，中选后由该 persona 写全章。token 成本约降为 full 模式的 1/N）。
+	Mode string `json:"mode,omitempty"`
+}
+
+// SynopsisMode 报告是否启用两段式（梗概竞稿）。未知值按 full 处理。
+func (w WritingContest) SynopsisMode() bool {
+	return strings.EqualFold(strings.TrimSpace(w.Mode), "synopsis")
 }
 
 // Normalize 去空白、去重、保序，返回规整后的副本。
@@ -162,7 +170,7 @@ func (w WritingContest) Normalize() WritingContest {
 		seen[p] = struct{}{}
 		out = append(out, p)
 	}
-	return WritingContest{Personas: out, Judge: w.Judge, Concurrency: w.Concurrency}
+	return WritingContest{Personas: out, Judge: w.Judge, Concurrency: w.Concurrency, Mode: w.Mode}
 }
 
 // Enabled 报告是否启用竞稿（至少 2 个 persona）。

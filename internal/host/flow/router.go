@@ -62,6 +62,7 @@ type State struct {
 	IsPromoted           bool            // 中选稿是否已提升为正式 draft.md
 	VerdictRevisionNotes string          // 中选稿的修改意见（来自 verdict，供润色 writer 参考）
 	ContestConcurrent    bool            // 候选生成是否并发（true=一次 parallel 批量派发）
+	ContestSynopsis      bool            // 两段式：候选为梗概+开头，终稿阶段才写全章
 	// Abandoned: nil 表示读取失败（已降级处理），空 map 表示本章无弃权
 	Abandoned map[string]bool // 本章已弃权 persona slug（并发失败收敛）
 }

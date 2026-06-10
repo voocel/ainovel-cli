@@ -45,6 +45,7 @@ func LoadState(store *storepkg.Store) State {
 type ContestConfig struct {
 	Personas    []string // persona slug，顺序即写作顺序；len<2 视为未启用
 	Concurrency bool     // 候选生成是否并发
+	Synopsis    bool     // 两段式：候选只写梗概+开头，中选后写全章
 }
 
 // LoadStateWithContest 在 LoadState 基础上补齐竞稿事实。
@@ -57,6 +58,7 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 	s.ContestEnabled = true
 	s.Personas = cfg.Personas
 	s.ContestConcurrent = cfg.Concurrency // 透传并发开关
+	s.ContestSynopsis = cfg.Synopsis      // 两段式开关透传
 
 	if s.Progress == nil || s.Progress.Phase != domain.PhaseWriting {
 		return s

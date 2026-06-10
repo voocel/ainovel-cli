@@ -137,6 +137,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		h.router.SetContest(flow.ContestConfig{
 			Personas:    persona.Slugs(wc.Personas), // persona slug 列表
 			Concurrency: wc.Concurrency,             // 并发开关透传
+			Synopsis:    wc.SynopsisMode(),          // 两段式开关透传
 		})
 	}
 	// 预算门禁：累计成本接近上限告警，超限拒绝派发并暂停。
