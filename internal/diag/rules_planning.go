@@ -41,6 +41,34 @@ func StaleForeshadow(snap *Snapshot) []Finding {
 	}}
 }
 
+// ForeshadowOverdue 检测已过建议回收章（deadline）仍未回收的伏笔。
+// 与 StaleForeshadow 互补：前者查"停滞"（无推进），本规则查"逾期"（过了约定回收点）。
+func ForeshadowOverdue(snap *Snapshot) []Finding {
+	if snap.Progress == nil || len(snap.Foreshadow) == 0 {
+		return nil
+	}
+	latest := snap.LatestCompleted()
+	overdue := domain.OverdueForeshadow(snap.Foreshadow, latest)
+	if len(overdue) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(overdue))
+	for _, f := range overdue {
+		parts = append(parts, fmt.Sprintf("%s(截止ch%d,现ch%d)", f.ID, f.Deadline, latest))
+	}
+	return []Finding{{
+		Rule:       "ForeshadowOverdue",
+		Category:   CatPlanning,
+		Severity:   SevWarning,
+		Confidence: ConfHigh,
+		AutoLevel:  AutoNone,
+		Target:     "context.foreshadow",
+		Title:      fmt.Sprintf("伏笔逾期: %d 条已过建议回收章未回收", len(overdue)),
+		Evidence:   strings.Join(parts, "; "),
+		Suggestion: "提醒 Writer 在近期章节回收，或由 Architect 评估后顺延 deadline（commit 的 foreshadow_updates advance 操作携带新 deadline）。",
+	}}
+}
+
 // CompassDrift 检测指南针长期未更新。
 func CompassDrift(snap *Snapshot) []Finding {
 	if snap.Progress == nil || !snap.Progress.Layered {
