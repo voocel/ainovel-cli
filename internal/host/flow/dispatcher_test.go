@@ -89,6 +89,20 @@ func TestDispatch_ConcurrentFailureConvergence(t *testing.T) {
 	}
 }
 
+// TestPromoteIfNeeded_Synopsis 验证两段式提升只置标记。
+func TestPromoteIfNeeded_Synopsis(t *testing.T) {
+	s := storepkg.NewStore(t.TempDir())
+	_ = s.Contest.SaveVerdict(domain.Verdict{Chapter: 2, Winner: "a"})
+	cfg := ContestConfig{Personas: []string{"a", "b"}, Synopsis: true}
+	if !PromoteIfNeeded(s, cfg, 2) {
+		t.Fatal("应提升成功")
+	}
+	v, _ := s.Contest.LoadVerdict(2)
+	if v == nil || !v.Promoted {
+		t.Fatalf("verdict = %+v", v)
+	}
+}
+
 // TestDispatcher_GateBlocksDispatch 验证 gate 返回 false 时 Dispatch 整体短路（不读 store、不 FollowUp）。
 func TestDispatcher_GateBlocksDispatch(t *testing.T) {
 	fc := &fakeCoord{}

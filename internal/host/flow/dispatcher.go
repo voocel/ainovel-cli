@@ -225,6 +225,15 @@ func PromoteIfNeeded(store *storepkg.Store, cfg ContestConfig, chapter int) bool
 	if err != nil || v == nil || v.Promoted {
 		return false
 	}
+	if cfg.Synopsis {
+		// 两段式：中选的是梗概不是正文，不复制候选槽；仅置 Promoted 标记，
+		// draft.md 由中选 writer 在终稿任务里直接撰写（draft_persona 的润色分支）。
+		if err := store.Contest.MarkVerdictPromoted(chapter); err != nil {
+			slog.Warn("contest mark promoted failed", "module", "host.flow", "chapter", chapter, "err", err)
+			return false
+		}
+		return true
+	}
 	if err := store.Contest.PromoteCandidate(chapter, v.Winner); err != nil {
 		slog.Warn("contest promote failed", "module", "host.flow", "chapter", chapter, "winner", v.Winner, "err", err)
 		return false

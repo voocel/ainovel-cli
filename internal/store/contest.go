@@ -118,6 +118,24 @@ func (s *ContestStore) PromoteCandidate(chapter int, winner string) error {
 	return s.SaveVerdict(*v)
 }
 
+// MarkVerdictPromoted 仅置 verdict.Promoted=true，不复制候选文件。
+// 两段式（梗概竞稿）用：中选的是梗概而非正文，draft.md 由中选 writer 在终稿阶段直接写入。
+// 幂等：已提升时直接返回 nil。
+func (s *ContestStore) MarkVerdictPromoted(chapter int) error {
+	v, err := s.LoadVerdict(chapter)
+	if err != nil {
+		return fmt.Errorf("load verdict before mark promoted: %w", err)
+	}
+	if v == nil {
+		return fmt.Errorf("chapter %d has no verdict; call SaveVerdict before MarkVerdictPromoted", chapter)
+	}
+	if v.Promoted {
+		return nil
+	}
+	v.Promoted = true
+	return s.SaveVerdict(*v)
+}
+
 // contestProgressPath 返回某章竞稿进度文件的相对路径。
 func contestProgressPath(chapter int) string {
 	return fmt.Sprintf("drafts/%02d.contest.json", chapter)

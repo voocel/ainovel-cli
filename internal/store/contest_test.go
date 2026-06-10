@@ -141,6 +141,33 @@ func TestContest_RecordAttempts_SkipsAlreadyAbandoned(t *testing.T) {
 	}
 }
 
+// TestMarkVerdictPromoted 验证仅置位不复制候选文件。
+func TestMarkVerdictPromoted(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if err := s.Contest.MarkVerdictPromoted(3); err == nil {
+		t.Fatal("无 verdict 应报错")
+	}
+	if err := s.Contest.SaveVerdict(domain.Verdict{Chapter: 3, Winner: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Contest.MarkVerdictPromoted(3); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Contest.LoadVerdict(3)
+	if v == nil || !v.Promoted {
+		t.Fatalf("verdict = %+v, want Promoted=true", v)
+	}
+	// 不应产生 draft.md（梗概不是正文）——用 Drafts 实际只读入口断言为空
+	draft, _ := s.Drafts.LoadDraft(3)
+	if draft != "" {
+		t.Fatalf("synopsis 提升不应产生 draft.md, got %q", draft)
+	}
+	// 幂等
+	if err := s.Contest.MarkVerdictPromoted(3); err != nil {
+		t.Fatal("重复调用应幂等")
+	}
+}
+
 func TestContest_RecordAttempts_RejectsNonPositiveThreshold(t *testing.T) {
 	st := NewStore(t.TempDir())
 	// threshold=0 应被拒绝，不得静默弃权
