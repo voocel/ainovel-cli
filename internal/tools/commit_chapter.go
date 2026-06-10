@@ -37,7 +37,9 @@ func (t *CommitChapterTool) WithRules(opts rules.LoadOptions) *CommitChapterTool
 // 由于嵌入字段会被 JSON marshaler 提升（promoted），序列化结果等同于扁平结构。
 type commitOutput struct {
 	domain.CommitResult
-	RuleViolations []rules.Violation `json:"rule_violations,omitempty"`
+	RuleViolations       []rules.Violation        `json:"rule_violations,omitempty"`
+	ForeshadowUnknownIDs []string                 `json:"foreshadow_unknown_ids,omitempty"`
+	ForeshadowOverdue    []domain.ForeshadowEntry `json:"foreshadow_overdue,omitempty"`
 }
 
 func (t *CommitChapterTool) Name() string { return "commit_chapter" }
@@ -61,6 +63,7 @@ func (t *CommitChapterTool) Schema() map[string]any {
 		schema.Property("id", schema.String("伏笔 ID")).Required(),
 		schema.Property("action", schema.Enum("操作", "plant", "advance", "resolve")).Required(),
 		schema.Property("description", schema.String("伏笔描述（仅 plant 时必需）")),
+		schema.Property("deadline", schema.Int("建议回收章号（可选；plant 时设置预期回收点，advance 时可顺延）")),
 	)
 	relationshipSchema := schema.Object(
 		schema.Property("character_a", schema.String("角色 A")).Required(),
@@ -218,7 +221,6 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		}
 		foreshadowUnknown = unknown
 	}
-	_ = foreshadowUnknown // Task 3 透传进 commitOutput 后删除此行
 	if len(a.RelationshipChanges) > 0 {
 		for i := range a.RelationshipChanges {
 			a.RelationshipChanges[i].Chapter = a.Chapter
@@ -343,7 +345,18 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 
 	// 11. 机械规则检查（仅返事实，不阻断；rulesOpts 未配置时返 nil）
 	violations := t.checkRules(content, wordCount)
-	return json.Marshal(commitOutput{CommitResult: result, RuleViolations: violations})
+
+	// 12. 伏笔事实：逾期清单（deadline 已过仍未回收）。读失败不阻断 commit，仅缺该事实。
+	var overdueFs []domain.ForeshadowEntry
+	if active, ferr := t.store.World.LoadActiveForeshadow(); ferr == nil {
+		overdueFs = domain.OverdueForeshadow(active, a.Chapter)
+	}
+	return json.Marshal(commitOutput{
+		CommitResult:         result,
+		RuleViolations:       violations,
+		ForeshadowUnknownIDs: foreshadowUnknown,
+		ForeshadowOverdue:    overdueFs,
+	})
 }
 
 // checkRules 加载用户规则并对给定章节正文做机械检查。
