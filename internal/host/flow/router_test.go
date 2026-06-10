@@ -279,6 +279,33 @@ func TestRouteContest_SynopsisTasks(t *testing.T) {
 	}
 }
 
+// TestRouteContest_SynopsisConcurrentBatch 验证两段式 + 并发：候选未齐时批量下发，
+// 每个子任务文案都是「候选梗概」而非「候选稿」。
+func TestRouteContest_SynopsisConcurrentBatch(t *testing.T) {
+	s := State{
+		Progress:          &domain.Progress{Phase: domain.PhaseWriting},
+		ContestEnabled:    true,
+		ContestChapter:    3,
+		ContestSynopsis:   true,
+		ContestConcurrent: true,
+		Personas:          []string{"a", "b"},
+		CandidatesReady:   map[string]bool{},
+		Abandoned:         map[string]bool{},
+	}
+	inst := Route(s)
+	if inst == nil || len(inst.Batch) != 2 {
+		t.Fatalf("应返回 2 个子任务的批量指令, got %+v", inst)
+	}
+	for _, sub := range inst.Batch {
+		if !strings.Contains(sub.Task, "候选梗概") {
+			t.Fatalf("子任务 %q 应含 候选梗概", sub.Task)
+		}
+		if strings.Contains(sub.Task, "候选稿") {
+			t.Fatalf("synopsis 并发子任务不应出现 候选稿: %q", sub.Task)
+		}
+	}
+}
+
 func TestDispatcher_Dedupe(t *testing.T) {
 	// 不需要真实 coordinator / store；dedupe 只读自己的缓存。
 	d := &Dispatcher{}

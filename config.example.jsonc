@@ -63,7 +63,7 @@
   //   // concurrency=true：候选生成并发（一次 parallel subagent 调用，受 maxConcurrency=4 限流）。
   //   // 缺省/false 为串行逐个写。judge/润色始终串行。
   //   "concurrency": false,
-  //   // "mode": "synopsis",  // 两段式竞稿：候选只写梗概+开头，中选后写全章（成本约降为 1/N）；缺省 full 写全章
+  //   // "mode": "synopsis",  // 两段式竞稿：候选只写梗概+开头，中选后写全章（全章 token 只花一份，另加梗概+评审少量开销）；缺省 full 写全章
   // },
 
   // 全书成本预算（可选）：累计成本达上限的 80% 告警，达到上限后暂停创作。
