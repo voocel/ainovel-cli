@@ -130,6 +130,9 @@ type Config struct {
 
 	// 多人格竞稿配置；为空或 personas < 2 时退回单 Writer 行为（完全向后兼容）。
 	WritingContest WritingContest `json:"writing_contest,omitempty"`
+
+	// 全书成本预算；MaxCostUSD<=0 视为未启用（完全向后兼容）。
+	Budget Budget `json:"budget,omitempty"`
 }
 
 // WritingContest 多人格竞稿配置。
@@ -164,6 +167,25 @@ func (w WritingContest) Normalize() WritingContest {
 
 // Enabled 报告是否启用竞稿（至少 2 个 persona）。
 func (w WritingContest) Enabled() bool { return len(w.Personas) >= 2 }
+
+// Budget 全书成本预算配置。累计成本（meta/usage.json 口径）达 WarnRatio 比例时告警，
+// 达到 MaxCostUSD 后 Host 拒绝派发新指令并暂停运行（in-flight 子代理自然完成，不强杀）。
+type Budget struct {
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"` // 美元上限；<=0 未启用
+	WarnRatio  float64 `json:"warn_ratio,omitempty"`   // 告警阈值比例 (0,1)，默认 0.8
+}
+
+// Enabled 报告预算门禁是否启用。
+func (b Budget) Enabled() bool { return b.MaxCostUSD > 0 }
+
+// WarnUSD 返回告警线金额；WarnRatio 非法时回落默认 0.8。
+func (b Budget) WarnUSD() float64 {
+	r := b.WarnRatio
+	if r <= 0 || r >= 1 {
+		r = 0.8
+	}
+	return b.MaxCostUSD * r
+}
 
 // ValidateBase 校验基础配置。
 func (c *Config) ValidateBase() error {

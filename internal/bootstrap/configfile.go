@@ -157,6 +157,11 @@ func mergeConfig(base, overlay Config) Config {
 		base.WritingContest = overlay.WritingContest
 	}
 
+	// Budget: overlay 配了上限则整体覆盖（与 WritingContest 同语义）。
+	if overlay.Budget.MaxCostUSD > 0 {
+		base.Budget = overlay.Budget
+	}
+
 	return base
 }
 

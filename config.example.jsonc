@@ -63,7 +63,14 @@
   //   // concurrency=true：候选生成并发（一次 parallel subagent 调用，受 maxConcurrency=4 限流）。
   //   // 缺省/false 为串行逐个写。judge/润色始终串行。
   //   "concurrency": false
-  // }
+  // },
+
+  // 全书成本预算（可选）：累计成本达上限的 80% 告警，达到上限后暂停创作。
+  // 调高上限后重新启动即可恢复（进度与上下文均断点续写）。
+  // "budget": {
+  //   "max_cost_usd": 20.0,
+  //   "warn_ratio": 0.8
+  // },
 
   // 可选。显式指定上下文压缩使用的窗口大小。省略 / 0 = 按模型名自动解析
   //（registry 命中用真实窗口，未命中兜底 200k）。配了就优先用：既能给 registry
