@@ -154,6 +154,23 @@ func TestUpdateForeshadow_DeadlineAndUnknownIDs(t *testing.T) {
 	if len(entries) != 1 || entries[0].Deadline != 30 || entries[0].Status != "advanced" {
 		t.Fatalf("entries = %+v, want f1 deadline=30 advanced", entries)
 	}
+
+	// 已回收伏笔不可被 advance 复活：状态保持 resolved，deadline 也不被顺延
+	if _, err := s.World.UpdateForeshadow(8, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "resolve"},
+	}); err != nil {
+		t.Fatalf("resolve err=%v", err)
+	}
+	unknown, err = s.World.UpdateForeshadow(9, []domain.ForeshadowUpdate{
+		{ID: "f1", Action: "advance", Deadline: 50},
+	})
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("advance resolved: unknown=%v err=%v", unknown, err)
+	}
+	entries, _ = s.World.LoadForeshadowLedger()
+	if entries[0].Status != "resolved" || entries[0].ResolvedAt != 8 || entries[0].Deadline != 30 {
+		t.Fatalf("entries = %+v, want f1 仍为 resolved@8 deadline=30（不被复活/顺延）", entries)
+	}
 }
 
 // ── Relationships ──

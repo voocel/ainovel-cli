@@ -63,7 +63,7 @@ func (t *CommitChapterTool) Schema() map[string]any {
 		schema.Property("id", schema.String("伏笔 ID")).Required(),
 		schema.Property("action", schema.Enum("操作", "plant", "advance", "resolve")).Required(),
 		schema.Property("description", schema.String("伏笔描述（仅 plant 时必需）")),
-		schema.Property("deadline", schema.Int("建议回收章号（可选；plant 时设置预期回收点，advance 时可顺延）")),
+		schema.Property("deadline", schema.Int("建议回收章号（可选；plant 时设置且应大于当前章，advance 时可顺延）")),
 	)
 	relationshipSchema := schema.Object(
 		schema.Property("character_a", schema.String("角色 A")).Required(),
@@ -347,9 +347,15 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 	violations := t.checkRules(content, wordCount)
 
 	// 12. 伏笔事实：逾期清单（deadline 已过仍未回收）。读失败不阻断 commit，仅缺该事实。
+	// 过滤本章刚 plant 的条目：deadline 误填为不大于当前章时，不应在埋设当章立即报逾期。
 	var overdueFs []domain.ForeshadowEntry
 	if active, ferr := t.store.World.LoadActiveForeshadow(); ferr == nil {
-		overdueFs = domain.OverdueForeshadow(active, a.Chapter)
+		for _, f := range domain.OverdueForeshadow(active, a.Chapter) {
+			if f.PlantedAt == a.Chapter {
+				continue
+			}
+			overdueFs = append(overdueFs, f)
+		}
 	}
 	return json.Marshal(commitOutput{
 		CommitResult:         result,

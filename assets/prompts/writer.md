@@ -84,10 +84,15 @@
 - `characters`：本章出场角色正式名
 - `key_events`：关键事件
 - `timeline_events`：时间线事件
-- `foreshadow_updates`：伏笔操作，`plant` / `advance` / `resolve`
+- `foreshadow_updates`：伏笔操作，`plant` / `advance` / `resolve`。`plant` 时可填 `deadline`（建议回收章号，必须大于当前章）；`advance` 时可携带新 `deadline` 顺延回收点
 - `relationship_changes`：人物关系变化
 - `state_changes`：角色或实体状态变化
 - `cast_intros`：本章首次引入的次要角色简介数组，每个 `{name, brief_role}`。详见上方"配角连续性"段。
 - `hook_type`：`crisis` / `mystery` / `desire` / `emotion` / `choice`
 - `dominant_strand`：`quest` / `fire` / `constellation`
 - `feedback`：对后续大纲的建议，可选
+
+commit 返回中的伏笔事实（只返事实不阻断，需要你消费）：
+
+- `foreshadow_unknown_ids`：本次 `advance` / `resolve` 引用了台账中不存在的伏笔 ID。核对 ID 拼写，在下一章 commit 时用正确 ID 修正
+- `foreshadow_overdue`：已过建议回收章仍未回收的伏笔。在近期章节安排回收；若剧情确需推迟，交由 Architect 评估后用 `advance` 携带新 `deadline` 顺延

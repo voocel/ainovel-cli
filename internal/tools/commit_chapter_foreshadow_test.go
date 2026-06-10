@@ -34,6 +34,8 @@ func TestCommitChapter_ForeshadowFacts(t *testing.T) {
 		"key_events": []string{"事件"},
 		"foreshadow_updates": []map[string]any{
 			{"id": "ghost", "action": "advance"},
+			// 本章新埋且 deadline=当前章（误填），不应在埋设当章立即报逾期
+			{"id": "f-new", "action": "plant", "description": "新伏笔", "deadline": 3},
 		},
 	})
 	raw, err := tool.Execute(context.Background(), args)
@@ -50,6 +52,7 @@ func TestCommitChapter_ForeshadowFacts(t *testing.T) {
 	if len(out.ForeshadowUnknownIDs) != 1 || out.ForeshadowUnknownIDs[0] != "ghost" {
 		t.Fatalf("unknown_ids = %v, want [ghost]", out.ForeshadowUnknownIDs)
 	}
+	// 仅 f-old 逾期；本章刚 plant 的 f-new（deadline=3 不大于当前章）被过滤，不报逾期
 	if len(out.ForeshadowOverdue) != 1 || out.ForeshadowOverdue[0].ID != "f-old" {
 		t.Fatalf("overdue = %+v, want [f-old]", out.ForeshadowOverdue)
 	}

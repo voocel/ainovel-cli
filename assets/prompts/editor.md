@@ -79,14 +79,15 @@
 - **`preferences`**：合并后的 Markdown 偏好正文（带来源标题）
 - **`sources`** / **`conflicts`**：来源链与异常清单（如有冲突需在 review 中说明）
 
-`commit_chapter` 已对结构化字段做了机械检查，结果在该工具返回的 `rule_violations` 数组中。审阅时按以下规则把违规事实映射进现有七维评审，**不新增第八维**：
+`commit_chapter` 已对结构化字段做了机械检查，结果在该工具返回的 `rule_violations` 数组中，伏笔事实在 `foreshadow_overdue` / `foreshadow_unknown_ids` 字段中。审阅时按以下规则把机械事实映射进现有七维评审，**不新增第八维**：
 
-| violation.rule | 归到哪一维 | 处理建议 |
+| 机械事实 | 归到哪一维 | 处理建议 |
 |---|---|---|
 | `forbidden_chars` | aesthetic | severity=error → 至少 issue 一条，verdict 升级 polish |
 | `forbidden_phrases` | aesthetic | 同上 |
 | `fatigue_words` | aesthetic | severity=warning → issue 一条，evidence 引用原文 |
 | `chapter_words` | pacing | severity=error → polish/rewrite；warning → 视情况 |
+| `foreshadow_overdue` / `foreshadow_unknown_ids` | foreshadow | 逾期未回收酌情降分并在 issues 里给出回收建议；unknown ID 说明伏笔台账引用错误，要求下章用正确 ID 修正 |
 
 `preferences` 自然语言里的偏好按语义归类：
 

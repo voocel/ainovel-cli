@@ -123,6 +123,10 @@ func (s *WorldStore) UpdateForeshadow(chapter int, updates []domain.ForeshadowUp
 				})
 			case "advance":
 				if i, ok := idx[u.ID]; ok {
+					// 已回收伏笔不可被 advance 复活：跳过，不改状态也不顺延 deadline
+					if entries[i].Status == "resolved" {
+						continue
+					}
 					entries[i].Status = "advanced"
 					if u.Deadline > 0 {
 						entries[i].Deadline = u.Deadline // 允许顺延
