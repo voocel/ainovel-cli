@@ -56,8 +56,7 @@ func NewDispatcher(coordinator *agentcore.Agent, store *storepkg.Store) *Dispatc
 
 // Enable 打开路由派发；关闭时 EventToolExecEnd 到达不会发 FollowUp。
 // Host 在 Start/Resume 完成首条 prompt 之后启用，避免与启动流程冲突。
-func (d *Dispatcher) Enable()  { d.enabled.Store(true) }
-func (d *Dispatcher) Disable() { d.enabled.Store(false) }
+func (d *Dispatcher) Enable() { d.enabled.Store(true) }
 
 // SetContest 注入竞稿配置；Host 在启用竞稿时调用。
 func (d *Dispatcher) SetContest(cfg ContestConfig) { d.contest = cfg }

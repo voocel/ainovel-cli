@@ -21,8 +21,6 @@ const (
 	ThresholdCompassDrift     = 15  // CompassDrift: 指南针未更新章数上限
 	ThresholdTimelineGapRate  = 0.3 // TimelineGaps: 缺失率容忍上限
 	ThresholdForeshadowMin    = 8   // StaleForeshadow: 伏笔停滞最小章数
-	ThresholdDesignWeakRate   = 0.6 // 设计诊断：症状与缺口相关性的最低比例
-	ThresholdDesignMinSamples = 2   // 设计诊断：最少样本数
 )
 
 // allRules 按 flow → quality → planning → context 排列。
@@ -48,11 +46,6 @@ var allRules = []RuleFunc{
 	GhostCharacter,
 	TimelineGaps,
 	RelationshipStagnation,
-	ContextCompactionPressure,
-	ChapterPlanInjectionGap,
-	ContinuitySupportWeak,
-	RewriteAfterCompaction,
-	ContractExecutionWeak,
 }
 
 // Analyze 是诊断系统的唯一入口。

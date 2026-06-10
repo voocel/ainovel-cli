@@ -123,7 +123,6 @@ func renderStatePanel(vp viewport.Model, width, height int, focused bool) string
 func renderStateContent(snap host.UISnapshot, contentW int) string {
 	contentW = max(12, contentW)
 	agents := sidebarAgents(snap.Agents)
-	tasks := sidebarTasks(snap.Tasks)
 	idleAgents := sidebarIdleAgents(snap.Agents)
 	var sections []string
 
@@ -156,7 +155,7 @@ func renderStateContent(snap host.UISnapshot, contentW int) string {
 	if label, ch := inProgressDisplay(snap); label != "" {
 		overview.WriteString(renderField(label, fmt.Sprintf("第 %d 章", ch)))
 	}
-	if headline := snapshotHeadline(tasks, snap); headline != "" {
+	if headline := snapshotHeadline(snap); headline != "" {
 		label := "当前"
 		if !snap.IsRunning {
 			label = "待恢复"
@@ -204,19 +203,6 @@ func renderStateContent(snap host.UISnapshot, contentW int) string {
 		sections = append(sections, renderSidebarSection("上下文", body, contentW))
 	}
 
-	if len(tasks) > 0 {
-		var taskBody strings.Builder
-		limit := 4
-		if len(tasks) < limit {
-			limit = len(tasks)
-		}
-		for i := 0; i < limit; i++ {
-			taskBody.WriteString(renderTaskLine(tasks[i], contentW))
-			taskBody.WriteString("\n")
-		}
-		sections = append(sections, renderSidebarSection("任务队列", taskBody.String(), contentW))
-	}
-
 	return strings.Join(sections, "\n\n")
 }
 
@@ -244,38 +230,6 @@ func renderAgentLine(agent host.AgentSnapshot, width int) string {
 	}
 	if ctx := agentContextLine(agent); ctx != "" {
 		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render("  "+truncate(ctx, max(8, width-2)))
-	}
-	return line
-}
-
-func renderTaskLine(task host.TaskSnapshot, width int) string {
-	color := taskStatusColor(task.Status)
-	icon := lipgloss.NewStyle().Foreground(color).Render(taskStateIcon(task.Status))
-	head := lipgloss.NewStyle().Foreground(color).Render(taskStatusLabel(task.Status))
-	title := truncate(taskListTitle(task), max(8, width-lipgloss.Width(head)-3))
-	line := icon + " " + head + " " + title
-	var meta []string
-	if task.Chapter > 0 {
-		meta = append(meta, fmt.Sprintf("第%d章", task.Chapter))
-	}
-	if task.Volume > 0 && task.Arc > 0 {
-		meta = append(meta, fmt.Sprintf("第%d卷·第%d弧", task.Volume, task.Arc))
-	}
-	if owner := taskOwnerLabel(task.Owner); owner != "" {
-		meta = append(meta, owner)
-	}
-	if len(meta) > 0 {
-		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Render("  "+strings.Join(meta, " · "))
-	}
-	detail := task.Summary
-	if detail == "" {
-		detail = task.Tool
-	}
-	if detail != "" {
-		line += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Render("  "+truncate(detail, max(8, width-2)))
-	}
-	if task.OutputRef != "" {
-		line += "\n" + lipgloss.NewStyle().Foreground(colorDim).Italic(true).Render("  out: "+truncate(task.OutputRef, max(8, width-7)))
 	}
 	return line
 }
@@ -334,31 +288,6 @@ func sidebarIdleAgents(agents []host.AgentSnapshot) []string {
 	return names
 }
 
-func sidebarTasks(tasks []host.TaskSnapshot) []host.TaskSnapshot {
-	var active []host.TaskSnapshot
-	for _, task := range tasks {
-		if task.Status != "running" && task.Status != "queued" {
-			continue
-		}
-		active = append(active, task)
-	}
-	if len(active) <= 1 {
-		return active
-	}
-
-	var concrete []host.TaskSnapshot
-	for _, task := range active {
-		if task.Kind == "coordinator_decision" {
-			continue
-		}
-		concrete = append(concrete, task)
-	}
-	if len(concrete) > 0 {
-		return concrete
-	}
-	return active
-}
-
 // inProgressDisplay 计算"进行中"字段的标签和章节号。
 // 根据 flow 选择动词（打磨/重写/写作）；in_progress_chapter 与 flow 不匹配时视为 stale：
 //   - polishing/rewriting 模式下章节不在 pending_rewrites 中 → 回退到队列首章
@@ -390,14 +319,7 @@ func inProgressDisplay(snap host.UISnapshot) (label string, chapter int) {
 	}
 }
 
-func snapshotHeadline(tasks []host.TaskSnapshot, snap host.UISnapshot) string {
-	if len(tasks) > 0 {
-		title := taskListTitle(tasks[0])
-		if !snap.IsRunning && tasks[0].Status == "queued" {
-			return "待恢复：" + title
-		}
-		return title
-	}
+func snapshotHeadline(snap host.UISnapshot) string {
 	if snap.PendingSteer != "" {
 		if !snap.IsRunning {
 			return "待恢复：处理用户干预"
@@ -718,22 +640,12 @@ func formatTokensCompact(n int) string {
 }
 
 func renderContextSidebar(snap host.UISnapshot, width int) string {
-	if snap.ContextWindow <= 0 && snap.ProjectionWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
+	if snap.ContextWindow <= 0 && snap.ContextStrategy == "" && snap.ContextScope == "" {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(renderContextUsageField("主上下文", snap.ContextPercent, snap.ContextTokens, snap.ContextWindow))
-	showProjection := snap.ProjectionTokens > 0 &&
-		snap.ProjectionWindow > 0 &&
-		(snap.ProjectionTokens != snap.ContextTokens || snap.ProjectionWindow != snap.ContextWindow)
-	if showProjection {
-		b.WriteString(renderContextUsageField("最近投影", snap.ProjectionPercent, snap.ProjectionTokens, snap.ProjectionWindow))
-	}
-	if showProjection {
-		if strategy := contextStrategyLabel(snap.ProjectionStrategy); strategy != "" {
-			b.WriteString(renderField("投影策略", truncate(strategy, max(8, width-12))))
-		}
-	} else if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
+	if strategy := contextStrategyLabel(snap.ContextStrategy); strategy != "" {
 		b.WriteString(renderField("最近策略", truncate(strategy, max(8, width-12))))
 	}
 	if scope := contextScopeLabel(snap.ContextScope); scope != "" {
@@ -745,14 +657,8 @@ func renderContextSidebar(snap host.UISnapshot, width int) string {
 	if snap.ContextActiveMessages > 0 {
 		b.WriteString(renderField("消息数", fmt.Sprintf("%d", snap.ContextActiveMessages)))
 	}
-	compactedCount := snap.ContextCompactedCount
-	keptCount := snap.ContextKeptCount
-	if showProjection && (snap.ProjectionCompacted > 0 || snap.ProjectionKept > 0) {
-		compactedCount = snap.ProjectionCompacted
-		keptCount = snap.ProjectionKept
-	}
-	if compactedCount > 0 || keptCount > 0 {
-		b.WriteString(renderField("最近重写", fmt.Sprintf("%d → %d", compactedCount, keptCount)))
+	if snap.ContextCompactedCount > 0 || snap.ContextKeptCount > 0 {
+		b.WriteString(renderField("最近重写", fmt.Sprintf("%d → %d", snap.ContextCompactedCount, snap.ContextKeptCount)))
 	}
 	return b.String()
 }
@@ -885,40 +791,6 @@ func taskStatusColor(status string) lipgloss.AdaptiveColor {
 	}
 }
 
-func taskStatusLabel(status string) string {
-	switch status {
-	case "running":
-		return "运行中"
-	case "queued":
-		return "排队中"
-	case "failed":
-		return "失败"
-	case "canceled":
-		return "取消"
-	case "succeeded":
-		return "完成"
-	default:
-		return status
-	}
-}
-
-func taskStateIcon(status string) string {
-	switch status {
-	case "running":
-		return "●"
-	case "queued":
-		return "○"
-	case "failed":
-		return "×"
-	case "canceled":
-		return "·"
-	case "succeeded":
-		return "✓"
-	default:
-		return "·"
-	}
-}
-
 func taskKindLabel(kind string) string {
 	switch kind {
 	case "foundation_plan":
@@ -942,38 +814,6 @@ func taskKindLabel(kind string) string {
 	default:
 		return kind
 	}
-}
-
-func taskOwnerLabel(owner string) string {
-	switch owner {
-	case "architect":
-		return "规划师"
-	case "editor":
-		return "评审者"
-	case "writer":
-		return "写作者"
-	case "coordinator":
-		return "协调器"
-	case "runtime":
-		return "系统"
-	default:
-		return owner
-	}
-}
-
-func taskListTitle(task host.TaskSnapshot) string {
-	switch task.Kind {
-	case "foundation_plan", "coordinator_decision", "steer_apply", "volume_append", "arc_expand":
-		return taskKindLabel(task.Kind)
-	case "chapter_write", "chapter_review", "chapter_rewrite", "chapter_polish":
-		if task.Chapter > 0 {
-			return fmt.Sprintf("%s · 第 %d 章", taskKindLabel(task.Kind), task.Chapter)
-		}
-	}
-	if task.Title != "" {
-		return task.Title
-	}
-	return taskKindLabel(task.Kind)
 }
 
 // renderEventContent 将事件列表渲染为层次化事件流。
@@ -1206,7 +1046,7 @@ var sparkleFrames = []string{
 }
 
 func renderEventSparkle(frame, width int) string {
-	pattern := []rune(sparkleFrames[frame%len(sparkleFrames)])
+	pattern := sparkleFrames[frame%len(sparkleFrames)]
 
 	var b strings.Builder
 	for _, ch := range pattern {

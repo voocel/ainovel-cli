@@ -19,10 +19,10 @@ import (
 //	OEBPS/content.opf           （metadata + manifest + spine）
 //	OEBPS/nav.xhtml             （EPUB 3 navigation）
 //	OEBPS/style.css             （极简排版）
-//	OEBPS/cover.xhtml           （书名 + premise，可选）
+//	OEBPS/cover.xhtml           （书名，可选）
 //	OEBPS/chapterNNN.xhtml      （每章一文件）
 func renderEPUB(
-	novelName, premise string,
+	novelName string,
 	chapters []int,
 	titleIdx chapterTitleIndex,
 	locations map[int]chapterLocation,
@@ -50,9 +50,9 @@ func renderEPUB(
 		return nil, err
 	}
 
-	hasCover := strings.TrimSpace(novelName) != "" || strings.TrimSpace(premise) != ""
+	hasCover := strings.TrimSpace(novelName) != ""
 	if hasCover {
-		if err := zipDeflate(zw, "OEBPS/cover.xhtml", renderCoverXHTML(novelName, premise)); err != nil {
+		if err := zipDeflate(zw, "OEBPS/cover.xhtml", renderCoverXHTML(novelName)); err != nil {
 			return nil, err
 		}
 	}
@@ -60,7 +60,7 @@ func renderEPUB(
 	for _, ch := range chapters {
 		loc, hasLoc := locations[ch]
 		title := strings.TrimSpace(titleIdx[ch])
-		body := stripChapterTitleHeader(strings.TrimSpace(bodies[ch]))
+		body := stripChapterTitleHeader(strings.TrimSpace(bodies[ch]), title)
 		xhtml := renderChapterXHTML(ch, title, loc, hasLoc, body)
 		if err := zipDeflate(zw, "OEBPS/"+chapterFileName(ch), xhtml); err != nil {
 			return nil, err
@@ -112,9 +112,7 @@ const containerXML = `<?xml version="1.0" encoding="utf-8"?>
 
 const styleCSS = `body { font-family: serif; line-height: 1.7; margin: 1em; }
 h1.book-title { font-size: 2em; text-align: center; margin: 4em 0 1em; }
-.premise { font-style: italic; text-align: justify; margin: 2em 1em; }
 .volume-divider { font-size: 1.6em; text-align: center; margin: 4em 0 1em; font-weight: bold; }
-.arc-divider { font-size: 1.2em; text-align: center; margin: 2em 0 1em; color: #555; }
 h1.chapter-title { font-size: 1.4em; text-align: center; margin: 2em 0 1.5em; }
 p { text-indent: 2em; margin: 0.5em 0; }
 `
@@ -141,10 +139,6 @@ func renderChapterXHTML(ch int, title string, loc chapterLocation, hasLoc bool, 
 	if hasLoc && loc.IsFirstOfVolume {
 		fmt.Fprintf(&b, "  <div class=\"volume-divider\">第 %d 卷 %s</div>\n",
 			loc.VolumeIdx, html.EscapeString(strings.TrimSpace(loc.VolumeTitle)))
-	}
-	if hasLoc && loc.IsFirstOfArc {
-		fmt.Fprintf(&b, "  <div class=\"arc-divider\">第 %d 弧 %s</div>\n",
-			loc.ArcIdx, html.EscapeString(strings.TrimSpace(loc.ArcTitle)))
 	}
 
 	fmt.Fprintf(&b, "  <h1 class=\"chapter-title\">%s</h1>\n", html.EscapeString(displayTitle))
@@ -175,7 +169,7 @@ func splitParagraphs(body string) []string {
 
 // 封面 ────────────────────────────────────────────────
 
-func renderCoverXHTML(novelName, premise string) string {
+func renderCoverXHTML(novelName string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -188,13 +182,6 @@ func renderCoverXHTML(novelName, premise string) string {
 `)
 	if name := strings.TrimSpace(novelName); name != "" {
 		fmt.Fprintf(&b, "  <h1 class=\"book-title\">%s</h1>\n", html.EscapeString(name))
-	}
-	if pm := strings.TrimSpace(premise); pm != "" {
-		b.WriteString(`  <div class="premise">` + "\n")
-		for _, para := range splitParagraphs(pm) {
-			fmt.Fprintf(&b, "    <p>%s</p>\n", html.EscapeString(para))
-		}
-		b.WriteString("  </div>\n")
 	}
 	b.WriteString("</body>\n</html>\n")
 	return b.String()

@@ -55,7 +55,7 @@
 - 关系变化要有事件触发，不要一章内从陌生跃迁到绝对信任。
 - 秘密分批释放，不提前解释大纲未要求的重大谜底。
 - 章末钩子可以是危机、选择、情绪余波、关系变化或未完成目标，不必每章都做夸张悬念。
-- 避免排比三连和四字成语堆砌；具体疲劳词阈值见 `working_memory.user_rules.structured.fatigue_words`，commit 时会被强制检查。
+- **去 AI 味**：写作时规避 `reference_pack.references.anti_ai_tone` 列出的全部模式（结构/用词/描写/对话/节奏五类）。其中可机械枚举的疲劳词、套句阈值见 `working_memory.user_rules.structured`，commit 时强制检查。
 
 ## 用户偏好（user_rules）
 

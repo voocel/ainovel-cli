@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
 	"github.com/voocel/agentcore"
@@ -90,6 +91,14 @@ func TestRunner_FullImport(t *testing.T) {
 	prog, _ := st.Progress.Load()
 	if len(prog.CompletedChapters) != 2 {
 		t.Errorf("completed chapters: %v", prog.CompletedChapters)
+	}
+	// 回归：导入不得把书自动判完结（否则"继续创作"撞上已完结的书无法续写），
+	// 且必须是分层模式（续写靠 append_volume/expand_arc，非分层无路可扩）。
+	if prog.Phase == domain.PhaseComplete {
+		t.Errorf("import must NOT auto-complete the book, phase=%q", prog.Phase)
+	}
+	if !prog.Layered {
+		t.Errorf("imported book must be layered")
 	}
 	if llm.calls.Load() != 3 {
 		t.Errorf("expected 3 LLM calls (1 foundation + 2 chapters), got %d", llm.calls.Load())

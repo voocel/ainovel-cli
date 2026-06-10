@@ -83,8 +83,8 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 				return
 			}
 			emit(StageFoundation, 0, total,
-				fmt.Sprintf("Foundation 就绪：%d 角色 / %d 规则 / %d 章大纲",
-					len(fr.Characters), len(fr.WorldRules), len(fr.Outline)),
+				fmt.Sprintf("Foundation 就绪：%d 角色 / %d 规则 / %d 章大纲（第一卷）",
+					len(fr.Characters), len(fr.WorldRules), len(domain.FlattenOutline(fr.Volumes))),
 				nil)
 		} else {
 			emit(StageFoundation, 0, total, "Foundation 已存在，跳过反推", nil)

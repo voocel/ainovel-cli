@@ -17,9 +17,7 @@ func PlanActions(findings []Finding) []Action {
 		}
 		seen[f.Rule] = struct{}{}
 
-		for _, a := range planRule(f) {
-			actions = append(actions, a)
-		}
+		actions = append(actions, planRule(f)...)
 	}
 	return actions
 }

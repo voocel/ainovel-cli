@@ -31,6 +31,7 @@ type References struct {
 	LongformPlanning string // 通用长篇规划参考
 	Differentiation  string // 通用差异化设计参考
 	ArcTemplates     string // 题材弧型模板（按 style 加载，可为空）
+	AntiAITone       string // 去 AI 味判据库（writer/editor 共用，全程注入）
 }
 
 // ContextTool 组装当前章节所需上下文。
@@ -400,6 +401,7 @@ func (t *ContextTool) writerReferences(chapter int) map[string]string {
 	add("consistency", t.refs.Consistency)
 	add("hook_techniques", t.refs.HookTechniques)
 	add("quality_checklist", t.refs.QualityChecklist)
+	add("anti_ai_tone", t.refs.AntiAITone) // 去 AI 味判据全程注入，不随章节裁剪
 	if chapter <= 3 {
 		add("chapter_guide", t.refs.ChapterGuide)
 		add("dialogue_writing", t.refs.DialogueWriting)
@@ -427,6 +429,7 @@ func (t *ContextTool) architectReferences() map[string]string {
 	add("differentiation", t.refs.Differentiation)
 	add("style_reference", t.refs.StyleReference)
 	add("arc_templates", t.refs.ArcTemplates)
+	add("anti_ai_tone", t.refs.AntiAITone) // architect 大纲去 AI 腔；亦兜 editor 走 Chapter=0 路径
 	return refs
 }
 

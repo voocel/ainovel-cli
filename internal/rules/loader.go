@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -16,8 +17,8 @@ type LoadOptions struct {
 	// 通常通过 fs.Sub(embedFS, "rules") 得到；nil 表示跳过内置规则。
 	RulesFS fs.FS
 
-	// HomeRulesPath 是 ~/.ainovel/rules.md 的绝对路径；空表示跳过。
-	HomeRulesPath string
+	// HomeRulesDir 是 ~/.ainovel/rules/ 目录；loader 扫描其下所有顶层 .md（文件名字典序合并）。空表示跳过。
+	HomeRulesDir string
 
 	// ProjectRulesPath 是 ./rules.md（或调用方指定的项目根）；空表示跳过。
 	ProjectRulesPath string
@@ -32,9 +33,7 @@ func Load(opts LoadOptions) []Parsed {
 	if p, ok := readFromFS(opts.RulesFS, "default.md", SourceDefault, "assets/rules/default.md"); ok {
 		layers = append(layers, p)
 	}
-	if p, ok := readFromDisk(opts.HomeRulesPath, SourceGlobal); ok {
-		layers = append(layers, p)
-	}
+	layers = append(layers, readDirFromDisk(opts.HomeRulesDir, SourceGlobal)...)
 	if p, ok := readFromDisk(opts.ProjectRulesPath, SourceProject); ok {
 		layers = append(layers, p)
 	}
@@ -90,6 +89,56 @@ func readFromDisk(absPath string, kind SourceKind) (Parsed, bool) {
 	return Parse(absPath, kind, data), true
 }
 
+// readDirFromDisk 扫描目录下所有顶层 .md 文件（文件名字典序），逐个解析为 Parsed。
+// 字典序保证同层多文件的合并顺序稳定、可预期（后者覆盖前者）。
+// 跳过子目录与 . 开头的隐藏/编辑器临时文件（如 macOS ._x.md、emacs .#x.md），
+// 避免把脏文件的二进制内容当成偏好正文注入 LLM。
+// 空路径或目录不存在返回 nil（静默跳过，与单文件缺失一致）；
+// 目录存在但读失败（权限 / 路径其实是文件）暴露 ConflictParseError，不静默吞错——
+// 与 readFromFS / readFromDisk 的容错契约保持一致。
+// 不递归子目录——保持扁平，避免引入隐式层级。
+func readDirFromDisk(dir string, kind SourceKind) []Parsed {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// 跨平台差异：Linux 对"文件冒充目录"返回 ENOTDIR（os.IsNotExist=false），
+		// 而 Windows 返回 "path not found"（os.IsNotExist=true）。仅凭 os.IsNotExist
+		// 判断会让 Windows 把"误建成文件的 rules 目录"静默跳过、不暴露 conflict。
+		// 用 os.Stat 复核：路径确实不存在才静默跳过；存在（哪怕是文件）则暴露 ConflictParseError。
+		if os.IsNotExist(err) {
+			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+				return nil
+			}
+		}
+		return []Parsed{{
+			Source: dir,
+			Kind:   kind,
+			Conflicts: []Conflict{{
+				Source: dir,
+				Kind:   ConflictParseError,
+				Detail: "规则目录读取失败: " + err.Error(),
+			}},
+		}}
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	var out []Parsed
+	for _, name := range names {
+		if p, ok := readFromDisk(filepath.Join(dir, name), kind); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // DefaultProjectRulesPath 拼出 ./rules.md 的绝对路径（基于给定项目目录）。
 // 调用方传入项目根，避免在 loader 内部依赖 cwd。
 func DefaultProjectRulesPath(projectDir string) string {
@@ -99,14 +148,67 @@ func DefaultProjectRulesPath(projectDir string) string {
 	return filepath.Join(projectDir, "rules.md")
 }
 
-// DefaultHomeRulesPath 拼出 ~/.ainovel/rules.md 的绝对路径。
+// DefaultHomeRulesDir 拼出 ~/.ainovel/rules/ 目录的绝对路径。
 // home 解析失败返回空串（调用方据此跳过该来源）。
-func DefaultHomeRulesPath() string {
+func DefaultHomeRulesDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ainovel", "rules.md")
+	return filepath.Join(home, ".ainovel", "rules")
+}
+
+// homeRulesReadme 是首次引导时写入 ~/.ainovel/rules/README.txt 的说明。
+// 刻意用 .txt 后缀而非 .md——loader 只扫描 .md，这份说明不会被当成规则注入 LLM。
+const homeRulesReadme = `这里放全局写作偏好，跨所有书生效。
+
+最简单：新建一个 .md 文件（如 my-style.md），用大白话写偏好就行——
+不需要任何格式、不需要 YAML：
+
+    # 角色
+    - 主角林尘别写成圣母，外冷内热即可
+    # 风格
+    - 多用身体感知（指节发白）替代情绪标签（紧张）
+    - 对话别太书面
+
+这些会原样交给 editor 按语义审阅。多个 .md 按文件名字典序合并；
+点开头的隐藏文件、非 .md 文件都会被忽略（所以这份 README.txt 不会被当成规则）。
+
+进阶（可选）：想要"字数 / 禁词"这类硬性、确定的机械检查，
+可在文件顶部加一段 YAML front matter——commit_chapter 会逐字计数、强制报错：
+
+    ---
+    chapter_words: 3000-6000          # 章节字数范围
+    forbidden_phrases: ["某种程度上"]  # 禁用短语，出现即报错
+    fatigue_words: {不禁: 1}           # 疲劳词，每章超阈值告警
+    ---
+    （下面照常写大白话偏好）
+
+不写也没关系：常见 AI 套句、疲劳词的机械基线已内置，开箱即用。
+
+加载优先级（高 → 低）：./rules.md（本书） > ~/.ainovel/rules/*.md（这里） > 内置默认
+`
+
+// EnsureHomeRulesDir 尽力创建 ~/.ainovel/rules/ 目录并写入 README.txt 引导，
+// 让用户发现这个全局偏好扩展点、知道怎么写。
+// nice-to-have，非关键路径：home 解析失败或写入出错都静默吞掉，绝不阻断启动。
+func EnsureHomeRulesDir() {
+	if dir := DefaultHomeRulesDir(); dir != "" {
+		_ = ensureRulesDirAt(dir)
+	}
+}
+
+// ensureRulesDirAt 创建目录并在 README.txt 缺失时写入说明，是 EnsureHomeRulesDir 的可测内核。
+// 幂等：目录已存在不报错，README.txt 已存在不覆盖（保留用户改动）。
+func ensureRulesDirAt(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	readme := filepath.Join(dir, "README.txt")
+	if _, err := os.Stat(readme); os.IsNotExist(err) {
+		return os.WriteFile(readme, []byte(homeRulesReadme), 0o644)
+	}
+	return nil
 }
 
 // DefaultOptions 根据当前工作目录构造常用 LoadOptions。
@@ -116,12 +218,12 @@ func DefaultHomeRulesPath() string {
 //
 // 路径语义：ProjectRulesPath 绑定 **当前工作目录（cwd）** 而非 outputDir。
 // 用户 cd 到不同目录启动写不同的书，./rules.md 自然跟着 cwd 走；如需跨书共享，
-// 放 ~/.ainovel/rules.md 全局层即可。
+// 放 ~/.ainovel/rules/ 全局目录即可（其下所有 .md 都会被加载）。
 func DefaultOptions(rulesFS fs.FS) LoadOptions {
 	cwd, _ := os.Getwd()
 	return LoadOptions{
 		RulesFS:          rulesFS,
-		HomeRulesPath:    DefaultHomeRulesPath(),
+		HomeRulesDir:     DefaultHomeRulesDir(),
 		ProjectRulesPath: DefaultProjectRulesPath(cwd),
 	}
 }

@@ -75,24 +75,6 @@ func TotalChapters(volumes []VolumeOutline) int {
 	return n
 }
 
-// NextSkeletonArc 从指定卷/弧之后查找下一个未展开的骨架弧。
-// 未找到返回 (0, 0)。
-func NextSkeletonArc(volumes []VolumeOutline, afterVol, afterArc int) (vol, arc int) {
-	past := false
-	for _, v := range volumes {
-		for _, a := range v.Arcs {
-			if v.Index == afterVol && a.Index == afterArc {
-				past = true
-				continue
-			}
-			if past && !a.IsExpanded() {
-				return v.Index, a.Index
-			}
-		}
-	}
-	return 0, 0
-}
-
 // FlattenOutline 将分层大纲展开为扁平章节列表，保持全局章节号连续。
 func FlattenOutline(volumes []VolumeOutline) []OutlineEntry {
 	var result []OutlineEntry

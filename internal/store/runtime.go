@@ -16,7 +16,6 @@ import (
 )
 
 const runtimeQueuePath = "meta/runtime/queue.jsonl"
-const runtimeControlPath = "meta/runtime/control.json"
 
 // RuntimeStore 管理统一运行时队列和每任务日志。
 type RuntimeStore struct {
@@ -98,121 +97,6 @@ func taskLogPath(taskID string) string {
 	return filepath.Join("meta", "runtime", "tasks", taskID+".log")
 }
 
-// EnqueueControl 追加一条控制指令到持久化队列。
-func (s *RuntimeStore) EnqueueControl(intent domain.ControlIntent) (domain.ControlIntent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if intent.ID == "" {
-		intent.ID = fmt.Sprintf("ctrl-%d", time.Now().UnixNano())
-	}
-	if intent.CreatedAt.IsZero() {
-		intent.CreatedAt = time.Now()
-	}
-	intents, err := s.loadControlsLocked()
-	if err != nil {
-		return intent, err
-	}
-	intents = append(intents, intent)
-	if err := s.io.WriteJSON(runtimeControlPath, intents); err != nil {
-		return intent, err
-	}
-	return intent, nil
-}
-
-// PrependResumeControl 将 resume_prompt 放到控制队列最前面。
-// 会清理残留的旧 resume_prompt；当 dropKinds 非空时，也会一并移除指定 kind，
-// 适用于恢复 prompt 已经重新注入语义、无需再执行旧控制项的场景。
-func (s *RuntimeStore) PrependResumeControl(intent domain.ControlIntent, dropKinds ...domain.ControlIntentKind) (domain.ControlIntent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if intent.ID == "" {
-		intent.ID = fmt.Sprintf("ctrl-%d", time.Now().UnixNano())
-	}
-	if intent.CreatedAt.IsZero() {
-		intent.CreatedAt = time.Now()
-	}
-
-	intents, err := s.loadControlsLocked()
-	if err != nil {
-		return intent, err
-	}
-
-	dropSet := make(map[domain.ControlIntentKind]struct{}, len(dropKinds))
-	for _, kind := range dropKinds {
-		dropSet[kind] = struct{}{}
-	}
-
-	filtered := make([]domain.ControlIntent, 0, len(intents)+1)
-	filtered = append(filtered, intent)
-	for _, item := range intents {
-		if item.Kind == domain.ControlIntentResumePrompt {
-			continue
-		}
-		if _, drop := dropSet[item.Kind]; drop {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	if err := s.io.WriteJSON(runtimeControlPath, filtered); err != nil {
-		return intent, err
-	}
-	return intent, nil
-}
-
-// LoadControls 返回全部待处理控制指令。
-func (s *RuntimeStore) LoadControls() ([]domain.ControlIntent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.loadControlsLocked()
-}
-
-// PeekControl 返回队首控制指令。
-func (s *RuntimeStore) PeekControl() (*domain.ControlIntent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	intents, err := s.loadControlsLocked()
-	if err != nil || len(intents) == 0 {
-		return nil, err
-	}
-	item := intents[0]
-	return &item, nil
-}
-
-// DequeueControl 删除一条已处理的控制指令。
-func (s *RuntimeStore) DequeueControl(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	intents, err := s.loadControlsLocked()
-	if err != nil {
-		return err
-	}
-	filtered := intents[:0]
-	for _, item := range intents {
-		if item.ID == id {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	return s.io.WriteJSON(runtimeControlPath, append([]domain.ControlIntent(nil), filtered...))
-}
-
-func (s *RuntimeStore) loadControlsLocked() ([]domain.ControlIntent, error) {
-	var intents []domain.ControlIntent
-	if err := s.io.ReadJSON(runtimeControlPath, &intents); err != nil {
-		if os.IsNotExist(err) {
-			return []domain.ControlIntent{}, nil
-		}
-		return nil, err
-	}
-	if intents == nil {
-		return []domain.ControlIntent{}, nil
-	}
-	return intents, nil
-}
-
 // Reset 清空运行时队列和任务日志。
 func (s *RuntimeStore) Reset() error {
 	s.mu.Lock()
@@ -223,9 +107,6 @@ func (s *RuntimeStore) Reset() error {
 
 	var errs []string
 	if err := os.Remove(filepath.Join(s.io.dir, runtimeQueuePath)); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, err.Error())
-	}
-	if err := os.Remove(filepath.Join(s.io.dir, runtimeControlPath)); err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err.Error())
 	}
 	if err := os.RemoveAll(filepath.Join(s.io.dir, "meta", "runtime", "tasks")); err != nil {

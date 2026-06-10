@@ -185,10 +185,7 @@ func (m Model) handleSimulationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.simulator = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
+		return m, m.textarea.Focus()
 	case tea.KeyUp:
 		m.simulator.viewport.ScrollUp(1)
 	case tea.KeyDown:

@@ -58,7 +58,6 @@ type UISnapshot struct {
 	RecoveryLabel      string
 	IsRunning          bool
 	Agents             []AgentSnapshot
-	Tasks              []TaskSnapshot
 
 	// 上下文
 	ContextTokens         int
@@ -66,12 +65,6 @@ type UISnapshot struct {
 	ContextPercent        float64
 	ContextScope          string
 	ContextStrategy       string
-	ProjectionTokens      int
-	ProjectionWindow      int
-	ProjectionPercent     float64
-	ProjectionStrategy    string
-	ProjectionCompacted   int
-	ProjectionKept        int
 	ContextActiveMessages int
 	ContextSummaryCount   int
 	ContextCompactedCount int
@@ -127,34 +120,17 @@ type OutlineSnapshot struct {
 	CoreEvent string
 }
 
-// TaskSnapshot 是任务状态的展示投影（从事件流投影，非事实层）。
-type TaskSnapshot struct {
-	ID        string
-	Kind      string
-	Owner     string
-	Title     string
-	Status    string
-	Chapter   int
-	Volume    int
-	Arc       int
-	Summary   string
-	Tool      string
-	OutputRef string
-	UpdatedAt time.Time
-}
-
 // AgentSnapshot 是 Agent 状态的展示投影。
 type AgentSnapshot struct {
-	Name             string
-	State            string
-	TaskID           string
-	TaskKind         string
-	Summary          string
-	Tool             string
-	Turn             int
-	Context          AgentContextSnapshot
-	RecentProjection AgentContextSnapshot
-	UpdatedAt        time.Time
+	Name      string
+	State     string
+	TaskID    string
+	TaskKind  string
+	Summary   string
+	Tool      string
+	Turn      int
+	Context   AgentContextSnapshot
+	UpdatedAt time.Time
 }
 
 // AgentCacheStat 是单个 agent 的缓存命中累计（投影到左栏）。

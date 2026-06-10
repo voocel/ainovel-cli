@@ -50,11 +50,6 @@ func (s *SummaryStore) LoadRecentSummaries(current, count int) ([]domain.Chapter
 	return result, nil
 }
 
-// LoadAllSummaries 加载 current 章之前的所有摘要。
-func (s *SummaryStore) LoadAllSummaries(current int) ([]domain.ChapterSummary, error) {
-	return s.LoadRecentSummaries(current, current)
-}
-
 // SaveArcSummary 保存弧级摘要。
 func (s *SummaryStore) SaveArcSummary(sum domain.ArcSummary) error {
 	return s.io.WriteJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", sum.Volume, sum.Arc), sum)

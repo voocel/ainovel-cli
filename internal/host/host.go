@@ -235,6 +235,14 @@ func (h *Host) Resume() (string, error) {
 	return label, nil
 }
 
+// interventionMsg 把用户文本包装成 Coordinator 可识别的干预消息。
+// Steer 与 Continue 共用同一 framing：两条入口的用户指令都带 `[用户干预]` 前缀，
+// 才能稳定触发 coordinator.md 的干预分类。否则 Continue 的裸文本会绕过路由规则，
+// Coordinator 失去分类锚点而误派子代理（曾导致"改已写章节"被派给 writer 撞 edit_chapter 守卫）。
+func interventionMsg(text string) agentcore.Message {
+	return agentcore.UserMsg("[用户干预] " + text)
+}
+
 // Continue 用指定 prompt 继续。停机后用户在输入框输入时调用。
 func (h *Host) Continue(text string) error {
 	text = strings.TrimSpace(text)
@@ -248,13 +256,13 @@ func (h *Host) Continue(text string) error {
 	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[继续] " + text, Level: "info"})
 
 	if running {
-		h.coordinator.FollowUp(agentcore.UserMsg(text))
+		h.coordinator.FollowUp(interventionMsg(text))
 		return nil
 	}
 	// 停机后 → 注入并自动恢复
 	h.refreshWriterRestore()
 	h.observer.setAborting(false)
-	_, err := h.coordinator.Inject(agentcore.UserMsg(text))
+	_, err := h.coordinator.Inject(interventionMsg(text))
 	if err != nil {
 		return fmt.Errorf("inject: %w", err)
 	}
@@ -273,7 +281,7 @@ func (h *Host) Steer(text string) {
 
 	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[用户干预] " + text, Level: "info"})
 
-	msg := agentcore.UserMsg("[用户干预] " + text)
+	msg := interventionMsg(text)
 	if running {
 		if _, err := h.coordinator.Inject(msg); err != nil {
 			slog.Error("steer inject 失败", "module", "host", "err", err)
@@ -583,21 +591,6 @@ func (h *Host) fillContextStatus(snap *UISnapshot) {
 				snap.ContextPercent = ctx.Usage.Percent
 			}
 		}
-	}
-	for _, agent := range snap.Agents {
-		if agent.Name != "coordinator" {
-			continue
-		}
-		p := agent.RecentProjection
-		if p.ContextWindow > 0 && p.Tokens > 0 {
-			snap.ProjectionTokens = p.Tokens
-			snap.ProjectionWindow = p.ContextWindow
-			snap.ProjectionPercent = p.Percent
-			snap.ProjectionStrategy = p.Strategy
-			snap.ProjectionCompacted = p.CompactedCount
-			snap.ProjectionKept = p.KeptCount
-		}
-		break
 	}
 }
 

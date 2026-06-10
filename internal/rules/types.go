@@ -7,7 +7,7 @@
 //   - 工具只返事实，不返指令（Violation 是事实，由 editor 决定是否触发重写）
 //   - 不引入新的 verdict 路径（复用 PendingRewrites）
 //   - 不引入严格度字段（severity 由规则类型固定映射，editor 自主语义裁定）
-//   - 不静默吞冲突（所有异常进 Bundle.Conflicts，让 LLM 与 /report 可见）
+//   - 不静默吞冲突（所有异常进 Bundle.Conflicts，让 LLM 与 /diag 可见）
 //   - 不动 Flow Router（rule 不参与路由）
 package rules
 
@@ -21,7 +21,7 @@ type SourceKind int
 const (
 	// SourceDefault — 项目内置默认规则（assets/rules/default.md），优先级最低。
 	SourceDefault SourceKind = iota
-	// SourceGlobal — 用户全局偏好（~/.ainovel/rules.md），跨书复用。
+	// SourceGlobal — 用户全局偏好（~/.ainovel/rules/ 目录下所有 .md，按文件名字典序合并），跨书复用。
 	SourceGlobal
 	// SourceProject — 本书规则（./rules.md），优先级最高。
 	SourceProject
@@ -86,7 +86,7 @@ const (
 
 // Conflict 一条冲突或异常记录。
 //
-// 永远不会阻断加载——所有异常都在这里暴露给 LLM 与 /report，不静默处理。
+// 永远不会阻断加载——所有异常都在这里暴露给 LLM 与 /diag，不静默处理。
 type Conflict struct {
 	Source string       `json:"source"`          // 文件路径（绝对或相对，按来源记录）
 	Kind   ConflictKind `json:"kind"`            // 冲突类型

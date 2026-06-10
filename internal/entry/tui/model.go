@@ -819,9 +819,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if state.finishCurrentAnswer() {
 				state.submit()
 				m.askState = nil
-				if m.mode != modeDone {
-					return m, m.textarea.Focus()
-				}
+				return m, m.textarea.Focus()
 			}
 			return m, nil
 		case tea.KeyBackspace, tea.KeyCtrlH:
@@ -848,10 +846,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			},
 		}
 		m.askState = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
+		return m, m.textarea.Focus()
 	case tea.KeyUp:
 		state.moveCursor(-1)
 	case tea.KeyDown:
@@ -879,9 +874,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if state.finishCurrentAnswer() {
 			state.submit()
 			m.askState = nil
-			if m.mode != modeDone {
-				return m, m.textarea.Focus()
-			}
+			return m, m.textarea.Focus()
 		}
 	}
 	return m, nil

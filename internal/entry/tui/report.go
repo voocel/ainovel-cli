@@ -15,6 +15,7 @@ import (
 type reportState struct {
 	reqID      int
 	report     *diag.Report
+	exportPath string // 脱敏诊断文件路径，渲染在报告顶部供贴 issue
 	loading    bool
 	renderW    int
 	startedAt  time.Time
@@ -36,9 +37,10 @@ func newReportState(width, height int, reqID int, startedAt time.Time) *reportSt
 	return state
 }
 
-func (s *reportState) load(report diag.Report, contentW int, finishedAt time.Time) {
+func (s *reportState) load(report diag.Report, contentW int, exportPath string, finishedAt time.Time) {
 	s.loading = false
 	s.report = &report
+	s.exportPath = exportPath
 	s.finishedAt = finishedAt
 	s.setContent(contentW)
 }
@@ -49,7 +51,7 @@ func (s *reportState) setContent(contentW int) {
 	case s.loading:
 		s.viewport.SetContent(renderReportLoadingText(contentW, s.startedAt))
 	case s.report != nil:
-		s.viewport.SetContent(renderReportText(*s.report, contentW, s.startedAt, s.finishedAt))
+		s.viewport.SetContent(renderReportText(*s.report, contentW, s.exportPath, s.startedAt, s.finishedAt))
 	default:
 		s.viewport.SetContent("诊断报告不可用")
 	}
@@ -70,7 +72,7 @@ func reportModalSize(termW, termH int) (int, int) {
 	return w, h
 }
 
-func renderReportText(report diag.Report, width int, startedAt, finishedAt time.Time) string {
+func renderReportText(report diag.Report, width int, exportPath string, startedAt, finishedAt time.Time) string {
 	var b strings.Builder
 	st := report.Stats
 
@@ -78,6 +80,15 @@ func renderReportText(report diag.Report, width int, startedAt, finishedAt time.
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
+
+	// 脱敏诊断已导出 → 引导用户贴 issue
+	if exportPath != "" {
+		exportStyle := lipgloss.NewStyle().Foreground(colorAccent2)
+		b.WriteString(exportStyle.Render("已导出脱敏诊断（可贴到 GitHub issue）"))
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(wrapText(exportPath, width)))
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString(titleStyle.Render("概览"))
 	b.WriteString("\n\n")
@@ -288,10 +299,9 @@ func wrapText(s string, maxWidth int) string {
 	if maxWidth <= 0 || lipgloss.Width(s) <= maxWidth {
 		return s
 	}
-	runes := []rune(s)
 	var b strings.Builder
 	lineW := 0
-	for _, r := range runes {
+	for _, r := range s {
 		w := lipgloss.Width(string(r))
 		if lineW+w > maxWidth && lineW > 0 {
 			b.WriteRune('\n')
@@ -342,10 +352,7 @@ func (m Model) handleReportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.report = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
+		return m, m.textarea.Focus()
 	case tea.KeyUp:
 		m.report.viewport.ScrollUp(1)
 		return m, nil

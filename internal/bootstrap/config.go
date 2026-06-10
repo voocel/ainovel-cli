@@ -51,6 +51,10 @@ type ProviderConfig struct {
 	APIKey  string   `json:"api_key,omitempty"`  // API Key
 	BaseURL string   `json:"base_url,omitempty"` // API Base URL
 	Models  []string `json:"models,omitempty"`   // 可选模型列表，供 TUI 切换时展示
+	// ExtraBody 透传给该 provider 每次请求的额外参数（如 temperature/top_p/min_p/
+	// presence_penalty，或厂商特有键如 nvidia 开 think 的 chat_template_kwargs）。
+	// OpenAI 兼容端逐字并入请求体（即 extra_body 约定）；值由用户自负其责。
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // RequiresAPIKey 返回该 provider 是否必须显式配置 api_key。
@@ -63,10 +67,7 @@ func (pc ProviderConfig) RequiresAPIKey(name string) bool {
 	case "ollama", "bedrock":
 		return false
 	}
-	if pc.Type != "" {
-		return false
-	}
-	return true
+	return pc.Type == ""
 }
 
 // ProviderType 返回有效的 API 协议类型。

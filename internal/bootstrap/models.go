@@ -274,6 +274,7 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 		llm.WithAPIKey(pc.APIKey),
 		llm.WithBaseURL(pc.BaseURL),
 		llm.WithStreamIdleTimeout(streamIdleTimeout),
+		llm.WithExtra(pc.ExtraBody),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("provider %s (%s): %w: %w", providerKey, providerType, errs.ErrProvider, err)

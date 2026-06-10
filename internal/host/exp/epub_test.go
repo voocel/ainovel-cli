@@ -11,7 +11,6 @@ import (
 func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 	data, err := renderEPUB(
 		"光斑",
-		"光与影的故事。",
 		[]int{1, 2},
 		chapterTitleIndex{1: "雨夜归人", 2: "破晓"},
 		nil,
@@ -128,8 +127,7 @@ func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 
 func TestRenderEPUB_HTMLEscape(t *testing.T) {
 	data, err := renderEPUB(
-		"A & B",          // & 必须转义
-		"premise <test>", // < > 必须转义
+		"A & B", // & 必须转义
 		[]int{1},
 		chapterTitleIndex{1: "C \"D\""},
 		nil,
@@ -150,9 +148,6 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 	if !strings.Contains(files["OEBPS/cover.xhtml"], "A &amp; B") {
 		t.Errorf("cover should escape &: %s", files["OEBPS/cover.xhtml"])
 	}
-	if !strings.Contains(files["OEBPS/cover.xhtml"], "premise &lt;test&gt;") {
-		t.Errorf("cover should escape <>: %s", files["OEBPS/cover.xhtml"])
-	}
 	if !strings.Contains(files["OEBPS/chapter001.xhtml"], "正文 &lt; &amp; &gt; 内容。") {
 		t.Errorf("chapter body should escape entities")
 	}
@@ -161,13 +156,14 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 	}
 }
 
-func TestRenderEPUB_LayeredVolumeArc(t *testing.T) {
+// TestRenderEPUB_LayeredVolume 验证分层大纲只在卷首插卷分隔，弧分隔永不出现。
+func TestRenderEPUB_LayeredVolume(t *testing.T) {
 	locs := map[int]chapterLocation{
-		1: {VolumeIdx: 1, VolumeTitle: "起源", ArcIdx: 1, ArcTitle: "登场", IsFirstOfVolume: true, IsFirstOfArc: true},
-		2: {VolumeIdx: 1, VolumeTitle: "起源", ArcIdx: 2, ArcTitle: "试炼", IsFirstOfArc: true},
+		1: {VolumeIdx: 1, VolumeTitle: "起源", IsFirstOfVolume: true},
+		2: {VolumeIdx: 1, VolumeTitle: "起源"},
 	}
 	data, err := renderEPUB(
-		"X", "",
+		"X",
 		[]int{1, 2},
 		chapterTitleIndex{1: "A", 2: "B"},
 		locs,
@@ -189,22 +185,19 @@ func TestRenderEPUB_LayeredVolumeArc(t *testing.T) {
 	if !strings.Contains(ch1, `class="volume-divider"`) || !strings.Contains(ch1, "第 1 卷 起源") {
 		t.Errorf("ch1 should have volume divider: %s", ch1)
 	}
-	if !strings.Contains(ch1, `class="arc-divider"`) || !strings.Contains(ch1, "第 1 弧 登场") {
-		t.Errorf("ch1 should have arc divider")
+	if strings.Contains(ch1, `class="arc-divider"`) {
+		t.Errorf("arc divider should never appear: %s", ch1)
 	}
 
 	ch2 := files["OEBPS/chapter002.xhtml"]
 	if strings.Contains(ch2, `class="volume-divider"`) {
 		t.Errorf("ch2 should NOT have volume divider (same volume)")
 	}
-	if !strings.Contains(ch2, `class="arc-divider"`) || !strings.Contains(ch2, "第 2 弧 试炼") {
-		t.Errorf("ch2 should have arc divider for new arc")
-	}
 }
 
-func TestRenderEPUB_NoCoverWhenNoTitleNoPremise(t *testing.T) {
+func TestRenderEPUB_NoCoverWhenNoTitle(t *testing.T) {
 	data, err := renderEPUB(
-		"", "", []int{1},
+		"", []int{1},
 		chapterTitleIndex{1: "唯一一章"},
 		nil,
 		map[int]string{1: "正文。"},
@@ -215,7 +208,7 @@ func TestRenderEPUB_NoCoverWhenNoTitleNoPremise(t *testing.T) {
 	zr, _ := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	for _, f := range zr.File {
 		if f.Name == "OEBPS/cover.xhtml" {
-			t.Errorf("cover.xhtml should not exist when both title and premise are empty")
+			t.Errorf("cover.xhtml should not exist when title is empty")
 		}
 	}
 	// content.opf 不应引用 cover

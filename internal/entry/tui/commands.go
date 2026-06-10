@@ -87,9 +87,9 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
-			Name:        "report",
+			Name:        "diag",
 			Group:       "analysis",
-			Usage:       "/report",
+			Usage:       "/diag",
 			Description: "诊断小说创作健康度",
 			AutoExecute: true,
 			Run: func(m Model, _ []string) (tea.Model, tea.Cmd) {

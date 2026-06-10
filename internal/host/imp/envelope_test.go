@@ -12,11 +12,11 @@ func TestParseTaggedEnvelope_Basic(t *testing.T) {
 === CHARACTERS ===
 [{"name":"A"}]
 
-=== OUTLINE ===
+=== WORLD_RULES ===
 []
 `
 	env := parseTaggedEnvelope(src)
-	if env["PREMISE"] == "" || env["CHARACTERS"] == "" || env["OUTLINE"] == "" {
+	if env["PREMISE"] == "" || env["CHARACTERS"] == "" || env["WORLD_RULES"] == "" {
 		t.Fatalf("missing tags: %+v", env)
 	}
 	if env["PREMISE"] != "# 书名\n正文" {

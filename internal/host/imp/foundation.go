@@ -13,10 +13,11 @@ import (
 
 // FoundationResult 是 Foundation 反推的结构化产物。
 type FoundationResult struct {
-	Premise    string                // Markdown 字符串
-	Characters []domain.Character    // 角色档案
-	WorldRules []domain.WorldRule    // 世界规则
-	Outline    []domain.OutlineEntry // 章节大纲，长度 = len(chapters)
+	Premise    string                 // Markdown 字符串
+	Characters []domain.Character     // 角色档案
+	WorldRules []domain.WorldRule     // 世界规则
+	Volumes    []domain.VolumeOutline // 分层大纲：导入正文作为第一卷（可续写、可扩展）
+	Compass    *domain.StoryCompass   // 续写方向锚点（ending_direction / open_threads / estimated_scale）
 }
 
 // LLMChat 是 imp 包对 ChatModel 的最小依赖：仅需要一次普通文本生成。
@@ -57,7 +58,7 @@ func buildFoundationUserPrompt(chapters []Chapter) string {
 	var sb strings.Builder
 	sb.WriteString("以下是已完成的 ")
 	fmt.Fprintf(&sb, "%d", len(chapters))
-	sb.WriteString(" 章正文。请严格按系统提示反推 foundation，输出四个 === TAG === 段。\n\n")
+	sb.WriteString(" 章正文。请严格按系统提示反推 foundation，输出五个 === TAG === 段。\n\n")
 	for i, ch := range chapters {
 		fmt.Fprintf(&sb, "## 第 %d 章：%s\n\n", i+1, ch.Title)
 		sb.WriteString(ch.Content)
@@ -72,7 +73,7 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 	if env == nil {
 		return nil, fmt.Errorf("no === TAG === envelope found in LLM output")
 	}
-	if err := requireTags(env, "PREMISE", "CHARACTERS", "WORLD_RULES", "OUTLINE"); err != nil {
+	if err := requireTags(env, "PREMISE", "CHARACTERS", "WORLD_RULES", "LAYERED_OUTLINE", "COMPASS"); err != nil {
 		return nil, err
 	}
 
@@ -82,7 +83,7 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 	}
 
 	var characters []domain.Character
-	if err := decodeJSONArray("characters", env["CHARACTERS"], &characters); err != nil {
+	if err := decodeJSON("characters", env["CHARACTERS"], &characters); err != nil {
 		return nil, err
 	}
 	if len(characters) == 0 {
@@ -90,33 +91,37 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 	}
 
 	var worldRules []domain.WorldRule
-	if err := decodeJSONArray("world_rules", env["WORLD_RULES"], &worldRules); err != nil {
+	if err := decodeJSON("world_rules", env["WORLD_RULES"], &worldRules); err != nil {
 		return nil, err
 	}
 
-	var outline []domain.OutlineEntry
-	if err := decodeJSONArray("outline", env["OUTLINE"], &outline); err != nil {
+	var volumes []domain.VolumeOutline
+	if err := decodeJSON("layered_outline", env["LAYERED_OUTLINE"], &volumes); err != nil {
 		return nil, err
 	}
-	if len(outline) != expectChapters {
-		return nil, fmt.Errorf("outline length mismatch: got %d, want %d", len(outline), expectChapters)
+	// 导入大纲必须把全部 N 章实展开（FlattenOutline 只数真实章节，骨架弧不计），
+	// 否则逐章 commit 时会有章节落在大纲范围外、被越界守卫拒绝。
+	if got := len(domain.FlattenOutline(volumes)); got != expectChapters {
+		return nil, fmt.Errorf("layered outline chapter count mismatch: got %d, want %d", got, expectChapters)
 	}
-	for i := range outline {
-		if outline[i].Chapter != i+1 {
-			outline[i].Chapter = i + 1
-		}
+
+	var compass domain.StoryCompass
+	if err := decodeJSON("compass", env["COMPASS"], &compass); err != nil {
+		return nil, err
 	}
 
 	return &FoundationResult{
 		Premise:    premise,
 		Characters: characters,
 		WorldRules: worldRules,
-		Outline:    outline,
+		Volumes:    volumes,
+		Compass:    &compass,
 	}, nil
 }
 
-// PersistFoundation 把反推结果写入 Store，顺序与 Architect 短篇 prompt 一致：
-// premise → characters → world_rules → outline。每步都触发 save_foundation 同款落盘逻辑。
+// PersistFoundation 把反推结果写入 Store，顺序与 Architect 长篇 prompt 一致：
+// premise → characters → world_rules → layered_outline → compass。导入正文作为第一卷
+// 落成分层大纲，使导入的书可被续写、可扩展。每步都触发 save_foundation 同款落盘逻辑。
 //
 // 不直接调 SaveFoundationTool 是因为这里是确定性回放，无需走 LLM 工具调度。
 // 但保持与 SaveFoundationTool 相同的副作用：phase 推进、checkpoint 追加。
@@ -156,20 +161,33 @@ func PersistFoundation(ctx context.Context, st *store.Store, scale domain.Planni
 		return fmt.Errorf("checkpoint world_rules: %w", err)
 	}
 
-	// 4. outline (扁平模式，与短篇 architect 一致)
-	if err := st.Outline.SaveOutline(fr.Outline); err != nil {
-		return fmt.Errorf("save outline: %w", err)
+	// 4. layered outline（导入正文作为第一卷 → 分层模式，可续写、可扩展）
+	if err := st.Outline.SaveLayeredOutline(fr.Volumes); err != nil {
+		return fmt.Errorf("save layered outline: %w", err)
+	}
+	if err := st.Outline.SaveOutline(domain.FlattenOutline(fr.Volumes)); err != nil {
+		return fmt.Errorf("save flattened outline: %w", err)
 	}
 	_ = st.Progress.UpdatePhase(domain.PhaseOutline)
-	_ = st.Progress.SetTotalChapters(len(fr.Outline))
-	_ = st.Progress.SetLayered(false)
-	_ = st.Progress.UpdateVolumeArc(0, 0)
-	_ = st.Outline.ClearLayeredOutline()
-	if _, err := st.Checkpoints.AppendArtifact(domain.GlobalScope(), "outline", "outline.json"); err != nil {
-		return fmt.Errorf("checkpoint outline: %w", err)
+	_ = st.Progress.SetTotalChapters(domain.TotalChapters(fr.Volumes))
+	_ = st.Progress.SetLayered(true)
+	if len(fr.Volumes) > 0 && len(fr.Volumes[0].Arcs) > 0 {
+		_ = st.Progress.UpdateVolumeArc(fr.Volumes[0].Index, fr.Volumes[0].Arcs[0].Index)
+	}
+	if _, err := st.Checkpoints.AppendArtifact(domain.GlobalScope(), "layered_outline", "layered_outline.json"); err != nil {
+		return fmt.Errorf("checkpoint layered outline: %w", err)
 	}
 
-	// 5. foundation 完整 → 推进到 writing 阶段（与 save_foundation 末尾逻辑一致）
+	// 5. compass（续写方向锚点）：让 layeredBookComplete 据 open_threads 判定，
+	//    避免导入即被判完结；也给续写时的方向/篇幅一个基准。
+	if err := st.Outline.SaveCompass(*fr.Compass); err != nil {
+		return fmt.Errorf("save compass: %w", err)
+	}
+	if _, err := st.Checkpoints.AppendArtifact(domain.GlobalScope(), "compass", "meta/compass.json"); err != nil {
+		return fmt.Errorf("checkpoint compass: %w", err)
+	}
+
+	// 6. foundation 完整 → 推进到 writing 阶段（与 save_foundation 末尾逻辑一致）
 	if len(st.FoundationMissing()) == 0 {
 		if p, _ := st.Progress.Load(); p != nil &&
 			p.Phase != domain.PhaseWriting && p.Phase != domain.PhaseComplete {
@@ -179,8 +197,8 @@ func PersistFoundation(ctx context.Context, st *store.Store, scale domain.Planni
 	return nil
 }
 
-// decodeJSONArray 解析 JSON 数组并附上行列错误，便于调试。
-func decodeJSONArray(label, body string, out any) error {
+// decodeJSON 解析 JSON（数组或对象）并附上标签，便于调试。
+func decodeJSON(label, body string, out any) error {
 	body = stripFences(body)
 	if body == "" {
 		return fmt.Errorf("%s body is empty", label)

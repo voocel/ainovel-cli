@@ -96,10 +96,7 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.help = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
+		return m, m.textarea.Focus()
 	case tea.KeyUp:
 		m.help.viewport.ScrollUp(1)
 		return m, nil

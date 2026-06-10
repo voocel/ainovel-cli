@@ -9,6 +9,7 @@ import (
 	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/headless"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/tui"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 )
 
 var (
@@ -51,6 +52,8 @@ func main() {
 }
 
 func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
+	rules.EnsureHomeRulesDir()
+
 	if len(args) > 0 {
 		fmt.Fprintln(os.Stderr, "error: 不再支持命令行直接传入小说需求，请启动后在 TUI 输入框中输入")
 		os.Exit(1)

@@ -97,8 +97,6 @@ func Run(ctx context.Context, deps Deps, opts Options) (*Result, error) {
 		volumes, _ = deps.Store.Outline.LoadLayeredOutline()
 	}
 
-	premise, _ := deps.Store.Outline.LoadPremise()
-
 	outPath := opts.OutPath
 	if outPath == "" {
 		name := strings.TrimSpace(progress.NovelName)
@@ -125,9 +123,9 @@ func Run(ctx context.Context, deps Deps, opts Options) (*Result, error) {
 	var data []byte
 	switch opts.Format {
 	case FormatTXT:
-		data = []byte(renderTXT(progress.NovelName, premise, chapters, titleIdx, locations, bodies))
+		data = []byte(renderTXT(progress.NovelName, chapters, titleIdx, locations, bodies))
 	case FormatEPUB:
-		buf, err := renderEPUB(progress.NovelName, premise, chapters, titleIdx, locations, bodies)
+		buf, err := renderEPUB(progress.NovelName, chapters, titleIdx, locations, bodies)
 		if err != nil {
 			return nil, fmt.Errorf("渲染 EPUB 失败：%w", err)
 		}

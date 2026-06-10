@@ -11,7 +11,12 @@
       "api_key": "sk-or-v1-xxx",
       "base_url": "https://openrouter.ai/api/v1",
       // 可选。声明 /model 面板候选；省略时回退到配置中已出现过的同 provider 模型。
-      "models": ["google/gemini-3.0-flash", "google/gemini-3.1-pro"]
+      "models": ["google/gemini-3.0-flash", "google/gemini-3.1-pro"],
+      // 可选。透传给该 provider 每次请求的额外参数（采样参数如 temperature/top_p/
+      // min_p，或厂商特有键如 nvidia 开 think 的 chat_template_kwargs），逐字并入请求体。
+      // 仅对 OpenAI 兼容类 provider 生效（openrouter/deepseek/qwen/glm/grok/ollama…）；
+      // type:"openai" 会按官方参数白名单过滤。值由用户自负其责。
+      "extra_body": { "temperature": 0.8, "min_p": 0.05 }
     },
     "anthropic": {
       "api_key": "sk-ant-xxx",
@@ -19,11 +24,14 @@
     },
     "ollama": {
       // ollama / bedrock / 显式 type 的自定义代理可以省略 api_key
-      "base_url": "http://localhost:11434",
+      // base_url 需带 /v1（ollama 的 OpenAI 兼容端点在 /v1 下）
+      "base_url": "http://localhost:11434/v1",
       "models": ["qwen3:14b"]
     },
     "my-proxy": {
-      "type": "openai",
+      // 自定义 OpenAI 兼容端点（自建/网关/厂商如 nvidia）。需要透传额外参数时
+      // type 选一个 compat 协议名（如 openrouter），再配 extra_body 即可。
+      "type": "openrouter",
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com/v1",
       "models": ["gpt-5.5"]

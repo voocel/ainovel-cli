@@ -26,6 +26,7 @@ type (
 	reportLoadedMsg struct {
 		reqID      int
 		report     diag.Report
+		exportPath string // 脱敏诊断文件绝对路径；空 = 导出失败
 		finishedAt time.Time
 	}
 	askUserMsg       askUserRequest
@@ -194,9 +195,14 @@ func abortRuntime(rt *host.Host) tea.Cmd {
 func loadReport(dir string, reqID int) tea.Cmd {
 	return func() tea.Msg {
 		s := store.NewStore(dir)
+		// Diagnose = 创作诊断 + 运行时检测，运行时 Finding 也进屏上报告。
+		rep, rc := diag.Diagnose(s)
+		// 复用 rep+rc 写出脱敏诊断文件（导出失败不影响屏上报告）。
+		exportPath, _ := diag.WriteExport(s, rep, rc)
 		return reportLoadedMsg{
 			reqID:      reqID,
-			report:     diag.Analyze(s),
+			report:     rep,
+			exportPath: exportPath,
 			finishedAt: time.Now(),
 		}
 	}

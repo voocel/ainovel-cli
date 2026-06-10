@@ -447,9 +447,12 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		if msg.complete {
 			m.abortPending = false
 			m.mode = modeDone
-			m.textarea.Placeholder = "创作已完成"
-			m.textarea.Blur()
-		} else if m.abortPending {
+			// 完成态不锁输入框：仅停止自动续写（handleEnter 在 modeDone 落到空操作），
+			// 但 /export、/model 等命令仍需可用，输入框必须保持聚焦（issue #27）。
+			m.textarea.Placeholder = "创作已完成 · 可 /export 导出，或输入 / 查看命令"
+			return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime), m.textarea.Focus()), true
+		}
+		if m.abortPending {
 			m.abortPending = false
 			m.snapshot.RuntimeState = "paused"
 			m.syncRuntimePlaceholder()
@@ -468,7 +471,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		boxW, _ := reportModalSize(m.width, m.height)
-		m.report.load(msg.report, paddedModalContentWidth(boxW), msg.finishedAt)
+		m.report.load(msg.report, paddedModalContentWidth(boxW), msg.exportPath, msg.finishedAt)
 		return m, nil, true
 	case importEventMsg:
 		if m.importer == nil || msg.reqID != m.importer.reqID {
@@ -476,8 +479,14 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		boxW, _ := reportModalSize(m.width, m.height)
 		m.importer.appendEvent(msg.ev, paddedModalContentWidth(boxW))
-		if msg.ev.Stage == imp.StageDone || msg.ev.Stage == imp.StageError {
+		if msg.ev.Stage == imp.StageError {
 			return m, nil, true
+		}
+		if msg.ev.Stage == imp.StageDone {
+			// 导入成功 → 自动接力续写：Resume 会启用 Router 并派发首条指令，
+			// 走与"重开项目恢复"完全一致的续写流程（补上同会话导入→续写的衔接）。
+			// 随后的 bootstrapMsg 处理会 enterRunning() 切到创作态。
+			return m, bootstrapRuntime(m.runtime), true
 		}
 		return m, listenImportEvent(msg.reqID, msg.ch), true
 	case simEventMsg:

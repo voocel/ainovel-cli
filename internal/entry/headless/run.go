@@ -8,10 +8,12 @@ import (
 
 	"github.com/Accelerator-mzq/ainovel-cli/assets"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/diag"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/entry/startup"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/logger"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 type Options struct {
@@ -46,6 +48,9 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	cleanup := logger.SetupFile(eng.Dir(), "headless.log", false)
 	defer cleanup()
 	defer eng.Close()
+	// 运行结束 / 出错返回时落一份脱敏诊断，方便 headless 用户贴 issue。
+	// （外部 kill 的挂死不走 defer，仍需在 TUI 里手动 /diag。）
+	defer func() { _, _ = diag.Export(store.NewStore(eng.Dir())) }()
 
 	prompt := strings.TrimSpace(opts.Prompt)
 	if prompt != "" {

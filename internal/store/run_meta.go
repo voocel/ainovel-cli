@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"os"
 	"time"
 
@@ -122,15 +121,4 @@ func (s *RunMetaStore) SetPlanningTier(tier domain.PlanningTier) error {
 		meta.PlanningTier = tier
 		return s.saveUnlocked(*meta)
 	})
-}
-
-// SaveCheckpoint 保存当前进度快照到 meta/checkpoints/。
-// progress 由调用方传入，避免跨域依赖。
-func (s *RunMetaStore) SaveCheckpoint(label string, progress *domain.Progress) error {
-	if progress == nil {
-		return nil
-	}
-	ts := time.Now().Format("20060102-150405")
-	rel := fmt.Sprintf("meta/checkpoints/%s-%s.json", ts, label)
-	return s.io.WriteJSON(rel, progress)
 }

@@ -14,18 +14,21 @@ func TestLoad_ThreeLayers(t *testing.T) {
 		"default.md": {Data: []byte("---\nchapter_words: 3000-6000\n---\n")},
 	}
 	tmp := t.TempDir()
-	globalPath := filepath.Join(tmp, "global.md")
-	projectPath := filepath.Join(tmp, "rules.md")
-	if err := os.WriteFile(globalPath, []byte("---\nforbidden_chars:\n  - \"——\"\n---\n# 全局偏好\n"), 0644); err != nil {
+	globalDir := filepath.Join(tmp, "rules")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(projectPath, []byte("---\nchapter_words: 4000-8000\n---\n# 项目偏好\n"), 0644); err != nil {
+	projectPath := filepath.Join(tmp, "rules.md")
+	if err := os.WriteFile(filepath.Join(globalDir, "global.md"), []byte("---\nforbidden_chars:\n  - \"——\"\n---\n# 全局偏好\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte("---\nchapter_words: 4000-8000\n---\n# 项目偏好\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	layers := Load(LoadOptions{
 		RulesFS:          rulesFS,
-		HomeRulesPath:    globalPath,
+		HomeRulesDir:     globalDir,
 		ProjectRulesPath: projectPath,
 	})
 
@@ -100,5 +103,132 @@ func TestLoad_OnlyDefault(t *testing.T) {
 	layers := Load(LoadOptions{RulesFS: rulesFS})
 	if len(layers) != 1 || layers[0].Kind != SourceDefault {
 		t.Errorf("expected only default layer, got %+v", layers)
+	}
+}
+
+// TestLoad_GlobalDirScansAllMarkdown 验证 global 目录下多个 .md 都被加载，
+// 按文件名字典序合并（后者覆盖前者），非 .md 文件被忽略。
+func TestLoad_GlobalDirScansAllMarkdown(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "rules")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("---\nchapter_words: 1000-2000\n---\n# A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("---\nchapter_words: 3000-4000\n---\n# B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 非 .md 文件应被忽略
+	if err := os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("not a rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	layers := Load(LoadOptions{HomeRulesDir: dir})
+	if len(layers) != 2 {
+		t.Fatalf("expected 2 global layers (a.md, b.md), got %d", len(layers))
+	}
+	for _, p := range layers {
+		if p.Kind != SourceGlobal {
+			t.Errorf("dir files should be SourceGlobal, got %v", p.Kind)
+		}
+	}
+	// 字典序 a 在前 b 在后，合并后 b 覆盖 a
+	b := Merge(layers)
+	if b.Structured.ChapterWords == nil || b.Structured.ChapterWords.Min != 3000 {
+		t.Errorf("later file (b.md) should win on chapter_words, got %+v", b.Structured.ChapterWords)
+	}
+	if !strings.Contains(b.Preferences, "# A") || !strings.Contains(b.Preferences, "# B") {
+		t.Errorf("both files' preferences should be merged, got %q", b.Preferences)
+	}
+}
+
+// TestLoad_GlobalDirMissing 验证 global 目录不存在时静默跳过。
+func TestLoad_GlobalDirMissing(t *testing.T) {
+	layers := Load(LoadOptions{HomeRulesDir: filepath.Join(t.TempDir(), "does-not-exist")})
+	if len(layers) != 0 {
+		t.Errorf("missing global dir should yield 0 layers, got %d", len(layers))
+	}
+}
+
+// TestLoad_GlobalDirIgnoresHiddenAndSubdirs 锁死:隐藏/编辑器临时文件(. 开头)被忽略、
+// 子目录不递归——防止脏文件二进制内容当偏好正文注入 LLM。
+func TestLoad_GlobalDirIgnoresHiddenAndSubdirs(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "rules")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("---\nchapter_words: 3000-6000\n---\n# real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// macOS AppleDouble / emacs 锁 / 普通隐藏文件 —— 都该被忽略
+	for _, dirty := range []string{"._real.md", ".#lock.md", ".hidden.md"} {
+		if err := os.WriteFile(filepath.Join(dir, dirty), []byte("\x00binary garbage\x00"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 子目录里的 .md 不该被递归
+	if err := os.WriteFile(filepath.Join(dir, "sub", "nested.md"), []byte("---\nchapter_words: 1-2\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	layers := Load(LoadOptions{HomeRulesDir: dir})
+	if len(layers) != 1 {
+		t.Fatalf("expected only real.md loaded (hidden/dirty/subdir ignored), got %d layers", len(layers))
+	}
+	if layers[0].Source != filepath.Join(dir, "real.md") {
+		t.Errorf("loaded wrong file: %s", layers[0].Source)
+	}
+	if b := Merge(layers); strings.Contains(b.Preferences, "garbage") || strings.Contains(b.Preferences, "\x00") {
+		t.Errorf("dirty file content leaked into preferences: %q", b.Preferences)
+	}
+}
+
+// TestLoad_GlobalDirIsFileExposesConflict 验证 rules 路径误建成文件(非目录)时
+// 暴露 conflict 而非静默吞错——与单文件 IO 错误的容错契约一致。
+func TestLoad_GlobalDirIsFileExposesConflict(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "rules")
+	if err := os.WriteFile(p, []byte("oops, should be a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	layers := Load(LoadOptions{HomeRulesDir: p})
+	if len(layers) != 1 || len(layers[0].Conflicts) == 0 {
+		t.Fatalf("expected 1 layer carrying a conflict, got %+v", layers)
+	}
+	if layers[0].Conflicts[0].Kind != ConflictParseError {
+		t.Errorf("expected ConflictParseError, got %v", layers[0].Conflicts[0].Kind)
+	}
+}
+
+// TestEnsureRulesDirAt 验证备好目录 + README.txt：写入说明、幂等、
+// 不覆盖用户改动，且 README.txt(非 .md)不会被 loader 当成规则。
+func TestEnsureRulesDirAt(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "rules")
+	if err := ensureRulesDirAt(dir); err != nil {
+		t.Fatal(err)
+	}
+	readme := filepath.Join(dir, "README.txt")
+	data, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatalf("README.txt should be written: %v", err)
+	}
+	if !strings.Contains(string(data), "front matter") {
+		t.Errorf("README.txt missing guidance, got %q", data)
+	}
+
+	// 幂等且不覆盖用户改动
+	if err := os.WriteFile(readme, []byte("user edited"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRulesDirAt(dir); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(readme); string(again) != "user edited" {
+		t.Errorf("scaffold must not overwrite existing README.txt, got %q", again)
+	}
+
+	// README.txt 不被当规则(loader 只扫 .md)
+	if layers := Load(LoadOptions{HomeRulesDir: dir}); len(layers) != 0 {
+		t.Errorf("README.txt must not be loaded as a rule, got %d layers", len(layers))
 	}
 }

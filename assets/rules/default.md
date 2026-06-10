@@ -5,19 +5,34 @@
 # 当前仍由 writer.md / editor.md 承载，待 Phase 1.5（F1 手测验证
 # working_memory 约束力后）再决定是否搬入本文件。
 #
-# 用户可在项目根 ./rules.md 或 ~/.ainovel/rules.md 覆盖普通字段；
+# 用户可在项目根 ./rules.md 或 ~/.ainovel/rules/ 目录（其下任意 .md）覆盖普通字段；
 # fatigue_words 按词合并，同一词由更近来源覆盖阈值。
 # 详细字段语义参见项目根 rules.md.example。
 
 # 章节字数范围：偏差 <20% 警告；≥20% 错误。
 chapter_words: 3000-6000
 
+# 短语黑名单：出现 ≥1 次即 error。checker 做字面子串匹配，无通配符，
+# 故只放"定长固定串"的 AI 套句（低争议）；带变量的模式（如"不是X而是Y"）
+# 字面匹配抓不到，归 anti-ai-tone.md 语义层。
+# 破折号 "——" 在对话被打断时合法，有争议，不进内置默认，留给 ./rules.md 自配。
+forbidden_phrases:
+  - "某种程度上"
+  - "值得注意的是"
+  - "不知为何"
+  - "五味杂陈"
+
 # 疲劳词软限制：commit_chapter 会检查每章出现次数，超过阈值报 warning。
-# 这些是网文/小说常见过度使用的词，writer.md 也有同方向的提示——双源信号一致。
+# 这些是网文/小说常见过度使用的词，anti-ai-tone.md 有同方向的语义提示——双源信号一致。
 fatigue_words:
   不禁: 1
   竟然: 1
   仿佛: 2
   此外: 1
   然而: 2
+  一丝: 2
+  一抹: 2
+  一缕: 2
+  宛如: 1
+  不由得: 1
 ---

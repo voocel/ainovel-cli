@@ -11,6 +11,7 @@ import (
 	"github.com/Accelerator-mzq/ainovel-cli/assets"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/agents/ctxpack"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host/persona"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host/reminder"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
@@ -359,8 +360,30 @@ func BuildCoordinator(
 		agentcore.WithMaxRetries(subagentMaxRetries),
 		agentcore.WithContextManager(coordinatorEngine),
 		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
+		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
+		agentcore.WithToolGate(completePhaseGate(store)),
 	)
 	return agent, askUser, restore, coordinatorEngine
+}
+
+// completePhaseGate 返回一个 ToolGate：phase=complete 时拒绝所有 subagent 派发。
+// 防止 Coordinator LLM 在书完成后仍调用 Writer/Architect 导致死循环。
+func completePhaseGate(st *store.Store) agentcore.ToolGate {
+	return func(_ context.Context, req agentcore.GateRequest) (*agentcore.GateDecision, error) {
+		if req.Call.Name != "subagent" {
+			return nil, nil
+		}
+		// fail-open：Load 出错或 progress 为空时一律放行，不因瞬时读错误卡死正常派发。
+		// 唯一代价是 complete 期恰逢读失败时死锁可能复现（概率极低，可接受）。
+		progress, _ := st.Progress.Load()
+		if progress != nil && progress.Phase == domain.PhaseComplete {
+			return &agentcore.GateDecision{
+				Allowed: false,
+				Reason:  "全书已完成（phase=complete），无法再调用子代理。请告知用户全书已完结，不支持重写或续写。",
+			}, nil
+		}
+		return nil, nil
+	}
 }
 
 type saveFoundationResult struct {

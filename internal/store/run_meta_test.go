@@ -2,7 +2,6 @@ package store
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 
@@ -240,25 +239,5 @@ func TestClearPendingSteer_Noop(t *testing.T) {
 	// 空 meta 上调用不报错
 	if err := store.RunMeta.ClearPendingSteer(); err != nil {
 		t.Fatalf("ClearPendingSteer on empty: %v", err)
-	}
-}
-
-func TestSaveCheckpoint(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
-	_ = store.Progress.Init("test", 10)
-
-	progress, _ := store.Progress.Load()
-	if err := store.RunMeta.SaveCheckpoint("ch01-commit", progress); err != nil {
-		t.Fatalf("SaveCheckpoint: %v", err)
-	}
-
-	// 验证 checkpoint 目录下有文件
-	entries, err := os.ReadDir(dir + "/meta/checkpoints")
-	if err != nil {
-		t.Fatalf("read checkpoints dir: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 checkpoint, got %d", len(entries))
 	}
 }

@@ -1,4 +1,11 @@
 ---
+# ── 最简用法 ───────────────────────────────────────────────
+# 本文件展示「全部」可配项，但你不必全用。只想写偏好？
+# 删掉这整段 front matter（--- 之间的内容），直接写下面的 markdown 正文
+# （# 角色 / # 风格 …）即可，零格式、零 YAML，editor 会按语义审阅。
+# 下面的结构化字段是「可选高级层」——要「字数 / 禁词」的硬性确定检查时才用。
+# ───────────────────────────────────────────────────────────
+
 # 题材标签：当前作为字符串透传到 working_memory.user_rules.structured.genre，
 # 供 LLM 在偏好语义判断时参考。题材规则库（assets/rules/genres/）暂未开放，
 # 未来真要按题材机械加载内置文件时再恢复二阶段 loader。
@@ -12,10 +19,12 @@ chapter_words: 3000-6000
 forbidden_chars:
   - "——"
 
-# 短语黑名单。出现 ≥ 1 次即 error。
+# 短语黑名单。出现 ≥ 1 次即 error。checker 做字面子串匹配，无通配符：
+# 只填"定长固定串"；带变量的模式（如"不是X而是Y"）字面匹配抓不到，
+# 应写到下面 markdown 正文，交 editor 语义判断。
 forbidden_phrases:
-  - "不是……而是"
-  - "核心动机"
+  - "某种程度上"
+  - "值得注意的是"
 
 # 疲劳词阈值：本章超过 N 次才 warning（不跨章累计）。
 # 同时支持 list 形式：- 不禁  - 竟然  ← 默认阈值 1
@@ -64,10 +73,12 @@ cp rules.md.example rules.md
 加载优先级（高 → 低）三层：
 
 1. `./rules.md` — **本书规则**（绑定当前工作目录 cwd）
-2. `~/.ainovel/rules.md` — **全局偏好**（跨书复用）
-3. `assets/rules/default.md` — **项目内置默认**
+2. `~/.ainovel/rules/` 目录下任意 `.md` — **全局偏好**（跨书复用，按文件名字典序合并）
+3. `assets/rules/default.md` — **项目内置默认**（含去 AI 味机械基线；语义基线另在内置 `assets/references/anti-ai-tone.md`）
 
 多来源声明同一字段且值不一致时**就近优先**生效；`fatigue_words` 按词合并，同一词在多来源声明不同阈值时按就近优先。冲突写进内部诊断信息（不进 LLM 上下文，由 CLI 启动面板按需展示），不阻断加载。
+
+> 去 AI 味即此机制的一例：内置基线（机械 `default.md` + 语义 `anti-ai-tone.md`）兜底，你的 `rules.md` 叠加在其上——大白话正文写语义偏好（主路径），需要硬性禁词/字数检查时再可选加 front matter，零编译生效。
 
 ## 多本书并行
 
@@ -76,4 +87,4 @@ cp rules.md.example rules.md
 - ✅ 推荐：每本书 cd 到独立目录启动（`cd works/xiyou && ainovel-cli` / `cd works/honglou && ainovel-cli`）— 每本书的 `./rules.md` 独立
 - ⚠️ 边缘：从同一 cwd 用 `-o output/xiyou` / `-o output/honglou` 切换两本书 — 这两本书会共享同一份 `./rules.md`
 
-如需"严格本书隔离"且不想换 cwd，把偏好放 `~/.ainovel/rules.md` 全局层，让所有书共享一套用户偏好。
+如需"严格本书隔离"且不想换 cwd，把偏好放 `~/.ainovel/rules/` 全局目录，让所有书共享一套用户偏好。

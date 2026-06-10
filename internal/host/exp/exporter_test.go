@@ -65,10 +65,37 @@ func TestRun_HappyPath_DefaultsToNovelDir(t *testing.T) {
 		t.Fatalf("read output: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{"《光斑》", "光与影的故事。", "第 1 章  雨夜归人", "第 3 章  余烬"} {
+	for _, want := range []string{"《光斑》", "第 1 章  雨夜归人", "第 3 章  余烬"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output missing %q\nfull:\n%s", want, text)
 		}
+	}
+	// premise 不进导出（创作蓝图，非读者内容）
+	if strings.Contains(text, "光与影的故事。") {
+		t.Errorf("premise must not appear in export:\n%s", text)
+	}
+}
+
+// TestRun_PremiseNotExported 端到端钉死：premise.md 存在也不进导出，书名保留（issue #27）。
+func TestRun_PremiseNotExported(t *testing.T) {
+	s, _ := newTestStore(t, "光斑", []int{1})
+	if err := s.Outline.SavePremise("# 光斑\n## 目标读者\n不该出现的创作蓝图。"); err != nil {
+		t.Fatalf("save premise: %v", err)
+	}
+	res, err := Run(context.Background(), Deps{Store: s}, Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	data, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "不该出现的创作蓝图。") || strings.Contains(text, "目标读者") {
+		t.Errorf("premise must not be exported, got:\n%s", text)
+	}
+	if !strings.Contains(text, "《光斑》") {
+		t.Errorf("book title should remain: %s", text)
 	}
 }
 

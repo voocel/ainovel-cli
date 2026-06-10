@@ -124,13 +124,13 @@ func parseAnalyzerOutput(text string) (*ChapterAnalysis, error) {
 		return nil, fmt.Errorf("invalid dominant_strand %q (want quest/fire/constellation)", a.DominantStrand)
 	}
 
-	if err := decodeJSONArray("characters", env["CHARACTERS"], &a.Characters); err != nil {
+	if err := decodeJSON("characters", env["CHARACTERS"], &a.Characters); err != nil {
 		return nil, err
 	}
 	if len(a.Characters) == 0 {
 		return nil, fmt.Errorf("characters array is empty")
 	}
-	if err := decodeJSONArray("key_events", env["KEY_EVENTS"], &a.KeyEvents); err != nil {
+	if err := decodeJSON("key_events", env["KEY_EVENTS"], &a.KeyEvents); err != nil {
 		return nil, err
 	}
 	if len(a.KeyEvents) == 0 {

@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"slices"
+
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 )
@@ -226,6 +228,9 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	}
 	state.chapterPlan = chapterPlan
 
+	// 是否正在重写本章：决定 novel_context 是否补"重写专用"事实。
+	isRewrite := progress != nil && slices.Contains(progress.PendingRewrites, chapter)
+
 	// 暴露 draft 是否已存在的事实：让 writer 被重派时能自行判断跳过重写还是覆盖。
 	// 只暴露 exists + word_count，不注入正文（正文让 writer 按需用 read_chapter 拉）。
 	if _, draftWords, draftErr := t.store.Drafts.LoadChapterContent(chapter); draftErr == nil && draftWords > 0 {
@@ -235,6 +240,27 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		}
 	} else if draftErr != nil {
 		warn("chapter_draft", draftErr)
+	}
+
+	// 重写时把"为什么改 + 改哪里"交给 writer：理由来自返工队列，具体批评来自本章评审
+	// （selectReviewLessons 只召回 chapter-1..chapter-3，恰好漏掉本章本身，writer 又无读评审的工具）。
+	// 正文不在此注入——保持"正文按需 read_chapter 拉"的约定不破。
+	if isRewrite {
+		brief := map[string]any{"reason": progress.RewriteReason}
+		if review, reviewErr := t.store.World.LoadReview(chapter); reviewErr == nil && review != nil {
+			if review.Summary != "" {
+				brief["review_summary"] = review.Summary
+			}
+			if len(review.Issues) > 0 {
+				brief["issues"] = review.Issues
+			}
+			if len(review.ContractMisses) > 0 {
+				brief["contract_misses"] = review.ContractMisses
+			}
+		} else if reviewErr != nil {
+			warn("rewrite_review", reviewErr)
+		}
+		envelope.Working["rewrite_brief"] = brief
 	}
 
 	foreshadow, foreshadowErr := t.store.World.LoadActiveForeshadow()

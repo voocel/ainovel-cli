@@ -168,10 +168,7 @@ func (m Model) handleModelSwitchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.modelSwitch = nil
-		if m.mode != modeDone {
-			return m, m.textarea.Focus()
-		}
-		return m, nil
+		return m, m.textarea.Focus()
 	case tea.KeyTab, tea.KeyDown:
 		state.moveFocus(1)
 		return m, nil
@@ -190,10 +187,7 @@ func (m Model) handleModelSwitchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.modelSwitch = nil
-		if m.mode != modeDone {
-			return m, tea.Batch(m.textarea.Focus(), fetchSnapshot(m.runtime))
-		}
-		return m, fetchSnapshot(m.runtime)
+		return m, tea.Batch(m.textarea.Focus(), fetchSnapshot(m.runtime))
 	default:
 		return m, nil
 	}

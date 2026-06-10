@@ -254,7 +254,7 @@ ainovel-cli
 
 ## 诊断报告
 
-在 TUI 中输入 `/report` 可对当前小说的 output 产物进行诊断分析，产出可执行的发现和改进建议。
+在 TUI 中输入 `/diag` 可对当前小说的 output 产物进行诊断分析，产出可执行的发现和改进建议。
 
 诊断覆盖四个维度：
 
@@ -264,6 +264,8 @@ ainovel-cli
 - **上下文** — 角色消失、时间线缺口、关系数据停滞
 
 每条发现包含：问题描述、数据证据、改进建议（指向具体的 prompt/flow/config）。
+
+`/diag` 同时会写出一份**已脱敏**的 `meta/diag-export.md`（移除小说正文，仅保留工具调用、错误串、重复次数等行为骨架）。遇到死循环 / 中断类问题，把它贴到 GitHub issue 即可，方便维护者在拿不到本地数据的情况下定位。
 
 ## 仿写画像
 
@@ -286,7 +288,7 @@ output/novel/meta/simulation_profile.json
 
 ## 导入
 
-在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 大纲，逐章落盘。导入完成后状态等同于"已写完 N 章"，输入"继续创作"即可让 Coordinator 接力续写。
+在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 分层大纲 / 指南针，逐章落盘。原文作为第一卷落成可续写的连载，导入完成后会**自动接力续写**——Coordinator 在第一卷末做评审/摘要、追加新卷，从下一章继续。
 
 ```
 /import ~/我的小说.txt              # 从头导入并反推 foundation
@@ -308,7 +310,7 @@ output/novel/meta/simulation_profile.json
 
 在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{novelDir}/{NovelName}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响 Coordinator 运行。
 
-格式由**输出路径后缀**决定（命令永远只这一行，零新增参数）：
+格式由**输出路径后缀**决定（`.txt` / `.epub`）：
 
 ```text
 /export                            # 默认 TXT，{novelDir}/{NovelName}.txt
@@ -318,7 +320,7 @@ output/novel/meta/simulation_profile.json
 /export from=10 ~/x.epub --overwrite
 ```
 
-- **TXT** — 标题页（`《书名》` + premise）→ 卷分隔 → 弧分隔 → 章节正文，长篇分层模式自动加卷/弧分隔。
+- **TXT** — `《书名》` → 卷分隔 → 章节正文（长篇分层模式自动加卷分隔）。两类内部数据**不进导出**：premise（创作蓝图，含目标读者 / 写作禁区等后台信息，写给作者与引擎看的）、弧分隔（读者视角下弧是过细的内部结构）。导出器统一生成"第 N 章 标题"，正文里 writer 自带的重复标题（`# 第N章…` 或 `# 章节名`）会被剥掉。
 - **EPUB** — EPUB 3 标准容器，含封面页、目录、按章拆分的 XHTML，标识符基于内容稳定派生（重导出同一本书阅读器识别为更新版本）。不带封面图。
 
 范围内未完成的章节会跳过并显示在结果里，不算错误。
@@ -377,7 +379,7 @@ output/novel/meta/simulation_profile.json
   "model": "qwen3:latest",
   "providers": {
     "ollama": {
-      "base_url": "http://localhost:11434"
+      "base_url": "http://localhost:11434/v1"
     }
   }
 }
@@ -414,6 +416,12 @@ output/novel/meta/simulation_profile.json
 ### 候选并发
 
 配置 `writing_contest.concurrency: true` 后，同一章的多个 persona 候选稿并发生成（一次 `subagent(tasks=[...])` 调用，受 agentcore `maxConcurrency=4` 限流），judge 选优、中选稿提升与润色仍串行。某 persona 候选连续失败 3 次自动弃权，候选数减一继续；全部弃权降级为单 Writer。崩溃恢复由磁盘事实（候选槽 / verdict / contest.json）驱动，幂等。
+
+### 去 AI 味与自定义规则
+
+内置一份去 AI 味基线（`assets/` 下，出厂默认）：机械黑名单 `rules/default.md`（套句 / 疲劳词，commit 时确定性检查）+ 语义判据 `references/anti-ai-tone.md`（注入 writer / editor 规避与举证）。
+
+想叠加自己的偏好**无需改源码**：在 `~/.ainovel/rules/` 目录（全局，放任意 `.md`，按文件名字典序合并）或项目根 `./rules.md`（本书）里，**用大白话写偏好即可**（如「主角别写成圣母」「多用身体感知」），editor 会按语义审阅——零格式、零 YAML。想要「字数 / 禁词」这类硬性确定检查，再**可选地**在文件顶部加一段 front matter。就近覆盖、与内置基线叠加生效；完整字段见 [`rules.md.example`](rules.md.example)。
 
 ## 输出结构
 

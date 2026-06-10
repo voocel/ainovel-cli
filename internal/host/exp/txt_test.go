@@ -9,22 +9,27 @@ import (
 
 func TestStripChapterTitleHeader(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		want string
+		name  string
+		in    string
+		title string
+		want  string
 	}{
-		{"plain body untouched", "他望着窗外。", "他望着窗外。"},
-		{"strip h1 chinese title", "# 第 1 章  雨夜归人\n\n他望着窗外。", "他望着窗外。"},
-		{"strip h2 with chapter token", "## 第二章\n\n他望着窗外。", "他望着窗外。"},
-		{"keep body even if no header", "正文第一句。\n第二句。", "正文第一句。\n第二句。"},
-		{"do not strip non-chapter heading", "# 序章\n他望着窗外。", "# 序章\n他望着窗外。"},
-		{"single line header only", "# 第 1 章", ""},
+		{"plain body untouched", "他望着窗外。", "雨夜归人", "他望着窗外。"},
+		{"strip h1 chinese title", "# 第 1 章  雨夜归人\n\n他望着窗外。", "雨夜归人", "他望着窗外。"},
+		{"strip h2 with chapter token", "## 第二章\n\n他望着窗外。", "", "他望着窗外。"},
+		{"keep body even if no header", "正文第一句。\n第二句。", "", "正文第一句。\n第二句。"},
+		{"do not strip non-chapter heading", "# 序章\n他望着窗外。", "边村浮生", "# 序章\n他望着窗外。"},
+		{"single line header only", "# 第 1 章", "", ""},
+		// writer 把纯章节名当标题写进首行 → 与导出器统一标题重复，应剥掉
+		{"strip h1 matching chapter title", "# 边村浮生\n\n天还没亮。", "边村浮生", "天还没亮。"},
+		// 首行 h1 但文字不等于本章标题 → 视为正文，保留
+		{"keep h1 not matching title", "# 别的小标题\n正文。", "边村浮生", "# 别的小标题\n正文。"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stripChapterTitleHeader(c.in)
+			got := stripChapterTitleHeader(c.in, c.title)
 			if got != c.want {
-				t.Fatalf("stripChapterTitleHeader\nin   = %q\nwant = %q\ngot  = %q", c.in, c.want, got)
+				t.Fatalf("stripChapterTitleHeader\nin   = %q\ntitle= %q\nwant = %q\ngot  = %q", c.in, c.title, c.want, got)
 			}
 		})
 	}
@@ -60,24 +65,25 @@ func TestBuildLocations(t *testing.T) {
 	}
 	locs := buildLocations(volumes)
 
-	if loc := locs[1]; !loc.IsFirstOfVolume || !loc.IsFirstOfArc || loc.VolumeIdx != 1 || loc.ArcIdx != 1 {
-		t.Errorf("ch1 loc = %+v", loc)
+	// 只验卷归属：弧不再进 location，但弧层仍参与全局章号累加。
+	if loc := locs[1]; !loc.IsFirstOfVolume || loc.VolumeIdx != 1 {
+		t.Errorf("ch1 should be first of volume 1: %+v", loc)
 	}
-	if loc := locs[2]; loc.IsFirstOfVolume || loc.IsFirstOfArc {
-		t.Errorf("ch2 should not be first of vol/arc: %+v", loc)
+	if loc := locs[2]; loc.IsFirstOfVolume || loc.VolumeIdx != 1 {
+		t.Errorf("ch2 should be volume 1, not first: %+v", loc)
 	}
-	if loc := locs[3]; loc.IsFirstOfVolume || !loc.IsFirstOfArc || loc.ArcIdx != 2 {
-		t.Errorf("ch3 should start arc 2 only: %+v", loc)
+	// ch3 是弧 2 的首章，但仍在卷 1 内 → 不是卷首。
+	if loc := locs[3]; loc.IsFirstOfVolume || loc.VolumeIdx != 1 {
+		t.Errorf("ch3 (arc 2, same volume) should not be first of volume: %+v", loc)
 	}
-	if loc := locs[4]; !loc.IsFirstOfVolume || !loc.IsFirstOfArc || loc.VolumeIdx != 2 {
-		t.Errorf("ch4 should start volume 2 + arc 1: %+v", loc)
+	if loc := locs[4]; !loc.IsFirstOfVolume || loc.VolumeIdx != 2 {
+		t.Errorf("ch4 should start volume 2: %+v", loc)
 	}
 }
 
-func TestRenderTXT_FrontMatterAndChapter(t *testing.T) {
+func TestRenderTXT_TitleAndChapter(t *testing.T) {
 	got := renderTXT(
 		"光斑",
-		"  这是一个关于光与影的故事。  ",
 		[]int{1, 2},
 		chapterTitleIndex{1: "雨夜归人", 2: "破晓"},
 		nil,
@@ -89,9 +95,7 @@ func TestRenderTXT_FrontMatterAndChapter(t *testing.T) {
 	if !strings.HasPrefix(got, "《光斑》\n\n") {
 		t.Errorf("missing book title at start:\n%s", got)
 	}
-	if !strings.Contains(got, "这是一个关于光与影的故事。") {
-		t.Errorf("missing premise body")
-	}
+	// premise 不进导出：书名后应直接是章节，不夹任何前情提要
 	if !strings.Contains(got, "第 1 章  雨夜归人") {
 		t.Errorf("missing ch1 header")
 	}
@@ -106,9 +110,9 @@ func TestRenderTXT_FrontMatterAndChapter(t *testing.T) {
 	}
 }
 
-func TestRenderTXT_EmptyNovelNameAndPremiseNoFrontMatter(t *testing.T) {
+func TestRenderTXT_EmptyNovelNameNoTitleLine(t *testing.T) {
 	got := renderTXT(
-		"", "",
+		"",
 		[]int{1},
 		chapterTitleIndex{1: "雨夜归人"},
 		nil,
@@ -122,13 +126,15 @@ func TestRenderTXT_EmptyNovelNameAndPremiseNoFrontMatter(t *testing.T) {
 	}
 }
 
-func TestRenderTXT_LayeredVolumeArc(t *testing.T) {
+// TestRenderTXT_LayeredVolume 验证分层大纲只在卷首插卷分隔，弧分隔永不出现
+// （issue #27：版式定为"《书名》→卷分隔→章节正文"）。
+func TestRenderTXT_LayeredVolume(t *testing.T) {
 	locs := map[int]chapterLocation{
-		1: {VolumeIdx: 1, VolumeTitle: "起源", ArcIdx: 1, ArcTitle: "登场", IsFirstOfVolume: true, IsFirstOfArc: true},
-		2: {VolumeIdx: 1, VolumeTitle: "起源", ArcIdx: 1, ArcTitle: "登场"},
+		1: {VolumeIdx: 1, VolumeTitle: "起源", IsFirstOfVolume: true},
+		2: {VolumeIdx: 1, VolumeTitle: "起源"},
 	}
 	got := renderTXT(
-		"X", "", []int{1, 2},
+		"X", []int{1, 2},
 		chapterTitleIndex{1: "A", 2: "B"},
 		locs,
 		map[int]string{1: "正文一。", 2: "正文二。"},
@@ -136,10 +142,10 @@ func TestRenderTXT_LayeredVolumeArc(t *testing.T) {
 	if !strings.Contains(got, "第 1 卷  起源") {
 		t.Errorf("missing volume header: %s", got)
 	}
-	if !strings.Contains(got, "第 1 弧  登场") {
-		t.Errorf("missing arc header: %s", got)
+	if strings.Contains(got, "弧") {
+		t.Errorf("arc divider should never appear: %s", got)
 	}
-	// 卷/弧标题只在第一章前出现一次
+	// 卷标题只在第一章前出现一次
 	if strings.Count(got, "第 1 卷") != 1 {
 		t.Errorf("volume header should appear exactly once: %s", got)
 	}
@@ -147,7 +153,7 @@ func TestRenderTXT_LayeredVolumeArc(t *testing.T) {
 
 func TestRenderTXT_ChapterWithoutTitleFallsBackToNumberOnly(t *testing.T) {
 	got := renderTXT(
-		"", "", []int{5},
+		"", []int{5},
 		chapterTitleIndex{}, // 没有标题
 		nil,
 		map[int]string{5: "正文。"},

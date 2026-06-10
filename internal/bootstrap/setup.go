@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -45,7 +46,7 @@ var setupProviders = []setupProvider{
 	{name: "qwen", label: "Qwen"},
 	{name: "glm", label: "GLM"},
 	{name: "grok", label: "Grok"},
-	{name: "ollama", label: "Ollama", baseURL: "http://localhost:11434", apiKeyOptional: true},
+	{name: "ollama", label: "Ollama", baseURL: "http://localhost:11434/v1", apiKeyOptional: true},
 	{name: "bedrock", label: "Bedrock", apiKeyOptional: true},
 	{name: "custom", label: "Custom Proxy", needType: true, apiKeyOptional: true},
 }
@@ -140,11 +141,17 @@ func RunSetup() (Config, error) {
 	// 生成注释模板
 	saveExampleConfig()
 
+	// 全局偏好目录由启动流程（runWithConfig）统一创建，这里仅取路径用于提示
+	rulesDir := rules.DefaultHomeRulesDir()
+
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "%s 配置已保存到 %s\n",
 		lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓"), path)
 	fmt.Fprintf(os.Stderr, "  默认模型：%s\n", modelName)
 	fmt.Fprintln(os.Stderr, "  如需按角色配置不同模型，编辑配置文件即可。")
+	if rulesDir != "" {
+		fmt.Fprintf(os.Stderr, "  全局写作偏好可放 %s 下的 .md 文件（见其中 README.txt）\n", rulesDir)
+	}
 	fmt.Fprintln(os.Stderr)
 
 	return cfg, nil
@@ -176,17 +183,19 @@ func saveExampleConfig() {
       "models": ["gemini-2.5-flash", "gemini-2.5-pro"]
     },
     "ollama": {
-      "base_url": "http://localhost:11434",
+      "base_url": "http://localhost:11434/v1",
       "models": ["qwen3:14b"]
     },
     "bedrock": {
       "base_url": ""
     }
-    // 自定义代理示例：
+    // 自定义 OpenAI 兼容端点示例（自建/网关/厂商如 nvidia）：
     // "my-proxy": {
-    //   "type": "openai",
-    //   "api_key": "sk-xxx", // 可选：若代理不需要认证可省略
-    //   "base_url": "https://proxy.example.com/v1"
+    //   "type": "openrouter",        // 选一个 compat 协议名即可逐字透传 extra_body
+    //   "api_key": "sk-xxx",         // 可选：若端点不需要认证可省略
+    //   "base_url": "https://proxy.example.com/v1",
+    //   // 可选：透传给每次请求的额外参数（采样/厂商特有键，如 nvidia 开 think）
+    //   "extra_body": { "temperature": 0.8, "min_p": 0.05, "chat_template_kwargs": { "enable_thinking": true } }
     // }
   },
 

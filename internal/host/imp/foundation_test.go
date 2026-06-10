@@ -70,11 +70,32 @@ const validEnvelope = `=== PREMISE ===
   {"category":"society","rule":"现代都市背景，警力体系完备","boundary":"不超自然"}
 ]
 
-=== OUTLINE ===
+=== LAYERED_OUTLINE ===
 [
-  {"chapter":1,"title":"初遇","core_event":"林晚收到匿名爆料","hook":"线索指向陈姓家族","scenes":["编辑部","咖啡馆"]},
-  {"chapter":2,"title":"循迹","core_event":"林晚走访失踪者家属","hook":"发现共同祭品符号","scenes":["旧宅","档案馆"]}
+  {
+    "index":1,
+    "title":"失踪疑云",
+    "theme":"记者追查连环失踪案",
+    "arcs":[
+      {
+        "index":1,
+        "title":"初查",
+        "goal":"林晚接案并锁定陈姓线索",
+        "chapters":[
+          {"title":"初遇","core_event":"林晚收到匿名爆料","hook":"线索指向陈姓家族","scenes":["编辑部","咖啡馆"]},
+          {"title":"循迹","core_event":"林晚走访失踪者家属","hook":"发现共同祭品符号","scenes":["旧宅","档案馆"]}
+        ]
+      }
+    ]
+  }
 ]
+
+=== COMPASS ===
+{
+  "ending_direction":"真相大白，主角在揭露与自保间抉择",
+  "open_threads":["陈姓家族的祭品仪式真相","林晚的清白指控"],
+  "estimated_scale":"预计 20-40 章"
+}
 `
 
 func TestReverseFoundation_ParsesValid(t *testing.T) {
@@ -93,8 +114,11 @@ func TestReverseFoundation_ParsesValid(t *testing.T) {
 	if len(got.Characters) != 2 || got.Characters[0].Name != "林晚" {
 		t.Errorf("characters wrong: %+v", got.Characters)
 	}
-	if len(got.Outline) != 2 || got.Outline[1].Chapter != 2 {
-		t.Errorf("outline wrong: %+v", got.Outline)
+	if len(got.Volumes) != 1 || len(domain.FlattenOutline(got.Volumes)) != 2 {
+		t.Errorf("volumes wrong: %+v", got.Volumes)
+	}
+	if got.Compass == nil || len(got.Compass.OpenThreads) == 0 {
+		t.Errorf("compass should be parsed with open_threads: %+v", got.Compass)
 	}
 	if !strings.Contains(llm.got[0].TextContent(), "with 2") {
 		t.Errorf("system prompt expected ${chapter_count}=2 substituted, got: %q",
@@ -113,8 +137,8 @@ func TestReverseFoundation_RejectsLengthMismatch(t *testing.T) {
 		{Title: "ch3", Content: "..."},
 	}
 	_, err := ReverseFoundation(context.Background(), llm, "x", chapters)
-	if err == nil || !strings.Contains(err.Error(), "outline length mismatch") {
-		t.Fatalf("want length-mismatch error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "chapter count mismatch") {
+		t.Fatalf("want chapter-count-mismatch error, got %v", err)
 	}
 }
 
@@ -166,6 +190,12 @@ func TestPersistFoundation_PromotesPhaseToWriting(t *testing.T) {
 	}
 	if prog.TotalChapters != 2 {
 		t.Errorf("total chapters: %d", prog.TotalChapters)
+	}
+	if !prog.Layered {
+		t.Errorf("imported book must be layered so it can be continued/extended")
+	}
+	if c, _ := st.Outline.LoadCompass(); c == nil {
+		t.Errorf("compass must be saved for continuation")
 	}
 	if prog.NovelName != "测试书名" {
 		t.Errorf("novel name: %q", prog.NovelName)
