@@ -86,6 +86,14 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 		result["recent_summaries"] = summaries
 	}
 
+	// 实体状态对照：最新状态快照 + 死亡名单（机械事实，Writer 自行对照本章出场角色）
+	if changes, _ := t.store.World.LoadStateChanges(); len(changes) > 0 {
+		result["entity_states"] = domain.FoldStateChanges(changes)
+		if dead := domain.DeadEntities(changes, a.Chapter); len(dead) > 0 {
+			result["dead_entities"] = dead
+		}
+	}
+
 	if _, err := t.store.Checkpoints.AppendArtifact(
 		domain.ChapterScope(a.Chapter), "consistency_check",
 		fmt.Sprintf("drafts/%02d.draft.md", a.Chapter),
