@@ -45,6 +45,7 @@ var allRules = []RuleFunc{
 	MissingSummaries,
 	// Context
 	GhostCharacter,
+	DeadCharacterAppears,
 	TimelineGaps,
 	RelationshipStagnation,
 }
