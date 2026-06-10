@@ -88,3 +88,15 @@ func TestDispatch_ConcurrentFailureConvergence(t *testing.T) {
 		t.Fatalf("两 persona 应均弃权, got %v", ab)
 	}
 }
+
+// TestDispatcher_GateBlocksDispatch 验证 gate 返回 false 时 Dispatch 整体短路（不读 store、不 FollowUp）。
+func TestDispatcher_GateBlocksDispatch(t *testing.T) {
+	fc := &fakeCoord{}
+	d := &Dispatcher{coordinator: fc, store: nil} // gate 在 LoadState 之前短路，nil store 不应被触碰
+	d.SetGate(func() bool { return false })
+	d.Enable()
+	d.Dispatch() // 若 gate 未生效会 panic（nil store）或产生 FollowUp
+	if len(fc.msgs) != 0 {
+		t.Fatalf("gate=false 时不应派发，got %d 条", len(fc.msgs))
+	}
+}

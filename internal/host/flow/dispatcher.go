@@ -31,6 +31,10 @@ type Dispatcher struct {
 	// 竞稿配置；零值（nil Personas）表示未启用，降级为原 LoadState 路径。
 	contest ContestConfig
 
+	// gate 预算/资源门禁；返回 false 时 Dispatch 整体短路（不派发新指令）。
+	// 仅在 Host 装配期（Attach/Enable 之前）SetGate 一次，运行期只读，无并发写。
+	gate func() bool
+
 	// 去重：记住最近一次派发指令的键，完全相同时跳过。
 	// 主要挡两种情况：
 	//   1. LLM 纯文字 turn 偶尔也会触发 ToolExecEnd?（防御）
@@ -61,6 +65,9 @@ func (d *Dispatcher) Enable() { d.enabled.Store(true) }
 // SetContest 注入竞稿配置；Host 在启用竞稿时调用。
 func (d *Dispatcher) SetContest(cfg ContestConfig) { d.contest = cfg }
 
+// SetGate 注入派发门禁；Host 在启用预算控制时装配期调用一次。
+func (d *Dispatcher) SetGate(gate func() bool) { d.gate = gate }
+
 // Attach 订阅 Coordinator 事件；返回的函数在关闭时调用以解绑。
 func (d *Dispatcher) Attach() func() {
 	return d.coordinator.Subscribe(d.handle)
@@ -82,6 +89,11 @@ func (d *Dispatcher) handle(ev agentcore.Event) {
 
 // Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
 func (d *Dispatcher) Dispatch() {
+	// 门禁：预算耗尽等场景拒绝派发新指令；in-flight 子代理自然完成。
+	if d.gate != nil && !d.gate() {
+		slog.Info("flow dispatch 被门禁拦截", "module", "host.flow")
+		return
+	}
 	state := LoadStateWithContest(d.store, d.contest)
 
 	// 竞稿提升：有 verdict 未提升时内联提升，再重读。
