@@ -13,8 +13,9 @@ type ForeshadowEntry struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	PlantedAt   int    `json:"planted_at"`
-	Status      string `json:"status"` // planted / advanced / resolved
+	Status      string `json:"status"`               // planted / advanced / resolved
 	ResolvedAt  int    `json:"resolved_at,omitempty"`
+	Deadline    int    `json:"deadline,omitempty"` // 建议回收章号（0=未设置；plant 时设置，advance 时可顺延）
 }
 
 // ForeshadowUpdate 伏笔增量操作。
@@ -22,6 +23,22 @@ type ForeshadowUpdate struct {
 	ID          string `json:"id"`
 	Action      string `json:"action"` // plant / advance / resolve
 	Description string `json:"description,omitempty"`
+	Deadline    int    `json:"deadline,omitempty"` // 建议回收章号（可选；plant 设置 / advance 顺延）
+}
+
+// OverdueForeshadow 返回已过建议回收章仍未回收的伏笔。
+// 判定：Deadline>0 且 current >= Deadline 且 Status != resolved。
+func OverdueForeshadow(entries []ForeshadowEntry, current int) []ForeshadowEntry {
+	var out []ForeshadowEntry
+	for _, e := range entries {
+		if e.Status == "resolved" || e.Deadline <= 0 {
+			continue
+		}
+		if current >= e.Deadline {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // RelationshipEntry 人物关系条目。
