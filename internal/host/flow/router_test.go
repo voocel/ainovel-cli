@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
@@ -233,6 +234,49 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestRouteContest_SynopsisTasks 验证两段式三处任务文案。
+func TestRouteContest_SynopsisTasks(t *testing.T) {
+	base := State{
+		Progress:        &domain.Progress{Phase: domain.PhaseWriting},
+		ContestEnabled:  true,
+		ContestChapter:  3,
+		ContestSynopsis: true,
+		Personas:        []string{"a", "b"},
+		CandidatesReady: map[string]bool{},
+		Abandoned:       map[string]bool{},
+	}
+
+	// 候选阶段：任务应为"候选梗概"
+	inst := Route(base)
+	if inst == nil || !strings.Contains(inst.Task, "候选梗概") {
+		t.Fatalf("候选任务 = %+v, 应含 候选梗概", inst)
+	}
+	if strings.Contains(inst.Task, "候选稿") {
+		t.Fatalf("synopsis 模式不应出现 候选稿: %q", inst.Task)
+	}
+
+	// judge 阶段
+	s := base
+	s.CandidatesReady = map[string]bool{"a": true, "b": true}
+	inst = Route(s)
+	if inst == nil || inst.Agent != "judge" || !strings.Contains(inst.Task, "候选梗概") {
+		t.Fatalf("judge 任务 = %+v, 应含 候选梗概", inst)
+	}
+
+	// 终稿阶段：已提升 → 中选 writer 写全章，任务必须含"润色"（StopGuard 切换关键词）
+	s.HasVerdict = true
+	s.IsPromoted = true
+	s.VerdictWinner = "a"
+	s.VerdictRevisionNotes = "节奏再快些"
+	inst = Route(s)
+	if inst == nil || inst.Agent != "writer_a" {
+		t.Fatalf("终稿任务 = %+v", inst)
+	}
+	if !strings.Contains(inst.Task, "全章正文") || !strings.Contains(inst.Task, "润色") {
+		t.Fatalf("终稿任务文案 = %q, 应含 全章正文 与 润色", inst.Task)
+	}
 }
 
 func TestDispatcher_Dedupe(t *testing.T) {
