@@ -46,6 +46,7 @@ type setupProvider struct {
 
 var setupProviders = []setupProvider{
 	{name: "openrouter", label: "OpenRouter", baseURL: "https://openrouter.ai/api/v1"},
+	{name: "requesty", label: "Requesty", baseURL: "https://router.requesty.ai/v1"},
 	{name: "anthropic", label: "Anthropic"},
 	{name: "gemini", label: "Gemini"},
 	{name: "openai", label: "OpenAI"},

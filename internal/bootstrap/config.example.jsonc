@@ -7,7 +7,7 @@
   "model": "google/gemini-2.5-flash",
 
   // Provider 凭证库。key 自定义，用作上面 provider 字段引用的目标。
-  // 已知 provider（openai/anthropic/gemini/openrouter/deepseek/qwen/glm/grok/mimo/ollama/bedrock）
+  // 已知 provider（openai/anthropic/gemini/openrouter/requesty/deepseek/qwen/glm/grok/mimo/ollama/bedrock）
   // 可省略 type；自定义代理必须显式声明 type 指明 API 协议。
   "providers": {
     "openrouter": {
@@ -26,6 +26,12 @@
         "user_agent": "my-client/1.0",
         "headers": { "X-Custom-Client": "my-client" }
       }
+    },
+    "requesty": {
+      "api_key": "rqsty-sk-xxx",
+      "base_url": "https://router.requesty.ai/v1",
+      // 可选。声明 /model 面板候选；省略时回退到配置中已出现过的同 provider 模型。
+      "models": ["openai/gpt-4o-mini", "anthropic/claude-sonnet-4"]
     },
     "anthropic": {
       "api_key": "sk-ant-xxx",
