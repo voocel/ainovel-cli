@@ -194,17 +194,14 @@ func EnsureHomeRulesDir() {
 	}
 }
 
-// ensureRulesDirAt 创建目录并在 README.txt 缺失时写入说明，是 EnsureHomeRulesDir 的可测内核。
-// 幂等：目录已存在不报错，README.txt 已存在不覆盖（保留用户改动）。
+// ensureRulesDirAt 创建目录并把 README.txt 写成当前引导模板，是 EnsureHomeRulesDir 的可测内核。
+// README.txt 是系统生成的引导文件（用户偏好写在 *.md，它不被 loader 加载），每次都覆盖为
+// 最新模板——不保留旧内容，也就不需要任何版本兼容逻辑。
 func ensureRulesDirAt(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	readme := filepath.Join(dir, "README.txt")
-	if _, err := os.Stat(readme); os.IsNotExist(err) {
-		return os.WriteFile(readme, []byte(homeRulesReadme), 0o644)
-	}
-	return nil
+	return os.WriteFile(filepath.Join(dir, "README.txt"), []byte(homeRulesReadme), 0o644)
 }
 
 // DefaultOptions 根据当前工作目录构造常用 LoadOptions。

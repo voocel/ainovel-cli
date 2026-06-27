@@ -213,6 +213,34 @@ ainovel-cli
 
 > Windows 或手动安装：前往 [Releases](https://github.com/voocel/ainovel-cli/releases/latest) 下载对应平台的包。
 
+### Docker
+
+Docker 镜像适合在服务器/NAS 上运行 headless 长任务，也可以用 `-it` 进入 TUI。配置和作品目录建议挂载到宿主机：
+
+```bash
+mkdir -p config workspace
+
+# TUI
+docker run --rm -it \
+  -v "$PWD/config:/root/.ainovel" \
+  -v "$PWD/workspace:/workspace" \
+  ghcr.io/voocel/ainovel-cli:latest
+
+# Headless
+docker run --rm \
+  -v "$PWD/config:/root/.ainovel" \
+  -v "$PWD/workspace:/workspace" \
+  ghcr.io/voocel/ainovel-cli:latest \
+  --headless --prompt "写一本东方玄幻长篇，主角从边陲小城起步"
+```
+
+也可以用 Compose：
+
+```bash
+docker compose run --rm ainovel
+docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
+```
+
 进入 TUI 后，启动阶段支持两种前置交互：
 
 - `快速开始`：一句话直接进入创作
@@ -414,7 +442,7 @@ output/novel/meta/simulation_profile.json
 关于 `api_key`：
 
 - `openrouter` / `anthropic` / `gemini` / `openai` / `deepseek` / `qwen` / `glm` / `grok` 这类托管接口通常需要填写 `api_key`
-- `ollama` 和 `bedrock` 允许不填 `api_key`
+- `ollama` 和 `bedrock` 允许不填 `api_key`；Bedrock 需在 `extra` 中配置 `region`、`access_key_id`、`secret_access_key`（可选 `session_token`）
 - 显式指定了 `type` 的自定义代理允许不填 `api_key`
 
 例如本地 `ollama` 配置：

@@ -810,11 +810,13 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 		rc.Model = model
 		h.cfg.Roles[role] = rc
 	}
+	h.normalizeThinkingLocked(role)
 	if path := bootstrap.DefaultConfigPath(); path != "" {
 		if err := bootstrap.SaveConfig(path, h.cfg); err != nil {
 			slog.Warn("保存配置失败", "module", "host", "err", err)
 		}
 	}
+	h.applyThinkingLocked(role)
 	// 切到未登记模型时打一行 warn，提示用户走了 128k 兜底——长篇容易被提前压缩。
 	logRole := role
 	if logRole == "" {
@@ -866,6 +868,63 @@ func (h *Host) CurrentThinking(role string) string {
 	return h.cfg.ResolveThinking(strings.ToLower(strings.TrimSpace(role)))
 }
 
+func (h *Host) AvailableThinking(role string) []agentcore.ThinkingLevel {
+	h.mu.Lock()
+	model := h.models.ForRole(strings.ToLower(strings.TrimSpace(role)))
+	h.mu.Unlock()
+	return agents.AvailableThinkingForModel(model)
+}
+
+func (h *Host) normalizeThinkingLocked(role string) agentcore.ThinkingLevel {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" || role == "default" {
+		parsed, _ := agents.ParseThinkingLevel(h.cfg.Thinking)
+		for _, r := range concreteThinkingRoles {
+			resolved, ok := agents.ResolveThinkingForModel(h.models.ForRole(r), parsed)
+			if !ok || resolved != parsed {
+				h.cfg.Thinking = string(resolved)
+				return resolved
+			}
+		}
+		h.cfg.Thinking = string(parsed)
+		return parsed
+	}
+
+	_, hasRoleThinking := h.cfg.Roles[role]
+	hasRoleThinking = hasRoleThinking && h.cfg.Roles[role].Thinking != ""
+	parsed, _ := agents.ParseThinkingLevel(h.cfg.ResolveThinking(role))
+	resolved, _ := agents.ResolveThinkingForModel(h.models.ForRole(role), parsed)
+	if !hasRoleThinking {
+		if resolved != parsed {
+			h.cfg.Thinking = string(resolved)
+		}
+		return resolved
+	}
+	if h.cfg.Roles == nil {
+		h.cfg.Roles = make(map[string]bootstrap.RoleConfig)
+	}
+	rc := h.cfg.Roles[role]
+	rc.Thinking = string(resolved)
+	h.cfg.Roles[role] = rc
+	return resolved
+}
+
+func (h *Host) applyThinkingLocked(role string) {
+	if h.thinkingApplier == nil {
+		return
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" || role == "default" {
+		for _, r := range concreteThinkingRoles {
+			lv, _ := agents.ParseThinkingLevel(h.cfg.ResolveThinking(r))
+			h.thinkingApplier(r, lv)
+		}
+		return
+	}
+	lv, _ := agents.ParseThinkingLevel(h.cfg.ResolveThinking(role))
+	h.thinkingApplier(role, lv)
+}
+
 // SetRoleThinking 设置某角色（或 default）的思考强度：校验→持久化→联动 live agent→事件。
 // 镜像 SwitchModel 的结构；与模型选择正交，可单独调整。level 为空 = 不覆盖（继承）。
 func (h *Host) SetRoleThinking(role, level string) error {
@@ -877,7 +936,16 @@ func (h *Host) SetRoleThinking(role, level string) error {
 		return err
 	}
 	role = strings.ToLower(strings.TrimSpace(role))
-
+	if role == "" || role == "default" {
+		for _, r := range concreteThinkingRoles {
+			if resolved, ok := agents.ResolveThinkingForModel(h.models.ForRole(r), parsed); !ok || resolved != parsed {
+				parsed = resolved
+				break
+			}
+		}
+	} else {
+		parsed, _ = agents.ResolveThinkingForModel(h.models.ForRole(role), parsed)
+	}
 	// 持久化：具体角色写 Roles[role].Thinking，default/"" 写顶层 Thinking。
 	if role == "" || role == "default" {
 		h.cfg.Thinking = string(parsed)
@@ -897,16 +965,7 @@ func (h *Host) SetRoleThinking(role, level string) error {
 
 	// 联动 live：具体角色直接应用；default 则遍历各具体角色按 ResolveThinking 重新应用
 	// （已被角色级覆盖的保留自身，未覆盖的吃上新默认）。
-	if h.thinkingApplier != nil {
-		if role == "" || role == "default" {
-			for _, r := range concreteThinkingRoles {
-				lv, _ := agents.ParseThinkingLevel(h.cfg.ResolveThinking(r))
-				h.thinkingApplier(r, lv)
-			}
-		} else {
-			h.thinkingApplier(role, parsed)
-		}
-	}
+	h.applyThinkingLocked(role)
 
 	logRole := role
 	if logRole == "" {

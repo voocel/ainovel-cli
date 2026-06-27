@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/voocel/agentcore"
 	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/agentcore/subagent"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
@@ -20,6 +23,21 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
+
+// logRulesLoaded 在装配期打印规则加载实况：本书规则目录、实际读到的来源、字数检查生效值。
+// 规则文件放错路径会被 loader 静默跳过、来源又不进 LLM（仅 /diag 面板可见），放错零反馈是
+// 用户排查的最大障碍。这一行启动日志让"路径错 / 字数没写进 front matter"一眼可见。
+func logRulesLoaded(opts rules.LoadOptions) {
+	b := rules.Merge(rules.Load(opts))
+	words := "未设置（不做字数检查）"
+	if w := b.Structured.ChapterWords; w != nil {
+		words = fmt.Sprintf("%d-%d", w.Min, w.Max)
+	}
+	slog.Info("规则加载",
+		"本书规则目录", opts.ProjectRulesDir,
+		"已加载来源", b.Sources,
+		"章节字数", words)
+}
 
 // agentToRole 把 subagent name 归一为 ModelSet 认得的 role 名。
 // architect_short / architect_long 都共用同一个 architect role 配置。
@@ -48,17 +66,26 @@ type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
 type ApplyThinking func(role string, level agentcore.ThinkingLevel)
 
 // ParseThinkingLevel 把配置字符串转 agentcore.ThinkingLevel。
-// "" 合法（= 不覆盖/继承）；其余须是 off/minimal/low/medium/high/xhigh 之一，
+// "" 合法（= 不覆盖/继承）；其余须是 off/minimal/low/medium/high/xhigh/max 之一，
 // 否则返回 error（启动时降级当空并 warn，运行时把 error 回显给用户）。
 func ParseThinkingLevel(s string) (agentcore.ThinkingLevel, error) {
-	lv := agentcore.ThinkingLevel(strings.ToLower(strings.TrimSpace(s)))
+	lv := agentcore.NormalizeThinkingLevel(agentcore.ThinkingLevel(s))
 	switch lv {
 	case "", agentcore.ThinkingOff, agentcore.ThinkingMinimal, agentcore.ThinkingLow,
-		agentcore.ThinkingMedium, agentcore.ThinkingHigh, agentcore.ThinkingXHigh:
+		agentcore.ThinkingMedium, agentcore.ThinkingHigh, agentcore.ThinkingXHigh,
+		agentcore.ThinkingMax:
 		return lv, nil
 	default:
-		return "", fmt.Errorf("无效思考强度 %q（可选：off/minimal/low/medium/high/xhigh）", s)
+		return "", fmt.Errorf("无效思考强度 %q（可选：off/minimal/low/medium/high/xhigh/max）", s)
 	}
+}
+
+func ResolveThinkingForModel(model agentcore.ChatModel, level agentcore.ThinkingLevel) (agentcore.ThinkingLevel, bool) {
+	return llm.ThinkingPolicyFor(model).Resolve(level)
+}
+
+func AvailableThinkingForModel(model agentcore.ChatModel) []agentcore.ThinkingLevel {
+	return llm.ThinkingPolicyFor(model).Available
 }
 
 // roleThinking 解析某角色生效的思考强度；非法值降级为空（不覆盖）并 warn。
@@ -69,6 +96,11 @@ func roleThinking(cfg bootstrap.Config, role string) agentcore.ThinkingLevel {
 		return ""
 	}
 	return lv
+}
+
+func resolvedRoleThinking(model agentcore.ChatModel, cfg bootstrap.Config, role string) agentcore.ThinkingLevel {
+	resolved, _ := ResolveThinkingForModel(model, roleThinking(cfg, role))
+	return resolved
 }
 
 // BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
@@ -86,6 +118,7 @@ func BuildCoordinator(
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
 	// 共享工具
 	rulesOpts := rules.DefaultOptions(bundle.RulesFS)
+	logRulesLoaded(rulesOpts)
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style, rulesOpts)
 	readChapter := tools.NewReadChapterTool(store)
 	askUser := tools.NewAskUserTool()
@@ -163,7 +196,7 @@ func BuildCoordinator(
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
 		return reminder.NewArchitectStopGuard(store)
 	}
-	architectThinking := roleThinking(cfg, "architect")
+	architectThinking, _ := ResolveThinkingForModel(architectModel, roleThinking(cfg, "architect"))
 	architectShort := subagent.Config{
 		Name:               "architect_short",
 		Description:        "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
@@ -182,26 +215,18 @@ func BuildCoordinator(
 		StopGuardFactory: architectStopGuardFactory,
 	}
 	architectLong := subagent.Config{
-		Name:               "architect_long",
-		Description:        "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
-		Model:              architectModel,
-		SystemPrompt:       bundle.Prompts.ArchitectLong,
-		Tools:              architectTools,
-		MaxTurns:           20,
-		MaxRetries:         subagentMaxRetries,
-		ThinkingLevel:      architectThinking,
-		ToolsAreIdempotent: true,
-		OnMessage:          onMsg,
-		StopAfterToolResult: func(toolName string, result json.RawMessage) bool {
-			r := decodeSaveFoundationResult(toolName, result)
-			switch r.Type {
-			case "update_compass", "expand_arc", "complete_book":
-				return true
-			default:
-				return false
-			}
-		},
-		StopGuardFactory: architectStopGuardFactory,
+		Name:                "architect_long",
+		Description:         "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
+		Model:               architectModel,
+		SystemPrompt:        bundle.Prompts.ArchitectLong,
+		Tools:               architectTools,
+		MaxTurns:            20,
+		MaxRetries:          subagentMaxRetries,
+		ThinkingLevel:       architectThinking,
+		ToolsAreIdempotent:  true,
+		OnMessage:           onMsg,
+		StopAfterToolResult: architectLongShouldStopAfterToolResult,
+		StopGuardFactory:    architectStopGuardFactory,
 	}
 
 	writerPrompt := bundle.Prompts.Writer
@@ -220,7 +245,7 @@ func BuildCoordinator(
 		Tools:              writerTools,
 		MaxTurns:           30,
 		MaxRetries:         subagentMaxRetries,
-		ThinkingLevel:      roleThinking(cfg, "writer"),
+		ThinkingLevel:      resolvedRoleThinking(writerModel, cfg, "writer"),
 		ToolsAreIdempotent: true,
 		StopAfterTools:     []string{"commit_chapter"},
 		OnMessage:          onMsg,
@@ -265,7 +290,7 @@ func BuildCoordinator(
 		Tools:              editorTools,
 		MaxTurns:           20,
 		MaxRetries:         subagentMaxRetries,
-		ThinkingLevel:      roleThinking(cfg, "editor"),
+		ThinkingLevel:      resolvedRoleThinking(editorModel, cfg, "editor"),
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
 		// 仅摘要类终态产物命中即停；save_review 不再硬停——StopAfterTool 退出会绕过
@@ -304,22 +329,29 @@ func BuildCoordinator(
 		agentcore.WithContextManager(coordinatorEngine),
 		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
 		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
-		agentcore.WithToolGate(completePhaseGate(store)),
+		agentcore.WithToolGate(combineToolGates(
+			completePhaseGate(store),
+			writerExpandedChapterGate(store),
+		)),
 	)
 	// Coordinator 思考强度：无条件应用解析结果。未配置时为空（不发 thinking，用 provider
 	// 默认），与各子代理（Config.ThinkingLevel 默认空）一致——避免覆盖 agentcore 默认
 	// ThinkingLow 而对所有 provider 强制发 low（含会被强制开思考的 GLM/Ollama）。
-	agent.SetThinkingLevel(roleThinking(cfg, "coordinator"))
+	coordinatorThinking, _ := ResolveThinkingForModel(models.ForRole("coordinator"), roleThinking(cfg, "coordinator"))
+	agent.SetThinkingLevel(coordinatorThinking)
 
 	// 运行时联动各角色思考强度：coordinator 走 Agent，子代理走 subagentTool override。
 	applyThinking := func(role string, level agentcore.ThinkingLevel) {
 		switch role {
 		case "coordinator":
+			level, _ = ResolveThinkingForModel(models.ForRole("coordinator"), level)
 			agent.SetThinkingLevel(level)
 		case "architect":
+			level, _ = ResolveThinkingForModel(models.ForRole("architect"), level)
 			subagentTool.SetThinkingLevel("architect_short", level)
 			subagentTool.SetThinkingLevel("architect_long", level)
 		case "writer", "editor":
+			level, _ = ResolveThinkingForModel(models.ForRole(role), level)
 			subagentTool.SetThinkingLevel(role, level)
 		}
 	}
@@ -347,6 +379,78 @@ func completePhaseGate(st *store.Store) agentcore.ToolGate {
 	}
 }
 
+func combineToolGates(gates ...agentcore.ToolGate) agentcore.ToolGate {
+	return func(ctx context.Context, req agentcore.GateRequest) (*agentcore.GateDecision, error) {
+		for _, gate := range gates {
+			if gate == nil {
+				continue
+			}
+			decision, err := gate(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+			if decision != nil && !decision.Allowed {
+				return decision, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
+func writerExpandedChapterGate(st *store.Store) agentcore.ToolGate {
+	return func(_ context.Context, req agentcore.GateRequest) (*agentcore.GateDecision, error) {
+		if req.Call.Name != "subagent" {
+			return nil, nil
+		}
+		var args struct {
+			Agent string `json:"agent"`
+			Task  string `json:"task"`
+		}
+		if err := json.Unmarshal(req.Call.Args, &args); err != nil || args.Agent != "writer" {
+			return nil, nil
+		}
+		chapter := chapterFromTask(args.Task)
+		if chapter <= 0 {
+			chapter = writerFallbackChapter(st)
+		}
+		if chapter <= 0 {
+			return nil, nil
+		}
+		if err := tools.EnsureChapterExpanded(st, chapter); err != nil {
+			return &agentcore.GateDecision{
+				Allowed: false,
+				Reason:  err.Error() + "。请改派 architect_long，调用 save_foundation(type=expand_arc) 展开下一弧，或 type=append_volume 追加并展开下一卷后再派 writer。",
+			}, nil
+		}
+		return nil, nil
+	}
+}
+
+func writerFallbackChapter(st *store.Store) int {
+	if st == nil {
+		return 0
+	}
+	progress, err := st.Progress.Load()
+	if err != nil || progress == nil {
+		return 0
+	}
+	if len(progress.PendingRewrites) > 0 {
+		return progress.PendingRewrites[0]
+	}
+	return progress.NextChapter()
+}
+
+var chapterTaskRe = regexp.MustCompile(`第\s*(\d+)\s*章`)
+
+func chapterFromTask(task string) int {
+	m := chapterTaskRe.FindStringSubmatch(task)
+	if len(m) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
 type saveFoundationResult struct {
 	Type            string `json:"type"`
 	FoundationReady bool   `json:"foundation_ready"`
@@ -359,4 +463,14 @@ func decodeSaveFoundationResult(toolName string, result json.RawMessage) saveFou
 	var r saveFoundationResult
 	_ = json.Unmarshal(result, &r)
 	return r
+}
+
+func architectLongShouldStopAfterToolResult(toolName string, result json.RawMessage) bool {
+	r := decodeSaveFoundationResult(toolName, result)
+	switch r.Type {
+	case "expand_arc", "complete_book":
+		return true
+	default:
+		return false
+	}
 }

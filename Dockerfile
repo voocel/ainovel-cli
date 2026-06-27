@@ -1,17 +1,23 @@
-FROM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
 
-WORKDIR /app
+WORKDIR /src
+
+ENV CGO_ENABLED=0 GOWORK=off
+
+ARG TARGETOS
+ARG TARGETARCH
+
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY . .
 
-RUN go mod download
-
-RUN CGO_ENABLED=0 GOOS=linux \
-    go build -ldflags="-s -w" \
-    -o /ainovel \
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" \
+    -o /out/ainovel-cli \
     ./cmd/ainovel-cli
 
-FROM alpine:latest
+FROM alpine:3.22
 
 RUN apk add --no-cache \
     ca-certificates \
@@ -19,8 +25,6 @@ RUN apk add --no-cache \
 
 WORKDIR /workspace
 
-COPY --from=builder /ainovel /usr/local/bin/ainovel
+COPY --from=builder /out/ainovel-cli /usr/local/bin/ainovel-cli
 
-ENV TZ=Asia/Shanghai
-
-CMD ["tail","-f","/dev/null"]
+ENTRYPOINT ["ainovel-cli"]

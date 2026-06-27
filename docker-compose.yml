@@ -1,14 +1,10 @@
 services:
   ainovel:
-    image: ghcr.io/star8521/ainovel-cli:latest
-    container_name: ainovel
-    restart: unless-stopped
+    image: ghcr.io/voocel/ainovel-cli:latest
+    build:
+      context: .
     volumes:
       - ./config:/root/.ainovel
       - ./workspace:/workspace
-    command: tail -f /dev/null
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: "2.0"
+    stdin_open: true
+    tty: true

@@ -94,7 +94,17 @@ func TestLoadConfig_ValidMergeWorks(t *testing.T) {
 	writeGlobal(t, validGlobal)
 	proj := t.TempDir()
 	t.Chdir(proj)
-	writeProjectConfig(t, `{ "model": "google/gemini-2.5-pro" }`)
+	writeProjectConfig(t, `{
+  "model": "google/gemini-2.5-pro",
+  "thinking": "high",
+  "roles": {
+    "writer": {
+      "provider": "openrouter",
+      "model": "google/gemini-2.5-flash",
+      "thinking": "low"
+    }
+  }
+}`)
 
 	cfg, err := LoadConfig("")
 	if err != nil {
@@ -105,6 +115,12 @@ func TestLoadConfig_ValidMergeWorks(t *testing.T) {
 	}
 	if cfg.ModelName != "google/gemini-2.5-pro" {
 		t.Errorf("model 应被项目级覆盖，得到 %q", cfg.ModelName)
+	}
+	if cfg.Thinking != "high" {
+		t.Errorf("thinking 应被项目级覆盖，得到 %q", cfg.Thinking)
+	}
+	if got := cfg.Roles["writer"].Thinking; got != "low" {
+		t.Errorf("roles.writer.thinking 应被项目级覆盖，得到 %q", got)
 	}
 }
 

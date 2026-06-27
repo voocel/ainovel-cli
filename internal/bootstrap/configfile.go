@@ -136,6 +136,9 @@ func mergeConfig(base, overlay Config) Config {
 	if overlay.ModelName != "" {
 		base.ModelName = overlay.ModelName
 	}
+	if overlay.Thinking != "" {
+		base.Thinking = overlay.Thinking
+	}
 	if overlay.Style != "" {
 		base.Style = overlay.Style
 	}
@@ -187,6 +190,9 @@ func mergeConfig(base, overlay Config) Config {
 			}
 			if len(v.Fallbacks) > 0 {
 				existing.Fallbacks = append([]ModelRef(nil), v.Fallbacks...)
+			}
+			if v.Thinking != "" {
+				existing.Thinking = v.Thinking
 			}
 			base.Roles[k] = existing
 		}

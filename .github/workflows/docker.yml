@@ -2,10 +2,9 @@ name: Build Docker
 
 on:
   push:
-    branches:
-      - docker
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,14 +32,12 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/star8521/ainovel-cli
+          images: ghcr.io/${{ github.repository }}
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/star8521/ainovel-cli:latest
-            ghcr.io/star8521/ainovel-cli:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

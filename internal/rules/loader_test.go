@@ -206,8 +206,8 @@ func TestLoad_GlobalDirIsFileExposesConflict(t *testing.T) {
 	}
 }
 
-// TestEnsureRulesDirAt 验证备好目录 + README.txt：写入说明、幂等、
-// 不覆盖用户改动，且 README.txt(非 .md)不会被 loader 当成规则。
+// TestEnsureRulesDirAt 验证备好目录 + README.txt：写入说明、始终覆盖为最新模板，
+// 且 README.txt(非 .md)不会被 loader 当成规则。
 func TestEnsureRulesDirAt(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rules")
 	if err := ensureRulesDirAt(dir); err != nil {
@@ -222,15 +222,15 @@ func TestEnsureRulesDirAt(t *testing.T) {
 		t.Errorf("README.txt missing guidance, got %q", data)
 	}
 
-	// 幂等且不覆盖用户改动
-	if err := os.WriteFile(readme, []byte("user edited"), 0o644); err != nil {
+	// 始终覆盖为最新模板：旧版本写的过时文案（如路径仍是 ./rules.md）再次 ensure 时被刷新
+	if err := os.WriteFile(readme, []byte("旧版本写的 ./rules.md 文案"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureRulesDirAt(dir); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := os.ReadFile(readme); string(again) != "user edited" {
-		t.Errorf("scaffold must not overwrite existing README.txt, got %q", again)
+	if again, _ := os.ReadFile(readme); string(again) != homeRulesReadme {
+		t.Errorf("README.txt should be refreshed to latest template, got %q", again)
 	}
 
 	// README.txt 不被当规则(loader 只扫 .md)

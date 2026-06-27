@@ -2,5 +2,15 @@
 .github
 .vscode
 .idea
-output
+go.work
+go.work.sum
+.DS_Store
+.env
+.ainovel
+config
+workspace
+dist
+tasks
+refer
+output*
 *.log

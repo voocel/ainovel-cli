@@ -15,7 +15,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/utils"
-	"github.com/voocel/litellm"
 )
 
 // errorKind classifies a runtime error into a stable, short label for log
@@ -25,7 +24,7 @@ import (
 // the rendered string fallback used when the chain has been flattened
 // (e.g. inside sub-agent JSON results).
 func errorKind(err error, msg string) string {
-	if err != nil && litellm.IsStreamIdleError(err) {
+	if err != nil && errors.Is(err, agentcore.ErrProviderStreamIdle) {
 		return "stream_idle"
 	}
 	if msg != "" && agentcore.IsStreamIdleMessage(msg) {

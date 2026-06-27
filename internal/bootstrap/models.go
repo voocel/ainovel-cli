@@ -84,6 +84,13 @@ func (m *SwappableModel) Info() llm.ModelInfo {
 	}
 }
 
+func (m *SwappableModel) Capabilities() llm.Capabilities {
+	if cp, ok := m.SwappableModel.Current().(llm.CapabilityProvider); ok {
+		return cp.Capabilities()
+	}
+	return llm.Capabilities{}
+}
+
 func (m *SwappableModel) Swap(provider, name string, model agentcore.ChatModel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
