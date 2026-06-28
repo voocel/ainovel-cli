@@ -1,25 +1,25 @@
-# 奇幻风格补充参考
+# Tham khảo bổ sung phong cách kỳ ảo
 
-## 世界构建
+## Xây dựng thế giới
 
-- 魔法体系必须有明确代价，不能出现"无限能量"
-- 种族特征要在行动中自然展示，禁止百科式灌输
-- 新设定首次出现时通过角色互动引出，不用旁白解释
+- Hệ thống ma thuật bắt buộc có giá cả rõ ràng, không xuất hiện "năng lượng vô hạn"
+- Đặc trưng chủng tộc thị trong hành động tự nhiên, cấm đổ kiểu bách khoa
+- Thiết lập mới lần đầu xuất hiện dẫn ra qua tương tác nhân vật, không dùng旁白 giải thích
 
-## 常见陷阱
+## Bẫy thường gặp
 
-- 龙傲天：主角能力攀升要有合理代价和挫折
-- 设定膨胀：每章最多引入一个新设定概念
-- 语言穿越：避免现代网络用语出现在古典背景中
+- Long ngạo thiên: Năng lực nhân vật chính thăng bắt buộc có giá cả và trắc trở hợp lý
+| Bùng nổ thiết lập: Mỗi chương tối đa dẫn một khái niệm thiết lập mới
+- Xuyên ngôn ngữ: Tránh từ vựng mạng hiện đại xuất hiện trong bối cảnh cổ đại
 
-## 战斗与能力描写
+## Chiến đấu và miêu tả năng lực
 
-- 战斗重点是策略和代价，不是招式名称堆砌
-- 能力上限在 world_rules 中已约定，严禁突破
-- 受伤要有持续影响，不能"下一场景就好了"
+- Trọng tâm chiến đấu là chiến thuật và giá cả, không phải chất đống danh chiêu thức
+| Giới hạn năng lực đã ước định trong world_rules, nghiêm cấm vượt biên
+- Bị thương phải có ảnh hưởng kéo dài, không thể "cảnh sau thì khỏi"
 
-## 氛围营造
+## Dọn nền bầu không khí
 
-- 通过五感描写建立异世界沉浸感
-- 日常生活细节（货币、食物、交通）体现世界观
-- 避免所有角色都说现代普通话，适当使用世界观内的表达方式
+| Thông qua ngũ giác miêu tả kiến tạo cảm chìm đắm dị giới
+| Chi tiết sinh hoạt thường nhật (tiền tệ, thức ăn, giao thông) thể hiện thế giới quan
+- Tránh tất cả nhân vật đều nói tiếng phổ thông hiện đại, đúng mức dùng cách biểu đạt trong thế giới quan

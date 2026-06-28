@@ -1,10 +1,10 @@
-## 言情风格
+## Phong cách ngôn tình
 
-- **情感递进**：遵循接触→好感→冲突→和解→深入的自然节奏，不急于推进
-- **关系张力**：每个阶段都需要合理的阻碍，阻碍来源要多样（性格、立场、误解、外部压力）
-- **内心描写**：深入角色内心，展现矛盾和挣扎，但避免大段独白式心理分析
-- **互动细节**：用微表情、小动作、不经意的习惯传递情感，比直接告白更有张力
-- **对话节奏**：暧昧期对话留白多，甜蜜期对话轻松自然，冲突期对话尖锐但克制
-- **场景氛围**：环境描写与情感状态呼应，但不过度使用"下雨=悲伤"类刻板隐喻
-- **配角功能**：闺蜜/兄弟角色推动情节发展，不沦为恋爱咨询工具
-- **冲突设计**：误会不能靠"一句话就能解释清楚"维持，矛盾要触及核心价值观差异
+| **Trình tiến cảm xúc**: Tuân theo tiếp xúc→hảo cảm→xung đột→hòa giải→thâm nhập nhịp tự nhiên, không vội đẩy tiến
+| **Sức căng quan hệ**: Mỗi giai đoạn đều cần cản trở hợp lý, nguồn cản trở đa dạng (tính cách, lập trường, hiểu lầm, áp lực bên ngoài)
+- **Miêu tả nội tâm**: Thâm nhập nội tâm nhân vật, thị mâu thuẫn và giằng xé, nhưng tránh đại đoạn độc白 phân tích tâm lý
+- **Chi tiết tương tác**: Dùng vi biểu tình, tiểu động tác, thói quen vô ý truyền cảm xúc, so với trực tiếp cáo bạch có sức căng hơn
+| **Nhịp đối thoại**: Kỳ mập mờ đối thoại chừa白 nhiều, kỳ ngọt đối thoại nhẹ tự nhiên, kỳ xung đột đối thoại sắc nhưng kềm chế
+| **Bầu không khí cảnh**: Miêu tả môi trường hô ứng trạng thái cảm xúc, nhưng không quá mức dùng "trời mưa=bi thương" loại ẩn dụ khuôn mẫu cố định
+| **Chức năng phụ**: Vai trò bạn thân/đệ huynh đẩy cốt truyện phát triển, không sa vào công cụ tư vấn tình yêu
+- **Thiết kế xung đột**: Hiểu lầm không thể dựa "một câu có thể giải thích rõ" duy trì, mâu thuẫn phải chạm khác biệt giá trị cốt lõi

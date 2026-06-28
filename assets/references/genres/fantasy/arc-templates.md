@@ -1,38 +1,38 @@
-## 奇幻/仙侠 弧型参考
+## Vòng mẫu kỳ ảo/tu tiên
 
-以下弧型适用于修仙、玄幻、奇幻冒险类长篇。根据具体设定自由组合，不必全部使用。
+Các vòng mẫu dưới áp dụng tiểu thuyết dài tu niệm, huyền ảo, phiêu lưu kỳ ảo. Tự do xen lẫm theo thiết lập, không bắt buộc dùng tất cả.
 
-### 修炼突破弧（10-15 章）
-3-4 章瓶颈困境/资源不足 → 2-3 章外部干扰或意外机缘 → 2-3 章闭关突破（穿插危机） → 1-2 章实力展示+收获
-- 突破前必须有明确代价或风险
-- 不要"坐下修炼三天就突破了"，过程中穿插人物互动和外部威胁
-- 突破后立刻用新实力解决一个之前无法解决的问题
+### Vòng đột phá tu luyện (10-15 chương)
+3-4 chương nút thắt tài nguyên không đủ → 2-3 chương can nhiễu bên ngoài hoặc cơ duy bất ngờ → 2-3 chương bế quan đột phá (xuyên tắc nguy cơ) → 1-2 chương thị thực lực + thu hoạch
+- Trước đột phá bắt buộc có giá cả hoặc rủi ro rõ ràng
+| Đừng "ngồi tu ba ngày là đột phá", xuyên tắc tương tác nhân vật và uy hiếp bên ngoài
+- Sau đột phá lập tức dùng thực lực mới giải quyết vấn đề trước đó không thể
 
-### 宗门大比/擂台弧（12-20 章）
-2-3 章赛前准备/情报收集 → 6-10 章逐轮对决（每轮对手有特色，穿插角色互动） → 2-3 章决赛高潮+奖惩
-- 每轮对手不能只是"更强的人"，要有性格和动机
-- 比赛间隙穿插阴谋、结盟、赌约等副线
-- 结局不一定是夺冠，失败或意外中断也能推动剧情
+### Vòng đại tỷ tông môn/đài quy (12-20 chương)
+2-3 chương trước thi chuẩn bị/thu hoạch tin → 6-10 chương từng vòng đối quyết (mỗi vòng đối thủ có đặc sắc, xuyên tắc tương tác nhân vật) → 2-3 chương quyết trận cao hồ + thưởng phạt
+- Mỗi vòng đối thủ không thể chỉ là "người mạnh hơn", phải có tính cách và động cơ
+- Khoảng thi xuyên tắc mưu mô, liên minh, cờ cược line phụ
+| Kết quả không nhất thiết đoạt quán, thất bại hoặc bất ngờ giữa断 cũng đẩy cốt truyện
 
-### 秘境/副本探险弧（15-25 章）
-2-3 章情报收集+组队 → 8-15 章层层深入（每层新机制/新危险） → 2-3 章最终Boss或宝藏+收获
-- 每层有独特的环境、规则和挑战，不是简单的打怪升级
-- 队伍内部关系在压力下发生变化（信任/背叛/牺牲）
-- 收获不只是法宝，也包括认知和关系转变
+### Vòng thám hiểm bí cảnh/phó bản (15-25 chương)
+2-3 chương thu hoạch tin + tổ đội → 8-15 chương từng tầng thâm nhập (mỗi tầng cơ chế/nguy hiểm mới) → 2-3 chương Boss cuối hoặc bảo tàng + thu hoạch
+- Mỗi tầng có môi trường, quy tắc và khiêu chiến độc đáo, không phải đơn giản quái物的 thăng cấp
+| Quan hệ nội bộ đội under áp lực biến đổi (tin tưởng/phản bội hy sinh)
+- Thu hoạch không chỉ pháp bảo, còn kiến thức và chuyển biến quan hệ
 
-### 势力争霸/门派斗争弧（12-18 章）
-2-3 章矛盾积累/站队 → 3-5 章暗战博弈 → 3-5 章正面冲突 → 2-3 章结算+格局重塑
-- 不是简单的正邪对立，各方都有合理立场
-- 主角在其中的角色要有演变（旁观→卷入→被迫选择→主导）
-- 结局要改变势力版图，为后续卷埋线
+### Vòng tranh bá thế lực/đấu phái (12-18 chương)
+2-3 chương tích lũy mâu thuẫn/chọn phe → 3-5 chương ám chiến cờ bạc → 3-5 chương xung đột chính diện → 2-3 chương kết toán + tái kiến cục thế lực
+| Không phải đơn giản chính tà đối nghịch, mỗi bên đều có lập trường hợp lý
+- Vai trò nhân vật chính trong đó có diễn (quan sát→cuốn vào→bắt buộc lựa chọn→chủ đạo)
+- Kết cục bắt buộc thay đổi bản đồ thế lực, chôn tuyến cho quyển sau
 
-### 渡劫/大战弧（8-12 章）
-2-3 章战前态势/最后准备 → 4-6 章多线战斗（不同战场交叉叙事） → 1-2 章决定性转折+代价
-- 战斗要有策略层面，不是纯粹的力量碾压
-- 要有重要角色的牺牲或重大损失
-- 战后世界发生不可逆变化
+### Vòng độ kiếp/chiến tranh (8-12 chương)
+2-3 chương thái thế trước chiến/chuẩn bị cuối → 4-6 chương chiến đấu đa dây (chuyện cắt chéo chiến trường khác) → 1-2 chương chuyển quyết định + giá cả
+- Chiến đấu phải có tầng chiến thuật, không phải đơn thuần lực lượng áp đảo
+| Phải có hy sinh hoặc tổn thất nặng nhân vật vật trọng yếu
+| Sau chiến thế giới phát sinh biến đổi bất khả nghịch
 
-### 日常/过渡弧（5-8 章）
-修炼日常/人物社交/势力建设/伏笔布局/角色情感发展
-- 不是水字数，每章至少推进一条暗线
-- 为下一个高潮弧蓄势，建立情感连接后破坏才有冲击力
+### Vòng thường nhật/chuyển tiếp (5-8 chương)
+Tu luyện thường nhật/tương tác nhân vật/thiết lập thế lực/chôn伏笔/phát triển cảm xúc nhân vật
+- Không phải châm chữ, mỗi chương tối thiểu đẩy một line ẩn
+- Tích thế cho vòng cao hồ tiếp, kiến tạo liên kết cảm xúc sau phá mới có lực xung kích
