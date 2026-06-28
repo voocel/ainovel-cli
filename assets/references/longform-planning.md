@@ -1,121 +1,120 @@
-# 通用长篇规划参考
+# Tham khảo规划 dài kỳ phổ thông
 
-这份参考用于“适合长篇连载”的题材，不限定具体品类。
+Tài liệu này dùng cho thể loại "phù hợp tiểu thuyết dài", không giới hạn loại cụ thể.
 
-## 长篇不是把短篇拉长
+## Dài không phải kéo ngắn ra
 
-长篇的核心不是章节更多，而是具备长期展开能力。判断一部作品能否写长，关键看它是否具备以下“故事引擎”：
+Cốt lõi tiểu thuyết dài không phải nhiều chương hơn, mà là có khả năng trải rộng dài hạn. Phán một tác phẩm có thể viết dài, then chốt xem nó có các "cỗ máy chuyện" dưới không:
 
-- **目标引擎**：主角会不断追求新的阶段目标
-- **世界引擎**：世界规则、势力格局、资源结构可以持续制造新问题
-- **关系引擎**：主要人物关系会持续演化，而不是定型后停滞
-- **身份引擎**：主角的位置、身份、阵营、责任会变化
-- **代价引擎**：每次成长都带来新的约束、损失或风险
+- **Cỗ máy mục tiêu**: Nhân vật chính sẽ liên tục theo đuổi mục tiêu giai đoạn mới
+- **Cỗ máy thế giới**: Quy tắc thế giới, cục thế lực, kết cấu tài nguyên có thể liên tục tạo vấn đề mới
+- **Cỗ máy quan hệ**: Quan hệ nhân vật chính sẽ liên tục diễn hóa, chứ không phải định hình sau đình trệ
+- **Cỗ máy thân phận**: Vị trí, thân phận, phe phái, trách nhiệm nhân vật chính sẽ biến đổi
+- **Cỗ máy giá cả**: Mỗi lần trưởng thành mang đến ràng buộc, tổn thất hoặc rủi ro mới
 
-如果这几个引擎都很弱，再多章节也只会变成重复灌水。
+Nếu mấy cỗ máy này đều yếu, chương nhiều cũng chỉ lặp lại châm nước.
 
-## 长篇推荐规划顺序
+## Thứ tự规划 dài kỳ khuyến nghị
 
-### 1. 作品卖点
+### 1. Điểm bán tác phẩm
 
-先明确：
+Trước làm rõ:
+- Lời hứa hấp dẫn độc giả nhất của sách này là gì
+| Điểm khác biệt lớn nhất với cùng thể loại phổ biến là gì
+- Độc giả vì sao nguyện theo nhân vật chính đi đến trung hậu kỳ
 
-- 这本书最吸引读者的承诺是什么
-- 它和同题材常见写法最不同的点是什么
-- 读者为什么愿意跟随主角走到中后期
+### 2. Xung đột dài hạn
 
-### 2. 长期冲突
+Đừng chỉ有一 "phản diện tối chung". Dài kỳ phù hợp đa giai đoạn xung đột:
 
-不要只有一个“终极反派”。长篇更适合多阶段冲突：
+- Xung đột cự ly gần: Sinh tồn hiện tại, nhiệm vụ hiện tại, mục tiêu giai đoạn
+- Xung đột cự ly trung: Cờ bạc thế lực, tái tổ hợp quan hệ, biến đổi thân phận
+- Xung đột cự ly xa: Chân tướng thế giới, mệnh đề thời đại, lựa chọn kết cục
 
-- 近程冲突：当前生存、当前任务、当前阶段目标
-- 中程冲突：势力博弈、关系重组、身份变化
-- 远程冲突：世界真相、时代命题、终局选择
+### 3. Thiết kế cấp quyển
 
-### 3. 卷级设计
+Mỗi quyển tối thiểu một chức năng rõ ràng, chức năng thường见:
 
-每一卷至少要有一个明确功能，常见功能包括：
+- Đứng vững
+| Mở rộng
+- Thử sai
+| Phản phệ
+- Mất mát
+| Chuyển hướng
+- Thu gom
+| Kết cục
 
-- 立足
-- 扩张
-- 试错
-- 反噬
-- 失去
-- 转向
-- 收束
-- 终局
+Mỗi quyển không chỉ thăng cấp cường độ, còn thăng cấp loại vấn đề.
 
-每卷不只升级强度，还要升级问题类型。
+### 4. Thiết kế cấp vòng
 
-### 4. 弧级设计
+Mỗi vòng nên như "một chuyện nhỏ có thể độc lập thành lập":
 
-每一弧都应该像“一个可独立成立的小故事”：
+- Mục tiêu rõ ràng
+| Cản trở rõ ràng
+- Chuyển hướng giai đoạn
+| Kết quả và giá cả
 
-- 有明确目标
-- 有明确阻力
-- 有阶段转折
-- 有结果与代价
+### 5. Thiết kế chương
 
-### 5. 章节设计
+Chương không phải phân bổ sự kiện bình quân, mà phục vụ vòng:
 
-章节不是平均分配事件，而是为弧服务：
+- Chương đẩy trọng tâm
+| Chương thay đổi quan hệ
+- Chương兑现 giá cả
+| Chương sai phán và phản phệ
+- Chương chuyển hướng
+| Chương thu gom và dẩn vòng sau
 
-- 关键推进章
-- 关系变化章
-- 代价兑现章
-- 误判与反噬章
-- 转折章
-- 收束与引出下弧章
+## Tránh đồng chất hóa dài kỳ
 
-## 避免长篇同质化
+### Cách sai
 
-### 错误做法
+- Mỗi quyển chỉ là "đổi địa đồ + đổi kẻ thù"
+- Mỗi lần thăng cấp chỉ là "nhân vật chính mạnh hơn"
+| Giữa kỳ vẫn lặp lại kết cấu điểm爽 tiền kỳ
+- Phụ chỉ xuất hiện khi cần, không có động cơ độc lập
+| Quy tắc thế giới chỉ viết trong thiết lập, cốt truyện không tạo áp lực
 
-- 每一卷都只是“换地图 + 换敌人”
-- 每次升级都只是“主角更强了”
-- 中期仍然重复前期的爽点结构
-- 配角只在需要时出现，没有独立动机
-- 世界规则只在设定里写，剧情中不产生压力
+### Cách đúng
 
-### 正确做法
+- Thăng cấp "loại xung đột", không chỉ thăng cấp "cường độ kẻ thù"
+- Thăng cấp "giá cả lựa chọn", không chỉ thăng cấp "quy mô tài nguyên"
+- Thăng cấp "độ phức tạp quan hệ", không chỉ thăng cấp "số người xuất trường"
+| Thăng cấp "mệnh đề", không chỉ thăng cấp "cỡ sân khấu"
 
-- 升级“冲突类型”，不只升级“敌人强度”
-- 升级“选择代价”，不只升级“资源规模”
-- 升级“关系复杂度”，不只升级“出场人数”
-- 升级“命题”，不只升级“舞台大小”
+## Chuyển hướng trung kỳ bắt buộc trước规划
 
-## 中期转向必须提前规划
+Nhiều tác phẩm 20 chương đầu viết được, 50 chương sau bắt đầu lặp, nguyên nhân không có chuyển hướng trung kỳ.
 
-很多作品前 20 章能写，50 章后就开始重复，根因是没有中期转向。
+规划时 bắt buộc trước nghĩ rõ:
 
-在规划时必须提前想清楚：
+- Lần đầu chuyển hướng cấu trúc xảy ra lúc nào
+| Vì sao phương pháp tiền kỳ giữa kỳ thất hiệu
+- Nhân vật chính giữa kỳ bắt buộc học tư duy mới gì
+- Sức hút cốt lõi trung hậu kỳ khác tiền kỳ thế nào
 
-- 第一次结构转向发生在什么时候
-- 为什么前期方法在中期失效
-- 主角到中期后必须学会什么新的思维方式
-- 中后期的核心吸引力与前期有什么不同
+## Mật độ nhịp cấp vòng
 
-## 弧级节奏密度
+Mỗi vòng nên tuân theo nhịp "lót nền → tích lũy → bùng nổ → thu hoạch". Dưới là m mật độ mẫu phổ thông (tự映射 theo thể loại):
 
-每个弧应遵循”铺垫→积累→爆发→收获”的节奏循环。以下是通用弧型的参考密度（根据题材自行映射）：
+- **Vòng trưởng thành đột phá** (10-15 chương): 3-4 chương năng lực không đủ/chuẩn bị → 2-3 chương khảo nghiệm bên ngoài/thí luyện → 2-3 chương đột phá then chốt → 1-2 chương thị + thu hoạch. Áp dụng: tu luyện thăng cấp, học kỹ năng, phá án đột phá, thăng chức职场
+- **Vòng cạnh kỹ đối kháng** (12-20 chương): 2-3 chương trước thi chuẩn bị/tình báo → 6-10 chương đa vòng đối quyết (xuyên tắc tương tác nhân vật và bất ngờ) → 2-3 chương quyết thắng + thưởng phạt. Áp dụng: hội võ, đấu thầu thương mại, biện luận pháp đình, vòng tuyển chọn
+- **Vòng thám hiểm phát hiện** (15-25 chương): 2-3 chương thu hoạch tin + tổ đội → 8-15 chương từng tầng thâm nhập (mỗi tầng khiêu chiến mới) → 2-3 chương phát hiện cuối + thu hoạch. Áp dụng: bí cảnh thám hiểm, điều tra chân tướng, giải谜 tìm báu, thâm nhập nội bộ địch
+- **Vòng ân oán xung đột** (8-12 chương): 2-3 chương tích lũy mâu thuẫn → 1-2 chương bùng nổ xung đột → 3-5 chương đa phương cờ bạc → 1-2 chương giải quyết + hậu quả. Áp dụng: quyết đấu kẻ thù, đấu phái hệ, rối nuốt cảm xúc, tranh quyền đoạt lợi
+- **Vòng thường nhật chuyển tiếp** (5-8 chương): Phát triển nhân vật/giao tiếp/bố伏笔/nghỉ ngơi, tích thế cho vòng cao hồ tiếp
 
-- **成长突破弧**（10-15 章）：3-4 章能力不足/准备 → 2-3 章外部考验/试炼 → 2-3 章关键突破 → 1-2 章展示+收获。适用于：修炼升级、技能习得、破案突破、职场晋升等
-- **竞技对抗弧**（12-20 章）：2-3 章赛前准备/情报 → 6-10 章多轮对决（穿插角色互动和意外） → 2-3 章决胜+奖惩。适用于：比武大会、商业竞标、法庭辩论、选拔赛等
-- **探索发现弧**（15-25 章）：2-3 章情报收集+组队 → 8-15 章层层深入（每层新挑战） → 2-3 章最终发现+收获。适用于：秘境探险、调查真相、解谜寻宝、深入敌后等
-- **恩怨冲突弧**（8-12 章）：2-3 章矛盾积累 → 1-2 章冲突爆发 → 3-5 章多方博弈 → 1-2 章解决+后果。适用于：仇敌对决、派系斗争、情感纠葛、权力争夺等
-- **日常过渡弧**（5-8 章）：角色发展/社交/伏笔布局/休整，为下一高潮弧蓄势
+Nguyên tắc trọng tâm:
+- Mỗi chuyển đoạn trọng đại là cao hồ cả vòng, không phải sự kiện đơn chương
+- estimated_chapters vòng không dưới 8 (quá ngắn không thể triển khai nhịp lặp)
+- Chương trong vòng phải có lên xuống, không đẩy đều tốc
+| Loại vòng khác nhau xen kẽ dùng, tránh nhịp đơn điệu
 
-关键原则：
-- 每次重大转折不是一章的事，而是整个弧的高潮
-- 弧的 estimated_chapters 不低于 8（太短无法展开节奏循环）
-- 弧内章节要有起伏，不是匀速推进
-- 不同类型的弧交替使用，避免节奏单调
+## Danh sách kiểm dài kỳ phổ thông
 
-## 长篇通用检查清单
-
-- 这本书是否具备至少 3 个阶段性主矛盾？
-- 前 3 卷是否各自承担不同功能？
-- 主角的”得到”和”失去”是否同步增长？
-- 主要配角是否会改变主线，而不是只被主角改变？
-- 世界规则是否真的限制了剧情决策？
-- 中期转向后，作品是否仍然成立？
+- Sách này có tối thiểu 3 mâu thuẫn chính giai đoạn không?
+- 3 quyển đầu có đảm nhận chức năng khác nhau không?
+| "Đạt được" và "mất mát" của nhân vật chính có đồng bộ tăng không?
+- Phụ chính có thay đổi line chính không, hay chỉ bị nhân vật chính thay đổi?
+| Quy tắc thế giới có thực sự hạn chế quyết sách cốt truyện không?
+- Sau chuyển hướng trung kỳ, tác phẩm vẫn thành lập không?

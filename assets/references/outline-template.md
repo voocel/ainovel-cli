@@ -1,92 +1,92 @@
-# 大纲规划模板
+# Mẫu规划 đại cương
 
-本模板的作用不是把所有作品都压成固定长度，而是帮助先判断作品级别，再选择大纲粒度。
+Tác dụng của mẫu này không phải ép tất cả tác phẩm thành độ dài cố định, mà giúp trước phán cấp độ tác phẩm, rồi chọn độ chi tiết đại cương.
 
-## 第一步：先判断作品长度级别
+## Bước 1: Phán cấp độ độ dài tác phẩm
 
-### 短篇 / 单卷故事
+### Ngắn / Đơn quyển
 
-- 适用：单冲突、单目标、角色少、结局集中
-- 参考长度：8-25 章
-- 建议格式：扁平 `outline`
+- Áp dụng: Đơn xung đột, đơn mục tiêu, nhân vật ít, kết cục tập trung
+| Tham khảo độ dài: 8-25 chương
+- Định dạng khuyến nghị: Phẳng `outline`
 
-### 中篇 / 多阶段故事
+### Trung / Đa giai đoạn
 
-- 适用：有阶段升级、数条支线、人物关系会变化
-- 参考长度：25-60 章
-- 建议格式：扁平 `outline` 或轻量分层
+- Áp dụng: Có thăng cấp giai đoạn, vài line phụ, quan hệ nhân vật biến đổi
+| Tham khảo độ dài: 25-60 chương
+- Định dạng khuyến nghị: Phẳng `outline` hoặc nhẹ phân tầng
 
-### 长篇连载 / 网文型故事
+### Dài kỳ连载 / Loại web novel
 
-- 适用：题材天然具备持续升级空间、长期关系张力、多个阶段目标、可扩展世界、长期谜团或长期成长线
-- 参考长度：80-200+ 章
-- 建议格式：分层 `layered_outline`
+- Áp dụng: Thể loại thiên nhiên có không gian thăng cấp liên tục, sức căng quan hệ dài hạn, đa mục tiêu giai đoạn, thế giới可 mở rộng,谜 đoàn dài hạn hoặc line trưởng thành dài kỳ
+| Tham khảo độ dài: 80-200+ chương
+- Định dạng khuyến nghị: Phân tầng `layered_outline`
 
-## 第二步：判断是否必须使用分层大纲
+## Bước 2: Phán có bắt buộc dùng đại cương phân tầng không
 
-只要满足下面任意 2 条，就优先使用 `layered_outline`：
+Chỉ cần thỏa mãn bất kỳ 2 điều dưới, ưu tiên dùng `layered_outline`:
 
-- 世界观需要逐步展开，而不是一次性讲完
-- 主角成长不是一次跃迁，而是多阶段升级
-- 人物关系会在多个阶段持续变化
-- 中期和后期存在不同类型的主矛盾
-- 需要多次地图/势力/身份/目标切换
-- 题材明显更像连载型商业小说，而不是单卷故事
+- Thế giới quan cần dần dần mở rộng, không phải lần một kể xong
+| Trưởng thành nhân vật chính không phải một nhảy, mà đa giai đoạn thăng cấp
+- Quan hệ nhân vật sẽ liên tục biến đổi ở đa giai đoạn
+| Giữa và hậu kỳ tồn tại loại mâu thuẫn chính khác nhau
+- Cần đa lần chuyển địa đồ/đổi thế lực/đổi thân phận/đổi mục tiêu
+- Thể loại rõ ràng更像 loại tiểu thuyết thương mại连载, không phải đơn quyển
 
-## 第三步：长篇时不要直接做“全书章节流水账”
+## Bước 3: Dài kỳ đừng trực tiếp làm "sổ流水 chương toàn sách"
 
-长篇规划顺序建议是：
+Thứ tự规划 dài kỳ khuyến nghị:
 
-1. 作品卖点与差异化
-2. 长期故事引擎
-3. 卷级主题与升级
-4. 弧级目标与阶段转折
-5. 章节级事件与钩子
+1. Điểm bán tác phẩm và khác biệt hóa
+2. Cỗ máy chuyện dài hạn
+3. Chủ đề cấp quyển và thăng cấp
+4. Mục tiêu cấp vòng và chuyển hướng giai đoạn
+5. Sự kiện cấp chương và móc
 
-错误做法：
+Cách sai:
 
-- 先写 20 章梗概，再强行拉长
-- 每卷都重复“遇敌-变强-换地图”
-- 只有主线升级，没有关系升级
-- 前期把所有大秘密透支完，中后期只能重复套路
+- Trước viết tóm tắt 20 chương, rồi cưỡng kéo dài
+- Mỗi quyển lặp "gặp địch-mạnh lên-đổi địa đồ"
+| Chỉ có line chính thăng cấp, không có line quan hệ thăng cấp
+- Tiền kỳ透支 tất cả bí mật lớn, trung hậu kỳ chỉ lặp mẫu
 
-## 扁平大纲模板（短/中篇）
+## Mẫu đại cương phẳng (Ngắn/Trung)
 
 ```json
 [
   {
     "chapter": 1,
-    "title": "章节标题",
-    "core_event": "本章核心事件",
-    "hook": "章末钩子",
-    "scenes": ["场景1", "场景2", "场景3"]
+    "title": "Tiêu đề chương",
+    "core_event": "Sự kiện cốt lõi chương",
+    "hook": "Móc cuối chương",
+    "scenes": ["Cảnh 1", "Cảnh 2", "Cảnh 3"]
   }
 ]
 ```
 
-## 分层大纲模板（长篇 - 卷弧双层滚动展开）
+## Mẫu đại cương phân tầng (Dài - Quyển vòng song tầng lăn mở)
 
-初始规划采用双层滚动：前 2 卷有弧骨架，其余卷为骨架卷；第一弧有详细章节。
+规划 ban đầu dùng song tầng lăn: 2 quyển trước có vòng骨架, quyển còn lại là quyển骨架; vòng đầu có chương chi tiết.
 
 ```json
 [
   {
     "index": 1,
-    "title": "第一卷标题",
-    "theme": "这一卷新增的核心矛盾/主题",
+    "title": "Tiêu đề quyển một",
+    "theme": "Mâu thuẫn/chủ đề cốt lõi mới增 quyển này",
     "arcs": [
       {
         "index": 1,
-        "title": "第一弧（已展开）",
-        "goal": "局部目标、阻力和转折",
+        "title": "Vòng một (đã triển khai)",
+        "goal": "Mục tiêu bộ phận, cản trở và chuyển hướng",
         "chapters": [
-          {"chapter": 1, "title": "章节标题", "core_event": "核心事件", "hook": "章末钩子", "scenes": ["场景1", "场景2"]}
+          {"chapter": 1, "title": "Tiêu đề chương", "core_event": "Sự kiện cốt lõi", "hook": "Móc cuối chương", "scenes": ["Cảnh 1", "Cảnh 2"]}
         ]
       },
       {
         "index": 2,
-        "title": "第二弧（骨架弧）",
-        "goal": "这一弧的目标概述",
+        "title": "Vòng hai (vòng骨架)",
+        "goal": "Tóm tắt mục tiêu vòng này",
         "estimated_chapters": 12,
         "chapters": []
       }
@@ -94,48 +94,48 @@
   },
   {
     "index": 2,
-    "title": "第二卷标题",
-    "theme": "第二卷主题",
+    "title": "Tiêu đề quyển hai",
+    "theme": "Chủ đề quyển hai",
     "arcs": [
-      {"index": 1, "title": "弧标题", "goal": "弧目标", "estimated_chapters": 15, "chapters": []},
-      {"index": 2, "title": "弧标题", "goal": "弧目标", "estimated_chapters": 10, "chapters": []}
+      {"index": 1, "title": "Tiêu đề vòng", "goal": "Mục tiêu vòng", "estimated_chapters": 15, "chapters": []},
+      {"index": 2, "title": "Tiêu đề vòng", "goal": "Mục tiêu vòng", "estimated_chapters": 10, "chapters": []}
     ]
   },
   {
     "index": 3,
-    "title": "第三卷标题（骨架卷）",
-    "theme": "第三卷主题方向",
+    "title": "Tiêu đề quyển ba (quyển骨架)",
+    "theme": "Hướng chủ đề quyển ba",
     "estimated_chapters": 60,
     "arcs": []
   }
 ]
 ```
 
-- 弧级展开：写作推进到骨架弧时，Architect 展开该弧的详细章节
-- 卷级展开：写作推进到骨架卷时，Architect 展开该卷的弧结构 + 首弧章节
+- Triển khai cấp vòng: Viết đẩy đến vòng骨架时, Architect triển khai chương chi tiết vòng đó
+- Triển khai cấp quyển: Viết đẩy đến quyển骨架时, Architect triển khai cấu trúc vòng + chương vòng đầu
 
-## 长篇卷级检查清单
+## Danh sách kiểm cấp quyển dài kỳ
 
-每一卷都要回答：
+Mỗi quyển đều phải trả lời:
 
-- 这一卷新增了什么世界信息？
-- 这一卷升级了什么核心矛盾？
-- 这一卷让主角得到什么，也失去什么？
-- 这一卷如何改变主要人物关系？
-- 这一卷结束后，故事为什么必须进入下一卷？
+- Quyển này mới增 tin thế giới gì?
+- Quyển này thăng cấp mâu thuẫn cốt lõi gì?
+- Quyển này để nhân vật chính được gì, cũng mất gì?
+- Quyển này thay đổi quan hệ nhân vật chính thế nào?
+- Sau khi quyển này kết, chuyện vì sao bắt buộc vào quyển tiếp?
 
-## 长篇弧级检查清单
+## Danh sách kiểm cấp vòng dài kỳ
 
-每一弧都要回答：
+Mỗi vòng đều phải trả lời:
 
-- 这条弧的明确目标是什么？
-- 阻力来自谁、什么规则、什么代价？
-- 转折点是什么？
-- 这条弧结束后，哪些状态发生了不可逆变化？
+- Mục tiêu rõ ràng của vòng này là gì?
+- Cản trở đến từ ai, quy tắc nào, giá cả gì?
+- Điểm chuyển hướng là gì?
+- Sau khi vòng kết, trạng thái nào phát sinh biến đổi bất khả nghịch?
 
-## 章节级检查清单
+## Danh sách kiểm cấp chương
 
-- 每章必须服务于所在弧的目标
-- 每章必须包含一个不可删除的事件推进
-- 钩子要多样化，不要全靠“发现秘密”一种模式
-- 前期章节不能只是在“介绍世界”，必须同步推进人物和冲突
+- Mỗi chương bắt buộc phục vụ mục tiêu vòng
+- Mỗi chương bắt buộc chứa một sự kiện đẩy tiến không thể xóa
+| Móc đa dạng, đừng toàn dựa vào mẫu "phát hiện bí mật"
+- Chương tiền kỳ không thể chỉ "giới thiệu thế giới", bắt buộc đồng bộ đẩy nhân vật và xung đột

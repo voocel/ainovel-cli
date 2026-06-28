@@ -1,316 +1,316 @@
-# 对话写作规范
+# Quy phạm viết đối thoại
 
-好对话是揭示人物、推动情节、制造冲突的有力工具。
+Đối thoại tốt là công cụ mạnh mẽ tiết lộ nhân vật, đẩy cốt truyện, tạo xung đột.
 
-## 对话核心原则
+## Nguyên tắc cốt lõi đối thoại
 
-### 1. 对话必须有目的
+### 1. Đối thoại bắt buộc có mục đích
 
-每句对话应该至少完成以下之一：
+Mỗi câu đối thoại nên hoàn thành ít nhất một trong:
 
-| 目的 | 示例 |
+| Mục đích | Ví dụ |
 |-----|------|
-| **推动情节** | "我找到凶器了，在河边的草丛里。" |
-| **揭示人物** | "我不信任警察，他们从来不帮我这样的人。" |
-| **制造冲突** | "你骗了我。你从头到尾都在骗我。" |
-| **传达信息** | "炸弹将在三点引爆。" |
-| **表达情感** | "我...我不知道该说什么。" |
-| **制造悬念** | "你知道那天晚上真正发生了什么吗？" |
+| **Đẩy cốt truyện** | "Tôi tìm thấy hung khí rồi, trong bụi cỏ bờ sông." |
+| **Tiết lộ nhân vật** | "Tôi không tin cảnh sát, họ chưa bao giờ giúp người như tôi." |
+| **Tạo xung đột** | "Anh lừa tôi. Từ đầu đến cuối anh đều lừa tôi." |
+| **Truyền tin** | "Bom sẽ nổ lúc ba giờ." |
+| **Biểu đạt cảm xúc** | "Tôi... tôi không biết phải nói gì." |
+| **Tạo treo lơ lửng** | "Cô có biết đêm đó thực sự chuyện gì đã xảy ra không?" |
 
-**无效对话：**
-> "你好。"
-> "你好。"
-> "吃了吗？"
-> "吃了。"
-> "哦，那就好。"
+**Đối thoại vô hiệu:**
+> "Chào anh."
+> "Chào."
+> "Ăn cơm chưa?"
+> "Rồi."
+> "Ừ, vậy tốt."
 
-### 2. 对话应该简洁
+### 2. Đối thoại nên ngắn gọn
 
-人们说话不写论文。删除多余的词。
+Người nói chuyện không viết tiểu luận. Xóa từ thừa.
 
-| 啰嗦 | 简洁 |
+| Rườm rà | Ngắn gọn |
 |-----|------|
-| "我想告诉你的是，我认为我们应该立刻离开这里。" | "我们得马上走。" |
-| "我非常抱歉，但我真的不知道你刚才说的那件事的答案。" | "我不知道。" |
-| "如果你不介意的话，我能不能请你帮我把那个东西递给我？" | "递给我那个。" |
+| "Điều tôi muốn nói là, tôi nghĩ chúng ta nên lập tức rời khỏi đây." | "Chúng phải đi ngay." |
+| "Tôi rất xin lỗi, nhưng tôi thực sự không biết câu trả lời cho chuyện anh vừa nói." | "Tôi không biết." |
+| "Nếu không phiền, tôi có thể nhờ anh đưa cho tôi cái đó không?" | "Đưa tôi cái đó." |
 
-### 3. 真实的人不会完整表达
+### 3. Người thật không biểu đạt đầy đủ
 
-真实对话充满：
-- 打断
-- 迟疑
-- 话题转移
-- 话没说完
-- 暗示而非明说
+Đối thoại thật đầy:
+- Cắt lời
+- Ngập ngừng
+| Chuyển chủ đề
+- Nói dở
+| Ngụ ý thay nói thẳng
 
-**示例：**
-> "我本来想告诉你，但是——"
-> "但是什么？"
-> "算了，没什么。"
-> "不，你说。"
-> "真的没什么。"
+**Ví dụ:**
+> "Tôi vốn muốn nói cho anh, nhưng——"
+> "Nhưng gì?"
+> "Thôi, không có gì."
+> "Không, anh nói đi."
+> "Thực sự không có gì."
 
 ---
 
-## 对话格式规范
+## Quy phạm định dạng đối thoại
 
-### 中文对话标点
+### Dấu câu đối thoại tiếng Việt
 
-**基础格式：**
+**Định dạng cơ bản:**
 ```
-"说话内容，" 他说。
-"说话内容？" 她问。
-"说话内容！" 他大喊。
-```
-
-**多行对话：**
-```
-"第一句话，"他说，"第二句话。"
-
-"第一句话。
-第二句话，"他说，"第三句话。"
+"Nội dung nói," anh nói.
+"Nội dung nói?" cô hỏi.
+"Nội dung nói!" anh hét.
 ```
 
-**对话动作：**
+**Đối thoại đa dòng:**
 ```
-"说话内容。" 他做了动作。
-他做了动作。"说话内容。"
+"Câu thứ nhất," anh nói, "câu thứ hai."
+
+"Câu thứ nhất.
+Câu thứ hai," anh nói, "câu thứ ba."
 ```
 
-### 对话标签使用
+**Hành động đối thoại:**
+```
+"Nội dung nói." Anh làm hành động.
+Anh làm hành động. "Nội dung nói."
+```
 
-**规则：**
-- 能辨识说话人时，省略标签
-- 使用"说""问"等中性标签
-- 避免过度使用副词修饰
+### Sử dụng nhãn đối thoại
 
-| 过度使用 | 改进后 |
+**Quy tắc:**
+- Khi có thể nhận diện người nói, lược nhãn
+- Dùng nhãn trung tính "nói", "hỏi"
+| Tránh quá mức dùng phó từ trang sức
+
+| Quá mức | Cải thiện |
 |---------|--------|
-| "你骗了我，"他愤怒地说。| "你骗了我。"他的声音在颤抖。 |
-| "好的，"她高兴地同意道。| 她眼睛亮了。"好的。" |
-| "我不知道，"他悲伤地回答。| 他低下头。"我不知道。" |
+| "Anh lừa tôi," hắn phẫn nộ nói. | "Anh lừa tôi." Giọng hắn run. |
+| "Được rồi," cô高兴 đồng ý. | Mắt cô sáng lên. "Được." |
+| "Tôi không biết," hắn buồn trả lời. | Hắn cúi đầu. "Tôi không biết." |
 
-**标签位置：**
-- 对话前：[标签]"对话。"
-- 对话后："对话。"[标签]
-- 对话中断："对话，"[标签]"对话。"
+**Vị trí nhãn:**
+- Trước đối thoại: [nhãn]"Đối thoại."
+- Sau đối thoại: "Đối thoại."[nhãn]
+| Giữa đối thoại: "Đối thoại,"[nhãn]"Đối thoại."
 
-### 段落划分
+### Chia đoạn
 
-**规则：** 每个说话人的对话开始新段落。
+**Quy tắc:** Mỗi người nói bắt đầu đoạn mới.
 
 ```
-正确：
-"第一句，"甲说。
-"第二句，"乙回答。
-"第三句。"甲点头。
+Đúng:
+"Câu thứ nhất," A nói.
+"Câu thứ hai," B trả lời.
+"Câu thứ ba." A gật đầu.
 
-错误：
-"第一句，"甲说。"第二句，"乙回答。"第三句。"甲点头。
+Sai:
+"Câu thứ nhất," A nói. "Câu thứ hai," B trả lời. "Câu thứ ba." A gật đầu.
 ```
 
 ---
 
-## 对话声音区分
+## Phân biệt giọng đối thoại
 
-每个角色说话方式应该不同。
+Mỗi nhân vật nói chuyện nên khác nhau.
 
-### 区分维度
+### Chiều phân biệt
 
-| 维度 | 示例 |
+| Chiều | Ví dụ |
 |-----|------|
-| **用词** | 正式/俚语/方言/专业术语 |
-| **句式** | 长句/短句/破碎句 |
-| **停顿** | 流畅/迟疑/频繁打断 |
-| **语气** | 温和/激烈/冷嘲热讽/平淡 |
-| **习惯语** | 特定口头禅或用词习惯 |
+| **Từ ngữ** | Chính thức/tiếng lúng/phương ngữ/thuật ngữ chuyên ngành |
+| **Câu thức** | Câu dài/câu ngắn/câu vỡ |
+| **Ngắt nghỉ** | Trôi chảy/ngập ngừng/thường xuyên cắt |
+| **Giọng điệu** | Nhẹ nhàng/mãnh liệt/mỉa mai/đạm nhiên |
+| **Khẩu ngữ** | Khẩu đầu ngữ cụ thể hoặc thói quen từ |
 
-### 角色声音示例
+### Ví dụ giọng nhân vật
 
-**教授型角色：**
-> "从理论角度分析，这个假设存在三个主要缺陷。首先，数据样本不足；其次，实验条件未受控制；最后，结论过于激进。"
+**Nhân vật giáo sư:**
+> "Phân tích từ góc độ lý luận, giả thiết này tồn tại ba khuyết điểm chính. Thứ nhất, mẫu dữ liệu không đủ; thứ hai, điều kiện thực nghiệm chưa kiểm soát; cuối cùng, kết luận quá mức kích tiến."
 
-**街头混混型角色：**
-> "扯淡。那帮人就是在放屁，想蒙咱们呢。我告诉你，这事儿没那么简单。"
+**Nhân vật giang hồ:**
+> "Nói vớ. Đám người đó chỉ đang bịp, muốn lừa tụi mình. Tao nói cho mày biết, chuyện này không đơn giản vậy."
 
-**害羞内向型角色：**
-> "我...我是说，如果...如果你不介意的话...那个..."
+**Nhân vật nhút nhát:**
+> "Tôi... tôi là nói, nếu... nếu anh không phiền... ờm..."
 
-**傲慢自大型角色：**
-> "让我来告诉你什么叫专业。你们这些业余人士根本不懂。"
+**Nhân vật ngạo mạn:**
+> "Để tôi nói cho các người biết chuyên nghiệp là gì. Đám nghiệp dư các người căn bản không hiểu."
 
 ---
 
-## 潜台词（Subtext）
+## Ngụy ý (Subtext)
 
-好的对话，真正含义在表面之下。
+Đối thoại tốt, ý nghĩa thật nằm bên dưới bề mặt.
 
-### 直接 vs 潜台词
+### Trực tiếp vs Ngụy ý
 
-| 直接（乏味） | 潜台词（有趣） |
+| Trực tiếp (nhạt) | Ngụy ý (thú vị) |
 |-------------|---------------|
-| "我很生气。" | "没事。我挺好的。真的。" |
-| "我喜欢你。" | "你今天看起来...不错。" |
-| "我不信任你。" | "谢谢你告诉我。我会记住的。" |
-| "我想离开。" | "这个地方空气不太好。" |
+| "Tôi rất giận." | "Không sao. Tôi ổn. Thật mà." |
+| "Tôi thích anh." | "Hôm nay anh nhìn... cũng được." |
+| "Tôi không tin anh." | "Cảm ơn anh đã nói. Tôi sẽ nhớ." |
+| "Tôi muốn đi." | "Nơi này không khí不太好." |
 
-### 潜台词技巧
+### Kỹ thuật ngụy ý
 
-**1. 话题转移**
+**1. Chuyển chủ đề**
 ```
-"你爱我吗？"
-"你看了天气预报吗？明天有雨。"
-```
-
-**2. 反问而非回答**
-```
-"你杀了他吗？"
-"你觉得像我这样的人会做那种事？"
+"Anh yêu em không?"
+"Em xem dự báo thời tiết chưa? Ngày mai mưa."
 ```
 
-**3. 谈论其他事物**
+**2. Hỏi ngược thay trả lời**
 ```
-"你想我吗？"
-"我妈昨天打电话来了。"
-```
-
-**4. 沉默和动作**
-```
-"你愿意原谅我吗？"
-她继续看杂志，翻了一页。
+"Anh đã giết hắn?"
+"Anh nghĩ người như tôi sẽ làm chuyện đó?"
 ```
 
----
-
-## 对话与动作结合
-
-对话与肢体语言配合，增强表现力。
-
-### 同步原则
-
-动作与对话一致或矛盾，都有戏剧效果。
-
-**一致（增强）：**
-> "我爱你。"她紧紧抱住他，眼泪流下来。
-
-**矛盾（揭示真相）：**
-> "我完全支持你。"他目光看向别处，手在口袋里握紧拳头。
-
-### 动作打断
-
-动作插入可以控制节奏。
-
+**3. Nói chuyện khác**
 ```
-"我本来想告诉你，"他停下脚步，转过身，"但我想你已经知道了。"
+"Anh có nhớ tôi không?"
+"Mẹ tôi hôm qua gọi điện."
 ```
 
-### 动作替代标签
-
-用动作替代"他说"。
-
+**4. Im lặng và hành động**
 ```
-"你在撒谎。"她拍案而起。
-"坐下。"他头也不抬。
+"Em sẵn sàng tha thứ cho anh không?"
+Cô tiếp tục xem tạp chí, lật một trang.
 ```
 
 ---
 
-## 对话场景类型
+## Kết hợp đối thoại và hành động
 
-### 争吵场景
+Đối thoại phối hợp với ngôn ngữ cơ thể, tăng sức biểu đạt.
 
-**特征：**
-- 短句
-- 打断
-- 重复强调
-- 情绪升级
+### Nguyên tắc đồng bộ
 
-**示例：**
-> "你答应过的！"
-> "情况变了！"
-> "那是你的借口！"
-> "你根本不懂！"
-> "我当然不懂！你什么都不告诉我！"
+Hành động và đối thoại nhất trí hoặc mâu thuẫn, đều có hiệu quả kịch.
 
-### 告白场景
+**Nhất trí (tăng cường):**
+> "Anh yêu em." Cô ôm chặt hắn, nước mắt chảy xuống.
 
-**特征：**
-- 迟疑
-- 停顿
-- 寻找词语
-- 真诚或尴尬
+**Mâu thuẫn (tiết lộ thật):**
+> "Tôi hoàn toàn ủng hộ anh." Hắn nhìn hướng khác, tay trong túi nắm chặt.
 
-**示例：**
-> "我...我想说...这些年，我一直在想...如果我们..."
-> 她低下头，声音变小。
-> "如果我们什么？"
-> "如果我们早一点相遇。"
+### Hành động cắt
 
-### 审讯场景
+Hành động chèn vào có thể kiểm soát nhịp.
 
-**特征：**
-- 提问控制
-- 信息不对称
-- 压力建立
-- 操纵对话
+```
+"Tôi vốn muốn nói cho anh," hắn dừng bước, quay người lại, "nhưng tôi nghĩ anh đã biết rồi."
+```
 
-**示例：**
-> "那天晚上你在哪里？"
-> "在家。"
-> "有人能证明吗？"
-> "...没有。"
-> "你是一个人？"
-> "是的。"
-> "整个晚上？"
+### Hành động thay nhãn
 
-### 调情场景
+Dùng hành động thay "hắn nói".
 
-**特征：**
-- 双关语
-- 试探
-- 身体接近
-- 暗示
-
-**示例：**
-> "你今天很漂亮。"
-> "只是今天？"
-> "嗯...今天特别漂亮。"
-> "那我明天该担心了？"
-> "明天...明天再看看。"
+```
+"Anh đang nói dối." Cô đập bàn đứng dậy.
+"Ngồi xuống." Hắn đầu cũng không nâng.
+```
 
 ---
 
-## 对话常见问题
+## Loại cảnh đối thoại
 
-### 避免
+### Cảnh cãi vã
 
-1. **信息倾倒** - 角色互相说已知信息
-   > 错误："正如你所知，我们的公司成立于1995年..."
-   > 正确：通过情节自然揭示信息
+**Đặc trưng:**
+- Câu ngắn
+- Cắt lời
+| Lặp nhấn mạnh
+- Cảm xúc thăng cấp
 
-2. **所有人说话一样** - 无法区分角色
-   > 解决：给每个角色独特的说话方式
+**Ví dụ:**
+> "Anh đã hứa rồi!"
+> "Tình huống变了!"
+> "Đó là cái cớ của anh!"
+> "Anh căn bản không hiểu!"
+> "Đương nhiên tôi không hiểu! Anh gì cũng không nói cho tôi!"
 
-3. **过度礼貌** - 真实对话更粗糙
-   > 错误："我很抱歉打扰你，能否请你..."
-   > 正确："喂。帮我个忙。"
+### Cảnh tỏ tình
 
-4. **无意义的闲聊** - 除非有特殊目的
-   > 删除天气、吃饭等无关对话，除非揭示人物/推动情节
+**Đặc trưng:**
+- Ngập ngừng
+- Ngừng lại
+| Tìm từ
+- Chân thành hoặc bối rối
 
-5. **说教** - 角色发表长篇哲学论述
-   > 改为通过冲突和行动展示观点
+**Ví dụ:**
+> "Tôi... tôi muốn nói... nhiều năm nay, tôi vẫn luôn nghĩ... nếu chúng ta..."
+> Cô cúi đầu, giọng nhỏ lại.
+> "Nếu chúng ta gì?"
+> "Nếu chúng ta gặp nhau sớm hơn một chút."
+
+### Cảnh thẩm vấn
+
+**Đặc trưng:**
+- Kiểm soát hỏi
+| Tin không đối xứng
+| Áp lực xây dựng
+| Thao túng đối thoại
+
+**Ví dụ:**
+> "Đêm đó anh ở đâu?"
+> "Ở nhà."
+> "Có ai chứng minh không?"
+> "...Không."
+> "Một mình?"
+> "Vâng."
+> "Cả đêm?"
+
+### Cảnh tán tỉnh
+
+**Đặc trưng:**
+- Nói đôi
+| Thử thăm
+- Gần gũi cơ thể
+| Ngụ ý
+
+**Ví dụ:**
+> "Hôm nay em rất xinh."
+> "Chỉ hôm nay thôi?"
+> "Ừm... hôm nay đặc biệt xinh."
+> "Vậy ngày mai tôi phải lo rồi?"
+> "Ngày mai... ngày mai tính tiếp."
 
 ---
 
-## 对话练习自查
+## Vấn đề thường gặp trong đối thoại
 
-写完对话后检查：
+### Tránh
 
-- [ ] 每句对话是否有目的？
-- [ ] 删除后情节是否受影响？
-- [ ] 能否辨识说话人（不看标签）？
-- [ ] 是否有潜台词？
-- [ ] 节奏是否合适（快/慢）？
-- [ ] 是否符合人物性格？
-- [ ] 标签使用是否正确？
+1. **Đổ tin** - Nhân vật nói với nhau tin đã biết
+   > Sai: "Như anh đã biết, công ty chúng ta thành lập năm 1995..."
+   > Đúng: Qua cốt truyện tự nhiên tiết lộ tin
+
+2. **Tất cả nói giống nhau** - Không phân biệt nhân vật
+   > Giải quyết: Cho mỗi nhân vật cách nói độc đáo
+
+3. **Quá mức lịch sự** - Đối thoại thật thô hơn
+   > Sai: "Tôi rất xin lỗi đã quấy rầy, có thể xin anh..."
+   > Đúng: "Ê. Giúp tôi một tay."
+
+4. **Tán gẫu vô nghĩa** - Trừ khi có mục đích đặc biệt
+   > Xóa đối thoại thời tiết, ăn uống không liên quan, trừ khi tiết lộ nhân vật/đẩy cốt truyện
+
+5. **Giảng đạo** - Nhân vật phát biểu luận triết dài
+   > Đổi thành qua xung đột và hành động thị quan điểm
+
+---
+
+## Tự kiểm đối thoại
+
+Sau khi viết kiểm:
+
+- [ ] Mỗi câu đối thoại có mục đích không?
+- [ ] Xóa đi cốt truyện ảnh hưởng không?
+- [ ] Có nhận diện được người nói (không xem nhãn) không?
+- [ ] Có ngụy ý không?
+- [ ] Nhịp có phù hợp (nhanh/chậm) không?
+- [ ] Phù hợp tính cách nhân vật không?
+- [ ] Nhãn sử dụng đúng chưa?

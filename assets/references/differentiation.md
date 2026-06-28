@@ -1,86 +1,86 @@
-# 通用差异化设计参考
+# Tham khảo thiết kế khác biệt hóa phổ thông
 
-这份参考用于避免同题材作品自动滑向“最高频模板”。
+Tài liệu này dùng để tránh tác phẩm cùng thể loại tự động trượt về "mẫu tần suất cao nhất".
 
-## 当用户只给出一个大题材词时，不能直接套最常见范式
+## Khi người dùng chỉ đưa một từ thể loại lớn, không thể trực tiếp用范式 phổ biến nhất
 
-例如用户说：
+Ví dụ người dùng nói:
 
-- 都市
-- 奇幻
-- 修仙
-- 悬疑
-- 言情
-- 科幻
+- Đô thị
+- Kỳ ảo
+- Tu tiên
+| Trinh thám
+- Ngôn tình
+- Khoa huyễn
 
-这不等于“照该题材最常见的开局写”。你必须先补足差异化维度。
+Điều này không bằng "theo khai cục phổ biến nhất của thể loại đó viết". Bạn bắt buộc trước bổ đầy đủ chiều khác biệt.
 
-## 差异化的五个维度
+## Năm chiều khác biệt hóa
 
-### 1. 主角维度
+### 1. Chiều nhân vật chính
 
-- 出身是否过于常见
-- 初始优势/劣势是否过于常见
-- 主角最强驱动力是什么
-- 主角最大的盲区是什么
+- Xuất thân có quá phổ biến không
+- Ưu/nhược điểm ban đầu có quá phổ biến không
+| Động lực mạnh nhất của nhân vật chính là gì
+- Mù điểm lớn nhất của nhân vật chính là gì
 
-### 2. 冲突维度
+### 2. Chiều xung đột
 
-- 主冲突是否只是该题材默认矛盾
-- 有没有第二层冲突改变读者预期
-- 冲突是否会在中期转型
+- Xung đột chính có chỉ là mâu thuẫn mặc định của thể loại không
+- Có tầng hai xung đột thay đổi kỳ vọng độc giả không
+| Xung đột có chuyển hình giữa kỳ không
 
-### 3. 世界维度
+### 3. Chiều thế giới
 
-- 世界规则是否真的改变角色行为
-- 社会结构、资源结构、权力结构是否能持续制造问题
-- 世界是否存在非主角视角也合理运转的逻辑
+- Quy tắc thế giới có thực sự thay đổi hành vi nhân vật không
+| Kết cấu xã hội, kết cấu tài nguyên, kết cấu quyền lực có thể liên tục tạo vấn đề không
+- Thế giới có tồn tại logic vận chuyển hợp lý từ góc nhìn phi nhân vật chính không
 
-### 4. 关系维度
+### 4. Chiều quan hệ
 
-- 主要关系是否只有“队友/恋人/敌人”三个静态功能
-- 是否存在长期互相塑造、互相伤害、互相利用、互相成全的关系
-- 关系线是否会反向推动主线
+- Quan hệ chính có chỉ ba chức năng tĩnh "đồng đội/tình nhân/kẻ thù" không
+- Có tồn tại quan hệ cùng塑造, cùng tổn thương, cùng lợi dụng, cùng thành toàn dài hạn không
+| Line quan hệ có đẩy ngược line chính không
 
-### 5. 节奏维度
+### 5. Chiều nhịp
 
-- 爽点是否单一重复
-- 是否规划了不同阶段的阅读驱动力
-- 前期吸引力和中后期吸引力是否一致，还是有自然升级
+- Điểm爽 có đơn nhất lặp lại không
+- Có规划 động lực đọc khác giai đoạn chưa
+| Sức hút tiền kỳ và trung hậu kỳ nhất trí, hay có thăng cấp tự nhiên
 
-## 常见同质化信号
+## Tín hiệu đồng chất hóa phổ biến
 
-出现越多，越说明作品在滑向通用模板：
+Xuất hiện càng nhiều, càng nói rõ tác phẩm đang trượt về mẫu phổ thông:
 
-- 最常见的主角出身设定
-- 最常见的“被看不起”起手
-- 最常见的导师/宗门/学院/豪门/案件开场
-- 最常见的反派动机
-- 最常见的阶段升级节奏
-- 最常见的“发现秘密”型钩子反复出现
+- Xuất thân nhân vật chính phổ biến nhất
+| Khai cục "bị coi thường" phổ biến nhất
+- Đạo sư/tông môn/học viện/hào môn/vụ án khai trường phổ biến nhất
+| Động cơ phản diện phổ biến nhất
+- Nhịp thăng cấp giai đoạn phổ biến nhất
+| Móc "phát hiện bí mật" lặp lại phổ biến nhất
 
-## 规划时必须主动给自己设限
+##规划时 bắt buộc chủ động tự đặt giới hạn
 
-在同题材下，至少给出 2-3 条反模板约束。例如：
+Trong cùng thể loại, tối thiểu đưa 2-3条 ràng buộc phản mẫu. Ví dụ:
 
-- 不使用最常见的开局身份
-- 不使用最常见的金手指/能力来源
-- 不使用最常见的中期升级路径
-- 不让主要关系线停留在单一功能
-- 不让终局只是“打败更大的敌人”
+- Không dùng thân phận khai cục phổ biến nhất
+- Không dùng nguồn kim thủ chỉ/năng lực phổ biến nhất
+- Không dùng lộ trình thăng cấp trung kỳ phổ biến nhất
+- Không để line quan hệ chính dừng ở đơn công năng
+| Không để kết cục chỉ là "đánh bại kẻ thù lớn hơn"
 
-## 差异化不是猎奇，而是重新分配重心
+## Khác biệt hóa không phải trộ khúc, mà là phân bổ lại trọng tâm
 
-有效的差异化通常来自：
+Khác biệt hóa hiệu quả thường đến từ:
 
-- 更换主角真正关心的东西
-- 更换长期冲突的来源
-- 更换世界规则的压力点
-- 更换关系线在故事中的功能
-- 更换中期之后的推进方式
+- Đổi thứ nhân vật chính thực sự quan tâm
+- Đổi nguồn xung đột dài hạn
+| Đổi điểm áp lực quy tắc thế giới
+- Đổi chức năng line quan hệ trong chuyện
+- Đổi cách đẩy tiến sau trung kỳ
 
-## 输出前自问
+## Tự hỏi trước xuất
 
-- 如果把角色名和设定名抹掉，这个故事还像同题材里另外十本书吗？
-- 如果只看前 10 章，读者能说出这本书“独特在哪”吗？
-- 如果写到 50 章后，作品的推进方式会不会和前 10 章完全重复？
+- Nếu xóa tên nhân vật và tên thiết lập, chuyện này còn giống mười cuốn khác cùng thể loại không?
+- Nếu chỉ xem 10 chương đầu, độc giả nói được sách này "khác biệt ở đâu" không?
+| Nếu viết đến 50 chương sau, cách đẩy tiến có lặp lại hoàn toàn 10 chương đầu không?
