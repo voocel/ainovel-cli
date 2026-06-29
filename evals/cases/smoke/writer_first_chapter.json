@@ -1,0 +1,18 @@
+{
+  "id": "writer_first_chapter",
+  "category": "smoke",
+  "role": "writer",
+  "description": "Writer 能完成第一章 plan→draft→commit 并落盘，工具链稳定。",
+  "prompt": "写一个短篇修仙小说，主角是边城药铺的杂役少年，靠一手辨药的本事卷入一桩失踪案。",
+  "max_chapters": 1,
+  "target_prompts": ["writer.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 1,
+    "required_checkpoints": ["chapter:1:plan", "chapter:1:draft", "chapter:1:commit"],
+    "no_pending": ["pending_commit", "pending_steer"]
+  },
+  "gate": {
+    "max_severity": "warning"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "architect_short",
+  "category": "smoke",
+  "role": "architect",
+  "description": "短篇规划能保存大纲与角色等基础设定，并推进到写作阶段。",
+  "prompt": "写一个三万字左右的悬疑短篇，封闭山庄一夜连环失踪，只有一个外来访客能看出破绽。",
+  "max_chapters": 1,
+  "target_prompts": ["architect-short.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 1,
+    "required_checkpoints": ["global:outline", "global:characters", "chapter:1:commit"],
+    "no_pending": ["pending_commit", "pending_steer"]
+  },
+  "gate": {
+    "max_severity": "warning"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "architect_long",
+  "category": "smoke",
+  "role": "architect",
+  "description": "长篇规划能产出分层大纲（卷弧骨架）并展开首弧，推进到写作。",
+  "prompt": "写一部两百章以上的玄幻长篇，主角背负灭门血仇，从废柴觉醒一步步搅动九大宗门的权力格局。",
+  "max_chapters": 1,
+  "target_prompts": ["architect-long.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 1,
+    "required_checkpoints": ["global:layered_outline", "chapter:1:commit"],
+    "no_pending": ["pending_commit", "pending_steer"]
+  },
+  "gate": {
+    "max_severity": "warning"
+  }
+}
