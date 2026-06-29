@@ -13,13 +13,13 @@ import (
 	"github.com/voocel/agentcore"
 )
 
-// SessionStore 追加式记录 LLM 对话历史到 JSONL 文件。
-// 大体积内容（小说正文、完整上下文）用 [session_compact: ...] 占位标记替代。
+// SessionStore 追加式记录 LLM 对话Lịch sử到 JSONL Tập tin。
+// 大体积内容（小说Chính văn、完整Ngữ cảnh）用 [session_compact: ...] 占位标记替代。
 type SessionStore struct {
 	io      *IO
 	mu      sync.Mutex
-	seq     map[string]int    // agent 运行序号（无法提取章节号时用）
-	taskKey map[string]string // "agentName|task" → suffix，同一 run 复用同一文件
+	seq     map[string]int    // agent 运行序号（Không thể提取Chương号时用）
+	taskKey map[string]string // "agentName|task" → suffix，同一 run 复用同一Tập tin
 }
 
 func NewSessionStore(io *IO) *SessionStore {
@@ -28,11 +28,11 @@ func NewSessionStore(io *IO) *SessionStore {
 
 // ModelLookup 在 logger 写入时按 agent 名查"当时生效"的 provider/model。
 // 用 func 类型而不是 interface，方便调用方用闭包注入归一规则（如 architect_short → architect）。
-// 返回空字符串表示未知，调用方仍照常写入但不带 _meta，replay 时退回 ModelSet fallback。
+// Quay lạiRỗng字符串表示Không rõ，调用方仍照常写入但不带 _meta，replay 时退回 ModelSet fallback。
 type ModelLookup func(agentName string) (provider, model string)
 
-// CoordinatorLogger 返回 coordinator 的 OnMessage 回调。
-// lookup 可为 nil，此时写入不带 _meta（兼容 cocreate 等无角色场景）。
+// CoordinatorLogger Quay lại coordinator 的 OnMessage 回调。
+// lookup 可为 nil，此时写入不带 _meta（兼容 cocreate 等Không có角色Cảnh）。
 func (s *SessionStore) CoordinatorLogger(lookup ModelLookup) func(agentcore.AgentMessage) {
 	return func(msg agentcore.AgentMessage) {
 		var meta *sessionLogMeta
@@ -45,7 +45,7 @@ func (s *SessionStore) CoordinatorLogger(lookup ModelLookup) func(agentcore.Agen
 	}
 }
 
-// SubAgentLogger 返回子代理的 OnMessage 回调。
+// SubAgentLogger Quay lại子Proxy的 OnMessage 回调。
 func (s *SessionStore) SubAgentLogger(lookup ModelLookup) func(agentName, task string, msg agentcore.AgentMessage) {
 	return func(agentName, task string, msg agentcore.AgentMessage) {
 		rel := s.subAgentPath(agentName, task)
@@ -68,7 +68,7 @@ func lookupMeta(lookup ModelLookup, agentName string) *sessionLogMeta {
 }
 
 // LogCoCreate 追加一条共创对话日志到 meta/sessions/cocreate.jsonl。
-// 共创阶段还没绑定具体小说，统一落到 OutputDir 默认根（output/novel）下，
+// 共创阶段还没绑定具体小说，统一落到 OutputDir Mặc định根（output/novel）下，
 // 与正式创作的 coordinator.jsonl / agents/* 同位，方便排查。
 func (s *SessionStore) LogCoCreate(entry any) error {
 	data, err := json.Marshal(entry)
@@ -79,16 +79,16 @@ func (s *SessionStore) LogCoCreate(entry any) error {
 	return s.io.AppendLine("meta/sessions/cocreate.jsonl", data)
 }
 
-// Log 追加一条消息到指定路径，自动压缩大内容。
-// 不携带 _meta（向后兼容入口；仅 cocreate 等无角色路径用）。
+// Log 追加一条消息到指定Đường dẫn，自动压缩大内容。
+// 不携带 _meta（向后兼容入口；仅 cocreate 等Không có角色Đường dẫn用）。
 func (s *SessionStore) Log(rel string, msg agentcore.AgentMessage) error {
 	return s.logEntry(rel, msg, nil)
 }
 
 // sessionLogEntry 嵌入 agentcore.Message + 可选 _meta。
-// agentcore.Message 是 plain struct（无 MarshalJSON），嵌入后 json marshal
-// 自动展开到顶层；_meta 通过 omitempty 控制——只有 assistant + Usage != nil
-// 时才注入，user/tool 消息不带 _meta，旧 jsonl 解析时 _meta=nil 是 noop。
+// agentcore.Message 是 plain struct（Không có MarshalJSON），嵌入后 json marshal
+// 自动Mở rộng到顶层；_meta 通过 omitempty 控制——只有 assistant + Usage != nil
+// 时才注入，user/tool 消息不带 _meta，Cũ jsonl 解析时 _meta=nil 是 noop。
 type sessionLogEntry struct {
 	agentcore.Message
 	Meta *sessionLogMeta `json:"_meta,omitempty"`
@@ -105,7 +105,7 @@ type sessionLogMeta struct {
 func (s *SessionStore) logEntry(rel string, msg agentcore.AgentMessage, meta *sessionLogMeta) error {
 	m, ok := msg.(agentcore.Message)
 	if !ok {
-		return nil // 非 LLM 消息（如自定义类型）跳过
+		return nil // 非 LLM 消息（如Tuỳ chỉnh类型）Bỏ qua
 	}
 	compacted := compactMessage(m)
 	entry := sessionLogEntry{Message: compacted}
@@ -133,7 +133,7 @@ func usageMeta(usage *agentcore.Usage) *sessionLogMeta {
 	}
 }
 
-// subAgentPath 根据 agentName+task 生成文件路径。
+// subAgentPath 根据 agentName+task 生成Tập tinĐường dẫn。
 func (s *SessionStore) subAgentPath(agentName, task string) string {
 	suffix := extractChapter(task)
 	if suffix != "" {
@@ -225,7 +225,7 @@ func compactText(role agentcore.Role, toolName, text string) string {
 func compactToolCall(tc *agentcore.ToolCall) *agentcore.ToolCall {
 	switch tc.Name {
 	case "draft_chapter":
-		return compactArgsContent(tc, "第N章正文", "drafts/")
+		return compactArgsContent(tc, "第N章Chính văn", "drafts/")
 	case "save_foundation":
 		return compactFoundationArgs(tc)
 	default:
@@ -251,7 +251,7 @@ func compactArgsContent(tc *agentcore.ToolCall, label, ref string) *agentcore.To
 		chars := utf8.RuneCountInString(content)
 		ch := extractJSONFieldInt(tc.Args, "chapter")
 		if ch > 0 {
-			label = fmt.Sprintf("第%d章正文", ch)
+			label = fmt.Sprintf("第%d章Chính văn", ch)
 			ref = fmt.Sprintf("drafts/%02d.draft.md", ch)
 		}
 		placeholder := fmt.Sprintf("[session_compact: %s %d字 | 见 %s]", label, chars, ref)
@@ -316,10 +316,10 @@ func extractJSONFieldInt(data json.RawMessage, field string) int {
 	return val
 }
 
-// CompactTag 是占位标记前缀，方便搜索和还原。
+// CompactTag 是占位标记前缀，方便Tìm kiếm和Hoàn nguyên。
 const CompactTag = "[session_compact:"
 
-// IsCompacted 检查文本是否已被压缩。
+// IsCompacted Kiểm tra文本Có czy không已被压缩。
 func IsCompacted(text string) bool {
 	return strings.HasPrefix(text, CompactTag)
 }

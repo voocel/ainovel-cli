@@ -23,7 +23,7 @@ type Scope struct {
 	Arc     int       `json:"arc,omitempty"`
 }
 
-// ChapterScope 构造一个章节级 Scope。
+// ChapterScope 构造一个Chương级 Scope。
 func ChapterScope(chapter int) Scope {
 	return Scope{Kind: ScopeChapter, Chapter: chapter}
 }
@@ -56,7 +56,7 @@ func (s Scope) String() string {
 	}
 }
 
-// Matches 判断两个 Scope 是否相同。
+// Matches 判断两个 Scope Có czy không相同。
 func (s Scope) Matches(other Scope) bool {
 	if s.Kind != other.Kind {
 		return false
@@ -73,8 +73,8 @@ func (s Scope) Matches(other Scope) bool {
 	}
 }
 
-// Checkpoint 记录某个 step 成功完成的事实。
-// 由工具在原子落盘后追加到 JSONL，是恢复和观察的唯一事实来源。
+// Checkpoint 记录某个 step Thành côngHoàn thành的事实。
+// 由工具在原子落盘后追加到 JSONL，是Phục hồi和观察的唯一事实来源。
 type Checkpoint struct {
 	Seq        int64     `json:"seq"`
 	Scope      Scope     `json:"scope"`

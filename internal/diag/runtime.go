@@ -22,18 +22,18 @@ const (
 	logTailCap   = 200 << 10 // 日志只取尾部 200KB（循环是近端现象）
 	sessionTail  = 80        // 骨架尾巴条数（看派发先后顺序）
 	repeatWindow = 150       // 重复聚合只看近端这么多条事件——长跑里正常工具累计上百次，
-	// 真循环是近端高度集中；用窗口而非累计，避免把"正常推进"误判成"死循环"。
-	recentAgents = 2  // 额外扫描最近活跃的子代理会话数
+	// 真循环是近端高度集中；用Cửa sổ而非累计，避免把"正常推进"误判成"死循环"。
+	recentAgents = 2  // 额外扫描最近活跃的子Proxy会话数
 	repeatMin    = 3  // 重复达到几次才算"高频信号"
 	repeatTopN   = 12 // 重复签名最多列几条
 )
 
-// RuntimeCapture 是一次运行时抓取的脱敏结果。只承载运行时信号；
-// phase/flow/章节等创作态由 Report.Stats 携带，不在此重复。
+// RuntimeCapture 是一次运行时抓取的脱敏Kết quả。只承载运行时信号；
+// phase/flow/Chương等创作态由 Report.Stats 携带，不在此重复。
 type RuntimeCapture struct {
 	GoOS, GoArch  string
 	Models        []RoleModel  // 各会话实际生效的 provider/model（从 _meta 收集）
-	CurrentStep   string       // 最新 checkpoint：scope.step
+	CurrentStep   string       // 最Mới checkpoint：scope.step
 	StuckStep     string       // 尾部连续同 step；"" = 不卡
 	StuckCount    int          // 连续次数
 	Repeats       []RepeatStat // 重复签名 top-N（循环信号）
@@ -75,7 +75,7 @@ type sessionLine struct {
 
 var kindRe = regexp.MustCompile(`kind=(\S+)`)
 
-// CaptureRuntime 从 output 目录只读抓取运行时信号并脱敏聚合。
+// CaptureRuntime 从 output Thư mục只读抓取运行时信号并脱敏聚合。
 // 任何源缺失都安全降级（不报错），尽力而为。
 func CaptureRuntime(s *store.Store) RuntimeCapture {
 	rc := RuntimeCapture{GoOS: runtime.GOOS, GoArch: runtime.GOARCH, LogKinds: map[string]int{}}
@@ -86,7 +86,7 @@ func CaptureRuntime(s *store.Store) RuntimeCapture {
 	return rc
 }
 
-// analyzeCheckpoints 取最新 step，并算尾部连续同 step（卡住信号）。
+// analyzeCheckpoints 取最Mới step，并算尾部连续同 step（卡住信号）。
 func analyzeCheckpoints(cps []domain.Checkpoint) (current, stuck string, count int) {
 	if len(cps) == 0 {
 		return "", "", 0
@@ -107,7 +107,7 @@ func analyzeCheckpoints(cps []domain.Checkpoint) (current, stuck string, count i
 	return current, stuck, count
 }
 
-// captureSessions 扫描 coordinator + 最近子代理会话，脱敏聚合。
+// captureSessions 扫描 coordinator + 最近子Proxy会话，脱敏聚合。
 func captureSessions(dir string, rc *RuntimeCapture) {
 	sessDir := filepath.Join(dir, "meta", "sessions")
 	files := sessionFiles(sessDir)
@@ -118,7 +118,7 @@ func captureSessions(dir string, rc *RuntimeCapture) {
 
 	for _, f := range files {
 		evs := scanSession(filepath.Join(sessDir, f.path), f.agent, rc, models)
-		// 聚合只看近端窗口：长跑里 subagent/novel_context 累计上百次是正常推进，
+		// 聚合只看近端Cửa sổ：长跑里 subagent/novel_context 累计上百次是正常推进，
 		// 不是循环；真死循环是近端高度集中。
 		aggregateRepeats(f.agent, tailEvents(evs, repeatWindow), repeats, dups)
 		// 骨架尾巴优先取 coordinator——派发循环在这看得最清。
@@ -128,7 +128,7 @@ func captureSessions(dir string, rc *RuntimeCapture) {
 		rc.Sources = append(rc.Sources, "sessions/"+f.path)
 	}
 	if len(rc.Tail) == 0 {
-		// 无 coordinator 会话时退回最近一个子代理。
+		// Không có coordinator 会话时退回最近一个子Proxy。
 		for _, f := range files {
 			if evs := scanSessionTailOnly(filepath.Join(sessDir, f.path), f.agent); len(evs) > 0 {
 				rc.Tail = tailEvents(evs, sessionTail)
@@ -147,7 +147,7 @@ type sessionFile struct {
 	agent string
 }
 
-// sessionFiles 返回 coordinator.jsonl + 最近活跃的子代理会话。
+// sessionFiles Quay lại coordinator.jsonl + 最近活跃的子Proxy会话。
 func sessionFiles(sessDir string) []sessionFile {
 	var out []sessionFile
 	if _, err := os.Stat(filepath.Join(sessDir, "coordinator.jsonl")); err == nil {
@@ -183,8 +183,8 @@ func sessionFiles(sessDir string) []sessionFile {
 	return out
 }
 
-// scanSession 读一个会话文件，逐行脱敏，收集事件序列与 per-agent 模型。
-// 重复/同段聚合不在这里做——交给 aggregateRepeats 在近端窗口上算。
+// scanSession 读一个会话Tập tin，逐行脱敏，收集事件序列与 per-agent Mô hình。
+// 重复/同段聚合不在这里做——交给 aggregateRepeats 在近端Cửa sổ上算。
 func scanSession(path, agent string, rc *RuntimeCapture, models map[string]RoleModel) []SkelEvent {
 	f, err := os.Open(path)
 	if err != nil {
@@ -210,7 +210,7 @@ func scanSession(path, agent string, rc *RuntimeCapture, models map[string]RoleM
 	return evs
 }
 
-// aggregateRepeats 在给定事件窗口上累计重复签名与同段文本。
+// aggregateRepeats 在给定事件Cửa sổ上累计重复签名与同段文本。
 func aggregateRepeats(agent string, evs []SkelEvent, repeats, dups map[string]int) {
 	for _, ev := range evs {
 		for _, t := range ev.Tools {
@@ -257,7 +257,7 @@ func tailEvents(evs []SkelEvent, n int) []SkelEvent {
 }
 
 // captureLog 读日志尾部，只聚合结构信号（kind/error/warn/stop_guard），
-// 不把原始日志行入包——Detail 可能夹带正文。
+// 不把原始日志行入包——Detail 可能夹带Chính văn。
 func captureLog(dir string, rc *RuntimeCapture) {
 	path := filepath.Join(dir, "logs", "tui.log")
 	tail, ok := readTail(path)
@@ -289,7 +289,7 @@ func captureLog(dir string, rc *RuntimeCapture) {
 	}
 }
 
-// readTail 读文件尾部 logTailCap 字节，并丢弃首个可能被截断的半行。
+// readTail 读Tập tin尾部 logTailCap 字节，并丢弃首个可能被截断的半行。
 func readTail(path string) ([]byte, bool) {
 	f, err := os.Open(path)
 	if err != nil {

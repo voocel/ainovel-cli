@@ -15,7 +15,7 @@ import (
 type reportState struct {
 	reqID      int
 	report     *diag.Report
-	exportPath string // 脱敏诊断文件路径，渲染在报告顶部供贴 issue
+	exportPath string // 脱敏诊断Tập tinĐường dẫn，渲染在报告顶部供贴 issue
 	loading    bool
 	renderW    int
 	startedAt  time.Time
@@ -53,7 +53,7 @@ func (s *reportState) setContent(contentW int) {
 	case s.report != nil:
 		s.viewport.SetContent(renderReportText(*s.report, contentW, s.exportPath, s.startedAt, s.finishedAt))
 	default:
-		s.viewport.SetContent("诊断报告不可用")
+		s.viewport.SetContent("诊断报告Không可用")
 	}
 }
 
@@ -76,32 +76,32 @@ func renderReportText(report diag.Report, width int, exportPath string, startedA
 	var b strings.Builder
 	st := report.Stats
 
-	// 概览
+	// Tổng quan
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
 
-	// 脱敏诊断已导出 → 引导用户贴 issue
+	// 脱敏诊断已Xuất → 引导用户贴 issue
 	if exportPath != "" {
 		exportStyle := lipgloss.NewStyle().Foreground(colorAccent2)
-		b.WriteString(exportStyle.Render("已导出脱敏诊断（可贴到 GitHub issue）"))
+		b.WriteString(exportStyle.Render("已Xuất脱敏诊断（可贴到 GitHub issue）"))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render(wrapText(exportPath, width)))
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(titleStyle.Render("概览"))
+	b.WriteString(titleStyle.Render("Tổng quan"))
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("开始 "))
+	b.WriteString(dimStyle.Render("Bắt đầu "))
 	b.WriteString(formatReportTime(startedAt))
 	if !finishedAt.IsZero() {
-		b.WriteString(dimStyle.Render("  完成 "))
+		b.WriteString(dimStyle.Render("  Hoàn thành "))
 		b.WriteString(formatReportTime(finishedAt))
 	}
 	b.WriteString("\n\n")
 
-	// 第一行：章节 + 字数
-	b.WriteString(mutedStyle.Render("章节 "))
+	// 第一行：Chương + 字数
+	b.WriteString(mutedStyle.Render("Chương "))
 	b.WriteString(fmt.Sprintf("%d/%d", st.CompletedChapters, st.TotalChapters))
 	b.WriteString(mutedStyle.Render("  字数 "))
 	b.WriteString(fmt.Sprintf("%d", st.TotalWords))
@@ -194,13 +194,13 @@ func renderReportLoadingText(width int, startedAt time.Time) string {
 	hintStyle := lipgloss.NewStyle().Foreground(colorDim)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("正在生成诊断报告"))
+	b.WriteString(titleStyle.Render("Đang tạo诊断报告"))
 	b.WriteString("\n\n")
-	b.WriteString(hintStyle.Render("开始时间 " + formatReportTime(startedAt)))
+	b.WriteString(hintStyle.Render("Bắt đầu时间 " + formatReportTime(startedAt)))
 	b.WriteString("\n\n")
-	b.WriteString(bodyStyle.Render(wrapText("正在读取当前小说 output 产物并分析流程、质量、规划和上下文问题。项目较大时可能需要几秒。", width)))
+	b.WriteString(bodyStyle.Render(wrapText("Đang đọcHiện tại小说 output 产物并分析流程、质量、规划和Ngữ cảnh问题。项目较大时可能Cần几秒。", width)))
 	b.WriteString("\n\n")
-	b.WriteString(hintStyle.Render("Esc 可先关闭面板，后台分析完成后下次打开会重新生成。"))
+	b.WriteString(hintStyle.Render("Esc 可先关闭面板，后台分析Hoàn thành后下次打开会重Mới生成。"))
 	return b.String()
 }
 
@@ -323,7 +323,7 @@ func renderReportModal(width, height int, state *reportState) string {
 
 	contentW := paddedModalContentWidth(boxW)
 
-	// 如果 viewport 尺寸变化了，更新
+	// 如果 viewport 尺寸变化了，更Mới
 	if state.viewport.Width != contentW {
 		state.viewport.Width = contentW
 		state.viewport.Height = boxH - 4

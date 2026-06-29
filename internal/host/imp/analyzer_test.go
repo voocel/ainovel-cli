@@ -11,7 +11,7 @@ import (
 )
 
 const validAnalyzerEnvelope = `=== SUMMARY ===
-林晚收到匿名爆料后，在档案馆发现失踪者全部姓陈，并在祭品旁找到陈姓家族祖宅地址。
+林晚收到匿名爆料后，在档案馆发现失踪者Tất cả姓陈，并在祭品旁找到陈姓家族祖宅地址。
 
 === CHARACTERS ===
 ["林晚","档案馆管理员"]
@@ -35,7 +35,7 @@ const validAnalyzerEnvelope = `=== SUMMARY ===
 
 === STATE_CHANGES ===
 [
-  {"entity":"林晚","field":"location","old_value":"编辑部","new_value":"档案馆","reason":"循迹追查"}
+  {"entity":"林晚","field":"location","old_value":"Sửa部","new_value":"档案馆","reason":"循迹追查"}
 ]
 
 === HOOK_TYPE ===
@@ -106,7 +106,7 @@ func TestPersistChapter_FullPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 准备 foundation：先用 ReverseFoundation+PersistFoundation 模拟 Phase 2 已完成
+	// 准备 foundation：先用 ReverseFoundation+PersistFoundation 模拟 Phase 2 Đã hoàn thành
 	fr := mustParse(t, validEnvelope, 2)
 	if err := PersistFoundation(context.Background(), st, domain.PlanningTierShort, fr); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestPersistChapter_FullPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitTool := tools.NewCommitChapterTool(st)
-	body := "林晚翻开匿名信，发现一行潦草字迹...\n\n（正文略，>500 字以让 LoadChapterContent 通过校验）"
+	body := "林晚翻开匿名信，发现一行潦草字迹...\n\n（Chính văn略，>500 字以让 LoadChapterContent 通过校验）"
 	body = strings.Repeat(body, 10) // 凑够字数
 
 	if err := PersistChapter(context.Background(), st, commitTool, 1, "初遇", body, a); err != nil {
@@ -137,7 +137,7 @@ func TestPersistChapter_FullPipeline(t *testing.T) {
 		t.Errorf("foreshadow not persisted: %+v", hooks)
 	}
 
-	// 二次提交同一章应是幂等（commit_chapter.IsChapterCompleted 短路）
+	// 二次Nộp同一章应是幂等（commit_chapter.IsChapterCompleted 短路）
 	if err := PersistChapter(context.Background(), st, commitTool, 1, "初遇", body, a); err != nil {
 		t.Errorf("re-import should be idempotent, got: %v", err)
 	}

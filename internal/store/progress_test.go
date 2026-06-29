@@ -174,7 +174,7 @@ func TestCompleteRewrite(t *testing.T) {
 	_ = store.Progress.SetPendingRewrites([]int{3, 5, 7}, "测试重写")
 	_ = store.Progress.SetFlow(domain.FlowRewriting)
 
-	// 完成第 5 章
+	// Hoàn thành第 5 章
 	if err := store.Progress.CompleteRewrite(5); err != nil {
 		t.Fatalf("CompleteRewrite(5): %v", err)
 	}
@@ -186,14 +186,14 @@ func TestCompleteRewrite(t *testing.T) {
 		t.Errorf("flow should still be rewriting, got %s", p.Flow)
 	}
 
-	// 完成第 3 章
+	// Hoàn thành第 3 章
 	_ = store.Progress.CompleteRewrite(3)
 	p, _ = store.Progress.Load()
 	if len(p.PendingRewrites) != 1 {
 		t.Fatalf("expected 1 pending, got %d", len(p.PendingRewrites))
 	}
 
-	// 完成最后一章 → 自动重置 Flow
+	// Hoàn thành最后一章 → 自动Đặt lại Flow
 	_ = store.Progress.CompleteRewrite(7)
 	p, _ = store.Progress.Load()
 	if len(p.PendingRewrites) != 0 {
@@ -215,7 +215,7 @@ func TestCompleteRewrite_NotInQueue(t *testing.T) {
 	_ = store.Progress.MarkChapterComplete(5, 3000, "", "")
 	_ = store.Progress.SetPendingRewrites([]int{3, 5}, "测试")
 
-	// 完成不在队列中的章节不应报错
+	// Hoàn thành不在队列中的Chương不应报错
 	if err := store.Progress.CompleteRewrite(99); err != nil {
 		t.Fatalf("CompleteRewrite(99): %v", err)
 	}

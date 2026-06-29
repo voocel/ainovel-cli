@@ -31,8 +31,8 @@ type ChapterAnalysis struct {
 	DominantStrand      string
 }
 
-// AnalyzeChapter 用一次 LLM 调用，从单章正文反推 commit_chapter 所需事实。
-// hooksContext 是已知伏笔池的快照（可空），用于让 LLM 复用既有 ID。
+// AnalyzeChapter 用一次 LLM 调用，从单章Chính văn反推 commit_chapter 所需事实。
+// hooksContext 是已知伏笔池的Chụp（可Rỗng），用于让 LLM 复用既有 ID。
 func AnalyzeChapter(
 	ctx context.Context,
 	llm LLMChat,
@@ -69,9 +69,9 @@ func buildAnalyzerUserPrompt(
 	hooks []domain.ForeshadowEntry,
 ) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "请分析第 %d 章正文，输出 9 个 === TAG === 段。\n\n", chapter)
+	fmt.Fprintf(&sb, "Vui lòng分析第 %d 章Chính văn，输出 9 个 === TAG === 段。\n\n", chapter)
 	if title != "" {
-		fmt.Fprintf(&sb, "章节标题：%s\n\n", title)
+		fmt.Fprintf(&sb, "ChươngTiêu đề：%s\n\n", title)
 	}
 
 	if strings.TrimSpace(premise) != "" {
@@ -86,7 +86,7 @@ func buildAnalyzerUserPrompt(
 	}
 
 	if len(hooks) > 0 {
-		sb.WriteString("## 已知伏笔池（请复用 ID，不要新造）\n\n")
+		sb.WriteString("## 已知伏笔池（Vui lòng复用 ID，不要Mới造）\n\n")
 		for _, h := range hooks {
 			fmt.Fprintf(&sb, "- `%s` [%s]：%s（埋设于第 %d 章）\n",
 				h.ID, h.Status, h.Description, h.PlantedAt)
@@ -94,7 +94,7 @@ func buildAnalyzerUserPrompt(
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("## 本章正文\n\n")
+	sb.WriteString("## 本章Chính văn\n\n")
 	sb.WriteString(content)
 	sb.WriteString("\n")
 	return sb.String()
@@ -157,7 +157,7 @@ func parseAnalyzerOutput(text string) (*ChapterAnalysis, error) {
 	return a, nil
 }
 
-// decodeOptionalArray 允许标签缺失或为空字符串；只在非空时解析。
+// decodeOptionalArray 允许标签缺失或为Rỗng字符串；只在非Rỗng时解析。
 func decodeOptionalArray(label, body string, out any) error {
 	body = stripFences(body)
 	if body == "" || body == "[]" {
@@ -169,8 +169,8 @@ func decodeOptionalArray(label, body string, out any) error {
 	return nil
 }
 
-// PersistChapter 把分析结果落盘：先写章节草稿，再调 commit_chapter 执行原子三件套。
-// 已完成章节会被 commit_chapter 自身的幂等检查跳过，仍返回 nil 让循环继续。
+// PersistChapter 把分析Kết quả落盘：先写ChươngBản nháp，再调 commit_chapter 执行原子三件套。
+// Đã hoàn thànhChương会被 commit_chapter 自身的幂等Kiểm traBỏ qua，仍Quay lại nil 让循环Tiếp tục。
 func PersistChapter(
 	ctx context.Context,
 	st *store.Store,
@@ -186,12 +186,12 @@ func PersistChapter(
 		return fmt.Errorf("nil commit tool")
 	}
 
-	// 1. 落盘草稿（commit_chapter 从 drafts/{ch}.draft.md 读正文）
+	// 1. 落盘Bản nháp（commit_chapter 从 drafts/{ch}.draft.md 读Chính văn）
 	if err := st.Drafts.SaveDraft(chapter, content); err != nil {
 		return fmt.Errorf("save draft ch%d: %w", chapter, err)
 	}
 
-	// 2. 标记进入写作中（ValidateChapterWork 在 FlowWriting 下不阻塞，但 progress 需要这一步保持一致）
+	// 2. 标记进入Viết中（ValidateChapterWork 在 FlowWriting 下不阻塞，但 progress Cần这一步保持一致）
 	if err := st.Progress.StartChapter(chapter); err != nil {
 		return fmt.Errorf("start chapter ch%d: %w", chapter, err)
 	}

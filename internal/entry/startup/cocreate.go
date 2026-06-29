@@ -7,7 +7,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
-// CoCreateSession 承载共创模式的非 UI 状态。
+// CoCreateSession 承载共创模式的非 UI Trạng thái。
 type CoCreateSession struct {
 	history        []host.CoCreateMessage
 	draftPrompt    string
@@ -38,9 +38,9 @@ func (s *CoCreateSession) ApplyReply(reply host.CoCreateReply) {
 	}
 	s.streamReply = ""
 	s.streamThinking = ""
-	// history 里 assistant 存完整三段 Raw（含 [DRAFT]），下一轮模型才能看到
-	// 自己上一轮写的草稿、在它基础上累积更新；只存 Message 会让 [DRAFT] 完全
-	// 不进上下文，模型每轮只能凭对话重新归纳，早期细节容易丢。降级路径下
+	// history 里 assistant 存完整三段 Raw（含 [DRAFT]），下一轮Mô hình才能看到
+	// 自己上一轮写的Bản nháp、在它基础上累积更Mới；只存 Message 会让 [DRAFT] 完全
+	// 不进Ngữ cảnh，Mô hình每轮只能凭对话重Mới归纳，早期细节容易丢。降级Đường dẫn下
 	// Raw == Message，等价。
 	text := strings.TrimSpace(reply.Raw)
 	if text == "" {
@@ -49,13 +49,13 @@ func (s *CoCreateSession) ApplyReply(reply host.CoCreateReply) {
 	if text != "" {
 		s.history = append(s.history, host.CoCreateMessage{Role: "assistant", Content: text})
 	}
-	// 仅当 Prompt 非空才覆盖 draft：parse 降级路径会返回 Prompt=""，此时
-	// 必须保留上一轮 draft，否则用户已积累的"当前创作指令"会被截断的回复清空。
+	// 仅当 Prompt 非Rỗng才覆盖 draft：parse 降级Đường dẫn会Quay lại Prompt=""，此时
+	// 必须保留上一轮 draft，否则用户已积累的"Hiện tại创作指令"会被截断的回复清Rỗng。
 	if prompt := strings.TrimSpace(reply.Prompt); prompt != "" {
 		s.draftPrompt = prompt
 	}
 	s.ready = reply.Ready
-	// suggestions 直接覆盖（包括覆盖为空）：每轮的引导只对当下有意义。
+	// suggestions 直接覆盖（Bao gồm覆盖为Rỗng）：每轮的引导只对当下有意义。
 	s.suggestions = append(s.suggestions[:0], reply.Suggestions...)
 }
 
@@ -68,7 +68,7 @@ func (s *CoCreateSession) AppendUser(text string) {
 		return
 	}
 	// 用户已经决定下一句要说什么，suggestions 立即作废，避免 AI 还没回复时
-	// 旧建议挂在输入框上误导。
+	// Cũ建议挂在Nhập框上误导。
 	s.suggestions = nil
 	s.history = append(s.history, host.CoCreateMessage{Role: "user", Content: text})
 }

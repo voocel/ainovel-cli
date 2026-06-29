@@ -10,9 +10,9 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// newFlagTestHost 造一个最小 Host，只够驱动 cocreating 标记状态机与并发守卫。
-// emitEvent 用 recover + 非阻塞 select，缓冲 events 通道即可，无需 coordinator/observer。
-// PauseForCoCreate 的运行态分支会调 coordinator.Abort（复用已验证的 Esc 暂停路径），
+// newFlagTestHost 造一个最小 Host，只够驱动 cocreating 标记Trạng thái机与并发守卫。
+// emitEvent 用 recover + 非阻塞 select，缓冲 events 通道即可，Không có需 coordinator/observer。
+// PauseForCoCreate 的运行态分支会调 coordinator.Abort（复用已验证的 Esc Tạm dừngĐường dẫn），
 // 不在此单测；这里只覆盖不依赖 coordinator 的非运行态与标记/守卫逻辑。
 func newFlagTestHost(lc lifecycle, cocreating bool) *Host {
 	return &Host{
@@ -38,7 +38,7 @@ func TestPauseForCoCreate_NonRunningSetsFlag(t *testing.T) {
 func TestPauseForCoCreate_RejectsCompleted(t *testing.T) {
 	h := newFlagTestHost(lifecycleCompleted, false)
 	if h.PauseForCoCreate() {
-		t.Error("全书完成后不应允许进入阶段共创")
+		t.Error("全书Hoàn thành后不应允许进入阶段共创")
 	}
 	if h.cocreating {
 		t.Error("拒绝后不应置位 cocreating")
@@ -56,16 +56,16 @@ func TestCancelCoCreate_ClearsFlag(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, true)
 	h.CancelCoCreate()
 	if h.cocreating {
-		t.Error("取消后 cocreating 应清空")
+		t.Error("Hủy后 cocreating 应清Rỗng")
 	}
 	if h.lifecycle != lifecyclePaused {
-		t.Errorf("取消不应改 lifecycle，得 %s", h.lifecycle)
+		t.Errorf("Hủy不应改 lifecycle，得 %s", h.lifecycle)
 	}
 }
 
 func TestCancelCoCreate_NoopWhenNotCocreating(t *testing.T) {
 	h := newFlagTestHost(lifecycleRunning, false)
-	h.CancelCoCreate() // 不应 panic，不应改状态
+	h.CancelCoCreate() // 不应 panic，不应改Trạng thái
 	if h.cocreating || h.lifecycle != lifecycleRunning {
 		t.Error("非共创态 CancelCoCreate 应为 no-op")
 	}
@@ -74,10 +74,10 @@ func TestCancelCoCreate_NoopWhenNotCocreating(t *testing.T) {
 func TestResumeFromCoCreate_RejectsEmptyDraft(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, true)
 	if err := h.ResumeFromCoCreate("   "); err == nil {
-		t.Fatal("空 draft 应报错")
+		t.Fatal("Rỗng draft 应报错")
 	}
 	if !h.cocreating {
-		t.Error("空 draft 在清标记前返回，cocreating 应保持 true")
+		t.Error("Rỗng draft 在清标记前Quay lại，cocreating 应保持 true")
 	}
 }
 
@@ -94,9 +94,9 @@ func TestGuardExclusive(t *testing.T) {
 		name       string
 		lc         lifecycle
 		cocreating bool
-		wantErr    string // 空=期望放行
+		wantErr    string // Rỗng=期望放行
 	}{
-		{"running", lifecycleRunning, false, "运行中"},
+		{"running", lifecycleRunning, false, "Đang chạy"},
 		{"cocreating", lifecyclePaused, true, "阶段共创"},
 		{"idle free", lifecycleIdle, false, ""},
 		{"paused free", lifecyclePaused, false, ""},
@@ -104,7 +104,7 @@ func TestGuardExclusive(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := newFlagTestHost(c.lc, c.cocreating)
-			err := h.guardExclusive("导入")
+			err := h.guardExclusive("Nhập")
 			if c.wantErr == "" {
 				if err != nil {
 					t.Fatalf("应放行，得 %v", err)
@@ -114,44 +114,44 @@ func TestGuardExclusive(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("应含 %q，得 %v", c.wantErr, err)
 			}
-			if !strings.Contains(err.Error(), "导入") {
-				t.Errorf("错误文案应带 action %q，得 %v", "导入", err)
+			if !strings.Contains(err.Error(), "Nhập") {
+				t.Errorf("Lỗi文案应带 action %q，得 %v", "Nhập", err)
 			}
 		})
 	}
 }
 
-// TestStageCoCreate_OccupancyBlocksConcurrentEntries 验证共创窗口内独占性入口全部被堵：
+// TestStageCoCreate_OccupancyBlocksConcurrentEntries 验证共创Cửa sổ内独占性入口Tất cả被堵：
 // import/start/resume/continue 在 cocreating 期间都应被拒，补上 paused 期只查 ==running 的缺口。
 func TestStageCoCreate_OccupancyBlocksConcurrentEntries(t *testing.T) {
 	h := newFlagTestHost(lifecycleIdle, false)
 	if !h.PauseForCoCreate() {
-		t.Fatal("进入阶段共创失败")
+		t.Fatal("进入阶段共创Thất bại")
 	}
 
 	if _, err := h.ImportFrom(context.Background(), imp.Options{}); err == nil {
-		t.Error("共创窗口内 ImportFrom 应被拒")
+		t.Error("共创Cửa sổ内 ImportFrom 应被拒")
 	}
-	if err := h.StartPrepared("写个新故事"); err == nil {
-		t.Error("共创窗口内 StartPrepared 应被拒")
+	if err := h.StartPrepared("写个Mới故事"); err == nil {
+		t.Error("共创Cửa sổ内 StartPrepared 应被拒")
 	}
 	if _, err := h.Resume(); err == nil {
-		t.Error("共创窗口内 Resume 应被拒")
+		t.Error("共创Cửa sổ内 Resume 应被拒")
 	}
-	if err := h.Continue("继续写"); err == nil {
-		t.Error("共创窗口内 Continue 应被拒")
+	if err := h.Continue("Tiếp tục写"); err == nil {
+		t.Error("共创Cửa sổ内 Continue 应被拒")
 	}
 
-	// 退出共创后占用解除（这里走 Cancel；Resume 注入路径需 coordinator，归集成验证）
+	// Thoát共创后占用解除（这里走 Cancel；Resume 注入Đường dẫn需 coordinator，归集成验证）
 	h.CancelCoCreate()
 	if h.cocreating {
-		t.Fatal("退出后占用标记应解除")
+		t.Fatal("Thoát后占用标记应解除")
 	}
 }
 
 func TestBuildStoryStateSummary_NilStore(t *testing.T) {
 	if got := buildStoryStateSummary(nil); got != "" {
-		t.Errorf("nil store 应返回空串，得 %q", got)
+		t.Errorf("nil store 应Quay lạiRỗng串，得 %q", got)
 	}
 }
 
@@ -179,9 +179,9 @@ func TestBuildStoryStateSummary_Populated(t *testing.T) {
 	}
 
 	got := buildStoryStateSummary(st)
-	for _, want := range []string{"影之诗", "已完成 3 章", "下一章为第 4 章", "主角登临绝巅", "师门血仇未报", "预计 4-6 卷"} {
+	for _, want := range []string{"影之诗", "Đã hoàn thành 3 章", "下一章为第 4 章", "主角登临绝巅", "师门血仇未报", "预计 4-6 卷"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("摘要应含 %q，实际:\n%s", want, got)
+			t.Errorf("Tóm tắt应含 %q，实际:\n%s", want, got)
 		}
 	}
 }

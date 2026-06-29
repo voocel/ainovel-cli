@@ -11,14 +11,14 @@ import "github.com/charmbracelet/lipgloss"
 //
 // colorAccent2 暗底从 #7a9e7e 改为青绿 #5fb8a3，跟 colorSuccess 的"健康绿"拉
 // 开 — 之前两者完全同色，让 architect agent 的色标和"高命中"喜悦感混淆。
-// bodyTextColor 是"中性正文"的前景策略：
-//   - 暗色终端 → NoColor，继承终端默认前景，避免我们硬塞 #e8e0d0 米白在用户自配
-//     的暖底/冷底主题上撞色（用户实测暗底默认色更耐读）。
+// bodyTextColor 是"中性Chính văn"的前景策略：
+//   - 暗色终端 → NoColor，继承终端Mặc định前景，避免我们硬塞 #e8e0d0 米白在用户自配
+//     的暖底/冷底主题上撞色（用户实测暗底Mặc định色更耐读）。
 //   - 亮色终端 → 用 colorText 的 Light 档（深棕 #3d3529），保留品牌暖调；
-//     亮底默认黑色对比度太硬，原本调过的深棕在亮底视觉更柔和。
+//     亮底Mặc định黑色对比度太硬，原本调过的深棕在亮底视觉更柔和。
 //
-// AdaptiveColor 两端都必须给颜色值，没有"无色"档，所以这里启动时判一次背景，
-// 之后所有概览值/章节正文/命令描述等"中性正文"统一引用 bodyTextColor。
+// AdaptiveColor 两端都必须给颜色值，没有"Không có色"档，所以这里启动时判一次背景，
+// 之后所有Tổng quan值/ChươngChính văn/命令描述等"中性Chính văn"统一引用 bodyTextColor。
 var bodyTextColor lipgloss.TerminalColor = func() lipgloss.TerminalColor {
 	if lipgloss.HasDarkBackground() {
 		return lipgloss.NoColor{}
@@ -40,7 +40,7 @@ var (
 	colorTool    = lipgloss.AdaptiveColor{Light: "#3a7a8a", Dark: "#7ec5d8"}
 )
 
-// 状态标签颜色映射
+// Trạng thái标签颜色映射
 var statusColors = map[string]lipgloss.AdaptiveColor{
 	"READY":    colorDim,
 	"PAUSING":  colorAccent,
@@ -52,20 +52,20 @@ var statusColors = map[string]lipgloss.AdaptiveColor{
 	"ERROR":    colorError,
 }
 
-// 状态展示：图标 + 中文标签。与整体暖调主题一致，避免实心色块突兀。
-// RUNNING 的 icon 留空，由 spinner frame 动态填充，让动态感融入状态指示本身。
+// Trạng thái展示：图标 + 中文标签。与整体暖调主题一致，避免实心色块突兀。
+// RUNNING 的 icon 留Rỗng，由 spinner frame 动态填充，让动态感融入Trạng thái指示本身。
 var statusDisplay = map[string]struct {
 	icon  string
 	label string
 }{
 	"READY":    {"○", "就绪"},
-	"RUNNING":  {"", "运行中"},
+	"RUNNING":  {"", "Đang chạy"},
 	"REVIEW":   {"◆", "审阅"},
 	"REWRITE":  {"◆", "返工"},
-	"COMPLETE": {"●", "完成"},
-	"PAUSED":   {"⏸", "暂停"},
-	"PAUSING":  {"⏸", "暂停中"},
-	"ERROR":    {"✕", "错误"},
+	"COMPLETE": {"●", "Hoàn thành"},
+	"PAUSED":   {"⏸", "Tạm dừng"},
+	"PAUSING":  {"⏸", "Tạm dừng中"},
+	"ERROR":    {"✕", "Lỗi"},
 }
 
 // 事件分类颜色映射
@@ -105,10 +105,10 @@ var (
 			Foreground(colorMuted).
 			Width(10)
 
-	// fieldValueStyle / cardContentStyle 用 bodyTextColor —— 概览区的值（运行态、
-	// 已完成章节数、字数等）、大纲条目、角色列表、章节摘要等"中性正文内容"
-	// 在暗底跟随终端默认前景色（避免硬塞米白撞主题），亮底走深棕保留暖调。
-	// 语义性强的元素（标题、高亮值、状态、错误、命中率染色等）仍走 colorAccent /
+	// fieldValueStyle / cardContentStyle 用 bodyTextColor —— Tổng quan区的值（运行态、
+	// Đã hoàn thànhChương数、字数等）、Đại cương条目、角色列表、Tóm tắt chương等"中性Chính văn内容"
+	// 在暗底跟随终端Mặc định前景色（避免硬塞米白撞主题），亮底走深棕保留暖调。
+	// 语义性强的元素（Tiêu đề、高亮值、Trạng thái、Lỗi、命中率染色等）仍走 colorAccent /
 	// colorError 等主题色。
 	fieldValueStyle = lipgloss.NewStyle().Foreground(bodyTextColor)
 

@@ -16,10 +16,10 @@ func TestParsePremiseSections(t *testing.T) {
 东方玄幻升级流，面向追求爽点和关系推进的读者。
 
 ## 核心冲突
-主角必须在宗门规则与个人良知之间做选择。
+主角必须在宗门规则与个人良知之间做Chọn。
 
 ## 中期转向
-旧有修炼路线失效，必须转向禁术体系。
+Cũ有修炼路线失效，必须转向禁术体系。
 `
 
 	sections := parsePremiseSections(premise)
@@ -53,7 +53,7 @@ func TestPremiseStructure(t *testing.T) {
 ## 终局方向
 终局
 
-## 写作禁区
+## Viết禁区
 禁区
 
 ## 差异化卖点
@@ -96,22 +96,22 @@ func TestPremiseStructureShortAcceptsLegacyHeadingAlias(t *testing.T) {
 救出人质并活着离开。
 
 ## 结局方向
-完成任务但付出代价。
+Hoàn thành任务但付出代价。
 
-## 写作禁区
+## Viết禁区
 不扩展成长期连载。
 
 ## 差异化卖点
 时限压力与连续反转。
 
 ## 差异化钩子
-每次选择都缩短救援时间。
+每次Chọn都缩短救援时间。
 
 ## 核心兑现承诺
 紧迫感、抉择与反转。
 
 ## 本作为什么适合短篇/单卷收束
-核心矛盾和人物弧线都能在单次任务中完成。
+核心矛盾和Nhân vật弧线都能在单次任务中Hoàn thành。
 `
 
 	structure := premiseStructure(premise, domain.PlanningTierShort)

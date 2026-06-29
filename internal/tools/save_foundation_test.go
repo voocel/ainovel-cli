@@ -19,7 +19,7 @@ func TestSaveFoundationPersistsPlanningTier(t *testing.T) {
 	tool := NewSaveFoundationTool(store)
 	args, err := json.Marshal(map[string]any{
 		"type":    "premise",
-		"content": "# 测试书名\n\n## 题材和基调\n测试",
+		"content": "# 测试Tên sách\n\n## 题材和基调\n测试",
 		"scale":   "long",
 	})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 
 	layeredArgs, err := json.Marshal(map[string]any{
 		"type":    "layered_outline",
-		"content": `[{"index":1,"title":"第一卷","theme":"主题","arcs":[{"index":1,"title":"第一弧","goal":"目标","chapters":[{"chapter":1,"title":"第一章","core_event":"开局","hook":"继续"}]}]}]`,
+		"content": `[{"index":1,"title":"第一卷","theme":"主题","arcs":[{"index":1,"title":"第一弧","goal":"目标","chapters":[{"chapter":1,"title":"第一章","core_event":"开局","hook":"Tiếp tục"}]}]}]`,
 		"scale":   "long",
 	})
 	if err != nil {
@@ -106,7 +106,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 
 	outlineArgs, err := json.Marshal(map[string]any{
 		"type":    "outline",
-		"content": `[{"chapter":1,"title":"第一章","core_event":"改为中篇","hook":"继续"}]`,
+		"content": `[{"chapter":1,"title":"第一章","core_event":"改为中篇","hook":"Tiếp tục"}]`,
 		"scale":   "mid",
 	})
 	if err != nil {
@@ -162,14 +162,14 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 
 	tool := NewSaveFoundationTool(s)
 
-	// 先创建初始 layered_outline（卷1）
+	// 先Tạo初始 layered_outline（卷1）
 	layeredArgs, _ := json.Marshal(map[string]any{
 		"type": "layered_outline",
 		"content": []map[string]any{{
 			"index": 1, "title": "第一卷", "theme": "起步",
 			"arcs": []map[string]any{{
 				"index": 1, "title": "首弧", "goal": "目标",
-				"chapters": []map[string]any{{"title": "第一章", "core_event": "开局", "hook": "继续"}},
+				"chapters": []map[string]any{{"title": "第一章", "core_event": "开局", "hook": "Tiếp tục"}},
 			}},
 		}},
 		"scale": "long",
@@ -185,7 +185,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 			"index": 2, "title": "第二卷", "theme": "升级",
 			"arcs": []map[string]any{{
 				"index": 1, "title": "弧一", "goal": "目标",
-				"chapters": []map[string]any{{"title": "新章", "core_event": "推进", "hook": "钩子"}},
+				"chapters": []map[string]any{{"title": "Mới章", "core_event": "推进", "hook": "钩子"}},
 			}},
 		},
 	})
@@ -199,7 +199,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 		t.Fatalf("expected volume=2, got %v", result["volume"])
 	}
 
-	// 验证大纲有 2 卷
+	// 验证Đại cương有 2 卷
 	volumes, _ := s.Outline.LoadLayeredOutline()
 	if len(volumes) != 2 {
 		t.Fatalf("expected 2 volumes, got %d", len(volumes))
@@ -228,14 +228,14 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 			"index": 1, "title": "第一卷", "theme": "起步",
 			"arcs": []map[string]any{{
 				"index": 1, "title": "首弧", "goal": "目标",
-				"chapters": []map[string]any{{"title": "第一章", "core_event": "开局", "hook": "继续"}},
+				"chapters": []map[string]any{{"title": "第一章", "core_event": "开局", "hook": "Tiếp tục"}},
 			}},
 		}},
 		"scale": "long",
 	})
 	tool.Execute(context.Background(), layeredArgs)
 
-	// Index 不递增 → 应失败（结构性校验）
+	// Index 不递增 → 应Thất bại（结构性校验）
 	appendArgs, _ := json.Marshal(map[string]any{
 		"type": "append_volume",
 		"content": map[string]any{
@@ -252,8 +252,8 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	}
 }
 
-// TestSaveFoundationAppendVolumeRejectsAfterComplete 验证 Phase=Complete 后不允许 append_volume。
-// 取代旧的"Final 卷拒绝追加"语义（Final 字段已删除）。
+// TestSaveFoundationAppendVolumeRejectsAfterComplete 验证 Phase=Complete 后Không允 phép append_volume。
+// 取代Cũ的"Final 卷拒绝追加"语义（Final 字段已删除）。
 func TestSaveFoundationAppendVolumeRejectsAfterComplete(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -385,8 +385,8 @@ func TestSaveFoundationAcceptsDirectJSONArrayContent(t *testing.T) {
 				"chapter":    1,
 				"title":      "第一章",
 				"core_event": "主角登场",
-				"hook":       "继续",
-				"scenes":     []string{"场景一", "场景二"},
+				"hook":       "Tiếp tục",
+				"scenes":     []string{"Cảnh一", "Cảnh二"},
 			},
 		},
 		"scale": "short",
@@ -409,8 +409,8 @@ func TestSaveFoundationAcceptsDirectJSONArrayContent(t *testing.T) {
 }
 
 // completeBookSetup 建一份处于 writing 阶段的最小 Store，用于 complete_book 系列测试。
-// complete_book 不校验 layered_outline 章节齐全（判定责任在 LLM 的"完结判定清单"），
-// 工具层只校验 PendingRewrites 为空、progress 已初始化。
+// complete_book 不校验 layered_outline Chương齐全（判定责任在 LLM 的"完结判定清单"），
+// 工具层只校验 PendingRewrites 为Rỗng、progress 已初始化。
 func completeBookSetup(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()
@@ -450,7 +450,7 @@ func TestSaveFoundationCompleteBookPushesPhaseComplete(t *testing.T) {
 }
 
 func TestSaveFoundationCompleteBookRejectsBeforeWriting(t *testing.T) {
-	// 规划阶段误调 complete_book 必须被拒，否则会直接跳过整本写作。
+	// 规划阶段误调 complete_book 必须被拒，否则会直接Bỏ qua整本Viết。
 	dir := t.TempDir()
 	s := store.NewStore(dir)
 	if err := s.Init(); err != nil {
@@ -479,7 +479,7 @@ func TestSaveFoundationCompleteBookRejectsWithPendingRewrites(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(2, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
-	if err := s.Progress.SetPendingRewrites([]int{2}, "尾章节奏过快"); err != nil {
+	if err := s.Progress.SetPendingRewrites([]int{2}, "尾Chương奏过快"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
 	tool := NewSaveFoundationTool(s)

@@ -57,7 +57,7 @@ func buildWriterStoreSummaryText(s *store.Store, budgetTokens int) (string, bool
 	if len(parts) == 0 {
 		return "", false, nil
 	}
-	return "以下内容来自小说持久化 store，用于在压缩后恢复写作上下文。\n\n" + strings.Join(parts, "\n\n"), true, nil
+	return "以下内容来自小说持久化 store，用于在压缩后Phục hồiViếtNgữ cảnh。\n\n" + strings.Join(parts, "\n\n"), true, nil
 }
 
 func buildWriterRestoreText(s *store.Store, budgetTokens int) (string, bool, error) {
@@ -234,13 +234,13 @@ func writerStoreProgressSection(state *writerStoreSummaryState) map[string]any {
 
 func writerStoreSummarySections(state *writerStoreSummaryState) []writerStoreSection {
 	return []writerStoreSection{
-		{heading: "当前进度", data: writerStoreProgressSection(state)},
-		{heading: "最近章节摘要", data: state.recentSummaries},
-		{heading: "当前章节计划", data: state.chapterPlan},
-		{heading: "当前章节大纲", data: state.currentOutline},
-		{heading: "当前弧摘要", data: state.currentArcSummary},
-		{heading: "当前卷摘要", data: state.currentVolSummary},
-		{heading: "角色快照", data: state.snapshots},
+		{heading: "Hiện tạiTiến độ", data: writerStoreProgressSection(state)},
+		{heading: "最近Tóm tắt chương", data: state.recentSummaries},
+		{heading: "Hiện tạiChương计划", data: state.chapterPlan},
+		{heading: "Hiện tạiChươngĐại cương", data: state.currentOutline},
+		{heading: "Hiện tại弧Tóm tắt", data: state.currentArcSummary},
+		{heading: "Hiện tại卷Tóm tắt", data: state.currentVolSummary},
+		{heading: "角色Chụp", data: state.snapshots},
 		{heading: "活跃伏笔", data: state.foreshadow},
 		{heading: "待修审稿问题", data: state.pendingReviews},
 		{heading: "最近时间线", data: state.timeline},
@@ -250,15 +250,15 @@ func writerStoreSummarySections(state *writerStoreSummaryState) []writerStoreSec
 
 func writerRestoreSections(state *writerStoreSummaryState) []writerStoreSection {
 	return []writerStoreSection{
-		{heading: "当前进度", data: writerStoreProgressSection(state)},
-		{heading: "当前章节计划", data: state.chapterPlan},
-		{heading: "当前章节大纲", data: state.currentOutline},
+		{heading: "Hiện tạiTiến độ", data: writerStoreProgressSection(state)},
+		{heading: "Hiện tạiChương计划", data: state.chapterPlan},
+		{heading: "Hiện tạiChươngĐại cương", data: state.currentOutline},
 		{heading: "待修审稿问题", data: state.pendingReviews},
-		{heading: "角色快照", data: state.snapshots},
-		{heading: "最近章节摘要", data: state.recentSummaries},
+		{heading: "角色Chụp", data: state.snapshots},
+		{heading: "最近Tóm tắt chương", data: state.recentSummaries},
 		{heading: "活跃伏笔", data: state.foreshadow},
-		{heading: "当前弧摘要", data: state.currentArcSummary},
-		{heading: "当前卷摘要", data: state.currentVolSummary},
+		{heading: "Hiện tại弧Tóm tắt", data: state.currentArcSummary},
+		{heading: "Hiện tại卷Tóm tắt", data: state.currentVolSummary},
 		{heading: "最近时间线", data: state.timeline},
 		{heading: "风格规则", data: state.styleRules},
 	}

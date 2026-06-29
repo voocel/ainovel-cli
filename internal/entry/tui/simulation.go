@@ -100,10 +100,10 @@ func (s *simulationState) refresh(contentW int) {
 		b.WriteString(s.source)
 		b.WriteString("\n")
 	}
-	b.WriteString(dimStyle.Render("开始 "))
+	b.WriteString(dimStyle.Render("Bắt đầu "))
 	b.WriteString(formatReportTime(s.startedAt))
 	if !s.finishedAt.IsZero() {
-		b.WriteString(dimStyle.Render("  完成 "))
+		b.WriteString(dimStyle.Render("  Hoàn thành "))
 		b.WriteString(formatReportTime(s.finishedAt))
 	}
 	b.WriteString("\n\n")
@@ -111,7 +111,7 @@ func (s *simulationState) refresh(contentW int) {
 	b.WriteString(mutedStyle.Render("阶段 "))
 	b.WriteString(stageStyle.Render(string(s.stage)))
 	if s.total > 0 {
-		b.WriteString(mutedStyle.Render("  进度 "))
+		b.WriteString(mutedStyle.Render("  Tiến độ "))
 		b.WriteString(fmt.Sprintf("%d/%d", s.current, s.total))
 	}
 	b.WriteString("\n\n")
@@ -139,13 +139,13 @@ func (s *simulationState) refresh(contentW int) {
 	b.WriteString("\n\n")
 	switch {
 	case !s.done:
-		b.WriteString(dimStyle.Render("Esc 取消"))
+		b.WriteString(dimStyle.Render("Esc Hủy"))
 	case s.err != nil:
-		b.WriteString(errStyle.Render("仿写画像处理失败"))
+		b.WriteString(errStyle.Render("仿写画像处理Thất bại"))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("Esc 关闭面板"))
 	default:
-		b.WriteString(okStyle.Render("仿写画像已就绪，后续 Agent 会从 novel_context 读取"))
+		b.WriteString(okStyle.Render("仿写画像已就绪，后续 Agent 会从 novel_context Đọc"))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("Esc 关闭面板"))
 	}
@@ -169,7 +169,7 @@ func renderSimulationModal(width, height int, s *simulationState) string {
 	if s.viewport.Height != boxH-4 {
 		s.viewport.Height = boxH - 4
 	}
-	hint := "  ↑↓ 滚动 · Esc 取消/关闭"
+	hint := "  ↑↓ 滚动 · Esc Hủy/关闭"
 	modal := renderPaddedModalFrame(boxW, boxH, "仿写画像", hint, strings.Split(s.viewport.View(), "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
@@ -222,7 +222,7 @@ func startImportSimulation(rt *host.Host, reqID int, args []string, width, heigh
 		cancel()
 		return nil, nil, err
 	}
-	state := newSimulationState(reqID, "导入仿写画像", args[0], width, height, cancel)
+	state := newSimulationState(reqID, "Nhập仿写画像", args[0], width, height, cancel)
 	return state, listenSimulationEvent(reqID, ch), nil
 }
 

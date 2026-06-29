@@ -8,17 +8,17 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// OutlineStore 管理故事前提、大纲（扁平/分层）和指南针。
+// OutlineStore 管理故事前提、Đại cương（扁平/分层）和指南针。
 type OutlineStore struct{ io *IO }
 
 func NewOutlineStore(io *IO) *OutlineStore { return &OutlineStore{io: io} }
 
-// SavePremise 保存故事前提到 premise.md。
+// SavePremise Lưu故事前提到 premise.md。
 func (s *OutlineStore) SavePremise(content string) error {
 	return s.io.WriteMarkdown("premise.md", content)
 }
 
-// LoadPremise 读取 premise.md。不存在时返回空字符串。
+// LoadPremise Đọc premise.md。不存在时Quay lạiRỗng字符串。
 func (s *OutlineStore) LoadPremise() (string, error) {
 	data, err := s.io.ReadFile("premise.md")
 	if os.IsNotExist(err) {
@@ -27,7 +27,7 @@ func (s *OutlineStore) LoadPremise() (string, error) {
 	return string(data), err
 }
 
-// SaveOutline 同时保存 outline.json 和 outline.md（原子写入）。
+// SaveOutline 同时Lưu outline.json 和 outline.md（原子写入）。
 func (s *OutlineStore) SaveOutline(entries []domain.OutlineEntry) error {
 	return s.io.WithWriteLock(func() error {
 		if err := s.io.WriteJSONUnlocked("outline.json", entries); err != nil {
@@ -37,7 +37,7 @@ func (s *OutlineStore) SaveOutline(entries []domain.OutlineEntry) error {
 	})
 }
 
-// LoadOutline 从 outline.json 读取结构化大纲。
+// LoadOutline 从 outline.json Đọc结构化Đại cương。
 func (s *OutlineStore) LoadOutline() ([]domain.OutlineEntry, error) {
 	var entries []domain.OutlineEntry
 	if err := s.io.ReadJSON("outline.json", &entries); err != nil {
@@ -49,7 +49,7 @@ func (s *OutlineStore) LoadOutline() ([]domain.OutlineEntry, error) {
 	return entries, nil
 }
 
-// GetChapterOutline 获取指定章节的大纲条目。
+// GetChapterOutline 获取指定Chương的Đại cương条目。
 func (s *OutlineStore) GetChapterOutline(chapter int) (*domain.OutlineEntry, error) {
 	entries, err := s.LoadOutline()
 	if err != nil {
@@ -63,7 +63,7 @@ func (s *OutlineStore) GetChapterOutline(chapter int) (*domain.OutlineEntry, err
 	return nil, fmt.Errorf("chapter %d not found in outline", chapter)
 }
 
-// SaveLayeredOutline 保存分层大纲（长篇模式，原子写入）。
+// SaveLayeredOutline Lưu分层Đại cương（长篇模式，原子写入）。
 func (s *OutlineStore) SaveLayeredOutline(volumes []domain.VolumeOutline) error {
 	return s.io.WithWriteLock(func() error {
 		if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
@@ -73,7 +73,7 @@ func (s *OutlineStore) SaveLayeredOutline(volumes []domain.VolumeOutline) error 
 	})
 }
 
-// LoadLayeredOutline 读取分层大纲。
+// LoadLayeredOutline Đọc分层Đại cương。
 func (s *OutlineStore) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	var volumes []domain.VolumeOutline
 	if err := s.io.ReadJSON("layered_outline.json", &volumes); err != nil {
@@ -85,7 +85,7 @@ func (s *OutlineStore) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 	return volumes, nil
 }
 
-// ClearLayeredOutline 清理分层大纲文件。
+// ClearLayeredOutline 清理分层Đại cươngTập tin。
 func (s *OutlineStore) ClearLayeredOutline() error {
 	return s.io.WithWriteLock(func() error {
 		if err := s.io.RemoveFileUnlocked("layered_outline.json"); err != nil {
@@ -95,7 +95,7 @@ func (s *OutlineStore) ClearLayeredOutline() error {
 	})
 }
 
-// GetChapterFromLayered 从分层大纲中按全局章节号查找。
+// GetChapterFromLayered 从分层Đại cương中按全局Chương号查找。
 func (s *OutlineStore) GetChapterFromLayered(chapter int) (*domain.OutlineEntry, error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil {
@@ -117,7 +117,7 @@ func (s *OutlineStore) GetChapterFromLayered(chapter int) (*domain.OutlineEntry,
 	return nil, fmt.Errorf("chapter %d not found in layered outline", chapter)
 }
 
-// LocateChapter 根据全局章节号定位所在的卷和弧。
+// LocateChapter 根据全局Chương号定位所在的卷和弧。
 func (s *OutlineStore) LocateChapter(chapter int) (volume, arc int, err error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil {
@@ -146,15 +146,15 @@ type ArcBoundary struct {
 	NextVolume     int
 	NextArc        int
 	NeedsExpansion bool
-	NeedsNewVolume bool // 卷末且当前 layered_outline 没有下一卷
+	NeedsNewVolume bool // 卷末且Hiện tại layered_outline 没有下一卷
 }
 
-// HasNextArc 是否还有后续弧。
+// HasNextArc Có czy không还有后续弧。
 func (b *ArcBoundary) HasNextArc() bool {
 	return b.NextVolume > 0 || b.NextArc > 0
 }
 
-// CheckArcBoundary 检查某章是否为弧/卷的最后一章。
+// CheckArcBoundary Kiểm tra某章Có czy không为弧/卷的最后一章。
 func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	volumes, err := s.LoadLayeredOutline()
 	if err != nil || len(volumes) == 0 {
@@ -199,7 +199,7 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	isLastChInArc := cur.chInArc == cur.arcLen-1
 	isLastArcInVol := cur.arcIdx == len(volumes[cur.volIdx].Arcs)-1
 
-	// Next*/NeedsExpansion/NeedsNewVolume 只在弧末才有意义，否则会让协调者误以为要提前展开下一弧。
+	// Next*/NeedsExpansion/NeedsNewVolume 只在弧末才有意义，否则会让协调者误以为要提前Mở rộng下一弧。
 	if !isLastChInArc {
 		return b, nil
 	}
@@ -311,23 +311,23 @@ func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutl
 		}
 	}
 	if len(vol.Arcs) == 0 {
-		return fmt.Errorf("新卷必须至少包含一个弧")
+		return fmt.Errorf("Mới卷必须至少包含一个弧")
 	}
 	if !vol.Arcs[0].IsExpanded() {
-		return fmt.Errorf("新卷的首弧必须包含详细章节")
+		return fmt.Errorf("Mới卷的首弧必须包含详细Chương")
 	}
 	return nil
 }
 
-// SaveCompass 保存终局方向指南针。
+// SaveCompass Lưu终局方向指南针。
 func (s *OutlineStore) SaveCompass(compass domain.StoryCompass) error {
 	if compass.EndingDirection == "" {
-		return fmt.Errorf("ending_direction 不能为空")
+		return fmt.Errorf("ending_direction 不能为Rỗng")
 	}
 	return s.io.WriteJSON("meta/compass.json", compass)
 }
 
-// LoadCompass 读取终局方向指南针。
+// LoadCompass Đọc终局方向指南针。
 func (s *OutlineStore) LoadCompass() (*domain.StoryCompass, error) {
 	var c domain.StoryCompass
 	if err := s.io.ReadJSON("meta/compass.json", &c); err != nil {
@@ -341,7 +341,7 @@ func (s *OutlineStore) LoadCompass() (*domain.StoryCompass, error) {
 
 func renderLayeredOutline(volumes []domain.VolumeOutline) string {
 	var b strings.Builder
-	b.WriteString("# 分层大纲\n\n")
+	b.WriteString("# 分层Đại cương\n\n")
 	ch := 1
 	for _, v := range volumes {
 		fmt.Fprintf(&b, "## 第 %d 卷：%s\n\n", v.Index, v.Title)
@@ -350,7 +350,7 @@ func renderLayeredOutline(volumes []domain.VolumeOutline) string {
 			fmt.Fprintf(&b, "### 第 %d 弧：%s\n\n", a.Index, a.Title)
 			fmt.Fprintf(&b, "**目标**：%s\n\n", a.Goal)
 			if !a.IsExpanded() {
-				fmt.Fprintf(&b, "*（待展开，预估 %d 章）*\n\n", a.EstimatedChapters)
+				fmt.Fprintf(&b, "*（待Mở rộng，预估 %d 章）*\n\n", a.EstimatedChapters)
 				continue
 			}
 			for _, e := range a.Chapters {
@@ -368,7 +368,7 @@ func renderLayeredOutline(volumes []domain.VolumeOutline) string {
 
 func renderOutline(entries []domain.OutlineEntry) string {
 	var b strings.Builder
-	b.WriteString("# 大纲\n\n")
+	b.WriteString("# Đại cương\n\n")
 	for _, e := range entries {
 		fmt.Fprintf(&b, "## 第 %d 章：%s\n\n", e.Chapter, e.Title)
 		fmt.Fprintf(&b, "**核心事件**：%s\n\n", e.CoreEvent)
@@ -376,7 +376,7 @@ func renderOutline(entries []domain.OutlineEntry) string {
 			fmt.Fprintf(&b, "**钩子**：%s\n\n", e.Hook)
 		}
 		if len(e.Scenes) > 0 {
-			b.WriteString("**场景**：\n")
+			b.WriteString("**Cảnh**：\n")
 			for i, sc := range e.Scenes {
 				fmt.Fprintf(&b, "%d. %s\n", i+1, sc)
 			}

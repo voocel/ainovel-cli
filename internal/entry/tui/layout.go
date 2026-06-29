@@ -48,9 +48,9 @@ func renderContextUsageField(label string, percent float64, tokens, window int) 
 	return fieldLabelStyle.Render(label) + usage + "\n"
 }
 
-// formatContextWindow 把 token 数格式化成紧凑窗口标记："128K" / "200K" / "1M" / "2M"。
+// formatContextWindow 把 token 数格式化成紧凑Cửa sổ标记："128K" / "200K" / "1M" / "2M"。
 // Gemini 的 1048576 (2^20) 等技术意义上的 1M 会展示为 "1M" 而非 "1.0M"。
-// n<=0 返回空串，调用方应据此决定是否展示。
+// n<=0 Quay lạiRỗng串，调用方应据此决定Có czy không展示。
 func formatContextWindow(n int) string {
 	if n <= 0 {
 		return ""
@@ -69,7 +69,7 @@ func formatContextWindow(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// formatCostUSD 格式化美元成本。<$0.01 用 4 位小数，否则 2 位。0 返回空。
+// formatCostUSD 格式化美元成本。<$0.01 用 4 位小数，否则 2 位。0 Quay lạiRỗng。
 func formatCostUSD(usd float64) string {
 	if usd <= 0 {
 		return ""

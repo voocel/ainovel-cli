@@ -6,7 +6,7 @@ import (
 )
 
 func chapterWith(body string) string {
-	return "# 标题\n" + body
+	return "# Tiêu đề\n" + body
 }
 
 func TestComputeBelowMinChapters(t *testing.T) {
@@ -17,7 +17,7 @@ func TestComputeBelowMinChapters(t *testing.T) {
 }
 
 func TestComputePatterns(t *testing.T) {
-	body := "他不是愤怒，而是恐惧。沉默了几息。像一盏灯。\n正文。\n"
+	body := "他不是愤怒，而是恐惧。沉默了几息。像一盏灯。\nChính văn。\n"
 	chapters := make([]string, 6)
 	for i := range chapters {
 		chapters[i] = chapterWith(body)
@@ -77,7 +77,7 @@ func TestComputeRepeatedSentences(t *testing.T) {
 	motto := "此生未能远行，望你替我看看远方的山海。"
 	chapters := make([]string, 6)
 	for i := range chapters {
-		body := "平常正文，没有什么重复。\n"
+		body := "平常Chính văn，没有什么重复。\n"
 		if i%2 == 0 {
 			body += motto + "\n"
 		}
@@ -100,8 +100,8 @@ func TestComputeRepeatedSentences(t *testing.T) {
 }
 
 func TestComputeEndingAndOpening(t *testing.T) {
-	short := chapterWith("一整夜没有睡。\n正文很长很长很长。\n他走了。")
-	long := chapterWith("白天的事。\n正文。\n这是一个非常非常非常长的结尾句子，远远超过三十个字符的阈值长度，用来测试中位数。")
+	short := chapterWith("一整夜没有睡。\nChính văn很长很长很长。\n他走了。")
+	long := chapterWith("白天的事。\nChính văn。\n这是一个非常非常非常长的结尾句子，远远超过三十个字符的阈值长度，用来测试中位数。")
 	chapters := []string{short, short, short, long, long}
 	s := Compute(Input{Chapters: chapters})
 	if s == nil {
@@ -118,7 +118,7 @@ func TestComputeEndingAndOpening(t *testing.T) {
 func TestComputeTitleFormats(t *testing.T) {
 	chapters := make([]string, 5)
 	for i := range chapters {
-		chapters[i] = chapterWith("正文。")
+		chapters[i] = chapterWith("Chính văn。")
 	}
 	// 混用 → 上报
 	s := Compute(Input{Chapters: chapters, Titles: []string{"第一章 风起", "云涌", "第3章 雷动"}})

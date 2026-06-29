@@ -79,7 +79,7 @@ func TestLoad_GenreFieldIsPassThrough(t *testing.T) {
 		ProjectRulesDir: projectDir,
 	})
 
-	// 期望仅 default + project，无 genre 层
+	// 期望仅 default + project，Không có genre 层
 	if len(layers) != 2 {
 		t.Fatalf("expected 2 layers (no genre loading), got %d: %+v", len(layers), layers)
 	}
@@ -87,14 +87,14 @@ func TestLoad_GenreFieldIsPassThrough(t *testing.T) {
 	if b.Structured.Genre != "xianxia" {
 		t.Errorf("genre field should be passed through, got %q", b.Structured.Genre)
 	}
-	// genre 文件未被加载 → 不应有 "——" 来自题材文件
+	// genre Tập tin未被加载 → 不应有 "——" 来自题材Tập tin
 	if len(b.Structured.ForbiddenChars) != 0 {
 		t.Errorf("genres/*.md must not be auto-loaded in Phase 1.1, got %v", b.Structured.ForbiddenChars)
 	}
 }
 
 func TestLoad_NilFSDoesNotPanic(t *testing.T) {
-	// 入参全空：不崩，返回空 layers
+	// 入参全Rỗng：不崩，Quay lạiRỗng layers
 	layers := Load(LoadOptions{})
 	if len(layers) != 0 {
 		t.Errorf("expected 0 layers, got %d", len(layers))
@@ -102,7 +102,7 @@ func TestLoad_NilFSDoesNotPanic(t *testing.T) {
 }
 
 func TestLoad_OnlyDefault(t *testing.T) {
-	// 仅项目内置默认规则可用，用户两个文件都缺
+	// 仅项目内置Mặc định规则可用，用户两个Tập tin都缺
 	rulesFS := fstest.MapFS{
 		"default.md": {Data: []byte("---\nchapter_words: 3000-6000\n---\n")},
 	}
@@ -112,8 +112,8 @@ func TestLoad_OnlyDefault(t *testing.T) {
 	}
 }
 
-// TestLoad_GlobalDirScansAllMarkdown 验证 global 目录下多个 .md 都被加载，
-// 按文件名字典序合并（后者覆盖前者），非 .md 文件被忽略。
+// TestLoad_GlobalDirScansAllMarkdown 验证 global Thư mục下多个 .md 都被加载，
+// 按Tập tin名字典序合并（后者覆盖前者），非 .md Tập tin被忽略。
 func TestLoad_GlobalDirScansAllMarkdown(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rules")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -125,7 +125,7 @@ func TestLoad_GlobalDirScansAllMarkdown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("---\nchapter_words: 3000-4000\n---\n# B\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// 非 .md 文件应被忽略
+	// 非 .md Tập tin应被忽略
 	if err := os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("not a rule"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestLoad_GlobalDirScansAllMarkdown(t *testing.T) {
 	}
 }
 
-// TestLoad_GlobalDirMissing 验证 global 目录不存在时静默跳过。
+// TestLoad_GlobalDirMissing 验证 global Thư mục不存在时静默Bỏ qua。
 func TestLoad_GlobalDirMissing(t *testing.T) {
 	layers := Load(LoadOptions{HomeRulesDir: filepath.Join(t.TempDir(), "does-not-exist")})
 	if len(layers) != 0 {
@@ -157,8 +157,8 @@ func TestLoad_GlobalDirMissing(t *testing.T) {
 	}
 }
 
-// TestLoad_GlobalDirIgnoresHiddenAndSubdirs 锁死:隐藏/编辑器临时文件(. 开头)被忽略、
-// 子目录不递归——防止脏文件二进制内容当偏好正文注入 LLM。
+// TestLoad_GlobalDirIgnoresHiddenAndSubdirs 锁死:隐藏/Sửa器临时Tập tin(. 开头)被忽略、
+// 子Thư mục不递归——防止脏Tập tin二进制内容当偏好Chính văn注入 LLM。
 func TestLoad_GlobalDirIgnoresHiddenAndSubdirs(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rules")
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
@@ -167,13 +167,13 @@ func TestLoad_GlobalDirIgnoresHiddenAndSubdirs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("---\nchapter_words: 3000-6000\n---\n# real\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// macOS AppleDouble / emacs 锁 / 普通隐藏文件 —— 都该被忽略
+	// macOS AppleDouble / emacs 锁 / 普通隐藏Tập tin —— 都该被忽略
 	for _, dirty := range []string{"._real.md", ".#lock.md", ".hidden.md"} {
 		if err := os.WriteFile(filepath.Join(dir, dirty), []byte("\x00binary garbage\x00"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// 子目录里的 .md 不该被递归
+	// 子Thư mục里的 .md 不该被递归
 	if err := os.WriteFile(filepath.Join(dir, "sub", "nested.md"), []byte("---\nchapter_words: 1-2\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -190,8 +190,8 @@ func TestLoad_GlobalDirIgnoresHiddenAndSubdirs(t *testing.T) {
 	}
 }
 
-// TestLoad_GlobalDirIsFileExposesConflict 验证 rules 路径误建成文件(非目录)时
-// 暴露 conflict 而非静默吞错——与单文件 IO 错误的容错契约一致。
+// TestLoad_GlobalDirIsFileExposesConflict 验证 rules Đường dẫn误建成Tập tin(非Thư mục)时
+// 暴露 conflict 而非静默吞错——与单Tập tin IO Lỗi的容错契约一致。
 func TestLoad_GlobalDirIsFileExposesConflict(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "rules")
 	if err := os.WriteFile(p, []byte("oops, should be a dir"), 0o644); err != nil {
@@ -206,7 +206,7 @@ func TestLoad_GlobalDirIsFileExposesConflict(t *testing.T) {
 	}
 }
 
-// TestEnsureRulesDirAt 验证备好目录 + README.txt：写入说明、始终覆盖为最新模板，
+// TestEnsureRulesDirAt 验证备好Thư mục + README.txt：写入说明、始终覆盖为最Mới模板，
 // 且 README.txt(非 .md)不会被 loader 当成规则。
 func TestEnsureRulesDirAt(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rules")
@@ -222,8 +222,8 @@ func TestEnsureRulesDirAt(t *testing.T) {
 		t.Errorf("README.txt missing guidance, got %q", data)
 	}
 
-	// 始终覆盖为最新模板：旧版本写的过时文案（如路径仍是 ./rules.md）再次 ensure 时被刷新
-	if err := os.WriteFile(readme, []byte("旧版本写的 ./rules.md 文案"), 0o644); err != nil {
+	// 始终覆盖为最Mới模板：CũPhiên bản写的过时文案（如Đường dẫn仍是 ./rules.md）再次 ensure 时被Làm mới
+	if err := os.WriteFile(readme, []byte("CũPhiên bản写的 ./rules.md 文案"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureRulesDirAt(dir); err != nil {
@@ -239,7 +239,7 @@ func TestEnsureRulesDirAt(t *testing.T) {
 	}
 }
 
-// TestDefaultProjectRulesDir 锁死项目级规则目录镜像全局：./.ainovel/rules/。
+// TestDefaultProjectRulesDir 锁死项目级规则Thư mục镜像全局：./.ainovel/rules/。
 func TestDefaultProjectRulesDir(t *testing.T) {
 	proj := filepath.Join("/tmp", "demo-book")
 	want := filepath.Join(proj, ".ainovel", "rules")
@@ -247,7 +247,7 @@ func TestDefaultProjectRulesDir(t *testing.T) {
 		t.Errorf("DefaultProjectRulesDir=%q, want %q", got, want)
 	}
 	if got := DefaultProjectRulesDir(""); got != "" {
-		t.Errorf("空项目根应返回空串，得到 %q", got)
+		t.Errorf("Rỗng项目根应Quay lạiRỗng串，得到 %q", got)
 	}
 }
 
@@ -277,6 +277,6 @@ func TestDefaultOptions_LoadsProjectRulesFromDotAinovel(t *testing.T) {
 		t.Fatalf("应从 ./.ainovel/rules/ 加载到项目规则层，得到 %+v", layers)
 	}
 	if b := Merge(layers); b.Structured.ChapterWords == nil || b.Structured.ChapterWords.Min != 4000 {
-		t.Errorf("项目规则应覆盖默认 chapter_words，得到 %+v", b.Structured.ChapterWords)
+		t.Errorf("项目规则应覆盖Mặc định chapter_words，得到 %+v", b.Structured.ChapterWords)
 	}
 }

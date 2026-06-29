@@ -71,7 +71,7 @@ func TestCheckpointStore_Idempotent(t *testing.T) {
 func TestCheckpointStore_EmptyDigestNotIdempotent(t *testing.T) {
 	cs, _ := newTestCheckpointStore(t)
 
-	// 空 digest 不参与幂等去重
+	// Rỗng digest 不参与幂等去重
 	cs.Append(domain.GlobalScope(), "note", "", "")
 	cs.Append(domain.GlobalScope(), "note", "", "")
 	if all := cs.All(); len(all) != 2 {
@@ -97,7 +97,7 @@ func TestCheckpointStore_Reset(t *testing.T) {
 		t.Fatalf("file should be removed, err=%v", err)
 	}
 
-	// Reset 后 seq 重置：下次追加从 1 开始
+	// Reset 后 seq Đặt lại：下次追加从 1 Bắt đầu
 	cp, _ := cs.Append(domain.ChapterScope(1), "plan", "p", "sha256:1")
 	if cp.Seq != 1 {
 		t.Fatalf("seq after reset should restart at 1, got %d", cp.Seq)
@@ -112,7 +112,7 @@ func TestCheckpointStore_RestoreFromDisk(t *testing.T) {
 	cs1.Append(domain.ChapterScope(1), "draft", "d", "sha256:2")
 	cs1.Append(domain.ChapterScope(2), "plan", "p2", "sha256:3")
 
-	// 模拟重启：新实例从同一目录加载
+	// 模拟重启：Mới实例从同一Thư mục加载
 	io2 := newIO(dir)
 	cs2 := NewCheckpointStore(io2)
 
@@ -169,7 +169,7 @@ func TestCheckpointStore_ConcurrentAppend(t *testing.T) {
 		t.Fatalf("concurrent append lost data: want %d got %d", goroutines*perGoroutine, len(all))
 	}
 
-	// seq 应为 1..N，无重复
+	// seq 应为 1..N，Không có重复
 	seen := make(map[int64]bool, len(all))
 	for _, cp := range all {
 		if seen[cp.Seq] {
@@ -190,7 +190,7 @@ func TestCheckpointStore_SeqNotConsumedOnWriteFailure(t *testing.T) {
 		t.Fatalf("seed append: %v", err)
 	}
 
-	// 把 jsonl 文件本身改为只读，使下一次 OpenFile 写入失败
+	// 把 jsonl Tập tin本身改为只读，使下一次 OpenFile 写入Thất bại
 	jsonlPath := filepath.Join(dir, checkpointsFile)
 	if err := os.Chmod(jsonlPath, 0o444); err != nil {
 		t.Skipf("chmod readonly not supported: %v", err)
@@ -206,7 +206,7 @@ func TestCheckpointStore_SeqNotConsumedOnWriteFailure(t *testing.T) {
 		t.Fatalf("cache leaked failed entry, len=%d", len(all))
 	}
 
-	// 恢复写权限，重试应得 seq=2 而不是 seq=3
+	// Phục hồi写权限，Thử lại应得 seq=2 而不是 seq=3
 	if err := os.Chmod(jsonlPath, 0o644); err != nil {
 		t.Fatalf("restore chmod: %v", err)
 	}

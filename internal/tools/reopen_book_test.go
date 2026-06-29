@@ -64,7 +64,7 @@ func TestReopenBookReopensCompletedBook(t *testing.T) {
 }
 
 func TestReopenBookRejectsNonCompleteBook(t *testing.T) {
-	// 写作中（未完结）的书不能 reopen
+	// Viết中（未完结）的书不能 reopen
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -91,7 +91,7 @@ func TestReopenBookRejectsUnwrittenChapters(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), args); err == nil {
 		t.Fatal("expected reopen to be rejected for unwritten chapter")
 	}
-	// 空 chapters → 拒绝
+	// Rỗng chapters → 拒绝
 	args, _ = json.Marshal(map[string]any{"chapters": []int{}})
 	if _, err := tool.Execute(context.Background(), args); err == nil {
 		t.Fatal("expected reopen to be rejected for empty chapters")

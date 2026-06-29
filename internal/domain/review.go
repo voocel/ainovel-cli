@@ -1,6 +1,6 @@
 package domain
 
-// TimelineEvent 时间线事件。
+// TimelineEvent Sự kiện thời gian。
 type TimelineEvent struct {
 	Chapter    int      `json:"chapter"`
 	Time       string   `json:"time"`
@@ -24,7 +24,7 @@ type ForeshadowUpdate struct {
 	Description string `json:"description,omitempty"`
 }
 
-// RelationshipEntry 人物关系条目。
+// RelationshipEntry Nhân vật关系条目。
 type RelationshipEntry struct {
 	CharacterA string `json:"character_a"`
 	CharacterB string `json:"character_b"`
@@ -32,12 +32,12 @@ type RelationshipEntry struct {
 	Chapter    int    `json:"chapter"`
 }
 
-// ConsistencyIssue 一致性问题。
+// ConsistencyIssue Nhất quán问题。
 type ConsistencyIssue struct {
 	Type        string `json:"type"`     // consistency / character / pacing / continuity / foreshadow / hook / aesthetic
 	Severity    string `json:"severity"` // critical / error / warning
 	Description string `json:"description"`
-	Evidence    string `json:"evidence,omitempty"` // 证据：原文片段、具体情节或状态数据
+	Evidence    string `json:"evidence,omitempty"` // 证据：原文片段、具体情节或Trạng thái数据
 	Suggestion  string `json:"suggestion,omitempty"`
 }
 
@@ -60,10 +60,10 @@ type ReviewEntry struct {
 	ContractNotes    string             `json:"contract_notes,omitempty"`  // 对 contract 履行情况的简述
 	Verdict          string             `json:"verdict"`                   // accept / polish / rewrite
 	Summary          string             `json:"summary"`
-	AffectedChapters []int              `json:"affected_chapters,omitempty"` // 需要重写/打磨的章节号
+	AffectedChapters []int              `json:"affected_chapters,omitempty"` // Cần重写/打磨的Chương号
 }
 
-// CriticalCount 返回 critical 级别问题数量。
+// CriticalCount Quay lại critical 级别问题数量。
 func (r *ReviewEntry) CriticalCount() int {
 	n := 0
 	for _, issue := range r.Issues {
@@ -74,7 +74,7 @@ func (r *ReviewEntry) CriticalCount() int {
 	return n
 }
 
-// ErrorCount 返回 error 级别问题数量。
+// ErrorCount Quay lại error 级别问题数量。
 func (r *ReviewEntry) ErrorCount() int {
 	n := 0
 	for _, issue := range r.Issues {
@@ -85,7 +85,7 @@ func (r *ReviewEntry) ErrorCount() int {
 	return n
 }
 
-// Dimension 返回指定维度的评分；不存在则返回 nil。
+// Dimension Quay lại指定维度的评分；不存在则Quay lại nil。
 func (r *ReviewEntry) Dimension(name string) *DimensionScore {
 	if r == nil {
 		return nil

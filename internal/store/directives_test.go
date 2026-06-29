@@ -41,10 +41,10 @@ func TestDirectivesAddAndLoad(t *testing.T) {
 func TestDirectivesAddDeduplicates(t *testing.T) {
 	store := NewStore(t.TempDir())
 
-	if _, err := store.Directives.Add(domain.UserDirective{Text: "标题只用中文"}); err != nil {
+	if _, err := store.Directives.Add(domain.UserDirective{Text: "Tiêu đề只用中文"}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	list, err := store.Directives.Add(domain.UserDirective{Text: "标题只用中文"})
+	list, err := store.Directives.Add(domain.UserDirective{Text: "Tiêu đề只用中文"})
 	if err != nil {
 		t.Fatalf("Add duplicate: %v", err)
 	}

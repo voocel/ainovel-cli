@@ -5,8 +5,8 @@ import "strings"
 // JSONFieldExtractor 从流式 JSON 碎片中提取指定字段的字符串值。
 //
 // LLM 流式生成 tool call 时，参数是逐片段到达的（OpenAI/Anthropic）
-// 或一次性到达的（Gemini）。本提取器用状态机逐字符扫描，
-// 检测到目标 key 后提取其字符串值，处理 JSON 转义。
+// 或一次性到达的（Gemini）。本提取器用Trạng thái机逐字符扫描，
+// Phát hiện目标 key 后提取其字符串值，处理 JSON 转义。
 type JSONFieldExtractor struct {
 	key      string // 匹配目标，如 `"content"` 或 `"task"`
 	state    extractState
@@ -27,7 +27,7 @@ func NewFieldExtractor(fieldName string) *JSONFieldExtractor {
 	return &JSONFieldExtractor{key: `"` + fieldName + `"`}
 }
 
-// Feed 处理一段 delta，返回提取到的文本（可能为空）。
+// Feed 处理一段 delta，Quay lại提取到的文本（可能为Rỗng）。
 func (e *JSONFieldExtractor) Feed(delta string) string {
 	e.buf.Reset()
 	for _, r := range delta {
@@ -61,7 +61,7 @@ func (e *JSONFieldExtractor) feedScan(r rune) {
 func (e *JSONFieldExtractor) feedColon(r rune) {
 	switch r {
 	case ':', ' ', '\t':
-		// 跳过
+		// Bỏ qua
 	case '"':
 		e.state = stateExtract
 		e.escape = false
@@ -103,14 +103,14 @@ func (e *JSONFieldExtractor) feedExtract(r rune) {
 	}
 }
 
-// Reset 重置状态（新 LLM 消息轮次时调用）。
+// Reset Đặt lạiTrạng thái（Mới LLM 消息轮次时调用）。
 func (e *JSONFieldExtractor) Reset() {
 	e.state = stateScan
 	e.matchPos = 0
 	e.escape = false
 }
 
-// ThinkingSep 是思考文本与正文之间的分隔标记。
+// ThinkingSep 是思考文本与Chính văn之间的分隔标记。
 // StreamFilter 在思考文本段前插入此标记，TUI 据此切换渲染样式。
 const ThinkingSep = "\x02"
 
@@ -125,7 +125,7 @@ type StreamFilter struct {
 	braceDepth int
 	inString   bool // 在 JSON 字符串内（大括号不计数）
 	escJSON    bool // JSON 字符串内的转义
-	thinking   bool // 当前处于思考文本段
+	thinking   bool // Hiện tại处于思考文本段
 	buf        strings.Builder
 }
 
@@ -140,7 +140,7 @@ func NewStreamFilter(fieldName string) *StreamFilter {
 	return &StreamFilter{fieldExt: NewFieldExtractor(fieldName)}
 }
 
-// Feed 处理一段 delta，返回可展示文本。
+// Feed 处理一段 delta，Quay lại可展示文本。
 // 文本回复直接输出；JSON 中的目标字段值被提取输出；其余 JSON 结构丢弃。
 func (f *StreamFilter) Feed(delta string) string {
 	f.buf.Reset()
@@ -170,7 +170,7 @@ func (f *StreamFilter) Feed(delta string) string {
 	return f.buf.String()
 }
 
-// feedExtractor 将单个字符喂给 fieldExt，提取结果写入 buf。
+// feedExtractor 将单个字符喂给 fieldExt，提取Kết quả写入 buf。
 func (f *StreamFilter) feedExtractor(r rune) {
 	if text := f.fieldExt.Feed(string(r)); text != "" {
 		f.buf.WriteString(text)
@@ -205,7 +205,7 @@ func (f *StreamFilter) trackBraces(r rune) {
 	}
 }
 
-// Reset 重置状态。
+// Reset Đặt lạiTrạng thái。
 func (f *StreamFilter) Reset() {
 	f.mode = filterText
 	f.braceDepth = 0

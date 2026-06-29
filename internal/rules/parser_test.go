@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// readFixture 读取 testdata 下的 fixture 文件；找不到则 t.Fatal。
+// readFixture Đọc testdata 下的 fixture Tập tin；找不到则 t.Fatal。
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	path := filepath.Join("testdata", name)
@@ -53,11 +53,11 @@ func TestParse_InvalidFrontMatter(t *testing.T) {
 	data := readFixture(t, "invalid-frontmatter.rules.md")
 	p := Parse("testdata/invalid-frontmatter.rules.md", SourceProject, data)
 
-	// 容错：结构化字段全空，但正文仍作为偏好
+	// 容错：结构化字段全Rỗng，但Chính văn仍作为偏好
 	if !p.Structured.IsEmpty() {
 		t.Errorf("structured should be empty on parse_error, got %+v", p.Structured)
 	}
-	if !strings.Contains(p.Preference, "正文应当仍作为偏好注入") {
+	if !strings.Contains(p.Preference, "Chính văn应当仍作为偏好注入") {
 		t.Errorf("preference should still be parsed despite front matter failure; got %q", p.Preference)
 	}
 	if len(p.Conflicts) == 0 {
@@ -86,7 +86,7 @@ func TestParse_UnknownFields(t *testing.T) {
 	if p.Structured.ChapterWords == nil || p.Structured.ChapterWords.Min != 2000 {
 		t.Errorf("chapter_words=%+v, want {2000,4000}", p.Structured.ChapterWords)
 	}
-	// 未知字段进 conflicts
+	// Không rõ字段进 conflicts
 	unknowns := map[string]bool{}
 	for _, c := range p.Conflicts {
 		if c.Kind == ConflictUnknownField {
@@ -119,7 +119,7 @@ func TestParse_TypeErrors(t *testing.T) {
 		t.Errorf("forbidden_chars should be empty on type_error, got %v", p.Structured.ForbiddenChars)
 	}
 
-	// forbidden_phrases: [1, 2] → 每个元素都是 int，严格判定 → 全部丢弃 → 空 list
+	// forbidden_phrases: [1, 2] → 每个元素都是 int，严格判定 → Tất cả丢弃 → Rỗng list
 	if len(p.Structured.ForbiddenPhrases) != 0 {
 		t.Errorf("forbidden_phrases should be empty on element type errors, got %v", p.Structured.ForbiddenPhrases)
 	}
@@ -129,7 +129,7 @@ func TestParse_TypeErrors(t *testing.T) {
 		t.Errorf("fatigue_words should be empty on type_error, got %+v", p.Structured.FatigueWords)
 	}
 
-	// 所有错误字段都应进 conflicts
+	// 所有Lỗi字段都应进 conflicts
 	fields := map[string]bool{}
 	for _, c := range p.Conflicts {
 		fields[c.Field] = true
@@ -151,13 +151,13 @@ func TestParse_TypeErrors(t *testing.T) {
 		t.Errorf("expected per-element conflict on forbidden_phrases, got %+v", p.Conflicts)
 	}
 
-	// 正文仍应注入
-	if !strings.Contains(p.Preference, "类型错误") {
+	// Chính văn仍应注入
+	if !strings.Contains(p.Preference, "类型Lỗi") {
 		t.Errorf("preference should be parsed despite type errors; got %q", p.Preference)
 	}
 }
 
-// TestParse_FatigueWordsPartialInvalid 验证：fatigue_words map 中部分 key 阈值非法时，
+// TestParse_FatigueWordsPartialInvalid 验证：fatigue_words map 中Phần key 阈值非法时，
 // 每个非法 key 都写 conflict，合法 key 正常保留。
 func TestParse_FatigueWordsPartialInvalid(t *testing.T) {
 	content := []byte("---\nfatigue_words:\n" +
@@ -226,7 +226,7 @@ func TestParse_NoFrontMatter(t *testing.T) {
 	if !p.Structured.IsEmpty() {
 		t.Errorf("no front matter, structured should be empty, got %+v", p.Structured)
 	}
-	if !strings.Contains(p.Preference, "仅有正文") {
+	if !strings.Contains(p.Preference, "仅有Chính văn") {
 		t.Errorf("preference should contain body, got %q", p.Preference)
 	}
 	if len(p.Conflicts) != 0 {
@@ -246,8 +246,8 @@ func TestParse_ChapterWordsObjectForm(t *testing.T) {
 	}
 }
 
-// TestParse_ChapterWordsSingleValue 验证单值写法（裸数字 / 字符串）展开为 ±20% 区间。
-// 防回归 issue #41：用户凭直觉写单值，过去被静默丢弃、回落内置默认。
+// TestParse_ChapterWordsSingleValue 验证单值写法（裸数字 / 字符串）Mở rộng为 ±20% 区间。
+// 防回归 issue #41：用户凭直觉写单值，过去被静默丢弃、回落内置Mặc định。
 func TestParse_ChapterWordsSingleValue(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -270,7 +270,7 @@ func TestParse_ChapterWordsSingleValue(t *testing.T) {
 	}
 }
 
-// TestParse_ChapterWordsInvalidRange 确认 min>max 被视为非法值。
+// TestParse_ChapterWordsInvalidRange Xác nhận min>max 被视为非法值。
 func TestParse_ChapterWordsInvalidRange(t *testing.T) {
 	content := []byte("---\nchapter_words: 6000-3000\n---\n")
 	p := Parse("inline", SourceProject, content)
@@ -288,7 +288,7 @@ func TestParse_ChapterWordsInvalidRange(t *testing.T) {
 	}
 }
 
-// TestParse_FrontMatterUnclosed 确认起始 --- 没闭合时整篇当正文处理。
+// TestParse_FrontMatterUnclosed Xác nhận起始 --- 没闭合时整篇当Chính văn处理。
 func TestParse_FrontMatterUnclosed(t *testing.T) {
 	content := []byte("---\ngenre: xianxia\n# 没有闭合的 --- \n\n# 偏好\n\n- 内容\n")
 	p := Parse("inline", SourceProject, content)

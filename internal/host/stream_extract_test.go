@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// feedAll 一次性喂入，返回累积输出。
+// feedAll 一次性喂入，Quay lại累积输出。
 func feedAll(t *testing.T, tool, input string) string {
 	t.Helper()
 	e := newToolExtractor(tool)
@@ -15,7 +15,7 @@ func feedAll(t *testing.T, tool, input string) string {
 	return e.Feed(input)
 }
 
-// feedChunked 按指定字节数分片喂入，验证流式与一次喂入结果一致。
+// feedChunked 按指定字节数分片喂入，验证流式与一次喂入Kết quả一致。
 func feedChunked(t *testing.T, tool, input string, chunk int) string {
 	t.Helper()
 	e := newToolExtractor(tool)
@@ -69,7 +69,7 @@ func TestExtract_FoundationCharacters(t *testing.T) {
 	mustContain(t, out, "✻ 设定")
 	mustContain(t, out, "type: characters")
 	mustContain(t, out, "scale: long")
-	// 通用渲染：所有字段都展示，包括之前被白名单跳过的 aliases / traits
+	// 通用渲染：所有字段都展示，Bao gồm之前被白名单Bỏ qua的 aliases / traits
 	mustContain(t, out, "name: 沈砺")
 	mustContain(t, out, "role: 主角")
 	mustContain(t, out, "aliases:")
@@ -140,7 +140,7 @@ func TestExtract_SaveReview(t *testing.T) {
 func TestExtract_CommitChapter(t *testing.T) {
 	in := `{"chapter":1,"summary":"被卖入矿场。","characters":["沈砺","母亲"],"key_events":["签卖身契"],"foreshadow_updates":[{"id":"f1","action":"plant","description":"灰矿发烫。"}],"state_changes":[{"entity":"沈砺","field":"身份","old_value":"采药少年","new_value":"矿场杂役"}]}`
 	out := feedAll(t, "commit_chapter", in)
-	mustContain(t, out, "✻ 章节提交")
+	mustContain(t, out, "✻ ChươngNộp")
 	mustContain(t, out, "summary: 被卖入矿场。")
 	mustContain(t, out, "- 沈砺")
 	mustContain(t, out, "- 母亲")
@@ -171,27 +171,27 @@ func TestExtract_EditChapter(t *testing.T) {
 func TestExtract_ReadChapter(t *testing.T) {
 	in := `{"chapter":234,"source":"final"}`
 	out := feedAll(t, "read_chapter", in)
-	mustContain(t, out, "✻ 读章节")
+	mustContain(t, out, "✻ 读Chương")
 	mustContain(t, out, "chapter: 234")
 	mustContain(t, out, "source: final")
 }
 
 func TestExtract_CheckConsistency(t *testing.T) {
 	out := feedAll(t, "check_consistency", `{"chapter":234}`)
-	mustContain(t, out, "✻ 一致性检查")
+	mustContain(t, out, "✻ Nhất quánKiểm tra")
 	mustContain(t, out, "chapter: 234")
 }
 
-// 空 args 兜底：coordinator 调 novel_context 不传参时 args 是 {}，
+// Rỗng args 兜底：coordinator 调 novel_context 不传参时 args 是 {}，
 // 不能完全静默，至少要输出 header 让用户感知调用。
 func TestExtract_NovelContextEmptyArgs(t *testing.T) {
 	out := feedAll(t, "novel_context", `{}`)
-	mustContain(t, out, "✻ 查询上下文")
+	mustContain(t, out, "✻ 查询Ngữ cảnh")
 }
 
 func TestExtract_NovelContextWithChapter(t *testing.T) {
 	out := feedAll(t, "novel_context", `{"chapter":234}`)
-	mustContain(t, out, "✻ 查询上下文")
+	mustContain(t, out, "✻ 查询Ngữ cảnh")
 	mustContain(t, out, "chapter: 234")
 }
 
@@ -200,7 +200,7 @@ func TestExtract_NovelContextWithChapter(t *testing.T) {
 func TestExtract_DraftChapterRawMarkdown(t *testing.T) {
 	in := `{"chapter":1,"content":"# 第一章\n\n沈砺站在矿口。\n"}`
 	out := feedAll(t, "draft_chapter", in)
-	// 裸流：无装饰、无 key prefix
+	// 裸流：Không có装饰、Không có key prefix
 	mustNotContain(t, out, "【")
 	mustNotContain(t, out, "content:")
 	mustNotContain(t, out, "chapter:")
@@ -209,10 +209,10 @@ func TestExtract_DraftChapterRawMarkdown(t *testing.T) {
 }
 
 func TestExtract_DraftChapterIgnoresOtherFields(t *testing.T) {
-	// content 之外的字段应被静默跳过，不污染输出
-	in := `{"chapter":7,"summary":"meta","content":"正文","extra_array":[1,2,3]}`
+	// content 之外的字段应被静默Bỏ qua，不污染输出
+	in := `{"chapter":7,"summary":"meta","content":"Chính văn","extra_array":[1,2,3]}`
 	out := feedAll(t, "draft_chapter", in)
-	mustContain(t, out, "正文")
+	mustContain(t, out, "Chính văn")
 	mustNotContain(t, out, "meta")
 	mustNotContain(t, out, "summary")
 	mustNotContain(t, out, "7")
@@ -237,7 +237,7 @@ func TestExtract_DoneAfterClose(t *testing.T) {
 
 // ── 流式分片不变性 ──
 
-// 同一份输入按 1/3/7/13 字节分片，输出应与一次喂入完全相同。
+// 同一份Nhập按 1/3/7/13 字节分片，输出应与一次喂入完全相同。
 func TestExtract_ChunkedEqualsWhole(t *testing.T) {
 	cases := []struct {
 		tool  string
@@ -247,7 +247,7 @@ func TestExtract_ChunkedEqualsWhole(t *testing.T) {
 		{"save_foundation", `{"type":"characters","content":[{"name":"沈砺","role":"主角","aliases":["灰脉","沈七"]}]}`},
 		{"save_foundation", `{"type":"layered_outline","content":[{"index":1,"title":"矿火","arcs":[{"index":1,"title":"矿役","goal":"求活","chapters":[{"chapter":1,"title":"卖身契"}]}]}]}`},
 		{"save_review", `{"verdict":"accept","summary":"good","dimensions":[{"dimension":"hook","score":85,"verdict":"pass"}],"issues":[]}`},
-		{"draft_chapter", `{"chapter":1,"content":"# 第一章\n\n正文。\n"}`},
+		{"draft_chapter", `{"chapter":1,"content":"# 第一章\n\nChính văn。\n"}`},
 	}
 	for _, tc := range cases {
 		whole := feedAll(t, tc.tool, tc.input)
@@ -278,7 +278,7 @@ func TestExtract_UnicodeEscape(t *testing.T) {
 	mustContain(t, out, "中文")
 }
 
-// ── 空容器 / 简单结构 ──
+// ── Rỗng容器 / 简单结构 ──
 
 func TestExtract_EmptyArrays(t *testing.T) {
 	in := `{"key_events":[],"characters":["沈砺"]}`
@@ -296,7 +296,7 @@ func TestExtract_BoolAndNull(t *testing.T) {
 	mustContain(t, out, "description: null")
 }
 
-// ── 边角场景：数组嵌数组、深层嵌套 ──
+// ── 边角Cảnh：数组嵌数组、深层嵌套 ──
 
 func TestExtract_NestedArrays(t *testing.T) {
 	// affected_chapters 是 int 数组；这里换成数组嵌数组验证
@@ -343,7 +343,7 @@ func TestExtract_NakedKeyOnlyTopLevel(t *testing.T) {
 	mustNotContain(t, out, "嵌套不应输出")
 }
 
-// ── 裸流模式：content 是非 string 时全跳过 ──
+// ── 裸流模式：content 是非 string 时全Bỏ qua ──
 
 func TestExtract_NakedKeyNonStringValue(t *testing.T) {
 	// content 错写成对象（不应该发生但要容忍）
@@ -367,7 +367,7 @@ func TestExtract_FeedAfterDone(t *testing.T) {
 	}
 }
 
-// ── 空 chunk / 空 input ──
+// ── Rỗng chunk / Rỗng input ──
 
 func TestExtract_EmptyFeed(t *testing.T) {
 	e := newToolExtractor("plan_chapter")
@@ -391,10 +391,10 @@ func TestExtract_ArrayOfArrays(t *testing.T) {
 	mustContain(t, out, "- 4")
 }
 
-// ── number 后空格再分隔符 ──
+// ── number 后Rỗng格再分隔符 ──
 
 func TestExtract_NumberWithTrailingSpace(t *testing.T) {
-	// "chapter": 1 ,  ← 数字前后多空格
+	// "chapter": 1 ,  ← 数字前后多Rỗng格
 	in := `{ "chapter" : 1 , "title" : "x" }`
 	out := feedAll(t, "plan_chapter", in)
 	mustContain(t, out, "chapter: 1")

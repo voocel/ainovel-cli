@@ -16,17 +16,17 @@ type FoundationResult struct {
 	Premise    string                 // Markdown 字符串
 	Characters []domain.Character     // 角色档案
 	WorldRules []domain.WorldRule     // 世界规则
-	Volumes    []domain.VolumeOutline // 分层大纲：导入正文作为第一卷（可续写、可扩展）
+	Volumes    []domain.VolumeOutline // 分层Đại cương：NhậpChính văn作为第一卷（可续写、可扩展）
 	Compass    *domain.StoryCompass   // 续写方向锚点（ending_direction / open_threads / estimated_scale）
 }
 
-// LLMChat 是 imp 包对 ChatModel 的最小依赖：仅需要一次普通文本生成。
+// LLMChat 是 imp 包对 ChatModel 的最小依赖：仅Cần一次普通文本生成。
 // 抽出独立接口便于单测注入 mock，避免直接耦合 agentcore 客户端。
 type LLMChat interface {
 	Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error)
 }
 
-// ReverseFoundation 用一次 LLM 调用，从已切分的章节正文反推 foundation。
+// ReverseFoundation 用一次 LLM 调用，从已切分的ChươngChính văn反推 foundation。
 // 不调用 save_foundation，纯函数；持久化由调用方决定。
 func ReverseFoundation(ctx context.Context, llm LLMChat, systemPrompt string, chapters []Chapter) (*FoundationResult, error) {
 	if len(chapters) == 0 {
@@ -53,12 +53,12 @@ func ReverseFoundation(ctx context.Context, llm LLMChat, systemPrompt string, ch
 	return parseFoundationOutput(resp.Message.TextContent(), len(chapters))
 }
 
-// buildFoundationUserPrompt 拼装用户提示：所有章节顺序拼接，附章号锚点便于 LLM 引用。
+// buildFoundationUserPrompt 拼装用户提示：所有Chương顺序拼接，附章号锚点便于 LLM 引用。
 func buildFoundationUserPrompt(chapters []Chapter) string {
 	var sb strings.Builder
-	sb.WriteString("以下是已完成的 ")
+	sb.WriteString("以下是Đã hoàn thành的 ")
 	fmt.Fprintf(&sb, "%d", len(chapters))
-	sb.WriteString(" 章正文。请严格按系统提示反推 foundation，输出五个 === TAG === 段。\n\n")
+	sb.WriteString(" 章Chính văn。Vui lòng严格按系统提示反推 foundation，输出五个 === TAG === 段。\n\n")
 	for i, ch := range chapters {
 		fmt.Fprintf(&sb, "## 第 %d 章：%s\n\n", i+1, ch.Title)
 		sb.WriteString(ch.Content)
@@ -79,7 +79,7 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 
 	premise := stripFences(env["PREMISE"])
 	if !strings.HasPrefix(strings.TrimLeft(premise, " \t\n"), "#") {
-		return nil, fmt.Errorf("premise must start with a Markdown heading line (# 书名)")
+		return nil, fmt.Errorf("premise must start with a Markdown heading line (# Tên sách)")
 	}
 
 	var characters []domain.Character
@@ -99,8 +99,8 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 	if err := decodeJSON("layered_outline", env["LAYERED_OUTLINE"], &volumes); err != nil {
 		return nil, err
 	}
-	// 导入大纲必须把全部 N 章实展开（FlattenOutline 只数真实章节，骨架弧不计），
-	// 否则逐章 commit 时会有章节落在大纲范围外、被越界守卫拒绝。
+	// NhậpĐại cương必须把Tất cả N 章实Mở rộng（FlattenOutline 只数真实Chương，骨架弧不计），
+	// 否则逐章 commit 时会有Chương落在Đại cương范围外、被越界守卫拒绝。
 	if got := len(domain.FlattenOutline(volumes)); got != expectChapters {
 		return nil, fmt.Errorf("layered outline chapter count mismatch: got %d, want %d", got, expectChapters)
 	}
@@ -119,11 +119,11 @@ func parseFoundationOutput(text string, expectChapters int) (*FoundationResult, 
 	}, nil
 }
 
-// PersistFoundation 把反推结果写入 Store，顺序与 Architect 长篇 prompt 一致：
-// premise → characters → world_rules → layered_outline → compass。导入正文作为第一卷
-// 落成分层大纲，使导入的书可被续写、可扩展。每步都触发 save_foundation 同款落盘逻辑。
+// PersistFoundation 把反推Kết quả写入 Store，顺序与 Architect 长篇 prompt 一致：
+// premise → characters → world_rules → layered_outline → compass。NhậpChính văn作为第一卷
+// 落成分层Đại cương，使Nhập的书可被续写、可扩展。每步都触发 save_foundation 同款落盘逻辑。
 //
-// 不直接调 SaveFoundationTool 是因为这里是确定性回放，无需走 LLM 工具调度。
+// 不直接调 SaveFoundationTool 是因为这里是确定性回放，Không có需走 LLM 工具调度。
 // 但保持与 SaveFoundationTool 相同的副作用：phase 推进、checkpoint 追加。
 func PersistFoundation(ctx context.Context, st *store.Store, scale domain.PlanningTier, fr *FoundationResult) error {
 	if fr == nil {
@@ -161,7 +161,7 @@ func PersistFoundation(ctx context.Context, st *store.Store, scale domain.Planni
 		return fmt.Errorf("checkpoint world_rules: %w", err)
 	}
 
-	// 4. layered outline（导入正文作为第一卷 → 分层模式，可续写、可扩展）
+	// 4. layered outline（NhậpChính văn作为第一卷 → 分层模式，可续写、可扩展）
 	if err := st.Outline.SaveLayeredOutline(fr.Volumes); err != nil {
 		return fmt.Errorf("save layered outline: %w", err)
 	}
@@ -179,7 +179,7 @@ func PersistFoundation(ctx context.Context, st *store.Store, scale domain.Planni
 	}
 
 	// 5. compass（续写方向锚点）：让 layeredBookComplete 据 open_threads 判定，
-	//    避免导入即被判完结；也给续写时的方向/篇幅一个基准。
+	//    避免Nhập即被判完结；也给续写时的方向/篇幅一个基准。
 	if err := st.Outline.SaveCompass(*fr.Compass); err != nil {
 		return fmt.Errorf("save compass: %w", err)
 	}

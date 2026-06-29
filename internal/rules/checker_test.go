@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// findViolation 在结果中按 rule + target 查找第一条违规。
+// findViolation 在Kết quả中按 rule + target 查找第一条违规。
 func findViolation(vs []Violation, rule, target string) *Violation {
 	for i := range vs {
 		if vs[i].Rule == rule && vs[i].Target == target {
@@ -41,7 +41,7 @@ func TestCheck_ForbiddenChars(t *testing.T) {
 }
 
 func TestCheck_ForbiddenCharsNotPresent(t *testing.T) {
-	vs := Check("普通文本无违规", -1, Structured{
+	vs := Check("普通文本Không có违规", -1, Structured{
 		ForbiddenChars: []string{"——"},
 	})
 	if len(vs) != 0 {
@@ -215,7 +215,7 @@ func TestCheck_MultipleRulesAtOnce(t *testing.T) {
 }
 
 func TestCheck_FatigueZeroLimitSkipped(t *testing.T) {
-	// limit=0 是非法值，应跳过整条规则（parser 也会过滤，这里防御）
+	// limit=0 是非法值，应Bỏ qua整条规则（parser 也会过滤，这里防御）
 	text := "不禁不禁不禁"
 	vs := Check(text, -1, Structured{
 		FatigueWords: map[string]int{"不禁": 0},
@@ -226,7 +226,7 @@ func TestCheck_FatigueZeroLimitSkipped(t *testing.T) {
 }
 
 func TestCheck_EmptyTargetsSkipped(t *testing.T) {
-	// 空字符串目标不应导致 false positive
+	// Rỗng字符串目标不应导致 false positive
 	vs := Check("任何文本", -1, Structured{
 		ForbiddenChars:   []string{""},
 		ForbiddenPhrases: []string{""},

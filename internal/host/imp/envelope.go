@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// envelopeTagRe 匹配 === TAG === 行（前后可有空白），不区分大小写。
+// envelopeTagRe 匹配 === TAG === 行（前后可有Rỗng白），不区分大小写。
 var envelopeTagRe = regexp.MustCompile(`(?m)^\s*===\s*([A-Z_]+)\s*===\s*$`)
 
 // parseTaggedEnvelope 把 `=== TAG ===\nbody...` 形式的多段输出解析成 map。
-// key 为大写标签名，value 为对应段落（已 trim 首尾空白）。
+// key 为大写标签名，value 为对应段落（已 trim 首尾Rỗng白）。
 // 出现重复标签时，后者覆盖前者。
 func parseTaggedEnvelope(text string) map[string]string {
 	matches := envelopeTagRe.FindAllStringSubmatchIndex(text, -1)
@@ -30,7 +30,7 @@ func parseTaggedEnvelope(text string) map[string]string {
 	return out
 }
 
-// requireTags 校验 envelope 必含给定标签且非空。
+// requireTags 校验 envelope 必含给定标签且非Rỗng。
 func requireTags(env map[string]string, tags ...string) error {
 	var missing []string
 	for _, t := range tags {

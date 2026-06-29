@@ -13,12 +13,12 @@ import (
 )
 
 // StopGuard 是"物理不可停机"的最后防线。
-// 当 LLM 试图 end_turn 时：
+// 当 LLM Cố gắng end_turn 时：
 //   - Progress.Phase = Complete → 放行
-//   - 否则注入 user message，让 agent 继续下一 turn
+//   - 否则注入 user message，让 agent Tiếp tục下一 turn
 //   - 连续阻拦超过 maxConsecutive 次 → Escalate 终止 run（说明 prompt/reminder 严重失灵）
 //
-// Guard 内部维护 consecutive block 计数；一旦成功放行或成功注入后重置为 0。
+// Guard 内部维护 consecutive block 计数；一旦Thành công放行或Thành công注入后Đặt lại为 0。
 // 真正驱动 Coordinator 行为的是 Reminder + Prompt，StopGuard 只是兜底。
 const maxConsecutiveBlocks = 5
 
@@ -35,8 +35,8 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 			lastBlockTurn.Store(-1)
 			return agentcore.StopDecision{Allow: true}
 		}
-		// 只有"相邻 turn 连续被拦"才累计计数；否则视为新一轮（LLM 已做过 tool call 取得过进展，
-		// 或用户注入 / resume 导致 TurnIndex 倒流），重置计数。
+		// 只有"相邻 turn 连续被拦"才累计计数；否则视为Mới一轮（LLM 已做过 tool call 取得过进展，
+		// 或用户注入 / resume 导致 TurnIndex 倒流），Đặt lại计数。
 		last := lastBlockTurn.Load()
 		if last < 0 || int64(info.TurnIndex) != last+1 {
 			consecutive.Store(0)
@@ -53,7 +53,7 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 		}
 		inject := blockMessage(st, progress)
 		if progress != nil && len(progress.PendingRewrites) > 0 {
-			inject = fmt.Sprintf("禁止结束对话。待重写队列未清：%v，请立即调 writer 处理。", progress.PendingRewrites)
+			inject = fmt.Sprintf("禁止Kết thúc对话。待重写队列未清：%v，Vui lòng立即调 writer 处理。", progress.PendingRewrites)
 		}
 		slog.Warn("stop_guard 拦截 end_turn",
 			"module", "host.reminder", "turn", info.TurnIndex, "consecutive", n)
@@ -66,7 +66,7 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 
 func blockMessage(st *store.Store, progress *domain.Progress) string {
 	if progress != nil && flow.Route(flow.LoadState(st)) != nil {
-		return "禁止结束对话。Phase 尚未 Complete；请等待并执行 Host 下达的 [Host 下达指令]，不要自行调用 novel_context 或 subagent。"
+		return "禁止Kết thúc对话。Phase 尚未 Complete；Vui lòng等待并执行 Host 下达的 [Host 下达指令]，不要自行调用 novel_context 或 subagent。"
 	}
-	return "禁止结束对话。Phase 尚未 Complete，且当前没有 Host 路由指令；这是 Coordinator 裁定场景，请按 coordinator.md 的裁定规则继续处理，不要空等 Host 指令。"
+	return "禁止Kết thúc对话。Phase 尚未 Complete，且Hiện tại没有 Host 路由指令；这是 Coordinator 裁定Cảnh，Vui lòng按 coordinator.md 的裁定规则Tiếp tục处理，不要Rỗng等 Host 指令。"
 }

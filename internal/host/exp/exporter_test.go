@@ -24,7 +24,7 @@ func newTestStore(t *testing.T, novelName string, completed []int) (*store.Store
 		t.Fatalf("init progress: %v", err)
 	}
 	for _, ch := range completed {
-		if err := s.Drafts.SaveFinalChapter(ch, fmt.Sprintf("正文 ch %d。", ch)); err != nil {
+		if err := s.Drafts.SaveFinalChapter(ch, fmt.Sprintf("Chính văn ch %d。", ch)); err != nil {
 			t.Fatalf("save chapter %d: %v", ch, err)
 		}
 		if err := s.Progress.StartChapter(ch); err != nil {
@@ -70,13 +70,13 @@ func TestRun_HappyPath_DefaultsToNovelDir(t *testing.T) {
 			t.Errorf("output missing %q\nfull:\n%s", want, text)
 		}
 	}
-	// premise 不进导出（创作蓝图，非读者内容）
+	// premise 不进Xuất（创作蓝图，非读者内容）
 	if strings.Contains(text, "光与影的故事。") {
 		t.Errorf("premise must not appear in export:\n%s", text)
 	}
 }
 
-// TestRun_PremiseNotExported 端到端钉死：premise.md 存在也不进导出，书名保留（issue #27）。
+// TestRun_PremiseNotExported 端到端钉死：premise.md 存在也不进Xuất，Tên sách保留（issue #27）。
 func TestRun_PremiseNotExported(t *testing.T) {
 	s, _ := newTestStore(t, "光斑", []int{1})
 	if err := s.Outline.SavePremise("# 光斑\n## 目标读者\n不该出现的创作蓝图。"); err != nil {
@@ -117,11 +117,11 @@ func TestRun_ExistingFile_NoOverwrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("expect error when target exists and !Overwrite")
 	}
-	if !strings.Contains(err.Error(), "已存在") {
+	if !strings.Contains(err.Error(), "Đã tồn tại") {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	// 加 Overwrite 应成功
+	// 加 Overwrite 应Thành công
 	res, err := Run(context.Background(), Deps{Store: s}, Options{OutPath: target, Overwrite: true})
 	if err != nil {
 		t.Fatalf("Overwrite Run: %v", err)
@@ -189,7 +189,7 @@ func TestInferFormat(t *testing.T) {
 		{"book.epub", FormatEPUB, false},
 		{"book.EPUB", FormatEPUB, false},
 		{"/abs/path/x.epub", FormatEPUB, false},
-		{"book", FormatTXT, false}, // 无后缀按 TXT
+		{"book", FormatTXT, false}, // Không có后缀按 TXT
 		{"book.dat", "", true},
 		{"book.pdf", "", true},
 	}

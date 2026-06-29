@@ -20,10 +20,10 @@ func TestSaveArcSummaryPersistsStyleRulesDialogueObjects(t *testing.T) {
 		"volume":     1,
 		"arc":        2,
 		"title":      "入山",
-		"summary":    "主角完成入山试炼，确认后续追索方向。",
-		"key_events": []string{"通过试炼", "发现旧案线索"},
+		"summary":    "主角Hoàn thành入山试炼，Xác nhận后续追索方向。",
+		"key_events": []string{"通过试炼", "发现Cũ案线索"},
 		"character_snapshots": []map[string]any{
-			{"name": "沈渊", "status": "存活", "motivation": "追查旧案"},
+			{"name": "沈渊", "status": "存活", "motivation": "追查Cũ案"},
 		},
 		"style_rules": map[string]any{
 			"prose": []string{"环境描写优先触觉和嗅觉", "动作戏用短句推进", "心理描写不解释结论"},
@@ -64,7 +64,7 @@ func TestSaveArcSummaryRejectsDialogueStringArray(t *testing.T) {
 		"volume":              1,
 		"arc":                 2,
 		"title":               "入山",
-		"summary":             "主角完成入山试炼，确认后续追索方向。",
+		"summary":             "主角Hoàn thành入山试炼，Xác nhận后续追索方向。",
 		"key_events":          []string{"通过试炼"},
 		"character_snapshots": []map[string]any{},
 		"style_rules": map[string]any{

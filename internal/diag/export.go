@@ -11,17 +11,17 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// ExportRelPath 是脱敏诊断文件相对 output 目录的固定位置（覆盖式一份）。
+// ExportRelPath 是脱敏诊断Tập tin相对 output Thư mục的固定位置（覆盖式一份）。
 const ExportRelPath = "meta/diag-export.md"
 
-// Export 完整诊断 + 渲染 + 落盘，返回写出的绝对路径。供 headless / 外部调用。
+// Export 完整诊断 + 渲染 + 落盘，Quay lại写出的绝对Đường dẫn。供 headless / 外部调用。
 func Export(s *store.Store) (string, error) {
 	rep, rc := Diagnose(s)
 	return WriteExport(s, rep, rc)
 }
 
 // WriteExport 把已算好的 Report + RuntimeCapture 渲染落盘，不重复抓取。
-// 供 /diag 命令复用 Diagnose 的结果。
+// 供 /diag 命令复用 Diagnose 的Kết quả。
 func WriteExport(s *store.Store, rep Report, rc RuntimeCapture) (string, error) {
 	data := RenderExport(rep, rc)
 	abs := filepath.Join(s.Dir(), filepath.FromSlash(ExportRelPath))
@@ -41,7 +41,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 
 	b.WriteString("# diag-export\n\n")
 	fmt.Fprintf(&b, "> 生成时间 %s · %s/%s\n", time.Now().Format("2006-01-02 15:04:05"), rc.GoOS, rc.GoArch)
-	b.WriteString("> ⚠️ 已脱敏：小说正文 / prompt / 思考已移除，仅保留行为骨架。可直接贴到 issue。\n\n")
+	b.WriteString("> ⚠️ 已脱敏：小说Chính văn / prompt / 思考已移除，仅保留行为骨架。可直接贴到 issue。\n\n")
 
 	// 1. 环境
 	b.WriteString("## 1. 环境\n\n")
@@ -49,7 +49,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 	if st.Flow != "" {
 		fmt.Fprintf(&b, " / flow `%s`", st.Flow)
 	}
-	fmt.Fprintf(&b, " · 章节 %d/%d · 字数 %d\n", st.CompletedChapters, st.TotalChapters, st.TotalWords)
+	fmt.Fprintf(&b, " · Chương %d/%d · 字数 %d\n", st.CompletedChapters, st.TotalChapters, st.TotalWords)
 	if st.PlanningTier != "" {
 		fmt.Fprintf(&b, "- 规划 `%s`\n", st.PlanningTier)
 	}
@@ -57,7 +57,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 		fmt.Fprintf(&b, "- %s → `%s` / `%s`\n", m.Agent, orDash(m.Provider), orDash(m.Model))
 	}
 
-	// 2. 诊断发现（仅运行时；创作类诊断含剧情/伏笔，留在 /diag 屏上报告，不进可分享导出）
+	// 2. 诊断发现（仅运行时；创作类诊断含剧情/伏笔，留在 /diag 屏上报告，不进可分享Xuất）
 	b.WriteString("\n## 2. 诊断发现（运行时）\n\n")
 	rf := runtimeFindings(&rc)
 	sortFindings(rf)
@@ -79,7 +79,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 	b.WriteString("\n## 3. 运行时信号\n\n")
 	wrote := false
 	if rc.CurrentStep != "" {
-		fmt.Fprintf(&b, "- 当前 step `%s`\n", rc.CurrentStep)
+		fmt.Fprintf(&b, "- Hiện tại step `%s`\n", rc.CurrentStep)
 		wrote = true
 	}
 	if rc.StuckStep != "" {
@@ -87,7 +87,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 		wrote = true
 	}
 	if len(rc.Repeats) > 0 {
-		b.WriteString("- 高频签名（近端窗口 ≥3 次，含正常重复工具，仅供参考）：\n")
+		b.WriteString("- 高频签名（近端Cửa sổ ≥3 次，含正常重复工具，仅供参考）：\n")
 		for _, r := range rc.Repeats {
 			fmt.Fprintf(&b, "  - `%s` ×%d\n", r.Sig, r.Count)
 		}
@@ -101,7 +101,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 		wrote = true
 	}
 	if len(rc.LogKinds) > 0 {
-		b.WriteString("- 日志错误分类：")
+		b.WriteString("- 日志Lỗi分类：")
 		b.WriteString(joinKinds(rc.LogKinds))
 		b.WriteString("\n")
 		wrote = true
@@ -115,13 +115,13 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 		wrote = true
 	}
 	if !wrote {
-		b.WriteString("- 无明显运行时异常信号。\n")
+		b.WriteString("- Không có明显运行时异常信号。\n")
 	}
 
 	// 4. 行为骨架尾巴
 	fmt.Fprintf(&b, "\n## 4. 行为骨架尾巴（末 %d 条）\n\n", len(rc.Tail))
 	if len(rc.Tail) == 0 {
-		b.WriteString("（无会话记录）\n")
+		b.WriteString("（Không có会话记录）\n")
 	} else {
 		b.WriteString("```\n")
 		for _, ev := range rc.Tail {
@@ -133,7 +133,7 @@ func RenderExport(rep Report, rc RuntimeCapture) []byte {
 
 	// 5. 脱敏自检
 	b.WriteString("\n## 5. 脱敏自检\n\n")
-	fmt.Fprintf(&b, "- 打码文本块 %d 处 · 正文出包 0 处\n", rc.RedactedTexts)
+	fmt.Fprintf(&b, "- 打码文本块 %d 处 · Chính văn出包 0 处\n", rc.RedactedTexts)
 	if len(rc.Sources) > 0 {
 		fmt.Fprintf(&b, "- 数据源：%s\n", strings.Join(rc.Sources, " · "))
 	}

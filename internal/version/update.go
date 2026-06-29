@@ -41,7 +41,7 @@ type releaseAsset struct {
 
 func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("Windows 不支持原地自更新，请到 https://github.com/%s/releases 下载新版", opts.Repo)
+		return nil, fmt.Errorf("Windows Không hỗ trợ原地自更Mới，Vui lòng到 https://github.com/%s/releases 下载Mới版", opts.Repo)
 	}
 	if opts.Repo == "" {
 		return nil, fmt.Errorf("missing repo")
@@ -59,7 +59,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 		return nil, err
 	}
 	if rel.TagName == "" {
-		return nil, fmt.Errorf("release 缺少 tag_name")
+		return nil, fmt.Errorf("release Thiếu tag_name")
 	}
 	if sameVersion(opts.CurrentVersion, rel.TagName) {
 		return &UpdateResult{Version: rel.TagName, Path: executablePath()}, nil
@@ -133,7 +133,7 @@ func selectAsset(rel *release, binaryName string) (releaseAsset, error) {
 			return asset, nil
 		}
 	}
-	return releaseAsset{}, fmt.Errorf("release %s 未找到当前平台安装包 *%s", rel.TagName, suffix)
+	return releaseAsset{}, fmt.Errorf("release %s Không tìm thấyHiện tại平台安装包 *%s", rel.TagName, suffix)
 }
 
 func assetSuffix() (string, error) {
@@ -144,7 +144,7 @@ func assetSuffix() (string, error) {
 	case "linux":
 		osName = "Linux"
 	default:
-		return "", fmt.Errorf("不支持的系统 %s", runtime.GOOS)
+		return "", fmt.Errorf("Không hỗ trợ的系统 %s", runtime.GOOS)
 	}
 	var arch string
 	switch runtime.GOARCH {
@@ -153,7 +153,7 @@ func assetSuffix() (string, error) {
 	case "arm64":
 		arch = "arm64"
 	default:
-		return "", fmt.Errorf("不支持的架构 %s", runtime.GOARCH)
+		return "", fmt.Errorf("Không hỗ trợ的架构 %s", runtime.GOARCH)
 	}
 	return "_" + osName + "_" + arch + ".tar.gz", nil
 }
@@ -219,7 +219,7 @@ func extractBinary(archivePath, dstDir, binaryName string) (string, error) {
 		}
 		return out, nil
 	}
-	return "", fmt.Errorf("安装包中未找到 %s", binaryName)
+	return "", fmt.Errorf("安装包中Không tìm thấy %s", binaryName)
 }
 
 func replaceCurrentExecutable(src string) (string, error) {
@@ -228,7 +228,7 @@ func replaceCurrentExecutable(src string) (string, error) {
 
 func replaceExecutable(dst, src string) (string, error) {
 	if dst == "" {
-		return "", fmt.Errorf("无法定位当前可执行文件")
+		return "", fmt.Errorf("Không thể定位Hiện tại可执行Tập tin")
 	}
 	if real, err := filepath.EvalSymlinks(dst); err == nil {
 		dst = real

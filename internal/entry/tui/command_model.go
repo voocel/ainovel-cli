@@ -24,7 +24,7 @@ type modelRoleOption struct {
 }
 
 var modelRoleOptions = []modelRoleOption{
-	{Key: "default", Label: "默认"},
+	{Key: "default", Label: "Mặc định"},
 	{Key: "coordinator", Label: "Coordinator"},
 	{Key: "architect", Label: "Architect"},
 	{Key: "writer", Label: "Writer"},
@@ -34,7 +34,7 @@ var modelRoleOptions = []modelRoleOption{
 type thinkingOption struct{ Key, Label string }
 
 var allThinkingOptions = []thinkingOption{
-	{"", "默认(继承)"},
+	{"", "Mặc định(继承)"},
 	{"off", "关闭"},
 	{"minimal", "最小"},
 	{"low", "低"},
@@ -72,7 +72,7 @@ func thinkingIndexOf(options []thinkingOption, level string) int {
 			return i
 		}
 	}
-	return 0 // 未知值 → 继承
+	return 0 // Không rõ值 → 继承
 }
 
 type modelSwitchState struct {
@@ -92,7 +92,7 @@ func newModelSwitchState(rt *host.Host, roleHint string) *modelSwitchState {
 		providers: rt.ConfiguredProviders(),
 	}
 	if len(state.providers) == 0 {
-		state.message = "当前没有可用 provider"
+		state.message = "Hiện tại没有可用 provider"
 	}
 
 	roleHint = normalizeRoleKey(roleHint)
@@ -224,16 +224,16 @@ func (s *modelSwitchState) syncThinking(rt *host.Host) {
 
 func (s *modelSwitchState) apply(rt *host.Host) error {
 	if len(s.providers) == 0 {
-		return fmt.Errorf("当前没有可用 provider")
+		return fmt.Errorf("Hiện tại没有可用 provider")
 	}
 	if len(s.models) == 0 {
-		return fmt.Errorf("provider %q 没有已配置模型", s.provider())
+		return fmt.Errorf("provider %q 没有已Cấu hìnhMô hình", s.provider())
 	}
 	if err := rt.SwitchModel(s.role(), s.provider(), s.model()); err != nil {
 		return err
 	}
 	s.syncThinking(rt)
-	// 思考强度与模型正交：仅当较当前值有变化时应用，避免冗余持久化/事件。
+	// 思考强度与Mô hình正交：仅当较Hiện tại值有变化时Áp dụng，避免冗余持久化/事件。
 	if want := s.thinkingKey(); want != strings.ToLower(strings.TrimSpace(rt.CurrentThinking(s.role()))) {
 		if err := rt.SetRoleThinking(s.role(), want); err != nil {
 			return err
@@ -284,16 +284,16 @@ func renderModelSwitchBar(width int, state *modelSwitchState) string {
 	title := lipgloss.NewStyle().
 		Foreground(colorMuted).
 		Bold(true).
-		Render("/model 切换模型")
+		Render("/model Đổi mô hình")
 
 	row1 := renderModelField("角色", state.roleLabel(), state.focus == modelFocusRole)
 	row2 := renderModelField("Provider", state.provider(), state.focus == modelFocusProvider)
-	row3 := renderModelField("模型", state.model(), state.focus == modelFocusModel)
+	row3 := renderModelField("Mô hình", state.model(), state.focus == modelFocusModel)
 	row4 := renderModelField("思考", state.thinkingLabel(), state.focus == modelFocusThinking)
 	hint := lipgloss.NewStyle().
 		Foreground(colorDim).
 		Italic(true).
-		Render("Tab 切字段   ←→ 切选项   Enter 应用   Esc 取消")
+		Render("Tab 切字段   ←→ 切选项   Enter Áp dụng   Esc Hủy")
 	lines := []string{
 		row1,
 		row2,
@@ -344,7 +344,7 @@ func renderModelSwitchBar(width int, state *modelSwitchState) string {
 
 func renderModelField(label, value string, focused bool) string {
 	if strings.TrimSpace(value) == "" {
-		value = "未设置"
+		value = "未Thiết lập"
 	}
 	labelText := lipgloss.NewStyle().
 		Foreground(colorMuted).

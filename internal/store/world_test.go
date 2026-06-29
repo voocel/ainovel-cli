@@ -18,7 +18,7 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
-// TestLoadEmpty 统一验证所有领域的空读取行为。
+// TestLoadEmpty 统一验证所有领域的RỗngĐọc行为。
 func TestLoadEmpty(t *testing.T) {
 	s := newTestStore(t)
 
@@ -86,7 +86,7 @@ func TestTimeline_LoadRecent(t *testing.T) {
 	for _, tt := range []struct {
 		current, window, want int
 	}{
-		{7, 10, 4}, // 全部
+		{7, 10, 4}, // Tất cả
 		{7, 3, 2},  // ch5,ch7
 		{5, 2, 3},  // ch3,ch5,ch7
 	} {
@@ -139,7 +139,7 @@ func TestRelationships_UpdateMerge(t *testing.T) {
 		{CharacterA: "张三", CharacterB: "李四", Relation: "师徒", Chapter: 1},
 	})
 
-	// 更新已有 + 新增
+	// 更Mới已有 + Mới增
 	_ = s.World.UpdateRelationships([]domain.RelationshipEntry{
 		{CharacterA: "张三", CharacterB: "李四", Relation: "挚友", Chapter: 5},
 		{CharacterA: "王五", CharacterB: "赵六", Relation: "同门", Chapter: 5},
@@ -159,7 +159,7 @@ func TestRelationships_PairKeySymmetry(t *testing.T) {
 	_ = s.World.SaveRelationships([]domain.RelationshipEntry{
 		{CharacterA: "张三", CharacterB: "李四", Relation: "师徒", Chapter: 1},
 	})
-	// B-A 顺序更新，应匹配同一条
+	// B-A 顺序更Mới，应匹配同一条
 	_ = s.World.UpdateRelationships([]domain.RelationshipEntry{
 		{CharacterA: "李四", CharacterB: "张三", Relation: "反目", Chapter: 3},
 	})
@@ -292,7 +292,7 @@ func TestRenderWorldRules(t *testing.T) {
 	if !strings.Contains(md, "边界：精神力耗尽会昏迷") {
 		t.Error("missing boundary")
 	}
-	// 无 boundary 不应输出空边界行
+	// Không có boundary 不应输出Rỗng边界行
 	if strings.Contains(md, "边界：\n") {
 		t.Error("empty boundary rendered")
 	}

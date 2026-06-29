@@ -16,7 +16,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
-// scriptedLLM 按调用顺序返回不同响应：第一次 foundation envelope，之后每次 analyzer envelope。
+// scriptedLLM 按调用顺序Quay lại不同响应：第一次 foundation envelope，之后每次 analyzer envelope。
 type scriptedLLM struct {
 	responses []string
 	calls     atomic.Int32
@@ -39,7 +39,7 @@ func (s *scriptedLLM) Generate(_ context.Context, _ []agentcore.Message, _ []age
 func TestRunner_FullImport(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "novel.txt")
-	body := strings.Repeat("正文段落，足够字数以通过 LoadChapterContent 校验。\n", 30)
+	body := strings.Repeat("Chính văn段落，足够字数以通过 LoadChapterContent 校验。\n", 30)
 	content := "第一章 初遇\n" + body + "\n第二章 循迹\n" + body
 	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,8 +92,8 @@ func TestRunner_FullImport(t *testing.T) {
 	if len(prog.CompletedChapters) != 2 {
 		t.Errorf("completed chapters: %v", prog.CompletedChapters)
 	}
-	// 回归：导入不得把书自动判完结（否则"继续创作"撞上已完结的书无法续写），
-	// 且必须是分层模式（续写靠 append_volume/expand_arc，非分层无路可扩）。
+	// 回归：Nhập不得把书自动判完结（否则"Tiếp tục创作"撞上已完结的书Không thể续写），
+	// 且必须是分层模式（续写靠 append_volume/expand_arc，非分层Không có路可扩）。
 	if prog.Phase == domain.PhaseComplete {
 		t.Errorf("import must NOT auto-complete the book, phase=%q", prog.Phase)
 	}
@@ -108,7 +108,7 @@ func TestRunner_FullImport(t *testing.T) {
 func TestRunner_SkipsAlreadyCompletedChapters(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "novel.txt")
-	body := strings.Repeat("正文段落。\n", 30)
+	body := strings.Repeat("Chính văn段落。\n", 30)
 	content := "第一章 a\n" + body + "\n第二章 b\n" + body
 	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestRunner_SkipsAlreadyCompletedChapters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 第一次导入：3 次 LLM 调用 (foundation + 2 chapters)
+	// 第一次Nhập：3 次 LLM 调用 (foundation + 2 chapters)
 	llm := &scriptedLLM{responses: []string{
 		validEnvelope,
 		validAnalyzerEnvelope,
@@ -144,8 +144,8 @@ func TestRunner_SkipsAlreadyCompletedChapters(t *testing.T) {
 		t.Fatalf("first import: want 3 calls, got %d", llm.calls.Load())
 	}
 
-	// 第二次导入相同文件：foundation 已存在 → 0 次 LLM；章节已完成 → 0 次 LLM
-	llm2 := &scriptedLLM{responses: []string{}} // 任何 LLM 调用都会失败
+	// 第二次Nhập相同Tập tin：foundation Đã tồn tại → 0 次 LLM；ChươngĐã hoàn thành → 0 次 LLM
+	llm2 := &scriptedLLM{responses: []string{}} // 任何 LLM 调用都会Thất bại
 	deps.LLM = llm2
 	events2, err := Run(context.Background(), deps, Options{SourcePath: src})
 	if err != nil {
@@ -164,7 +164,7 @@ func TestRunner_SkipsAlreadyCompletedChapters(t *testing.T) {
 func TestRunner_ResumeFromSkipsFoundation(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "novel.txt")
-	body := strings.Repeat("正文。\n", 30)
+	body := strings.Repeat("Chính văn。\n", 30)
 	content := "第一章 a\n" + body + "\n第二章 b\n" + body
 	_ = os.WriteFile(src, []byte(content), 0o644)
 

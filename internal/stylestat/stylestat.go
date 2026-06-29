@@ -1,6 +1,6 @@
-// Package stylestat 对已写正文做全书级风格统计，产出纯事实。
+// Package stylestat 对已写Chính văn做全书级风格统计，产出纯事实。
 //
-// 动机：弧内评审窗口（~10 章）对全书级模式固化天然失明——句式 tic 章均几十次、
+// 动机：弧内评审Cửa sổ（~10 章）对全书级模式固化天然失明——句式 tic 章均几十次、
 // 章末形态同构、跨章复读，单章看每处都"正常"，只有全书统计能暴露。统计归代码
 //（确定性、零幻觉），裁定归 LLM（editor 按数字判维度分，writer 据此自避免）。
 package stylestat
@@ -14,18 +14,18 @@ import (
 // minChapters 少于此章数不出统计——样本太小，频率没有意义。
 const minChapters = 5
 
-// phraseWindow 动态短语挖掘只看最近 N 章：writer 需要避免的是"现在的口头禅"。
+// phraseWindow 动态短语挖掘只看最近 N 章：writer Cần避免的是"现在的口头禅"。
 const phraseWindow = 20
 
-// Input 统计输入。Chapters 按章号升序；Stopwords 为角色名等专有名词，
-// 动态短语挖掘时跳过（出场人名天然高频，不是文风问题）。
+// Input 统计Nhập。Chapters 按章号升序；Stopwords 为角色名等专有名词，
+// 动态短语挖掘时Bỏ qua（出场人名天然高频，不是文风问题）。
 type Input struct {
 	Chapters  []string
 	Titles    []string
 	Stopwords []string
 }
 
-// Stats 全书风格统计结果。所有字段都是事实计数，不含任何裁定或指令。
+// Stats 全书风格统计Kết quả。所有字段都是事实计数，不含任何裁定或指令。
 type Stats struct {
 	Chapters          int            `json:"chapters"`
 	Patterns          []PatternStat  `json:"patterns,omitempty"`
@@ -62,7 +62,7 @@ type EndingStat struct {
 	MedianRunes int     `json:"median_runes"`
 }
 
-// TitleStat 章节标题「第N章」前缀混用计数（混用=机制痕迹暴露在产物里）。
+// TitleStat ChươngTiêu đề「第N章」前缀混用计数（混用=机制痕迹暴露在产物里）。
 type TitleStat struct {
 	WithPrefix    int `json:"with_prefix"`
 	WithoutPrefix int `json:"without_prefix"`
@@ -89,7 +89,7 @@ var (
 // shortEndingRunes 末行不超过此字数计为"短结尾"。
 const shortEndingRunes = 30
 
-// Compute 计算全书风格统计；章数不足时返回 nil。
+// Compute 计算全书风格统计；章数不足时Quay lại nil。
 func Compute(in Input) *Stats {
 	n := len(in.Chapters)
 	if n < minChapters {
@@ -124,8 +124,8 @@ func recentWindow(chapters []string) []string {
 	return chapters[len(chapters)-phraseWindow:]
 }
 
-// minePhrases 在窗口内挖掘 3-6 字高频短语。
-// 过滤：含标点/空白、首尾虚词、命中专有名词；去重：与已选短语互为子串的丢弃。
+// minePhrases 在Cửa sổ内挖掘 3-6 字高频短语。
+// 过滤：含标点/Rỗng白、首尾虚词、命中专有名词；去重：与已选短语互为子串的丢弃。
 func minePhrases(chapters []string, stopwords []string) []PhraseStat {
 	text := strings.Join(chapters, "\n")
 	runes := []rune(text)
@@ -184,7 +184,7 @@ func minePhrases(chapters []string, stopwords []string) []PhraseStat {
 	return out
 }
 
-// gramEdgeStop 首尾为这些虚词/代词的 n-gram 不是文风短语，跳过。
+// gramEdgeStop 首尾为这些虚词/代词的 n-gram 不是文风短语，Bỏ qua。
 const gramEdgeStop = "的了着是在和与就也都还又把被他她它我你这那"
 
 func validGram(gram []rune) bool {
@@ -199,9 +199,9 @@ func validGram(gram []rune) bool {
 	return true
 }
 
-// stopwordBigrams 把专有名词拆成 2 字片段：人名常以部分形式入文
+// stopwordBigrams 把专有名词拆成 2 字片段：人名常以Phần形式入文
 //（"九渊负手"含"九渊"），按整名匹配会漏网。宁可过滤偏严——短语事实少一条
-// 无碍，人名混进口头禅清单才是噪声。
+// Không có碍，人名混进口头禅清单才是噪声。
 func stopwordBigrams(stopwords []string) []string {
 	var grams []string
 	for _, w := range stopwords {
@@ -334,7 +334,7 @@ func lastNonEmptyLine(text string) string {
 	return ""
 }
 
-// firstParagraph 取第一个非空且非 Markdown 标题的行（章文件首行常是 # 标题）。
+// firstParagraph 取第一个非Rỗng且非 Markdown Tiêu đề的行（章Tập tin首行常是 # Tiêu đề）。
 func firstParagraph(text string) string {
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)

@@ -9,23 +9,23 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
-// renderInputBox 渲染底部输入区。
-// 输入框单独负责输入与提示，不承载启动模式栏。
+// renderInputBox 渲染底部Nhập区。
+// Nhập框单独负责Nhập与提示，不承载启动模式栏。
 func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir string, width int) string {
 	innerW := width - 4 // border + padding
 	if innerW < 12 {
 		innerW = 12
 	}
 
-	// 输入行：提示符 + 输入框
+	// Nhập行：提示符 + Nhập框
 	prompt := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("❯ ")
 	inputLine := prompt + inputView
 
-	// 提示行：左快捷键，右进度
+	// 提示行：左快捷键，右Tiến độ
 	info := buildRightInfo(snap, outputDir)
 	line2 := joinInlineSides(hints, info, innerW)
 
-	// 输入区（单一盒子，避免视觉上出现双输入框）
+	// Nhập区（单一盒子，避免视觉上出现双Nhập框）
 	inputStyle := lipgloss.NewStyle().
 		Width(width).
 		Border(baseBorder, true, false, true, false).
@@ -33,7 +33,7 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 		Padding(0, 1)
 	inputBlock := inputStyle.Render(inputLine)
 
-	// 提示行（无边框，紧贴下横线下方）
+	// 提示行（Không có边框，紧贴下横线下方）
 	hintStyle := lipgloss.NewStyle().
 		Width(width).
 		Padding(0, 2)
@@ -42,8 +42,8 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 	return inputBlock + "\n" + hintBlock + "\n"
 }
 
-// buildRightInfo 构建右侧信息：provider · model(window) · 花费 · 目录。
-// 章节/字数等进度信息由左侧"概览"面板承载，这里不再重复。
+// buildRightInfo 构建右侧信息：provider · model(window) · 花费 · Thư mục。
+// Chương/字数等Tiến độ信息由左侧"Tổng quan"面板承载，这里不再重复。
 func buildRightInfo(snap host.UISnapshot, outputDir string) string {
 	var parts []string
 

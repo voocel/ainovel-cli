@@ -32,13 +32,13 @@ func (m *mockLLM) Generate(_ context.Context, msgs []agentcore.Message, _ []agen
 }
 
 const validEnvelope = `=== PREMISE ===
-# 测试书名
+# 测试Tên sách
 
 ## 题材和基调
 现代都市悬疑
 
 ## 核心冲突
-新闻记者追查连环失踪案
+Mới闻记者追查连环失踪案
 
 ## 主角目标
 找出真凶并自证清白
@@ -46,7 +46,7 @@ const validEnvelope = `=== PREMISE ===
 ## 结局方向
 真相大白，主角抉择
 
-## 写作禁区
+## Viết禁区
 血腥猎奇，跳脱现实
 
 ## 差异化卖点
@@ -54,7 +54,7 @@ const validEnvelope = `=== PREMISE ===
 - 女性视角
 
 ## 差异化钩子
-失踪者全部姓"陈"
+失踪者Tất cả姓"陈"
 
 ## 核心兑现承诺
 追完能体验完整悬疑解谜
@@ -82,8 +82,8 @@ const validEnvelope = `=== PREMISE ===
         "title":"初查",
         "goal":"林晚接案并锁定陈姓线索",
         "chapters":[
-          {"title":"初遇","core_event":"林晚收到匿名爆料","hook":"线索指向陈姓家族","scenes":["编辑部","咖啡馆"]},
-          {"title":"循迹","core_event":"林晚走访失踪者家属","hook":"发现共同祭品符号","scenes":["旧宅","档案馆"]}
+          {"title":"初遇","core_event":"林晚收到匿名爆料","hook":"线索指向陈姓家族","scenes":["Sửa部","咖啡馆"]},
+          {"title":"循迹","core_event":"林晚走访失踪者家属","hook":"发现共同祭品符号","scenes":["Cũ宅","档案馆"]}
         ]
       }
     ]
@@ -102,13 +102,13 @@ func TestReverseFoundation_ParsesValid(t *testing.T) {
 	llm := &mockLLM{out: validEnvelope}
 	chapters := []Chapter{
 		{Title: "初遇", Content: "林晚翻开匿名信..."},
-		{Title: "循迹", Content: "她敲响那栋旧宅的门..."},
+		{Title: "循迹", Content: "她敲响那栋Cũ宅的门..."},
 	}
 	got, err := ReverseFoundation(context.Background(), llm, "system prompt with ${chapter_count}", chapters)
 	if err != nil {
 		t.Fatalf("ReverseFoundation: %v", err)
 	}
-	if !strings.HasPrefix(got.Premise, "# 测试书名") {
+	if !strings.HasPrefix(got.Premise, "# 测试Tên sách") {
 		t.Errorf("premise head: %q", got.Premise[:20])
 	}
 	if len(got.Characters) != 2 || got.Characters[0].Name != "林晚" {
@@ -197,7 +197,7 @@ func TestPersistFoundation_PromotesPhaseToWriting(t *testing.T) {
 	if c, _ := st.Outline.LoadCompass(); c == nil {
 		t.Errorf("compass must be saved for continuation")
 	}
-	if prog.NovelName != "测试书名" {
+	if prog.NovelName != "测试Tên sách" {
 		t.Errorf("novel name: %q", prog.NovelName)
 	}
 	if got := st.FoundationMissing(); len(got) != 0 {

@@ -79,7 +79,7 @@ func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 		t.Errorf("container.xml does not point to content.opf")
 	}
 
-	// content.opf 必含 metadata + manifest + spine 三大块；spine 顺序 = 章节顺序
+	// content.opf 必含 metadata + manifest + spine 三大块；spine 顺序 = Chương顺序
 	opf := files["OEBPS/content.opf"]
 	for _, want := range []string{
 		"<metadata", "</metadata>",
@@ -100,7 +100,7 @@ func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 		t.Errorf("spine order wrong: ch001=%d ch002=%d", idx1, idx2)
 	}
 
-	// 章节 XHTML 含标题 + 段落 + 转义；首行 markdown 标题已剥
+	// Chương XHTML 含Tiêu đề + 段落 + 转义；首行 markdown Tiêu đề已剥
 	ch1 := files["OEBPS/chapter001.xhtml"]
 	if !strings.Contains(ch1, "第 1 章 雨夜归人") {
 		t.Errorf("chapter1 missing display title")
@@ -115,7 +115,7 @@ func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 		t.Errorf("chapter1 should have stripped markdown header: %s", ch1)
 	}
 
-	// nav.xhtml 列出所有章节
+	// nav.xhtml 列出所有Chương
 	nav := files["OEBPS/nav.xhtml"]
 	if !strings.Contains(nav, `epub:type="toc"`) {
 		t.Errorf("nav missing epub:type=toc")
@@ -131,7 +131,7 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 		[]int{1},
 		chapterTitleIndex{1: "C \"D\""},
 		nil,
-		map[int]string{1: "正文 < & > 内容。"},
+		map[int]string{1: "Chính văn < & > 内容。"},
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -148,7 +148,7 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 	if !strings.Contains(files["OEBPS/cover.xhtml"], "A &amp; B") {
 		t.Errorf("cover should escape &: %s", files["OEBPS/cover.xhtml"])
 	}
-	if !strings.Contains(files["OEBPS/chapter001.xhtml"], "正文 &lt; &amp; &gt; 内容。") {
+	if !strings.Contains(files["OEBPS/chapter001.xhtml"], "Chính văn &lt; &amp; &gt; 内容。") {
 		t.Errorf("chapter body should escape entities")
 	}
 	if !strings.Contains(files["OEBPS/content.opf"], "<dc:title>A &amp; B</dc:title>") {
@@ -156,7 +156,7 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 	}
 }
 
-// TestRenderEPUB_LayeredVolume 验证分层大纲只在卷首插卷分隔，弧分隔永不出现。
+// TestRenderEPUB_LayeredVolume 验证分层Đại cương只在卷首插卷分隔，弧分隔永不出现。
 func TestRenderEPUB_LayeredVolume(t *testing.T) {
 	locs := map[int]chapterLocation{
 		1: {VolumeIdx: 1, VolumeTitle: "起源", IsFirstOfVolume: true},
@@ -167,7 +167,7 @@ func TestRenderEPUB_LayeredVolume(t *testing.T) {
 		[]int{1, 2},
 		chapterTitleIndex{1: "A", 2: "B"},
 		locs,
-		map[int]string{1: "正文一。", 2: "正文二。"},
+		map[int]string{1: "Chính văn一。", 2: "Chính văn二。"},
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -200,7 +200,7 @@ func TestRenderEPUB_NoCoverWhenNoTitle(t *testing.T) {
 		"", []int{1},
 		chapterTitleIndex{1: "唯一一章"},
 		nil,
-		map[int]string{1: "正文。"},
+		map[int]string{1: "Chính văn。"},
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -231,9 +231,9 @@ func TestSplitParagraphs(t *testing.T) {
 		want []string
 	}{
 		{"a\n\nb", []string{"a", "b"}},
-		{"a\n\n\n\nb", []string{"a", "b"}}, // 多空行折叠为一个分隔
-		{"a\nb", []string{"a b"}},          // 段内单换行变空格
-		{"  ", nil},                        // 全空白返回 nil
+		{"a\n\n\n\nb", []string{"a", "b"}}, // 多Rỗng行Thu gọn为一个分隔
+		{"a\nb", []string{"a b"}},          // 段内单换行变Rỗng格
+		{"  ", nil},                        // 全Rỗng白Quay lại nil
 		{"a\r\n\r\nb", []string{"a", "b"}}, // CRLF 兼容
 	}
 	for _, c := range cases {
@@ -245,7 +245,7 @@ func TestSplitParagraphs(t *testing.T) {
 }
 
 func TestBookIdentifier_StableAcrossChapterRanges(t *testing.T) {
-	// 同名作品、不同导出范围必须返回同一 ID — 阅读器才能识别为"更新版本"
+	// 同名作品、不同Xuất范围必须Quay lại同一 ID — 阅读器才能识别为"更MớiPhiên bản"
 	idFull := bookIdentifier("光斑")
 	idAgain := bookIdentifier("光斑")
 	if idFull != idAgain {

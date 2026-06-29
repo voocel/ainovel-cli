@@ -13,7 +13,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// SaveArcSummaryTool 保存弧级摘要和角色快照，Editor 在弧结束时调用。
+// SaveArcSummaryTool Lưu弧级Tóm tắt和角色Chụp，Editor 在弧Kết thúc时调用。
 type SaveArcSummaryTool struct {
 	store *store.Store
 }
@@ -24,9 +24,9 @@ func NewSaveArcSummaryTool(store *store.Store) *SaveArcSummaryTool {
 
 func (t *SaveArcSummaryTool) Name() string { return "save_arc_summary" }
 func (t *SaveArcSummaryTool) Description() string {
-	return "保存弧级摘要和角色状态快照（长篇模式，弧结束时调用）"
+	return "Lưu弧级Tóm tắt和角色Trạng tháiChụp（长篇模式，弧Kết thúc时调用）"
 }
-func (t *SaveArcSummaryTool) Label() string { return "保存弧摘要" }
+func (t *SaveArcSummaryTool) Label() string { return "Lưu弧Tóm tắt" }
 
 // 写工具，禁止并发。
 func (t *SaveArcSummaryTool) ReadOnly(_ json.RawMessage) bool        { return false }
@@ -35,10 +35,10 @@ func (t *SaveArcSummaryTool) ConcurrencySafe(_ json.RawMessage) bool { return fa
 func (t *SaveArcSummaryTool) Schema() map[string]any {
 	snapshotSchema := schema.Object(
 		schema.Property("name", schema.String("角色名")).Required(),
-		schema.Property("status", schema.String("当前状态（存活/受伤/失踪等）")).Required(),
+		schema.Property("status", schema.String("Hiện tạiTrạng thái（存活/受伤/失踪等）")).Required(),
 		schema.Property("power", schema.String("能力变化")),
-		schema.Property("motivation", schema.String("当前动机")).Required(),
-		schema.Property("relations", schema.String("关键关系变化")),
+		schema.Property("motivation", schema.String("Hiện tại动机")).Required(),
+		schema.Property("relations", schema.String("关键Thay đổi quan hệ")),
 	)
 	voiceSchema := schema.Object(
 		schema.Property("name", schema.String("角色名")).Required(),
@@ -52,10 +52,10 @@ func (t *SaveArcSummaryTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("volume", schema.Int("卷号")).Required(),
 		schema.Property("arc", schema.Int("弧号")).Required(),
-		schema.Property("title", schema.String("弧标题")).Required(),
-		schema.Property("summary", schema.String("弧摘要（500字以内）")).Required(),
-		schema.Property("key_events", schema.Array("弧内关键事件", schema.String(""))).Required(),
-		schema.Property("character_snapshots", schema.Array("角色状态快照", snapshotSchema)).Required(),
+		schema.Property("title", schema.String("弧Tiêu đề")).Required(),
+		schema.Property("summary", schema.String("弧Tóm tắt（500字以内）")).Required(),
+		schema.Property("key_events", schema.Array("弧内Sự kiện trọng tâm", schema.String(""))).Required(),
+		schema.Property("character_snapshots", schema.Array("角色Trạng tháiChụp", snapshotSchema)).Required(),
 		schema.Property("style_rules", styleRulesSchema),
 	)
 }

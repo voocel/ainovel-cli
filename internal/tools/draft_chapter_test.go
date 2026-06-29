@@ -34,14 +34,14 @@ func TestDraftChapterRejectsUnfinishedPendingRewrite(t *testing.T) {
 	tool := NewDraftChapterTool(s)
 	args, err := json.Marshal(map[string]any{
 		"chapter": 65,
-		"content": "错误写入未来章节。",
+		"content": "Lỗi写入未来Chương。",
 		"mode":    "write",
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "pending_rewrites 只能包含已完成章节") {
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "pending_rewrites 只能包含Đã hoàn thànhChương") {
 		t.Fatalf("expected invalid pending_rewrites rejection, got %v", err)
 	}
 	progress, _ := s.Progress.Load()
@@ -86,7 +86,7 @@ func TestDraftChapterRejectsUnexpandedLayeredChapter(t *testing.T) {
 	tool := NewDraftChapterTool(s)
 	args, err := json.Marshal(map[string]any{
 		"chapter": 3,
-		"content": "越界正文。",
+		"content": "越界Chính văn。",
 		"mode":    "write",
 	})
 	if err != nil {

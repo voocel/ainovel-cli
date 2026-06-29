@@ -43,7 +43,7 @@ func TestTerminalAskUserCustomInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if got := resp.Answers["还有什么限制？"]; got != "自定义" {
+	if got := resp.Answers["还有什么限制？"]; got != "Tuỳ chỉnh" {
 		t.Fatalf("unexpected answer: %q", got)
 	}
 	if got := resp.Notes["还有什么限制？"]; got != "不要感情线" {

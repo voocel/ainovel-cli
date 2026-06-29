@@ -29,10 +29,10 @@ func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 		"dimensions":        []map[string]any{{"dimension": "consistency", "score": 85, "verdict": "pass", "comment": "基本一致"}, {"dimension": "character", "score": 82, "verdict": "pass", "comment": "人设稳定"}, {"dimension": "pacing", "score": 78, "verdict": "warning", "comment": "略慢"}, {"dimension": "continuity", "score": 84, "verdict": "pass", "comment": "连贯"}, {"dimension": "foreshadow", "score": 80, "verdict": "pass", "comment": "正常"}, {"dimension": "hook", "score": 76, "verdict": "warning", "comment": "钩子一般"}, {"dimension": "aesthetic", "score": 81, "verdict": "pass", "comment": "语言基本成立"}},
 		"issues":            []map[string]any{},
 		"contract_status":   "partial",
-		"contract_misses":   []string{"未明确埋下内门试炼邀请"},
+		"contract_misses":   []string{"未明确埋下内门试炼邀Vui lòng"},
 		"contract_notes":    "主线推进达成，但 contract 中的第二个推进项没有落地。",
 		"verdict":           "polish",
-		"summary":           "本章基本完成目标，但 contract 仍有漏项。",
+		"summary":           "本章基本Hoàn thành目标，但 contract 仍有漏项。",
 		"affected_chapters": []int{3},
 	})
 	if err != nil {
@@ -53,7 +53,7 @@ func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 	if review.ContractStatus != "partial" {
 		t.Fatalf("unexpected contract status: %q", review.ContractStatus)
 	}
-	if len(review.ContractMisses) != 1 || review.ContractMisses[0] != "未明确埋下内门试炼邀请" {
+	if len(review.ContractMisses) != 1 || review.ContractMisses[0] != "未明确埋下内门试炼邀Vui lòng" {
 		t.Fatalf("unexpected contract misses: %+v", review.ContractMisses)
 	}
 	if review.Dimension("aesthetic") == nil {
@@ -150,7 +150,7 @@ func TestSaveReviewRejectsUnfinishedAffectedChapter(t *testing.T) {
 		"dimensions": []map[string]any{
 			{"dimension": "consistency", "score": 85, "comment": "基本一致"},
 			{"dimension": "character", "score": 82, "comment": "人设稳定"},
-			{"dimension": "pacing", "score": 58, "comment": "节奏需要重写"},
+			{"dimension": "pacing", "score": 58, "comment": "节奏Cần重写"},
 			{"dimension": "continuity", "score": 84, "comment": "连贯"},
 			{"dimension": "foreshadow", "score": 80, "comment": "正常"},
 			{"dimension": "hook", "score": 76, "comment": "钩子一般"},
@@ -159,16 +159,16 @@ func TestSaveReviewRejectsUnfinishedAffectedChapter(t *testing.T) {
 		"issues":            []map[string]any{},
 		"contract_status":   "partial",
 		"verdict":           "polish",
-		"summary":           "需要打磨第 58 章，不能把未完成章节入队。",
+		"summary":           "Cần打磨第 58 章，不能把未Hoàn thànhChương入队。",
 		"affected_chapters": []int{65},
 		"contract_misses":   []string{"节奏超出本章职责"},
-		"contract_notes":    "应只处理已完成章节。",
+		"contract_notes":    "应只处理Đã hoàn thànhChương。",
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "pending_rewrites 只能包含已完成章节") {
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "pending_rewrites 只能包含Đã hoàn thànhChương") {
 		t.Fatalf("expected unfinished affected chapter rejection, got %v", err)
 	}
 	review, err := s.World.LoadReview(58)
@@ -187,9 +187,9 @@ func TestSaveReviewRejectsUnfinishedAffectedChapter(t *testing.T) {
 	}
 }
 
-// TestSaveReviewDerivesVerdictFromScore 验证：verdict 由 score 确定性推导，模型给的
+// TestSaveReviewDerivesVerdictFromScore 验证：verdict 由 score 确定性推导，Mô hình给的
 // 不一致 verdict（如 score=85 却填 warning）不再报错，而是被覆写成正确值（pass）。
-// 防回归 issue：弱模型 score/verdict 打架曾导致 save_review 反复失败。
+// 防回归 issue：弱Mô hình score/verdict 打架曾导致 save_review 反复Thất bại。
 func TestSaveReviewDerivesVerdictFromScore(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
@@ -231,7 +231,7 @@ func TestSaveReviewDerivesVerdictFromScore(t *testing.T) {
 	if err != nil || review == nil {
 		t.Fatalf("LoadReview: %v", err)
 	}
-	// 85 → pass（覆写模型给的 warning）；82 省略 → pass。
+	// 85 → pass（覆写Mô hình给的 warning）；82 省略 → pass。
 	if d := review.Dimension("aesthetic"); d == nil || d.Verdict != "pass" {
 		t.Fatalf("aesthetic verdict should be derived to pass, got %+v", d)
 	}
@@ -261,7 +261,7 @@ func TestSaveReviewRejectsMissingAffectedChaptersForRewrite(t *testing.T) {
 		},
 		"issues":  []map[string]any{},
 		"verdict": "rewrite",
-		"summary": "需要重写",
+		"summary": "Cần重写",
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -295,7 +295,7 @@ func TestSaveReviewRejectsIssueWithoutEvidence(t *testing.T) {
 			{"type": "hook", "severity": "warning", "description": "章末钩子偏弱"},
 		},
 		"verdict":           "polish",
-		"summary":           "需要补强钩子。",
+		"summary":           "Cần补强钩子。",
 		"affected_chapters": []int{3},
 	})
 	if err != nil {

@@ -128,7 +128,7 @@ func TestAppendSteerEntry_PreservesExistingMeta(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	// 先保存 RunMeta
+	// 先Lưu RunMeta
 	_ = store.RunMeta.Save(domain.RunMeta{
 		StartedAt: "2026-03-07T10:00:00+08:00",
 		Provider:  "openrouter",
@@ -136,7 +136,7 @@ func TestAppendSteerEntry_PreservesExistingMeta(t *testing.T) {
 		Model:     "gpt-4o",
 	})
 
-	// 追加 Steer 不应覆盖其他字段
+	// 追加 Steer 不应覆盖Khác字段
 	_ = store.RunMeta.AppendSteerEntry(domain.SteerEntry{Input: "test", Timestamp: "now"})
 
 	meta, _ := store.RunMeta.Load()
@@ -158,14 +158,14 @@ func TestInitRunMeta_PreservesHistory(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	// 先建立带历史的 RunMeta
+	// 先建立带Lịch sử的 RunMeta
 	_ = store.RunMeta.Save(domain.RunMeta{
 		StartedAt:    "old",
 		Provider:     "openai",
 		Style:        "fantasy",
 		Model:        "old-model",
-		SteerHistory: []domain.SteerEntry{{Input: "历史干预", Timestamp: "ts"}},
-		PendingSteer: "待处理",
+		SteerHistory: []domain.SteerEntry{{Input: "Lịch sử干预", Timestamp: "ts"}},
+		PendingSteer: "Chờ xử lý",
 	})
 
 	// InitRunMeta 应保留 SteerHistory 和 PendingSteer
@@ -181,10 +181,10 @@ func TestInitRunMeta_PreservesHistory(t *testing.T) {
 	if meta.Model != "new-model" {
 		t.Errorf("model should be updated, got %s", meta.Model)
 	}
-	if len(meta.SteerHistory) != 1 || meta.SteerHistory[0].Input != "历史干预" {
+	if len(meta.SteerHistory) != 1 || meta.SteerHistory[0].Input != "Lịch sử干预" {
 		t.Errorf("steer history should be preserved, got %v", meta.SteerHistory)
 	}
-	if meta.PendingSteer != "待处理" {
+	if meta.PendingSteer != "Chờ xử lý" {
 		t.Errorf("pending steer should be preserved, got %s", meta.PendingSteer)
 	}
 }
@@ -193,7 +193,7 @@ func TestSetAndClearPendingSteer(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	// 设置 PendingSteer
+	// Thiết lập PendingSteer
 	if err := store.RunMeta.SetPendingSteer("主角改成女性"); err != nil {
 		t.Fatalf("SetPendingSteer: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestClearPendingSteer_Noop(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	// 空 meta 上调用不报错
+	// Rỗng meta 上调用不报错
 	if err := store.RunMeta.ClearPendingSteer(); err != nil {
 		t.Fatalf("ClearPendingSteer on empty: %v", err)
 	}

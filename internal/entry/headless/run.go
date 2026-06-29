@@ -23,8 +23,8 @@ type Options struct {
 	Stderr io.Writer
 }
 
-// Run 以无界面模式运行会话内核，直接消费 Engine 事件与流式输出。
-// 未来若新增“续写已有小说”等共享启动方式，不应直接堆到这里，
+// Run 以Không có界面模式运行会话内核，直接消费 Engine 事件与流式输出。
+// 未来若Mới增“续写已有小说”等共享启动方式，不应直接堆到这里，
 // 而应先落到 internal/entry/startup，再由 headless 入口调用。
 func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	stdout := opts.Stdout
@@ -48,7 +48,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	cleanup := logger.SetupFile(eng.Dir(), "headless.log", false)
 	defer cleanup()
 	defer eng.Close()
-	// 运行结束 / 出错返回时落一份脱敏诊断，方便 headless 用户贴 issue。
+	// 运行Kết thúc / 出错Quay lại时落一份脱敏诊断，方便 headless 用户贴 issue。
 	// （外部 kill 的挂死不走 defer，仍需在 TUI 里手动 /diag。）
 	defer func() { _, _ = diag.Export(store.NewStore(eng.Dir())) }()
 
@@ -81,9 +81,9 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return err
 		}
 		if label == "" {
-			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
+			return fmt.Errorf("headless 模式Cần --prompt，或输出Thư mục %q 下已有可Phục hồi会话", eng.Dir())
 		}
-		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
+		fmt.Fprintf(stderr, "headless Phục hồi: %s (%s)\n", eng.Dir(), label)
 		return consume(eng, stdout, stderr, roundHasContent)
 	}
 

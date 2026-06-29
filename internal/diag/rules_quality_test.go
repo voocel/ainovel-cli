@@ -33,7 +33,7 @@ func TestPayoffMissPattern(t *testing.T) {
 	snap := &Snapshot{
 		Plans: map[int]*domain.ChapterPlan{
 			1: {Chapter: 1, Contract: domain.ChapterContract{PayoffPoints: []string{"首战取胜"}}},
-			2: {Chapter: 2, Contract: domain.ChapterContract{PayoffPoints: []string{"确认搭档关系"}}},
+			2: {Chapter: 2, Contract: domain.ChapterContract{PayoffPoints: []string{"Xác nhận搭档关系"}}},
 			3: {Chapter: 3, Contract: domain.ChapterContract{PayoffPoints: []string{"揭开真相一角"}}},
 		},
 		Reviews: map[int]*domain.ReviewEntry{

@@ -12,7 +12,7 @@ import (
 
 const configDirName = ".ainovel"
 
-// DefaultConfigPath 返回全局配置文件路径 ~/.ainovel/config.json。
+// DefaultConfigPath Quay lại全局Tập tin cấu hìnhĐường dẫn ~/.ainovel/config.json。
 func DefaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -21,8 +21,8 @@ func DefaultConfigPath() string {
 	return filepath.Join(home, configDirName, "config.json")
 }
 
-// DefaultConfigDir 返回 ~/.ainovel 目录路径；取不到家目录时返回空字符串。
-// 仅用于读/写不强制存在的文件（如模型缓存），不会自动创建目录。
+// DefaultConfigDir Quay lại ~/.ainovel Thư mụcĐường dẫn；取不到家Thư mục时Quay lạiRỗng字符串。
+// 仅用于读/写不强制存在的Tập tin（如Mô hình缓存），不会自动TạoThư mục。
 func DefaultConfigDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -31,7 +31,7 @@ func DefaultConfigDir() string {
 	return filepath.Join(home, configDirName)
 }
 
-// configDir 返回 ~/.ainovel 目录路径，不存在时创建。
+// configDir Quay lại ~/.ainovel Thư mụcĐường dẫn，不存在时Tạo。
 func configDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -44,37 +44,37 @@ func configDir() (string, error) {
 	return dir, nil
 }
 
-// projectConfigPath 返回项目级配置文件的相对路径 ./.ainovel/config.json。
+// projectConfigPath Quay lại项目级Tập tin cấu hình的相对Đường dẫn ./.ainovel/config.json。
 // 项目级 dotdir 镜像全局 ~/.ainovel/，复用同一个 configDirName；相对 cwd 解析。
 func projectConfigPath() string {
 	return filepath.Join(configDirName, "config.json")
 }
 
-// LoadConfig 按优先级加载并合并配置：
+// LoadConfig 按优先级加载并合并Cấu hình：
 //  1. ~/.ainovel/config.json（全局）
 //  2. ./.ainovel/config.json（项目级覆盖）
-//  3. flagPath 指定的路径（最高优先级）
+//  3. flagPath 指定的Đường dẫn（最高优先级）
 func LoadConfig(flagPath string) (Config, error) {
 	var cfg Config
 
-	// 1. 全局配置。它是最低优先级基底，坏文件降级为告警而非阻断——可被项目级
-	//    / --config 覆盖；硬失败会把"坏全局 + 有效 --config"的用户挡在门外，
+	// 1. 全局Cấu hình。它是最低优先级基底，坏Tập tin降级为告警而非阻断——可被项目级
+	//    / --config 覆盖；硬Thất bại会把"坏全局 + 有效 --config"的用户挡在门外，
 	//    违反 --config"我明确指定这个"的语义。
 	if p := DefaultConfigPath(); p != "" {
 		global, found, err := loadOptionalJSON(p)
 		switch {
 		case err != nil:
-			slog.Warn("全局配置解析失败，已忽略（可被项目级/--config 覆盖）", "module", "config", "path", p, "err", err)
+			slog.Warn("全局Cấu hình解析Thất bại，已忽略（可被项目级/--config 覆盖）", "module", "config", "path", p, "err", err)
 		case found:
 			cfg = global
 		}
 	}
 
-	// 2. 项目级覆盖。坏文件 fail loud：用户在当前目录主动放的配置，静默吞掉会让
-	//    "配了不生效"无从排查（issue #37）。
+	// 2. 项目级覆盖。坏Tập tin fail loud：用户在Hiện tạiThư mục主动放的Cấu hình，静默吞掉会让
+	//    "配了不生效"Không có从排查（issue #37）。
 	project, found, err := loadOptionalJSON(projectConfigPath())
 	if err != nil {
-		return cfg, fmt.Errorf("项目级配置 ./.ainovel/config.json 解析失败（请检查 JSON 语法）: %w", err)
+		return cfg, fmt.Errorf("项目级Cấu hình ./.ainovel/config.json 解析Thất bại（Vui lòngKiểm tra JSON 语法）: %w", err)
 	}
 	if found {
 		cfg = mergeConfig(cfg, project)
@@ -92,10 +92,10 @@ func LoadConfig(flagPath string) (Config, error) {
 	return cfg, nil
 }
 
-// loadOptionalJSON 读取一个可选的配置文件：
-//   - 文件不存在 → (zero, false, nil)，由调用方决定用默认/上层值
-//   - 文件存在但解析失败 → 返回错误（不再静默吞掉——否则用户的配置"配了不生效"
-//     却无从排查，正是 issue #37 的根因）
+// loadOptionalJSON Đọc一个可选的Tập tin cấu hình：
+//   - Tập tin不存在 → (zero, false, nil)，由调用方决定用Mặc định/上层值
+//   - Tập tin存在但解析Thất bại → Quay lạiLỗi（不再静默吞掉——否则用户的Cấu hình"配了不生效"
+//     却Không có从排查，正是 issue #37 的根因）
 func loadOptionalJSON(path string) (Config, bool, error) {
 	cfg, err := loadJSONFile(path)
 	if err != nil {
@@ -107,14 +107,14 @@ func loadOptionalJSON(path string) (Config, bool, error) {
 	return cfg, true, nil
 }
 
-// LoadConfigFile 读取单个 JSON 配置文件，支持 // 行注释。
-// 不做任何合并，仅返回该文件自身的配置。文件不存在时返回错误。
+// LoadConfigFile Đọc单个 JSON Tập tin cấu hình，支持 // 行注释。
+// 不做任何合并，仅Quay lại该Tập tin自身的Cấu hình。Tập tin不存在时Quay lạiLỗi。
 func LoadConfigFile(path string) (Config, error) {
 	return loadJSONFile(path)
 }
 
-// loadJSONFile 读取 JSON 配置文件，支持 // 行注释。
-// 文件不存在时返回错误（由调用方决定是否忽略）。
+// loadJSONFile Đọc JSON Tập tin cấu hình，支持 // 行注释。
+// Tập tin不存在时Quay lạiLỗi（由调用方决定Có czy không忽略）。
 func loadJSONFile(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -220,7 +220,7 @@ func cloneMap(m map[string]any) map[string]any {
 	return c
 }
 
-// stripJSONComments 去除 JSON 中的 // 行注释，跟踪引号状态避免误删字符串内容。
+// stripJSONComments 去除 JSON 中的 // 行注释，跟踪引号Trạng thái避免误删字符串内容。
 func stripJSONComments(data []byte) []byte {
 	out := make([]byte, 0, len(data))
 	inString := false
@@ -270,9 +270,9 @@ func stripJSONComments(data []byte) []byte {
 	return out
 }
 
-// WriteStartupError 把启动期致命错误追加写入 ~/.ainovel/last-error.log，并返回
-// 该文件路径（best-effort，失败时返回空字符串）。双击启动时控制台窗口会随进程
-// 退出立即关闭、错误一闪而过，落盘是这类用户事后追溯的唯一途径。
+// WriteStartupError 把启动期致命Lỗi追加写入 ~/.ainovel/last-error.log，并Quay lại
+// 该Tập tinĐường dẫn（best-effort，Thất bại时Quay lạiRỗng字符串）。双击启动时控制台Cửa sổ会随进程
+// Thoát立即关闭、Lỗi一闪而过，落盘是这类用户事后追溯的唯一途径。
 func WriteStartupError(msg string) string {
 	dir := DefaultConfigDir()
 	if dir == "" {
@@ -293,7 +293,7 @@ func WriteStartupError(msg string) string {
 	return path
 }
 
-// SaveConfig 将配置写入指定路径（JSON 格式，缩进美化）。
+// SaveConfig 将Cấu hình写入指定Đường dẫn（JSON 格式，缩进美化）。
 func SaveConfig(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

@@ -12,7 +12,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// TestEditChapterAppliesEdit 正常路径：drafts 已有内容，唯一匹配替换成功。
+// TestEditChapterAppliesEdit 正常Đường dẫn：drafts 已有内容，唯一匹配替换Thành công。
 func TestEditChapterAppliesEdit(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -59,7 +59,7 @@ func TestEditChapterSeedsFromFinalChapter(t *testing.T) {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
-	// 模拟第 3 章已提交且进入打磨队列
+	// 模拟第 3 章已Nộp且进入打磨队列
 	original := "风从窗缝里钻进来，带着潮湿的泥土气味。"
 	if err := s.Drafts.SaveFinalChapter(3, original); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
@@ -84,7 +84,7 @@ func TestEditChapterSeedsFromFinalChapter(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	// drafts 应被播种且包含新文本
+	// drafts 应被播种且包含Mới文本
 	draft, err := s.Drafts.LoadDraft(3)
 	if err != nil {
 		t.Fatalf("LoadDraft: %v", err)
@@ -103,7 +103,7 @@ func TestEditChapterSeedsFromFinalChapter(t *testing.T) {
 	}
 }
 
-// TestEditChapterRejectsCompletedWithoutQueue 已完成且不在重写队列中 → 拒绝。
+// TestEditChapterRejectsCompletedWithoutQueue Đã hoàn thành且不在重写队列中 → 拒绝。
 func TestEditChapterRejectsCompletedWithoutQueue(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -113,7 +113,7 @@ func TestEditChapterRejectsCompletedWithoutQueue(t *testing.T) {
 	if err := s.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	original := "第二章原始正文。"
+	original := "第二章原始Chính văn。"
 	if err := s.Drafts.SaveDraft(2, original); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEditChapterRejectsCompletedWithoutQueue(t *testing.T) {
 	tool := NewEditChapterTool(s)
 	args, _ := json.Marshal(map[string]any{
 		"chapter":    2,
-		"old_string": "原始正文",
+		"old_string": "原始Chính văn",
 		"new_string": "篡改内容",
 	})
 	_, err := tool.Execute(context.Background(), args)
@@ -198,7 +198,7 @@ func TestEditChapterReplaceAll(t *testing.T) {
 	}
 }
 
-// TestEditChapterRejectsEmptyOldString 空 old_string → 参数非法。
+// TestEditChapterRejectsEmptyOldString Rỗng old_string → 参数非法。
 func TestEditChapterRejectsEmptyOldString(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -250,8 +250,8 @@ func TestEditChapterRejectsNoDraftNoFinal(t *testing.T) {
 	}
 }
 
-// TestEditChapterWorksWithCommitValidation 整条链路：edit_chapter → commit_chapter 成功 drain 队列。
-// 验证新工具与 commit_chapter 的 drafts≠chapters 硬校验配合良好。
+// TestEditChapterWorksWithCommitValidation 整条链路：edit_chapter → commit_chapter Thành công drain 队列。
+// 验证Mới工具与 commit_chapter 的 drafts≠chapters 硬校验配合良好。
 func TestEditChapterWorksWithCommitValidation(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
@@ -292,9 +292,9 @@ func TestEditChapterWorksWithCommitValidation(t *testing.T) {
 	commitTool := NewCommitChapterTool(s)
 	commitArgs, _ := json.Marshal(map[string]any{
 		"chapter":    2,
-		"summary":    "打磨后摘要",
+		"summary":    "打磨后Tóm tắt",
 		"characters": []string{"主角"},
-		"key_events": []string{"完成打磨"},
+		"key_events": []string{"Hoàn thành打磨"},
 	})
 	if _, err := commitTool.Execute(context.Background(), commitArgs); err != nil {
 		t.Fatalf("commit_chapter after edit: %v", err)

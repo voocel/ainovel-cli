@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// Lint 内置产品底线检查：扫描正文中的机制残留，与用户规则无关，commit 时始终执行。
+// Lint 内置产品底线Kiểm tra：扫描Chính văn中的机制残留，与用户规则Không có关，commit 时始终执行。
 // 与 Check 同契约——仅返事实（铁律一），不阻断流程，由评审/用户裁定。
 //
-// 当前三类（全部来自真实长跑产物的实证缺陷）：
-//   - markdown_residue：正文残留 ** 加粗、首行之外的 # 标题行（导出 txt 会裸露符号）
-//   - non_cjk_fragments：连续拉丁字母片段（模型语言混杂，如中文正文裸混 "pattern"）
+// Hiện tại三类（Tất cả来自真实长跑产物的实证缺陷）：
+//   - markdown_residue：Chính văn残留 ** 加粗、首行之外的 # Tiêu đề行（Xuất txt 会裸露符号）
+//   - non_cjk_fragments：连续拉丁字母片段（Mô hình语言混杂，如中文Chính văn裸混 "pattern"）
 func Lint(text string) []Violation {
 	var vs []Violation
 	vs = appendMarkdownResidue(vs, text)
@@ -34,7 +34,7 @@ func appendMarkdownResidue(vs []Violation, text string) []Violation {
 		if t == "" {
 			continue
 		}
-		// 第一个非空行的 # 标题是章文件的合法格式（不按行号写死，容忍前导空行）
+		// 第一个非Rỗng行的 # Tiêu đề是章Tập tin的合法格式（不按行号写死，容忍前导Rỗng行）
 		first := !seenContent
 		seenContent = true
 		if !first && strings.HasPrefix(t, "#") {

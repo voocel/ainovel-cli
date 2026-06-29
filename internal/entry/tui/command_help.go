@@ -52,11 +52,11 @@ func renderHelpText(width int) string {
 	b.WriteString(titleStyle.Render("快捷键"))
 	b.WriteString("\n\n")
 	for _, line := range []string{
-		"输入 / 搜索命令",
-		"↑↓ 选择命令候选",
+		"Nhập / Tìm kiếm命令",
+		"↑↓ Chọn命令候选",
 		"Tab/Enter 接受补全",
-		"Esc 关闭当前命令面板",
-		"Ctrl+R 切换选中复制模式（关闭鼠标上报后可拖拽选中复制，再按一次恢复）",
+		"Esc 关闭Hiện tạiBảng lệnh",
+		"Ctrl+R 切换选中复制模式（关闭鼠标上报后可拖拽选中复制，再按一次Phục hồi）",
 	} {
 		b.WriteString(hintStyle.Render(line))
 		b.WriteString("\n")

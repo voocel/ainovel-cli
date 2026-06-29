@@ -7,7 +7,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
-// PrepareQuick 将直接输入整理为可进入 Engine 的快速启动计划。
+// PrepareQuick 将直接Nhập整理为可进入 Engine 的快速启动计划。
 func PrepareQuick(req Request) (Plan, error) {
 	prompt := strings.TrimSpace(req.UserPrompt)
 	if prompt == "" {
@@ -15,7 +15,7 @@ func PrepareQuick(req Request) (Plan, error) {
 	}
 	return Plan{
 		Mode:        ModeQuick,
-		DisplayName: "快速开始",
+		DisplayName: "快速Bắt đầu",
 		StartPrompt: host.BuildStartPrompt(prompt),
 	}, nil
 }

@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// Merge 把 loader 返回的多个来源合并成最终 Bundle。
+// Merge 把 loader Quay lại的多个来源合并成最终 Bundle。
 //
 // 合并规则：
 //   - 普通结构化字段：就近优先（后者覆盖前者），多来源声明同一字段且值不一致写 field_conflict
 //   - fatigue_words：按词合并；同一词多来源声明且阈值不一致时，就近优先并写 field_conflict
-//   - Markdown 正文：按来源顺序拼接，每段加来源标题，不覆盖
-//   - sources：所有成功加载的文件路径
+//   - Markdown Chính văn：按来源顺序拼接，每段加来源Tiêu đề，不覆盖
+//   - sources：所有Thành công加载的Tập tinĐường dẫn
 //   - conflicts：解析期 conflicts + 合并期 field_conflict
 //
 // 入参 layers 应已按 SourceKind 升序排好（loader.Load 的输出形态）。
@@ -49,7 +49,7 @@ func Merge(layers []Parsed) Bundle {
 	}
 
 	// 阶段 B：合并结构化字段，得到最终结构化字段。
-	// 标量/list 字段保持就近覆盖；fatigue_words 是 map，按词叠加，便于用户只新增少量疲劳词。
+	// 标量/list 字段保持就近覆盖；fatigue_words 是 map，按词叠加，便于用户只Mới增少量疲劳词。
 	for _, p := range layers {
 		if p.Structured.Genre != "" {
 			bundle.Structured.Genre = p.Structured.Genre
@@ -88,7 +88,7 @@ func Merge(layers []Parsed) Bundle {
 		})
 	}
 
-	// 阶段 D：合并 Markdown 偏好正文
+	// 阶段 D：合并 Markdown 偏好Chính văn
 	var sb strings.Builder
 	for _, p := range layers {
 		if strings.TrimSpace(p.Preference) == "" {
@@ -178,10 +178,10 @@ func fatigueWordConflicts(sources []Parsed) []Conflict {
 	return conflicts
 }
 
-// allEqual 判定同一字段在多个来源中的值是否完全一致；一致则不报冲突。
+// allEqual 判定同一字段在多个来源中的值Có czy không完全一致；一致则不报冲突。
 //
 // list 字段语义上不关心顺序，但实现上 yaml 反序列化已保留声明顺序，
-// 完全相同的两份配置 reflect.DeepEqual 即返回 true，已满足"值一致"的判定。
+// 完全相同的两份Cấu hình reflect.DeepEqual 即Quay lại true，已满足"值一致"的判定。
 // 顺序不同但元素相同的特殊情况按"不一致"处理是可接受的（仍然 just info，不阻断）。
 func allEqual(field string, sources []Parsed) bool {
 	if len(sources) < 2 {

@@ -4,7 +4,7 @@ package diag
 type Severity string
 
 const (
-	SevCritical Severity = "critical" // 阻塞进度或数据损坏
+	SevCritical Severity = "critical" // 阻塞Tiến độ或数据损坏
 	SevWarning  Severity = "warning"  // 可能降低质量或浪费 token
 	SevInfo     Severity = "info"     // 可优化项
 )
@@ -13,9 +13,9 @@ const (
 type Category string
 
 const (
-	CatFlow     Category = "flow"     // 流程卡顿、状态异常、恢复问题
-	CatQuality  Category = "quality"  // 评审评分、合同履约、一致性
-	CatPlanning Category = "planning" // 大纲缺口、伏笔漂移、指南针过时
+	CatFlow     Category = "flow"     // 流程卡顿、Trạng thái异常、Phục hồi问题
+	CatQuality  Category = "quality"  // 评审评分、合同履约、Nhất quán
+	CatPlanning Category = "planning" // Đại cương缺口、伏笔漂移、指南针过时
 	CatContext  Category = "context"  // 角色/时间线/关系异常
 )
 
@@ -28,16 +28,16 @@ const (
 	ConfLow    Confidence = "low"    // 粗略信号，仅供参考
 )
 
-// AutoLevel 表示 Finding 是否可以转为自动化动作。
+// AutoLevel 表示 Finding Có czy không可以转为自动化动作。
 type AutoLevel string
 
 const (
 	AutoNone    AutoLevel = "none"    // 仅报告，不自动
-	AutoSuggest AutoLevel = "suggest" // 建议动作但需人工确认
+	AutoSuggest AutoLevel = "suggest" // 建议动作但需人工Xác nhận
 	AutoSafe    AutoLevel = "safe"    // 可安全自动执行
 )
 
-// Finding 是一条可执行的诊断结果。
+// Finding 是一条可执行的诊断Kết quả。
 type Finding struct {
 	Rule       string     // 规则名，如 "StaleForeshadow"
 	Category   Category   // 分类
@@ -45,7 +45,7 @@ type Finding struct {
 	Confidence Confidence // 判定置信度
 	AutoLevel  AutoLevel  // 自动化级别
 	Target     string     // 建议作用面，如 "runtime.flow"
-	Title      string     // 一行摘要
+	Title      string     // 一行Tóm tắt
 	Evidence   string     // 具体数据证据
 	Suggestion string     // 改进建议（指向 prompt/flow/config）
 }
@@ -71,7 +71,7 @@ type Action struct {
 	Fingerprint string     // 来源 Finding 的稳定指纹，用于运行时去重
 }
 
-// Stats 是与发现并列展示的概览指标。
+// Stats 是与发现并列展示的Tổng quan指标。
 type Stats struct {
 	CompletedChapters int
 	TotalChapters     int

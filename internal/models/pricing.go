@@ -18,12 +18,12 @@ const (
 	cacheTTL      = 24 * time.Hour
 	fetchTimeout  = 10 * time.Second
 	cacheFileName = "models-cache.json"
-	// maxModelAgeDays 与 gen_models.go 保持一致：超过这个年龄的模型视作过时、剔除。
+	// maxModelAgeDays 与 gen_models.go 保持一致：超过这个年龄的Mô hình视作过时、剔除。
 	maxModelAgeDays = 730
 )
 
 // providerMap 把 OpenRouter 的 vendor 前缀规范化成本地 provider 名。
-// 未列入的厂商会被忽略，避免拉回无法使用的条目。
+// 未列入的厂商会被忽略，避免拉回Không thể使用的条目。
 var providerMap = map[string]string{
 	"anthropic":  "anthropic",
 	"openai":     "openai",
@@ -68,23 +68,23 @@ type modelCache struct {
 	Models    []ModelEntry `json:"models"`
 }
 
-// StartPricingRefresh 起后台 goroutine 刷新模型数据。
-// 先读磁盘缓存（24h TTL），过期或不存在则拉新数据并落盘。
-// cacheDir 为空时跳过磁盘缓存，仍会尝试网络拉取。
+// StartPricingRefresh 起后台 goroutine Làm mớiMô hình数据。
+// 先读磁盘缓存（24h TTL），过期或不存在则拉Mới数据并落盘。
+// cacheDir 为Rỗng时Bỏ qua磁盘缓存，仍会尝试网络拉取。
 func StartPricingRefresh(registry *ModelRegistry, cacheDir string) {
 	go func() {
 		models := loadCache(cacheDir)
 		if models == nil {
 			fetched, err := fetchModels()
 			if err != nil {
-				slog.Warn("模型元数据刷新失败", "module", "models", "err", err)
+				slog.Warn("Mô hình元数据Làm mớiThất bại", "module", "models", "err", err)
 				return
 			}
 			models = fetched
 			saveCache(models, cacheDir)
 		}
 		registry.MergeModels(models)
-		slog.Info("模型元数据已就绪", "module", "models", "count", len(models))
+		slog.Info("Mô hình元数据已就绪", "module", "models", "count", len(models))
 	}()
 }
 
@@ -197,8 +197,8 @@ func convertModel(m openRouterModel) (ModelEntry, bool) {
 	return entry, true
 }
 
-// isStaleModel 按 maxModelAgeDays 过滤过时模型。
-// 0 或负值视为数据缺失，按"老模型"处理直接剔除。
+// isStaleModel 按 maxModelAgeDays 过滤过时Mô hình。
+// 0 或负值视为数据缺失，按"老Mô hình"处理直接剔除。
 func isStaleModel(created int64) bool {
 	if created <= 0 {
 		return true
@@ -207,7 +207,7 @@ func isStaleModel(created int64) bool {
 	return age > maxModelAgeDays
 }
 
-// tokenToMillion 把 OpenRouter 返回的"每 token 美元价格"转成"每 1M token 美元价格"。
+// tokenToMillion 把 OpenRouter Quay lại的"每 token 美元价格"转成"每 1M token 美元价格"。
 func tokenToMillion(s string) float64 {
 	if s == "" {
 		return 0

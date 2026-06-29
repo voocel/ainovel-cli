@@ -20,15 +20,15 @@ func TestStoreSummaryCompactApplyUsesPersistentStoreData(t *testing.T) {
 	})
 
 	msgs := []agentcore.AgentMessage{
-		agentcore.UserMsg(strings.Repeat("旧上下文", 80)),
+		agentcore.UserMsg(strings.Repeat("CũNgữ cảnh", 80)),
 		agentcore.Message{
 			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.TextBlock(strings.Repeat("旧回复", 80))},
+			Content: []agentcore.ContentBlock{agentcore.TextBlock(strings.Repeat("Cũ回复", 80))},
 		},
-		agentcore.UserMsg("继续写第三章，注意承接第二章结尾。"),
+		agentcore.UserMsg("Tiếp tục写第三章，注意承接第二章结尾。"),
 		agentcore.Message{
 			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.TextBlock("收到，我先梳理当前场景。")},
+			Content: []agentcore.ContentBlock{agentcore.TextBlock("收到，我先梳理Hiện tạiCảnh。")},
 		},
 	}
 
@@ -53,10 +53,10 @@ func TestStoreSummaryCompactApplyUsesPersistentStoreData(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ContextSummary, got %T", out[0])
 	}
-	if !strings.Contains(summary.Summary, "最近章节摘要") {
+	if !strings.Contains(summary.Summary, "最近Tóm tắt chương") {
 		t.Fatalf("expected persistent summaries in checkpoint, got %q", summary.Summary)
 	}
-	if !strings.Contains(summary.Summary, "当前章节计划") {
+	if !strings.Contains(summary.Summary, "Hiện tạiChương计划") {
 		t.Fatalf("expected chapter plan in checkpoint, got %q", summary.Summary)
 	}
 	if !strings.Contains(summary.Summary, "活跃伏笔") {
@@ -65,7 +65,7 @@ func TestStoreSummaryCompactApplyUsesPersistentStoreData(t *testing.T) {
 	if !strings.Contains(summary.Summary, "待修审稿问题") {
 		t.Fatalf("expected pending review section in checkpoint, got %q", summary.Summary)
 	}
-	if !strings.Contains(summary.Summary, "仓库线索需要再蓄压一拍") {
+	if !strings.Contains(summary.Summary, "仓库线索Cần再蓄压一拍") {
 		t.Fatalf("expected pending review details in checkpoint, got %q", summary.Summary)
 	}
 	if result.Info == nil || result.Info.CompactedCount <= 0 {
@@ -90,10 +90,10 @@ func TestStoreSummaryCompactApplyFallsBackWhenStoreDataInsufficient(t *testing.T
 
 	strategy := NewStoreSummaryCompact(StoreSummaryCompactConfig{Store: s, KeepRecentTokens: 20})
 	msgs := []agentcore.AgentMessage{
-		agentcore.UserMsg(strings.Repeat("旧上下文", 40)),
+		agentcore.UserMsg(strings.Repeat("CũNgữ cảnh", 40)),
 		agentcore.Message{
 			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.TextBlock(strings.Repeat("旧回复", 40))},
+			Content: []agentcore.ContentBlock{agentcore.TextBlock(strings.Repeat("Cũ回复", 40))},
 		},
 	}
 
@@ -129,7 +129,7 @@ func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
 	if !strings.Contains(text, "待修审稿问题") {
 		t.Fatalf("expected pending review section, got %q", text)
 	}
-	if !strings.Contains(text, "当前章节计划") {
+	if !strings.Contains(text, "Hiện tạiChương计划") {
 		t.Fatalf("expected chapter plan section, got %q", text)
 	}
 }
@@ -153,7 +153,7 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 1, Title: "第一章", CoreEvent: "开场"},
 		{Chapter: 2, Title: "第二章", CoreEvent: "冲突升级"},
-		{Chapter: 3, Title: "第三章", CoreEvent: "追查线索", Scenes: []string{"主角追查失踪案", "发现旧仓库线索"}},
+		{Chapter: 3, Title: "第三章", CoreEvent: "追查线索", Scenes: []string{"主角追查失踪案", "发现Cũ仓库线索"}},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -177,9 +177,9 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 	}
 	if err := s.Summaries.SaveSummary(domain.ChapterSummary{
 		Chapter:    2,
-		Summary:    "两人追查旧码头，线索指向废弃仓库。",
+		Summary:    "两人追查Cũ码头，线索指向废弃仓库。",
 		Characters: []string{"林岚", "周策", "沈叔"},
-		KeyEvents:  []string{"旧码头冲突", "仓库线索出现"},
+		KeyEvents:  []string{"Cũ码头冲突", "仓库线索出现"},
 	}); err != nil {
 		t.Fatalf("SaveSummary 2: %v", err)
 	}
@@ -189,7 +189,7 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 		t.Fatalf("SaveForeshadowLedger: %v", err)
 	}
 	if err := s.World.SaveTimeline([]domain.TimelineEvent{
-		{Chapter: 2, Time: "夜晚", Event: "旧码头交锋", Characters: []string{"林岚", "周策"}},
+		{Chapter: 2, Time: "夜晚", Event: "Cũ码头交锋", Characters: []string{"林岚", "周策"}},
 	}); err != nil {
 		t.Fatalf("SaveTimeline: %v", err)
 	}
@@ -203,7 +203,7 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 		Chapter: 2,
 		Scope:   "chapter",
 		Verdict: "polish",
-		Summary: "第二章结尾铺垫偏急，需要补一拍仓库前的压迫感。",
+		Summary: "第二章结尾铺垫偏急，Cần补一拍仓库前的压迫感。",
 		Issues: []domain.ConsistencyIssue{
 			{
 				Type:        "pacing",
@@ -220,7 +220,7 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 		Chapter: 2,
 		Scope:   "global",
 		Verdict: "polish",
-		Summary: "第二章尾声节奏偏快，仓库线索需要再蓄压一拍。",
+		Summary: "第二章尾声节奏偏快，仓库线索Cần再蓄压一拍。",
 	}); err != nil {
 		t.Fatalf("SaveReview: %v", err)
 	}

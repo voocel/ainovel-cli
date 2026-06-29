@@ -60,7 +60,7 @@ func TestObserverSubagentToolDeltaUpdatesSaveFoundationType(t *testing.T) {
 		Agent:     "architect_long",
 		Tool:      "save_foundation",
 		DeltaKind: agentcore.DeltaToolCall,
-		Delta:     `{"type":"premise","content":"# 书名`,
+		Delta:     `{"type":"premise","content":"# Tên sách`,
 	})
 
 	if len(events) < 2 {
@@ -78,7 +78,7 @@ func TestObserverSubagentToolDeltaUpdatesSaveFoundationTypeAcrossChunks(t *testi
 	var events []Event
 	o := testObserver(&events)
 
-	for _, delta := range []string{`{"ty`, `pe":"premise","content":"# 书名`} {
+	for _, delta := range []string{`{"ty`, `pe":"premise","content":"# Tên sách`} {
 		o.handleSubagentDelta(&agentcore.ProgressPayload{
 			Kind:      agentcore.ProgressToolDelta,
 			Agent:     "architect_long",
@@ -176,10 +176,10 @@ func TestObserverCoordinatorSubagentDeltaMergesWithExecStart(t *testing.T) {
 	o.handleMessageUpdate(agentcore.Event{
 		Type:      agentcore.EventMessageUpdate,
 		Message:   msg,
-		Delta:     `{"agent":"writer","task":"继续"}`,
+		Delta:     `{"agent":"writer","task":"Tiếp tục"}`,
 		DeltaKind: agentcore.DeltaToolCall,
 	})
-	args, err := json.Marshal(map[string]any{"agent": "writer", "task": "继续"})
+	args, err := json.Marshal(map[string]any{"agent": "writer", "task": "Tiếp tục"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestObserverCoordinatorSubagentDeltaMergesWithExecStart(t *testing.T) {
 	if events[0].Category != "DISPATCH" || events[0].Summary != "subagent" {
 		t.Fatalf("dispatch start = %+v", events[0])
 	}
-	if events[1].ID != events[0].ID || events[1].Summary != "writer（继续）" {
+	if events[1].ID != events[0].ID || events[1].Summary != "writer（Tiếp tục）" {
 		t.Fatalf("dispatch update = %+v, start = %+v", events[1], events[0])
 	}
 }
@@ -213,7 +213,7 @@ func TestObserverCoordinatorSubagentDeltaUpdatesDispatchSummary(t *testing.T) {
 		},
 	}
 
-	for _, delta := range []string{`{"agent":"wr`, `iter","task":"继续"}`} {
+	for _, delta := range []string{`{"agent":"wr`, `iter","task":"Tiếp tục"}`} {
 		o.handleMessageUpdate(agentcore.Event{
 			Type:      agentcore.EventMessageUpdate,
 			Message:   msg,
@@ -228,7 +228,7 @@ func TestObserverCoordinatorSubagentDeltaUpdatesDispatchSummary(t *testing.T) {
 	if events[0].Category != "DISPATCH" || events[0].Summary != "subagent" {
 		t.Fatalf("dispatch start = %+v", events[0])
 	}
-	if events[1].ID != events[0].ID || events[1].Summary != "writer（继续）" {
+	if events[1].ID != events[0].ID || events[1].Summary != "writer（Tiếp tục）" {
 		t.Fatalf("dispatch update = %+v, start = %+v", events[1], events[0])
 	}
 }

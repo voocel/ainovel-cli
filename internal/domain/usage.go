@@ -2,15 +2,15 @@ package domain
 
 import "time"
 
-// UsageSchemaVersion 是 meta/usage.json 的兼容版本号。
-// 未来若 AgentUsageTotals 字段语义变化，递增此值；UsageStore.Load 见到不同版本应忽略并触发 replay 重建。
+// UsageSchemaVersion 是 meta/usage.json 的兼容Phiên bản号。
+// 未来若 AgentUsageTotals 字段语义变化，递增此值；UsageStore.Load 见到不同Phiên bản应忽略并触发 replay 重建。
 const UsageSchemaVersion = 2
 
-// UsageState 是累计 token / cost 用量的可持久化快照。
+// UsageState 是累计 token / cost 用量的可持久化Chụp。
 // 内存中由 UsageTracker 维护，定期 debounce 落盘到 meta/usage.json。
 //
 // 注意：UsageTracker 内部的滑动窗 samples（"近 N 次命中率"）**不持久化**——
-// 它只服务 UI 短期诊断，进程重启从空开始重新积累几轮即可恢复语义。
+// 它只服务 UI 短期诊断，进程重启从RỗngBắt đầu重Mới积累几轮即可Phục hồi语义。
 // MissingAssistantUsage 保留持久化，跨重启累积更有诊断价值。
 type UsageState struct {
 	Schema       int                         `json:"schema"`

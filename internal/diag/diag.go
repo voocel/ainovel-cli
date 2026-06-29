@@ -18,7 +18,7 @@ const (
 	ThresholdHookWeakScore    = 75  // HookWeakChain: hook 低于此分视为偏弱
 	ThresholdHookWeakChain    = 3   // HookWeakChain: 连续偏弱章数阈值
 	ThresholdPayoffMissRate   = 0.4 // PayoffMissPattern: payoff 未兑现率上限
-	ThresholdCompassDrift     = 15  // CompassDrift: 指南针未更新章数上限
+	ThresholdCompassDrift     = 15  // CompassDrift: 指南针未更Mới章数上限
 	ThresholdTimelineGapRate  = 0.3 // TimelineGaps: 缺失率容忍上限
 	ThresholdForeshadowMin    = 8   // StaleForeshadow: 伏笔停滞最小章数
 )
@@ -62,8 +62,8 @@ func Analyze(s *store.Store) Report {
 			Confidence: ConfHigh,
 			AutoLevel:  AutoNone,
 			Target:     "runtime.flow",
-			Title:      fmt.Sprintf("工件加载失败: %s", e),
-			Suggestion: "文件可能损坏或权限不足，相关诊断规则的结果可能不完整。",
+			Title:      fmt.Sprintf("工件加载Thất bại: %s", e),
+			Suggestion: "Tập tin可能损坏或权限不足，相关诊断规则的Kết quả可能不完整。",
 		})
 	}
 	for _, rule := range allRules {
@@ -136,7 +136,7 @@ func sortFindings(findings []Finding) {
 	})
 }
 
-// staleForeshadowThreshold 根据总章节数计算伏笔停滞阈值。
+// staleForeshadowThreshold 根据总Chương数计算伏笔停滞阈值。
 func staleForeshadowThreshold(completedChapters int) int {
 	t := completedChapters / 3
 	if t < ThresholdForeshadowMin {

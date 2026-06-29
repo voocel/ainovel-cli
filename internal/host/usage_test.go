@@ -20,7 +20,7 @@ func makeUsageMsg(input, cacheRead, cacheWrite, output int) agentcore.AgentMessa
 }
 
 // Test_pushSample_RingBuffer 验证滑动窗的轮转语义：
-// 前 N 次直接 append；之后按 sampleIdx 覆盖最旧条目。recentSums 始终反映"最近 N 次"。
+// 前 N 次直接 append；之后按 sampleIdx 覆盖最Cũ条目。recentSums 始终反映"最近 N 次"。
 func Test_pushSample_RingBuffer(t *testing.T) {
 	var tot agentTotals
 
@@ -172,11 +172,11 @@ func Test_UsageTracker_ProviderOnlyDoesNotInventModelKey(t *testing.T) {
 func Test_UsageTracker_RecentWindowReflectsLatest(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 
-	// 前 5 次极低命中（首章场景）
+	// 前 5 次极低命中（首章Cảnh）
 	for i := 0; i < 5; i++ {
 		tk.Record("writer", makeUsageMsg(1000, 0, 0, 200))
 	}
-	// 后 8 次（>5）高命中（稳态场景）
+	// 后 8 次（>5）高命中（稳态Cảnh）
 	for i := 0; i < 8; i++ {
 		tk.Record("writer", makeUsageMsg(1000, 900, 0, 200))
 	}
@@ -209,7 +209,7 @@ func Test_UsageTracker_RecentWindowReflectsLatest(t *testing.T) {
 }
 
 // Test_computeSaved 验证 saved 算法：CacheRead × (Input价 - CacheRead价)；
-// 价差 ≤ 0 或 InputCost ≤ 0 时返回 0（CacheWrite 溢价不抵扣）。
+// 价差 ≤ 0 或 InputCost ≤ 0 时Quay lại 0（CacheWrite 溢价不抵扣）。
 func Test_computeSaved(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -224,13 +224,13 @@ func Test_computeSaved(t *testing.T) {
 			want:  80_000 * (3.0 - 0.3) / 1_000_000, // 0.216
 		},
 		{
-			name:  "无命中 saved=0",
+			name:  "Không có命中 saved=0",
 			usage: agentcore.Usage{Input: 100_000, CacheRead: 0},
 			entry: models.ModelEntry{InputCostPer1M: 3.0, CacheReadCostPer1M: 0.3},
 			want:  0,
 		},
 		{
-			name:  "模型未标价 saved=0",
+			name:  "Mô hình未标价 saved=0",
 			usage: agentcore.Usage{Input: 100_000, CacheRead: 50_000},
 			entry: models.ModelEntry{InputCostPer1M: 0, CacheReadCostPer1M: 0},
 			want:  0,
@@ -253,17 +253,17 @@ func Test_computeSaved(t *testing.T) {
 }
 
 // Test_UsageTracker_CacheCapableSticky 验证 CacheCapable 一旦置 true 就不回退。
-// 历史上跑过支持 cache 的模型 → 累计命中数据有效；中途切到不支持的模型不应让标记回退。
+// Lịch sử上跑过支持 cache 的Mô hình → 累计命中数据有效；中途切到Không hỗ trợ的Mô hình不应让标记回退。
 //
-// 通过构造 perAgent 直接赋值模拟（resolveCost 路径需要 ModelSet+Registry，集成层已覆盖）。
+// 通过构造 perAgent 直接赋值模拟（resolveCost Đường dẫnCần ModelSet+Registry，集成层已覆盖）。
 func Test_UsageTracker_CacheCapableSticky(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 
-	// 模拟"曾经跑过支持 cache 的模型 + 命中过"
+	// 模拟"曾经跑过支持 cache 的Mô hình + 命中过"
 	tk.perAgent["writer"] = &agentTotals{
 		Input: 1000, CacheRead: 500, Output: 200, CacheCapable: true,
 	}
-	// 后续追加一次"不支持 cache 的模型调用"
+	// 后续追加一次"Không hỗ trợ cache 的Mô hình调用"
 	tk.Record("writer", makeUsageMsg(500, 0, 0, 100))
 
 	per := tk.PerAgent()
@@ -294,10 +294,10 @@ func Test_UsageTracker_PerAgentSkipsZero(t *testing.T) {
 
 // Test_UsageTracker_MissingAssistantUsageCounted 验证 missingAssistantUsage
 // 计数的判定边界：
-//   - 累加路径只看 Usage != nil（不绑死 Role）
-//   - 诊断路径要求 Role=Assistant 且 Content 非空 — 这才像"一次真 LLM 响应却
+//   - 累加Đường dẫn只看 Usage != nil（不绑死 Role）
+//   - 诊断Đường dẫn要求 Role=Assistant 且 Content 非Rỗng — 这才像"一次真 LLM 响应却
 //     没拿到 usage"，对应上游 streaming 没发 OpenAI include_usage 那条 final
-//     chunk 的典型表现。其它情形（user/tool 消息、空 content 的 assistant）
+//     chunk 的典型表现。其它情形（user/tool 消息、Rỗng content 的 assistant）
 //     都不算 missing。
 func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
@@ -312,12 +312,12 @@ func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 	// assistant + 有 Content + nil Usage → 看起来是真响应但缺 usage，计入诊断
 	tk.Record("writer", withContent("hi"))
 	tk.Record("writer", withContent("again"))
-	// assistant 但 Content 为空 → 异常恢复路径或占位消息，不算 missing
+	// assistant 但 Content 为Rỗng → 异常Phục hồiĐường dẫn或占位消息，不算 missing
 	tk.Record("writer", agentcore.Message{Role: agentcore.RoleAssistant})
-	// user/tool 消息天然不携带 usage，无论 Content 是否为空都不算 missing
+	// user/tool 消息天然不携带 usage，Không có论 Content Có czy không为Rỗng都不算 missing
 	tk.Record("writer", agentcore.Message{Role: agentcore.RoleUser, Content: []agentcore.ContentBlock{agentcore.TextBlock("u")}})
 	tk.Record("writer", agentcore.Message{Role: agentcore.RoleTool, Content: []agentcore.ContentBlock{agentcore.TextBlock("t")}})
-	// 正常带 usage → 走累加路径，不计入诊断
+	// 正常带 usage → 走累加Đường dẫn，不计入诊断
 	tk.Record("writer", makeUsageMsg(100, 50, 0, 20))
 
 	if got := tk.MissingAssistantUsage(); got != 2 {
@@ -325,15 +325,15 @@ func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 	}
 	_, in, _, _, _ := tk.Totals()
 	if in != 100 {
-		t.Errorf("正常路径累计被破坏，input=%d want 100", in)
+		t.Errorf("正常Đường dẫn累计被破坏，input=%d want 100", in)
 	}
 }
 
-// Test_UsageTracker_CacheCapableFromFacts 验证 CacheCapable 在注册表查不到该模型时
-// 仍能根据"事实"标记为 true：自建 / 国内代理后端的模型经常不在 BerriAI/litellm
-// 的 pricing 索引里，resolveCost 返回 capable=false；但只要 backend 真的返回了
-// CacheRead 或 CacheWrite > 0，就证明该模型客观支持 prompt cache，per-role 行
-// 不该显示"未启用"。
+// Test_UsageTracker_CacheCapableFromFacts 验证 CacheCapable 在注册表查不到该Mô hình时
+// 仍能根据"事实"标记为 true：自建 / 国内Proxy后端的Mô hình经常不在 BerriAI/litellm
+// 的 pricing 索引里，resolveCost Quay lại capable=false；但只要 backend 真的Quay lại了
+// CacheRead 或 CacheWrite > 0，就证明该Mô hình客观支持 prompt cache，per-role 行
+// 不该显示"未Bật"。
 func Test_UsageTracker_CacheCapableFromFacts(t *testing.T) {
 	tk := NewUsageTracker(nil, nil) // modelSet=nil → resolveCost 永远 capable=false
 
@@ -347,17 +347,17 @@ func Test_UsageTracker_CacheCapableFromFacts(t *testing.T) {
 		t.Errorf("overall CacheCapable 也应同步置 true")
 	}
 
-	// 反向：完全无 cache 活动的 role，CacheCapable 必须保持 false
+	// 反向：完全Không có cache 活动的 role，CacheCapable 必须保持 false
 	tk.Record("editor", makeUsageMsg(500, 0, 0, 100))
 	per = tk.PerAgent()
 	for _, a := range per {
 		if a.Role == "editor" && a.CacheCapable {
-			t.Errorf("editor 全程无 CacheRead/Write，CacheCapable 不应被错误标记为 true")
+			t.Errorf("editor 全程Không có CacheRead/Write，CacheCapable 不应被Lỗi标记为 true")
 		}
 	}
 }
 
-// Test_UsageTracker_AccumulatesAnyRoleWithUsage 验证累加路径解耦于 Role：
+// Test_UsageTracker_AccumulatesAnyRoleWithUsage 验证累加Đường dẫn解耦于 Role：
 // 即使将来某个 adapter 把 usage 装配到非 assistant 角色的 message 上，
 // 仍能正确累计。守住"装配规则与累加规则解耦"的契约。
 func Test_UsageTracker_AccumulatesAnyRoleWithUsage(t *testing.T) {
@@ -379,7 +379,7 @@ func Test_UsageTracker_AccumulatesAnyRoleWithUsage(t *testing.T) {
 }
 
 // Test_UsageTracker_OnCostCallback 验证预算哨兵的接线点：每次记账后
-// 锁外回调携带最新累计成本（含 provider 自报 cost 路径）。
+// 锁外回调携带最Mới累计成本（含 provider 自报 cost Đường dẫn）。
 func Test_UsageTracker_OnCostCallback(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 	var got []float64
@@ -405,7 +405,7 @@ func Test_UsageTracker_OnMissingUsageOnce(t *testing.T) {
 	fired := 0
 	tk.SetOnMissingUsage(func() { fired++ })
 
-	noUsage := agentcore.Message{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("正文")}}
+	noUsage := agentcore.Message{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("Chính văn")}}
 	tk.Record("writer", noUsage)
 	tk.Record("writer", noUsage)
 	tk.Record("editor", noUsage)

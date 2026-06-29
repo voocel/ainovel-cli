@@ -49,12 +49,12 @@ func (s *RuntimeStore) AppendQueue(item domain.RuntimeQueueItem) (domain.Runtime
 	return item, nil
 }
 
-// LoadQueue 读取当前持久化的全部运行时队列项。
+// LoadQueue ĐọcHiện tại持久化的Tất cả运行时队列项。
 func (s *RuntimeStore) LoadQueue() ([]domain.RuntimeQueueItem, error) {
 	return loadJSONLines[domain.RuntimeQueueItem](s.io, runtimeQueuePath)
 }
 
-// LoadQueueAfter 返回指定序号之后的队列项。
+// LoadQueueAfter Quay lại指定序号之后的队列项。
 func (s *RuntimeStore) LoadQueueAfter(afterSeq int64) ([]domain.RuntimeQueueItem, error) {
 	items, err := s.LoadQueue()
 	if err != nil || afterSeq <= 0 {
@@ -84,7 +84,7 @@ func (s *RuntimeStore) AppendTaskLog(taskID string, entry domain.RuntimeTaskLogE
 	return s.appendJSONLine(taskLogPath(taskID), entry)
 }
 
-// LoadTaskLog 读取某个任务的全部运行日志。
+// LoadTaskLog Đọc某个任务的Tất cả运行日志。
 func (s *RuntimeStore) LoadTaskLog(taskID string) ([]domain.RuntimeTaskLogEntry, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -97,7 +97,7 @@ func taskLogPath(taskID string) string {
 	return filepath.Join("meta", "runtime", "tasks", taskID+".log")
 }
 
-// Reset 清空运行时队列和任务日志。
+// Reset 清Rỗng运行时队列和任务日志。
 func (s *RuntimeStore) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

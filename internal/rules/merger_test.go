@@ -36,7 +36,7 @@ func TestMerge_NearestWinsScalar(t *testing.T) {
 	if b.Structured.ChapterWords == nil || b.Structured.ChapterWords.Min != 4000 || b.Structured.ChapterWords.Max != 8000 {
 		t.Errorf("project should win, got %+v", b.Structured.ChapterWords)
 	}
-	// 一致性冲突应被识别
+	// Nhất quán冲突应被识别
 	if !hasConflict(b.Conflicts, ConflictFieldConflict, "chapter_words") {
 		t.Errorf("expected field_conflict for chapter_words, got %+v", b.Conflicts)
 	}
@@ -82,7 +82,7 @@ func TestMerge_NearestWinsList(t *testing.T) {
 }
 
 func TestMerge_FatigueWordsMergeByKey(t *testing.T) {
-	// genre fatigue {不禁:1}; project fatigue {竟然:2} → 按词合并，避免用户只新增一词时丢失默认规则
+	// genre fatigue {不禁:1}; project fatigue {竟然:2} → 按词合并，避免用户只Mới增一词时丢失Mặc định规则
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			FatigueWords: map[string]int{"不禁": 1},
@@ -142,23 +142,23 @@ func TestMerge_PreservesUntouchedFields(t *testing.T) {
 
 func TestMerge_MarkdownConcatenated(t *testing.T) {
 	layers := []Parsed{
-		makeParsed("default.md", SourceDefault, Structured{}, "默认偏好正文"),
-		makeParsed("project.md", SourceProject, Structured{}, "项目偏好正文"),
+		makeParsed("default.md", SourceDefault, Structured{}, "Mặc định偏好Chính văn"),
+		makeParsed("project.md", SourceProject, Structured{}, "项目偏好Chính văn"),
 	}
 	b := Merge(layers)
-	if !strings.Contains(b.Preferences, "默认偏好正文") {
+	if !strings.Contains(b.Preferences, "Mặc định偏好Chính văn") {
 		t.Errorf("default body missing: %q", b.Preferences)
 	}
-	if !strings.Contains(b.Preferences, "项目偏好正文") {
+	if !strings.Contains(b.Preferences, "项目偏好Chính văn") {
 		t.Errorf("project body missing: %q", b.Preferences)
 	}
 	// 顺序：default 在前，project 在后
-	di := strings.Index(b.Preferences, "默认偏好正文")
-	pi := strings.Index(b.Preferences, "项目偏好正文")
+	di := strings.Index(b.Preferences, "Mặc định偏好Chính văn")
+	pi := strings.Index(b.Preferences, "项目偏好Chính văn")
 	if di >= pi {
 		t.Errorf("default body should appear before project body; default@%d project@%d", di, pi)
 	}
-	// 来源标题
+	// 来源Tiêu đề
 	if !strings.Contains(b.Preferences, "[default] default.md") {
 		t.Errorf("source header for default missing: %q", b.Preferences)
 	}
@@ -170,19 +170,19 @@ func TestMerge_MarkdownConcatenated(t *testing.T) {
 func TestMerge_SkipsEmptyBody(t *testing.T) {
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{}, "   "),
-		makeParsed("project.md", SourceProject, Structured{}, "项目正文"),
+		makeParsed("project.md", SourceProject, Structured{}, "项目Chính văn"),
 	}
 	b := Merge(layers)
 	if strings.Contains(b.Preferences, "[default]") {
 		t.Errorf("empty body should not emit source header, got %q", b.Preferences)
 	}
-	if !strings.Contains(b.Preferences, "项目正文") {
+	if !strings.Contains(b.Preferences, "项目Chính văn") {
 		t.Errorf("project body missing: %q", b.Preferences)
 	}
 }
 
 func TestMerge_PropagatesParsedConflicts(t *testing.T) {
-	// 单文件已有解析期 conflict（如 unknown field），merger 应原样汇总
+	// 单Tập tin已有解析期 conflict（如 unknown field），merger 应原样汇总
 	parsed := Parsed{
 		Source: "project.md",
 		Kind:   SourceProject,
@@ -190,7 +190,7 @@ func TestMerge_PropagatesParsedConflicts(t *testing.T) {
 			Source: "project.md",
 			Kind:   ConflictUnknownField,
 			Field:  "secret_x",
-			Detail: "未知",
+			Detail: "Không rõ",
 		}},
 	}
 	b := Merge([]Parsed{parsed})
@@ -212,7 +212,7 @@ func TestMerge_AllSourcesInList(t *testing.T) {
 	}
 }
 
-// hasConflict 检查 conflicts 中是否存在指定 (Kind, Field) 的条目。
+// hasConflict Kiểm tra conflicts 中Có czy không存在指定 (Kind, Field) 的条目。
 func hasConflict(conflicts []Conflict, kind ConflictKind, field string) bool {
 	for _, c := range conflicts {
 		if c.Kind == kind && c.Field == field {

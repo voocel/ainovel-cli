@@ -151,7 +151,7 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 ## 终局方向
 成为真正的执棋者。
 
-## 写作禁区
+## Viết禁区
 不提前揭露师尊真相。
 
 ## 差异化卖点
@@ -198,7 +198,7 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveSummary: %v", err)
 	}
-	if err := s.Drafts.SaveFinalChapter(1, "第一章正文结尾，留下试炼悬念。"); err != nil {
+	if err := s.Drafts.SaveFinalChapter(1, "第一章Chính văn结尾，留下试炼悬念。"); err != nil {
 		t.Fatalf("SaveFinalChapter: %v", err)
 	}
 	if err := s.Drafts.SaveChapterPlan(domain.ChapterPlan{
@@ -206,10 +206,10 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 		Title:   "试炼",
 		Goal:    "通过第一关",
 		Contract: domain.ChapterContract{
-			RequiredBeats:    []string{"必须让主角通过第一关", "必须埋下内门试炼邀请"},
+			RequiredBeats:    []string{"必须让主角通过第一关", "必须埋下内门试炼邀Vui lòng"},
 			ForbiddenMoves:   []string{"不能提前揭露师尊真实身份"},
-			ContinuityChecks: []string{"主角左臂旧伤仍未痊愈"},
-			EvaluationFocus:  []string{"重点检查试炼节奏是否拖沓"},
+			ContinuityChecks: []string{"主角左臂Cũ伤仍未痊愈"},
+			EvaluationFocus:  []string{"重点Kiểm tra试炼节奏Có czy không拖沓"},
 		},
 	}); err != nil {
 		t.Fatalf("SaveChapterPlan: %v", err)
@@ -226,7 +226,7 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	}
 
 	tool := NewContextTool(s, References{
-		Consistency:      "一致性检查",
+		Consistency:      "Nhất quánKiểm tra",
 		HookTechniques:   "钩子技巧",
 		QualityChecklist: "质量清单",
 	}, "default", rules.LoadOptions{})
@@ -283,7 +283,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 群像长篇冒险
 
 ## 核心冲突
-众人必须在不断失控的旧秩序中寻找新秩序。
+众人必须在不断失控的Cũ秩序中寻找Mới秩序。
 
 ## 主角目标
 抵达真相核心。
@@ -291,7 +291,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 ## 终局方向
 揭开古老真相并重建秩序。
 
-## 写作禁区
+## Viết禁区
 不靠天降设定收尾。
 
 ## 差异化卖点
@@ -301,7 +301,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 每卷都改变队伍关系结构。
 
 ## 核心兑现承诺
-持续提供发现、牺牲与选择。
+持续提供发现、牺牲与Chọn。
 
 ## 故事引擎
 旅途推进、真相调查与队伍关系共同驱动。
@@ -309,7 +309,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 ## 关系/成长主线
 队伍从互不信任走向分裂再重组。
 
-## 升级路径
+## 升级Đường dẫn
 从地方事件走向世界级危机。
 
 ## 中期转向
@@ -321,7 +321,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 		t.Fatalf("SavePremise: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
-		{Chapter: 1, Title: "起点", CoreEvent: "旅途开始"},
+		{Chapter: 1, Title: "起点", CoreEvent: "旅途Bắt đầu"},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 	}
 
 	tool := NewContextTool(s, References{
-		OutlineTemplate:   "大纲模板",
+		OutlineTemplate:   "Đại cương模板",
 		CharacterTemplate: "角色模板",
 		LongformPlanning:  "长篇规划",
 	}, "default", rules.LoadOptions{})
@@ -441,8 +441,8 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 		t.Fatalf("Init: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
-		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀请", Scenes: []string{"密谈", "留下试炼令"}},
-		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀请", Hook: "谁在背后推动这场试炼", Scenes: []string{"整理线索", "决定赴约"}},
+		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀Vui lòng", Scenes: []string{"密谈", "留下试炼令"}},
+		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀Vui lòng", Hook: "谁在背后推动这场试炼", Scenes: []string{"整理线索", "决定赴约"}},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -450,11 +450,11 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
-		{ID: "trial_invite", Description: "内门试炼邀请的真实目的", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_invite", Description: "内门试炼邀Vui lòng的真实目的", PlantedAt: 1, Status: "planted"},
 		{ID: "trial_mastermind", Description: "谁在背后推动这场试炼", PlantedAt: 1, Status: "planted"},
 		{ID: "trial_rules", Description: "试炼规则碑文残卷", PlantedAt: 1, Status: "planted"},
-		{ID: "outer_disciple", Description: "外门弟子的旧债纠纷", PlantedAt: 1, Status: "planted"},
-		{ID: "elder_token", Description: "长老手中令牌的来历", PlantedAt: 1, Status: "planted"},
+		{ID: "outer_disciple", Description: "外门弟子的Cũ债纠纷", PlantedAt: 1, Status: "planted"},
+		{ID: "elder_token", Description: "长老手中Token的来历", PlantedAt: 1, Status: "planted"},
 		{ID: "hidden_gate", Description: "山门背后的隐藏通道", PlantedAt: 1, Status: "planted"},
 		{ID: "trial_bet", Description: "试炼盘口的幕后操盘人", PlantedAt: 1, Status: "planted"},
 	}); err != nil {
@@ -463,9 +463,9 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 	if err := s.Drafts.SaveChapterPlan(domain.ChapterPlan{
 		Chapter: 2,
 		Title:   "试炼前夜",
-		Goal:    "决定是否回应邀请",
+		Goal:    "决定Có czy không回应邀Vui lòng",
 		Contract: domain.ChapterContract{
-			PayoffPoints: []string{"回应内门试炼邀请"},
+			PayoffPoints: []string{"回应内门试炼邀Vui lòng"},
 			HookGoal:     "抛出谁在背后推动试炼",
 		},
 	}); err != nil {
@@ -475,9 +475,9 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 		Chapter:        1,
 		Scope:          "chapter",
 		Verdict:        "polish",
-		Summary:        "主线启动完成，但伏笔不够明确。",
+		Summary:        "主线启动Hoàn thành，但伏笔不够明确。",
 		ContractStatus: "partial",
-		ContractMisses: []string{"未明确埋下内门试炼邀请"},
+		ContractMisses: []string{"未明确埋下内门试炼邀Vui lòng"},
 		Issues: []domain.ConsistencyIssue{
 			{Type: "hook", Severity: "warning", Description: "章末钩子不够具体"},
 		},
@@ -512,7 +512,7 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 	if len(payload.Selected.ReviewLessons) == 0 {
 		t.Fatal("expected review lesson recall items")
 	}
-	if !containsRecallSummary(payload.Selected.StoryThreads, "内门试炼邀请") {
+	if !containsRecallSummary(payload.Selected.StoryThreads, "内门试炼邀Vui lòng") {
 		t.Fatalf("expected story thread recall to mention invite, got %+v", payload.Selected.StoryThreads)
 	}
 	if !containsRecallSummary(payload.Selected.StoryThreads, "推动这场试炼") {
@@ -532,7 +532,7 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 	}
 }
 
-// 久挂未回收的伏笔即使与当前章关键词无关，也应被账龄回填进 story_threads——
+// 久挂未回收的伏笔即使与Hiện tại章关键词Không có关，也应被账龄回填进 story_threads——
 // 这正是相关性召回的盲区（独自悬挂太久、却没在本章撞上关键词的那根线）。
 // 近期埋下的伏笔（账龄 < 阈值）不应被误标为"未回收"。
 func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
@@ -541,7 +541,7 @@ func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	// 当前章主题与所有伏笔都不沾边，确保相关性召回为空，只剩账龄回填生效。
+	// Hiện tại章主题与所有伏笔都不沾边，确保相关性召回为Rỗng，只剩账龄回填生效。
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 50, Title: "瘟疫", CoreEvent: "林砚在城南医馆救治瘟疫病患", Scenes: []string{"熬药", "封锁街巷"}},
 	}); err != nil {
@@ -604,8 +604,8 @@ func TestContextToolSelectedMemoryIncludesGlobalReviewLessons(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
-		{Chapter: 1, Title: "开端", CoreEvent: "故事开始"},
-		{Chapter: 2, Title: "推进", CoreEvent: "主线继续推进"},
+		{Chapter: 1, Title: "开端", CoreEvent: "故事Bắt đầu"},
+		{Chapter: 2, Title: "推进", CoreEvent: "主线Tiếp tục推进"},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -655,7 +655,7 @@ func TestContextToolKeepsFullForeshadowWhenRecallNotTriggered(t *testing.T) {
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 1, Title: "起势", CoreEvent: "故事起势"},
-		{Chapter: 2, Title: "推进", CoreEvent: "继续推进"},
+		{Chapter: 2, Title: "推进", CoreEvent: "Tiếp tục推进"},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -698,8 +698,8 @@ func TestContextToolFallsBackToFullForeshadowWhenSelectionIsTooSparse(t *testing
 		t.Fatalf("Init: %v", err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
-		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀请"},
-		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀请", Scenes: []string{"整理线索", "决定赴约"}},
+		{Chapter: 1, Title: "邀约", CoreEvent: "长老暗中给出内门试炼邀Vui lòng"},
+		{Chapter: 2, Title: "试炼前夜", CoreEvent: "林砚准备回应内门试炼邀Vui lòng", Scenes: []string{"整理线索", "决定赴约"}},
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
@@ -707,10 +707,10 @@ func TestContextToolFallsBackToFullForeshadowWhenSelectionIsTooSparse(t *testing
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
-		{ID: "trial_invite", Description: "内门试炼邀请的真实目的", PlantedAt: 1, Status: "planted"},
+		{ID: "trial_invite", Description: "内门试炼邀Vui lòng的真实目的", PlantedAt: 1, Status: "planted"},
 		{ID: "trial_rules", Description: "试炼规则碑文残卷", PlantedAt: 1, Status: "planted"},
-		{ID: "outer_disciple", Description: "外门弟子的旧债纠纷", PlantedAt: 1, Status: "planted"},
-		{ID: "elder_token", Description: "长老手中令牌的来历", PlantedAt: 1, Status: "planted"},
+		{ID: "outer_disciple", Description: "外门弟子的Cũ债纠纷", PlantedAt: 1, Status: "planted"},
+		{ID: "elder_token", Description: "长老手中Token的来历", PlantedAt: 1, Status: "planted"},
 		{ID: "hidden_gate", Description: "山门背后的隐藏通道", PlantedAt: 1, Status: "planted"},
 		{ID: "trial_bet", Description: "试炼盘口的幕后操盘人", PlantedAt: 1, Status: "planted"},
 	}); err != nil {
@@ -762,7 +762,7 @@ func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(2, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
-	if err := s.Progress.SetPendingRewrites([]int{2}, "节奏拖沓，需要压缩前半段"); err != nil {
+	if err := s.Progress.SetPendingRewrites([]int{2}, "节奏拖沓，Cần压缩前半段"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
 	if err := s.World.SaveReview(domain.ReviewEntry{
@@ -771,7 +771,7 @@ func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 		Verdict: "rewrite",
 		Summary: "前半段铺垫过长，冲突迟迟不出现。",
 		Issues: []domain.ConsistencyIssue{
-			{Type: "pacing", Severity: "error", Description: "前 2000 字无推进"},
+			{Type: "pacing", Severity: "error", Description: "前 2000 字Không có推进"},
 		},
 		ContractMisses: []string{"未兑现试炼开场"},
 	}); err != nil {
@@ -796,7 +796,7 @@ func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rewrite_brief in chapter context, got %T", payload["rewrite_brief"])
 	}
-	if got := brief["reason"]; got != "节奏拖沓，需要压缩前半段" {
+	if got := brief["reason"]; got != "节奏拖沓，Cần压缩前半段" {
 		t.Fatalf("expected rewrite reason, got %v", got)
 	}
 	if got, _ := brief["review_summary"].(string); !strings.Contains(got, "铺垫过长") {
@@ -905,7 +905,7 @@ func TestContextToolInjectsEmptyUserDirectives(t *testing.T) {
 	if !ok {
 		t.Fatal("missing working_memory")
 	}
-	// 空列表也注入 []（字段稳定，同 user_rules 先例），不能是 null/缺失
+	// Rỗng列表也注入 []（字段稳定，同 user_rules 先例），不能是 null/缺失
 	directives, ok := working["user_directives"].([]any)
 	if !ok {
 		t.Fatalf("expected stable empty array, got %T", working["user_directives"])

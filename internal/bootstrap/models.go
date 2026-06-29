@@ -14,9 +14,9 @@ import (
 	"github.com/voocel/ainovel-cli/internal/errs"
 )
 
-// 长输出 + 长 ctx 场景下，reasoning-aware provider（mimo / deepseek-r1 等）
+// 长输出 + 长 ctx Cảnh下，reasoning-aware provider（mimo / deepseek-r1 等）
 // 思考阶段如果 server 端不流式发 reasoning delta，SSE 整段会保持沉默。
-// litellm 默认 watchdog 是 2 分钟，对 8000 字写作章节经常触发误杀。
+// litellm Mặc định watchdog 是 2 分钟，对 8000 字ViếtChương经常触发误杀。
 // 5 分钟覆盖绝大多数实测案例（参见 tasks/todo.md plan→draft 思考时长统计），
 // 仍小于 RequestTimeout 10 分钟，网络真死时仍能兜底。
 const streamIdleTimeout = 5 * time.Minute
@@ -43,7 +43,7 @@ type modelTarget struct {
 }
 
 // SwappableModel 是可热切换的 ChatModel 包装器。
-// 已开始的请求继续使用旧实例；后续请求自动切到新实例。
+// 已Bắt đầu的Vui lòng求Tiếp tục使用Cũ实例；后续Vui lòng求自动切到Mới实例。
 type SwappableModel struct {
 	*agentcore.SwappableModel
 	mu       sync.RWMutex
@@ -105,7 +105,7 @@ func (m *SwappableModel) Current() (provider, name string) {
 	return m.provider, m.name
 }
 
-// ModelSet 持有按角色分配的模型实例，未配置的角色回退到默认模型。
+// ModelSet 持有按角色分配的Mô hình实例，未Cấu hình的角色回退到Mặc địnhMô hình。
 type ModelSet struct {
 	Default   *SwappableModel
 	models    map[string]*SwappableModel
@@ -113,7 +113,7 @@ type ModelSet struct {
 	config    Config
 }
 
-// ForRole 返回指定角色的模型，未配置时返回默认模型。
+// ForRole Quay lại指定角色的Mô hình，未Cấu hình时Quay lạiMặc địnhMô hình。
 func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
 	if m, ok := ms.models[role]; ok {
 		return m
@@ -121,8 +121,8 @@ func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
 	return ms.Default
 }
 
-// ForRoleWithFailover 返回带有单次请求级 fallback 的角色模型。
-// 仅当该角色显式配置了 fallbacks 时生效；未配置时退化为普通模型。
+// ForRoleWithFailover Quay lại带有单次Vui lòng求级 fallback 的角色Mô hình。
+// 仅当该角色显式Cấu hình了 fallbacks 时生效；未Cấu hình时退化为普通Mô hình。
 func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) agentcore.ChatModel {
 	primary, ok := ms.models[role]
 	if !ok {
@@ -140,7 +140,7 @@ func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) ag
 	}
 }
 
-// Summary 返回模型分配摘要（供日志使用）。
+// Summary Quay lạiMô hình分配Tóm tắt（供日志使用）。
 func (ms *ModelSet) Summary() string {
 	var parts []string
 	for role, m := range ms.models {
@@ -155,8 +155,8 @@ func (ms *ModelSet) Summary() string {
 	return fmt.Sprintf("default=%s/%s %s", provider, name, strings.Join(parts, " "))
 }
 
-// CurrentSelection 返回角色当前生效的 provider/model。
-// role 为空或 "default" 时返回默认模型。
+// CurrentSelection Quay lại角色Hiện tại生效的 provider/model。
+// role 为Rỗng或 "default" 时Quay lạiMặc địnhMô hình。
 func (ms *ModelSet) CurrentSelection(role string) (provider, model string, explicit bool) {
 	if role == "" || role == "default" {
 		provider, model = ms.Default.Current()
@@ -170,8 +170,8 @@ func (ms *ModelSet) CurrentSelection(role string) (provider, model string, expli
 	return provider, model, false
 }
 
-// Swap 切换默认模型或指定角色模型。
-// role 为空或 "default" 时切换默认模型；其他角色切换为显式覆盖。
+// Swap 切换Mặc địnhMô hình或指定角色Mô hình。
+// role 为Rỗng或 "default" 时切换Mặc địnhMô hình；Khác角色切换为显式覆盖。
 func (ms *ModelSet) Swap(role, provider, model string) error {
 	pc, ok := ms.config.Providers[provider]
 	if !ok {
@@ -179,7 +179,7 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 	}
 	next, err := createModelFromConfig(provider, model, pc, make(map[string]agentcore.ChatModel))
 	if err != nil {
-		return fmt.Errorf("切换模型失败: %w", err)
+		return fmt.Errorf("Đổi mô hìnhThất bại: %w", err)
 	}
 
 	if role == "" || role == "default" {
@@ -199,8 +199,8 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 	return nil
 }
 
-// ModelName 从 ChatModel 中提取当前模型名，失败返回空字符串。
-// 支持 SwappableModel 的热切换：调用时总是返回最新值。
+// ModelName 从 ChatModel 中提取Hiện tạiMô hình名，Thất bạiQuay lạiRỗng字符串。
+// 支持 SwappableModel 的热切换：调用时总是Quay lại最Mới值。
 func ModelName(m agentcore.ChatModel) string {
 	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
 		return info.Info().Name
@@ -208,12 +208,12 @@ func ModelName(m agentcore.ChatModel) string {
 	return ""
 }
 
-// NewModelSet 根据配置创建多模型集合。
+// NewModelSet 根据Cấu hìnhTạo多Mô hình集合。
 // 相同 provider+model 组合复用同一个实例。
 func NewModelSet(cfg Config) (*ModelSet, error) {
 	cache := make(map[string]agentcore.ChatModel)
 
-	// 创建默认模型
+	// TạoMặc địnhMô hình
 	defaultPC := cfg.DefaultProviderConfig()
 	defaultModel, err := createModelFromConfig(cfg.Provider, cfg.ModelName, defaultPC, cache)
 	if err != nil {
@@ -227,7 +227,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 		config:    cfg,
 	}
 
-	// 创建角色覆盖模型
+	// Tạo角色覆盖Mô hình
 	for role, rc := range cfg.Roles {
 		pc, ok := cfg.Providers[rc.Provider]
 		if !ok {
@@ -238,7 +238,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 			return nil, fmt.Errorf("role %s model: %w", role, err)
 		}
 		ms.models[role] = NewSwappableModel(rc.Provider, rc.Model, m)
-		slog.Info("角色模型分配", "module", "config", "role", role, "provider", rc.Provider, "model", rc.Model)
+		slog.Info("角色Mô hình分配", "module", "config", "role", role, "provider", rc.Provider, "model", rc.Model)
 		if len(rc.Fallbacks) == 0 {
 			continue
 		}
@@ -265,7 +265,7 @@ func NewModelSet(cfg Config) (*ModelSet, error) {
 	return ms, nil
 }
 
-// createModelFromConfig 创建或复用 ChatModel 实例。
+// createModelFromConfig Tạo或复用 ChatModel 实例。
 func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache map[string]agentcore.ChatModel) (agentcore.ChatModel, error) {
 	cacheKey := providerKey + "|" + model
 	if m, ok := cache[cacheKey]; ok {
@@ -274,7 +274,7 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 
 	providerType, err := pc.ProviderType(providerKey)
 	if err != nil {
-		return nil, fmt.Errorf("解析 provider 类型失败: %w", err)
+		return nil, fmt.Errorf("解析 provider 类型Thất bại: %w", err)
 	}
 
 	m, err := llm.NewModel(providerType, model,

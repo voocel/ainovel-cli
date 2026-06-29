@@ -42,10 +42,10 @@ func TestSplitText_Chinese(t *testing.T) {
 
 func TestSplitText_ChineseWithMarkdownPrefix(t *testing.T) {
 	src := `# 第1章 起航
-正文一。
+Chính văn一。
 
 ## 第二回 风浪
-正文二。`
+Chính văn二。`
 
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
@@ -83,10 +83,10 @@ A blade fell.`
 
 func TestSplitText_Volume(t *testing.T) {
 	src := `第一卷 风起
-卷一正文。
+卷一Chính văn。
 
 卷二 云涌
-卷二正文。`
+卷二Chính văn。`
 
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
@@ -108,7 +108,7 @@ func TestSplitText_SpecialUnits(t *testing.T) {
 多年以后。
 
 番外
-番外正文。`
+番外Chính văn。`
 
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 4 {
@@ -143,10 +143,10 @@ Years later.`
 
 func TestSplitText_NoTitle_FallsBack(t *testing.T) {
 	src := `第一章
-没有空格的标题，正文紧跟。
+没有Rỗng格的Tiêu đề，Chính văn紧跟。
 
 第二章
-第二段正文。`
+第二段Chính văn。`
 
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
@@ -158,8 +158,8 @@ func TestSplitText_NoTitle_FallsBack(t *testing.T) {
 }
 
 func TestSplitText_NoMatches(t *testing.T) {
-	src := `这是一段没有任何章节标题的文本。
-全部按一段处理。`
+	src := `这是一段没有任何ChươngTiêu đề的文本。
+Tất cả按一段处理。`
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 0 {
 		t.Errorf("want empty, got %d", len(got))
@@ -167,19 +167,19 @@ func TestSplitText_NoMatches(t *testing.T) {
 }
 
 func TestSplitText_EmptyChapterSkipped(t *testing.T) {
-	src := `第一章 标题
-正文。
+	src := `第一章 Tiêu đề
+Chính văn。
 
-第二章 空章
+第二章 Rỗng章
 
 第三章 末章
-末章正文。`
+末章Chính văn。`
 
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
 		t.Fatalf("want 2 (skip empty), got %d", len(got))
 	}
-	if got[0].Title != "标题" || got[1].Title != "末章" {
+	if got[0].Title != "Tiêu đề" || got[1].Title != "末章" {
 		t.Errorf("titles after skip: %+v", got)
 	}
 }
@@ -213,13 +213,13 @@ func TestSplitText_FullWidthSpace(t *testing.T) {
 	if got[0].Title != "风起" {
 		t.Errorf("ch1 title: %q", got[0].Title)
 	}
-	if got[1].Title != "第2章" { // 仅尾随全角空格 → 回退占位标题
+	if got[1].Title != "第2章" { // 仅尾随全角Rỗng格 → 回退占位Tiêu đề
 		t.Errorf("ch2 title: %q", got[1].Title)
 	}
 }
 
 func TestSplitText_BodyPrefix(t *testing.T) {
-	src := "正文 第一章 风起\n北风。\n\n正文　第二章　云涌\n乌云。\n"
+	src := "Chính văn 第一章 风起\n北风。\n\nChính văn　第二章　云涌\n乌云。\n"
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
 		t.Fatalf("want 2, got %d", len(got))
@@ -232,7 +232,7 @@ func TestSplitText_BodyPrefix(t *testing.T) {
 func TestSplitFile_ReadsAndSplits(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "novel.txt")
-	src := "第一章 起\n正文 A\n\n第二章 终\n正文 B\n"
+	src := "第一章 起\nChính văn A\n\n第二章 终\nChính văn B\n"
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestSplitFile_EmptyError(t *testing.T) {
 }
 
 func TestSplitFile_GBKEncoded(t *testing.T) {
-	src := "第一章 起\n正文 A\n\n第二章 终\n正文 B\n"
+	src := "第一章 起\nChính văn A\n\n第二章 终\nChính văn B\n"
 	data, err := simplifiedchinese.GB18030.NewEncoder().Bytes([]byte(src))
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestSplitFile_GBKEncoded(t *testing.T) {
 func TestSplitFile_UTF8BOM(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bom.txt")
-	src := "\uFEFF第一章 起\n正文 A\n"
+	src := "\uFEFF第一章 起\nChính văn A\n"
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -298,10 +298,10 @@ func TestSplitFile_UTF8BOM(t *testing.T) {
 
 func TestSplitText_SectionAndAct(t *testing.T) {
 	src := `第一节 开端
-正文一。
+Chính văn一。
 
 第二幕 高潮
-正文二。`
+Chính văn二。`
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
 		t.Fatalf("want 2, got %d", len(got))
@@ -313,10 +313,10 @@ func TestSplitText_SectionAndAct(t *testing.T) {
 
 func TestSplitText_UppercaseNumbers(t *testing.T) {
 	src := `第壹章 起
-正文一。
+Chính văn一。
 
 第贰拾章 终
-正文二。`
+Chính văn二。`
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 2 {
 		t.Fatalf("want 2, got %d", len(got))
@@ -328,13 +328,13 @@ func TestSplitText_UppercaseNumbers(t *testing.T) {
 
 func TestSplitText_BracketWrapped(t *testing.T) {
 	src := `【第一章 风起】
-正文一。
+Chính văn一。
 
 〖第二章 云涌〗
-正文二。
+Chính văn二。
 
 【楔子】
-楔子正文。`
+楔子Chính văn。`
 	got := splitText(src, defaultChapterRegex)
 	if len(got) != 3 {
 		t.Fatalf("want 3, got %d", len(got))

@@ -50,12 +50,12 @@ func TestExtractNovelNameFromPremise_Placeholder(t *testing.T) {
 		premise string
 		want    string
 	}{
-		{"真实书名", "# 长夜将明\n\n## 题材", "长夜将明"},
-		{"带书名号", "# 《星河彼岸》\n## 题材", "星河彼岸"},
-		{"占位-书名", "# 书名\n## 题材", ""},
-		{"占位-示例书名", "# 《示例书名》\n## 题材", ""},
-		{"占位-实际书名", "# 实际书名\n## 题材", ""},
-		{"首行非标题", "纯文本第一行\n# 书名", ""},
+		{"真实Tên sách", "# 长夜将明\n\n## 题材", "长夜将明"},
+		{"带Tên sách号", "# 《星河彼岸》\n## 题材", "星河彼岸"},
+		{"占位-Tên sách", "# Tên sách\n## 题材", ""},
+		{"占位-示例Tên sách", "# 《示例Tên sách》\n## 题材", ""},
+		{"占位-实际Tên sách", "# 实际Tên sách\n## 题材", ""},
+		{"首行非Tiêu đề", "Văn bản thuần第一行\n# Tên sách", ""},
 	}
 	for _, c := range cases {
 		if got := ExtractNovelNameFromPremise(c.premise); got != c.want {

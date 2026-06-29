@@ -1,11 +1,11 @@
-// Package flow 实现垂类路由：Host 根据事实决定下一个调哪个子代理做什么。
+// Package flow 实现垂类路由：Host 根据事实决定下一个调哪个子Proxy做什么。
 //
 // 设计原则：
-//   - Route 是纯函数：输入 State，输出 *Instruction。无 IO、无 Store 调用，可单测。
-//   - State 由 LoadState（非纯）从 Store 构造，一次性把路由需要的事实读齐。
-//   - 返回 nil 是合法的：表示"裁定场景，让 Coordinator LLM 自主决策"。
+//   - Route 是纯函数：Nhập State，输出 *Instruction。Không có IO、Không có Store 调用，可单测。
+//   - State 由 LoadState（非纯）从 Store 构造，一次性把路由Cần的事实读齐。
+//   - Quay lại nil 是合法的：表示"裁定Cảnh，让 Coordinator LLM 自主决策"。
 //
-// Router 覆盖的是"查表型"决策（每章下一步、弧末后处理、队列驱动），
+// Router 覆盖的是"查表型"决策（每章Bước tiếp、弧末后处理、队列驱动），
 // 不覆盖"语义理解型"决策（选规划师、处理用户 Steer、输出总结）。
 package flow
 
@@ -16,26 +16,26 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-// Instruction 指示 Host 下一步要求 Coordinator 调用的子代理与任务。
+// Instruction 指示 Host Bước tiếp要求 Coordinator 调用的子Proxy与任务。
 type Instruction struct {
 	Agent   string // architect_long / architect_short / writer / editor
-	Task    string // 给子代理的任务描述
+	Task    string // 给子Proxy的任务描述
 	Reason  string // 给 Coordinator 看的理由（可选，方便调试与日志）
-	Chapter int    // writer 任务涉及的章节号（续写/重写/打磨）；0 表示不涉及（editor/architect 任务）
+	Chapter int    // writer 任务涉及的Chương号（续写/重写/打磨）；0 表示不涉及（editor/architect 任务）
 }
 
-// State 是 Route 的输入：所有事实必须在此显式声明，禁止 Route 内部读 Store。
+// State 是 Route 的Nhập：所有事实必须在此显式声明，禁止 Route 内部读 Store。
 type State struct {
 	Progress *domain.Progress
 
-	// 上一个已完成章节（Progress.CompletedChapters 末尾）；为 0 表示尚未开始写作。
+	// 上一个Đã hoàn thànhChương（Progress.CompletedChapters 末尾）；为 0 表示尚未Bắt đầuViết。
 	LastCompleted int
 
-	// 上一章的弧边界信息；IsArcEnd=false 时其他字段无意义。
+	// 上一章的弧边界信息；IsArcEnd=false 时Khác字段Không có意义。
 	// 当 LastCompleted=0 或非 Layered 模式时应为 nil。
 	ArcBoundary *storepkg.ArcBoundary
 
-	// 弧末后处理的三个事实：评审 / 弧摘要 / 卷摘要是否已完成。
+	// 弧末后处理的三个事实：评审 / 弧Tóm tắt / 卷Tóm tắtCó czy khôngĐã hoàn thành。
 	HasArcReview     bool
 	HasArcSummary    bool
 	HasVolumeSummary bool
@@ -44,17 +44,17 @@ type State struct {
 	FoundationMissing []string
 }
 
-// Route 根据事实返回下一步指令；返回 nil 表示让 Coordinator LLM 自主裁定。
+// Route 根据事实Quay lạiBước tiếp指令；Quay lại nil 表示让 Coordinator LLM 自主裁定。
 //
 // 决策优先级（互斥，自上而下匹配第一个）：
 //  1. Phase=Complete        → nil（LLM 输出总结）
 //  2. Phase!=Writing        → nil（LLM 裁定规划师选型 / 规划补齐）
-//  3. PendingRewrites 非空  → writer 按队列重写/打磨
-//  4. Flow=Reviewing        → nil（editor 刚保存 review，verdict 分叉由工具层处理）
+//  3. PendingRewrites 非Rỗng  → writer 按队列重写/打磨
+//  4. Flow=Reviewing        → nil（editor 刚Lưu review，verdict 分叉由工具层处理）
 //  5. Flow=Steering         → nil（用户干预处理中）
 //  6. 弧末评审缺失           → editor(arc review)
-//  7. 弧末评审有但弧摘要缺失  → editor(arc summary)
-//  8. 卷末弧摘要有但卷摘要缺失 → editor(volume summary)
+//  7. 弧末评审有但弧Tóm tắt缺失  → editor(arc summary)
+//  8. 卷末弧Tóm tắt有但卷Tóm tắt缺失 → editor(volume summary)
 //  9. 下一弧是骨架           → architect_long(expand_arc)
 //
 // 10. 卷末需决策下一卷       → architect_long(append_volume / complete_book)
@@ -85,7 +85,7 @@ func Route(s State) *Instruction {
 		return &Instruction{
 			Agent:   "writer",
 			Task:    fmt.Sprintf("%s第 %d 章", verb, ch),
-			Reason:  fmt.Sprintf("PendingRewrites 队列剩余 %d 章", len(p.PendingRewrites)),
+			Reason:  fmt.Sprintf("PendingRewrites 队列Còn lại %d 章", len(p.PendingRewrites)),
 			Chapter: ch,
 		}
 	}
@@ -95,7 +95,7 @@ func Route(s State) *Instruction {
 		return nil
 	}
 
-	// 5. 用户干预处理中：Coordinator 正在裁定，Host 不抢占
+	// 5. 用户干预处理中：Coordinator Đang裁定，Host 不抢占
 	if p.Flow == domain.FlowSteering {
 		return nil
 	}
@@ -108,31 +108,31 @@ func Route(s State) *Instruction {
 			return &Instruction{
 				Agent:  "editor",
 				Task:   fmt.Sprintf("对第 %d 卷第 %d 弧做弧级评审（scope=arc）", b.Volume, b.Arc),
-				Reason: "弧末评审未完成",
+				Reason: "弧末评审未Hoàn thành",
 			}
 		case !s.HasArcSummary:
 			return &Instruction{
 				Agent:  "editor",
-				Task:   fmt.Sprintf("生成第 %d 卷第 %d 弧摘要（save_arc_summary）", b.Volume, b.Arc),
-				Reason: "弧摘要未完成",
+				Task:   fmt.Sprintf("生成第 %d 卷第 %d 弧Tóm tắt（save_arc_summary）", b.Volume, b.Arc),
+				Reason: "弧Tóm tắt未Hoàn thành",
 			}
 		case b.IsVolumeEnd && !s.HasVolumeSummary:
 			return &Instruction{
 				Agent:  "editor",
-				Task:   fmt.Sprintf("生成第 %d 卷卷摘要（save_volume_summary）", b.Volume),
-				Reason: "卷摘要未完成",
+				Task:   fmt.Sprintf("生成第 %d 卷卷Tóm tắt（save_volume_summary）", b.Volume),
+				Reason: "卷Tóm tắt未Hoàn thành",
 			}
 		case b.NeedsExpansion && b.NextArc > 0:
 			return &Instruction{
 				Agent:  "architect_long",
-				Task:   fmt.Sprintf("展开第 %d 卷第 %d 弧（save_foundation type=expand_arc）", b.NextVolume, b.NextArc),
-				Reason: "下一弧骨架待展开",
+				Task:   fmt.Sprintf("Mở rộng第 %d 卷第 %d 弧（save_foundation type=expand_arc）", b.NextVolume, b.NextArc),
+				Reason: "下一弧骨架待Mở rộng",
 			}
 		case b.NeedsNewVolume:
 			return &Instruction{
 				Agent:  "architect_long",
-				Task:   "评估后调用 save_foundation type=append_volume（继续写）或 type=complete_book（全书结束）",
-				Reason: "卷末需决定追加新卷或结束全书",
+				Task:   "评估后调用 save_foundation type=append_volume（Tiếp tục写）或 type=complete_book（全书Kết thúc）",
+				Reason: "卷末需决定追加Mới卷或Kết thúc全书",
 			}
 		}
 	}
@@ -154,7 +154,7 @@ func Route(s State) *Instruction {
 // 格式固定，便于 Coordinator prompt 识别与 LLM 直接响应。
 func FormatMessage(i *Instruction) string {
 	return fmt.Sprintf(
-		"[Host 下达指令]\n下一步：调用 subagent(%s, %q)\nagent: %s\ntask: %q\n理由：%s\n这是流程层的明确指令，请立即执行；subagent 的 agent/task 参数必须原样使用上面的 agent/task，不要改写 task，不要先调 novel_context，不要先输出推理。",
+		"[Host 下达指令]\nBước tiếp：调用 subagent(%s, %q)\nagent: %s\ntask: %q\n理由：%s\n这是流程层的明确指令，Vui lòng立即执行；subagent 的 agent/task 参数必须原样使用上面的 agent/task，不要改写 task，不要先调 novel_context，不要先输出推理。",
 		i.Agent, i.Task, i.Agent, i.Task, i.Reason,
 	)
 }

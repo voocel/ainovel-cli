@@ -2,7 +2,7 @@ package models
 
 import "strings"
 
-// SameModelID 判断两个模型标识是否指向同一个规范模型（忽略日期后缀、大小写、点/横线差异）。
+// SameModelID 判断两个Mô hình标识Có czy không指向同一个规范Mô hình（忽略日期后缀、大小写、点/横线差异）。
 func SameModelID(a, b string) bool {
 	return modelLookupMatches(normalizeModelLookupID(a), normalizeModelLookupID(b))
 }
@@ -41,7 +41,7 @@ func modelLookupMatches(knownID, targetID string) bool {
 	return false
 }
 
-// isDatedModelSuffix 判断字符串是否形如 "-20250514"（连字符 + 8 位数字）。
+// isDatedModelSuffix 判断字符串Có czy không形如 "-20250514"（连字符 + 8 位数字）。
 func isDatedModelSuffix(s string) bool {
 	if len(s) != 9 || s[0] != '-' {
 		return false

@@ -8,17 +8,17 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-// CharacterStore 管理角色档案和状态快照。
+// CharacterStore 管理角色档案和Trạng tháiChụp。
 type CharacterStore struct {
 	io      *IO
-	outline *OutlineStore // 只读依赖，用于快照遍历
+	outline *OutlineStore // 只读依赖，用于Chụp遍历
 }
 
 func NewCharacterStore(io *IO, outline *OutlineStore) *CharacterStore {
 	return &CharacterStore{io: io, outline: outline}
 }
 
-// Save 同时保存 characters.json 和 characters.md（原子写入）。
+// Save 同时Lưu characters.json 和 characters.md（原子写入）。
 func (s *CharacterStore) Save(chars []domain.Character) error {
 	return s.io.WithWriteLock(func() error {
 		if err := s.io.WriteJSONUnlocked("characters.json", chars); err != nil {
@@ -28,7 +28,7 @@ func (s *CharacterStore) Save(chars []domain.Character) error {
 	})
 }
 
-// Load 从 characters.json 读取角色档案。
+// Load 从 characters.json Đọc角色档案。
 func (s *CharacterStore) Load() ([]domain.Character, error) {
 	var chars []domain.Character
 	if err := s.io.ReadJSON("characters.json", &chars); err != nil {
@@ -40,12 +40,12 @@ func (s *CharacterStore) Load() ([]domain.Character, error) {
 	return chars, nil
 }
 
-// SaveSnapshots 保存角色状态快照到 meta/snapshots/v{vol}a{arc}.json。
+// SaveSnapshots Lưu角色Trạng tháiChụp到 meta/snapshots/v{vol}a{arc}.json。
 func (s *CharacterStore) SaveSnapshots(volume, arc int, snapshots []domain.CharacterSnapshot) error {
 	return s.io.WriteJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), snapshots)
 }
 
-// LoadSnapshots 读取指定卷弧的角色快照。
+// LoadSnapshots Đọc指定卷弧的角色Chụp。
 func (s *CharacterStore) LoadSnapshots(volume, arc int) ([]domain.CharacterSnapshot, error) {
 	var snapshots []domain.CharacterSnapshot
 	if err := s.io.ReadJSON(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume, arc), &snapshots); err != nil {
@@ -57,7 +57,7 @@ func (s *CharacterStore) LoadSnapshots(volume, arc int) ([]domain.CharacterSnaps
 	return snapshots, nil
 }
 
-// LoadLatestSnapshots 加载最近一次角色快照（按卷弧倒序查找）。
+// LoadLatestSnapshots 加载最近一次角色Chụp（按卷弧倒序查找）。
 func (s *CharacterStore) LoadLatestSnapshots() ([]domain.CharacterSnapshot, error) {
 	volumes, _ := s.outline.LoadLayeredOutline()
 	if len(volumes) == 0 {

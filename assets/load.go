@@ -39,12 +39,12 @@ type Bundle struct {
 	References tools.References
 	Prompts    Prompts
 	Styles     map[string]string
-	// RulesFS 是 assets/rules 子树（根目录直接包含 default.md）。
+	// RulesFS 是 assets/rules 子树（根Thư mục直接包含 default.md）。
 	// 调用方传给 rules.Load 作为内置规则来源。
 	RulesFS fs.FS
 }
 
-// Load 返回指定风格对应的资源集合。
+// Load Quay lại指定风格对应的资源集合。
 func Load(style string) Bundle {
 	return Bundle{
 		References: loadReferences(style),
@@ -54,8 +54,8 @@ func Load(style string) Bundle {
 	}
 }
 
-// loadRulesFS 返回 assets/rules 的子文件系统；根目录直接包含 default.md。
-// fs.Sub 失败时（理论不应发生）返回 nil，rules.Load 据此跳过内置来源。
+// loadRulesFS Quay lại assets/rules 的子Tập tin系统；根Thư mục直接包含 default.md。
+// fs.Sub Thất bại时（理论不应发生）Quay lại nil，rules.Load 据此Bỏ qua内置来源。
 func loadRulesFS() fs.FS {
 	sub, err := fs.Sub(rulesFS, "rules")
 	if err != nil {
@@ -114,9 +114,9 @@ func withSimulationGuidance(prompt, role string) string {
 
 const simulationGuidance = `## 仿写画像
 
-当 novel_context 返回 simulation_profile 时，必须把它视为当前作品的仿写方向约束。{{role}} 应读取其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
+当 novel_context Quay lại simulation_profile 时，必须把它视为Hiện tại作品的仿写方向约束。{{role}} 应Đọc其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
 
-使用原则：借鉴结构、节奏、钩子、信息释放和吸引读者的手法；不要复制原文句子、人物、地名、专有设定或固定桥段。若 simulation_profile 与用户显式要求冲突，优先服从用户要求。`
+使用原则：借鉴结构、节奏、钩子、信息释放和吸引读者的手法；不要复制原文句子、Nhân vật、地名、专有设定或固定桥段。若 simulation_profile 与用户显式要求冲突，优先服从用户要求。`
 
 func loadStyles() map[string]string {
 	styles := make(map[string]string)

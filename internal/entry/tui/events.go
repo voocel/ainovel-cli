@@ -16,7 +16,7 @@ import (
 type (
 	eventMsg       host.Event
 	snapshotMsg    host.UISnapshot
-	doneMsg        struct{ complete bool } // complete=true 全书完成，false 出错停止
+	doneMsg        struct{ complete bool } // complete=true 全书Hoàn thành，false 出错停止
 	abortResultMsg struct{ stopped bool }
 	bootstrapMsg   struct {
 		replay  []domain.RuntimeQueueItem
@@ -26,7 +26,7 @@ type (
 	reportLoadedMsg struct {
 		reqID      int
 		report     diag.Report
-		exportPath string // 脱敏诊断文件绝对路径；空 = 导出失败
+		exportPath string // 脱敏诊断Tập tin绝对Đường dẫn；Rỗng = XuấtThất bại
 		finishedAt time.Time
 	}
 	askUserMsg       askUserRequest
@@ -52,9 +52,9 @@ type (
 	toolSpinnerTickMsg time.Time // 事件流工具 spinner 独立 tick（更快、独立于顶栏/星星）
 	cursorTickMsg      time.Time // 流式光标独立 tick
 	streamDeltaMsg     string    // 流式 token 增量
-	streamClearMsg     struct{}  // 清空流式缓冲（新消息开始）
-	streamFlushTickMsg struct{}  // 60fps 节流刷新流式面板（合并 token 级 delta）
-	quitResetMsg       struct{}  // 双次 Ctrl+C 超时重置
+	streamClearMsg     struct{}  // 清Rỗng流式缓冲（Mới消息Bắt đầu）
+	streamFlushTickMsg struct{}  // 60fps 节流Làm mới流式面板（合并 token 级 delta）
+	quitResetMsg       struct{}  // 双次 Ctrl+C 超时Đặt lại
 )
 
 // --- Cmd 函数 ---
@@ -122,7 +122,7 @@ func runCoCreate(rt *host.Host, state *cocreateState) tea.Cmd {
 	state.cancel = cancel
 	state.deltaCh = make(chan cocreateStreamItem, 64)
 	state.doneCh = make(chan cocreateDoneMsg, 1)
-	// 阶段共创带故事状态摘要、产出"后续方向 brief"；冷启动从零澄清需求。两者签名一致。
+	// 阶段共创带故事Trạng tháiTóm tắt、产出"后续方向 brief"；冷启动从零澄清需求。两者签名一致。
 	stream := rt.CoCreateStream
 	if state.stage {
 		stream = rt.StageCoCreateStream
@@ -149,7 +149,7 @@ func listenCoCreateDelta(state *cocreateState) tea.Cmd {
 		return nil
 	}
 	// 抓取 channel 局部引用：避免后续 state.deltaCh 被 reassign 时
-	// 旧 listen 闭包错读新 channel（虽然当前流程不触发，留作维护陷阱不应该）。
+	// Cũ listen 闭包错读Mới channel（虽然Hiện tại流程不触发，留作维护陷阱不应该）。
 	reqID := state.reqID
 	ch := state.deltaCh
 	return func() tea.Msg {
@@ -191,8 +191,8 @@ func continueRuntime(rt *host.Host, text string) tea.Cmd {
 	}
 }
 
-// resumeFromCoCreate 把阶段共创产出的后续方向 brief 注入并恢复创作。
-// 复用 continueResultMsg：成功即接 listenDone 续跑，失败回显错误。
+// resumeFromCoCreate 把阶段共创产出的后续方向 brief 注入并Phục hồi创作。
+// 复用 continueResultMsg：Thành công即接 listenDone 续跑，Thất bại回显Lỗi。
 func resumeFromCoCreate(rt *host.Host, draft string) tea.Cmd {
 	return func() tea.Msg {
 		err := rt.ResumeFromCoCreate(draft)
@@ -200,7 +200,7 @@ func resumeFromCoCreate(rt *host.Host, draft string) tea.Cmd {
 	}
 }
 
-// cancelCoCreate 放弃阶段共创：清占用标记、保持暂停。事件经 events 通道回流，无需返回消息。
+// cancelCoCreate 放弃阶段共创：清占用标记、保持Tạm dừng。事件经 events 通道回流，Không có需Quay lại消息。
 func cancelCoCreate(rt *host.Host) tea.Cmd {
 	return func() tea.Msg {
 		rt.CancelCoCreate()
@@ -219,7 +219,7 @@ func loadReport(dir string, reqID int) tea.Cmd {
 		s := store.NewStore(dir)
 		// Diagnose = 创作诊断 + 运行时检测，运行时 Finding 也进屏上报告。
 		rep, rc := diag.Diagnose(s)
-		// 复用 rep+rc 写出脱敏诊断文件（导出失败不影响屏上报告）。
+		// 复用 rep+rc 写出脱敏诊断Tập tin（XuấtThất bại不影响屏上报告）。
 		exportPath, _ := diag.WriteExport(s, rep, rc)
 		return reportLoadedMsg{
 			reqID:      reqID,
@@ -236,7 +236,7 @@ func tickSpinner() tea.Cmd {
 	})
 }
 
-// tickToolSpinner 驱动事件流"进行中"行的 spinner。独立于 tickSpinner，节奏更快（150ms）。
+// tickToolSpinner 驱动事件流"Đang thực hiện"行的 spinner。独立于 tickSpinner，节奏更快（150ms）。
 func tickToolSpinner() tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 		return toolSpinnerTickMsg(t)
@@ -249,8 +249,8 @@ func tickCursor() tea.Cmd {
 	})
 }
 
-// tickStreamFlush 驱动流式面板节流刷新。streamDelta 不再每个 token 立即重渲，
-// 而是 mark dirty；本 tick 每 16ms（~60fps）检查并合并刷新一次，把 LLM 高速流式
+// tickStreamFlush 驱动流式面板节流Làm mới。streamDelta 不再每个 token 立即重渲，
+// 而是 mark dirty；本 tick 每 16ms（~60fps）Kiểm tra并合并Làm mới一次，把 LLM 高速流式
 // 期的"每秒数十次全量重渲"压回 60 次上限。
 func tickStreamFlush() tea.Cmd {
 	return tea.Tick(16*time.Millisecond, func(t time.Time) tea.Msg {
@@ -265,7 +265,7 @@ func listenStream(rt *host.Host) tea.Cmd {
 			return nil
 		}
 		// sentinel 派发为 streamClearMsg，保证与正常 delta 在同一通道里按 emit
-		// 顺序到达 TUI。双通道时 clearCh 与 streamCh 之间无序，✻ header 经常被
+		// 顺序到达 TUI。双通道时 clearCh 与 streamCh 之间Không có序，✻ header 经常被
 		// 错塞到上一段 thinking 末尾。
 		if delta == host.StreamClearSentinel {
 			return streamClearMsg{}

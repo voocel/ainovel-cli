@@ -15,7 +15,7 @@ func TestPendingCommitLifecycle(t *testing.T) {
 	pending := domain.PendingCommit{
 		Chapter:   3,
 		Stage:     domain.CommitStageProgressMarked,
-		Summary:   "第3章摘要",
+		Summary:   "第3章Tóm tắt",
 		StartedAt: "2026-03-27T10:00:00Z",
 		UpdatedAt: "2026-03-27T10:01:00Z",
 		Result: &domain.CommitResult{

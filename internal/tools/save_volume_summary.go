@@ -10,7 +10,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// SaveVolumeSummaryTool 保存卷级摘要，Editor 在卷结束时调用。
+// SaveVolumeSummaryTool Lưu卷级Tóm tắt，Editor 在卷Kết thúc时调用。
 type SaveVolumeSummaryTool struct {
 	store *store.Store
 }
@@ -21,9 +21,9 @@ func NewSaveVolumeSummaryTool(store *store.Store) *SaveVolumeSummaryTool {
 
 func (t *SaveVolumeSummaryTool) Name() string { return "save_volume_summary" }
 func (t *SaveVolumeSummaryTool) Description() string {
-	return "保存卷级摘要（长篇模式，卷结束时调用）"
+	return "Lưu卷级Tóm tắt（长篇模式，卷Kết thúc时调用）"
 }
-func (t *SaveVolumeSummaryTool) Label() string { return "保存卷摘要" }
+func (t *SaveVolumeSummaryTool) Label() string { return "Lưu卷Tóm tắt" }
 
 // 写工具，禁止并发。
 func (t *SaveVolumeSummaryTool) ReadOnly(_ json.RawMessage) bool        { return false }
@@ -32,9 +32,9 @@ func (t *SaveVolumeSummaryTool) ConcurrencySafe(_ json.RawMessage) bool { return
 func (t *SaveVolumeSummaryTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("volume", schema.Int("卷号")).Required(),
-		schema.Property("title", schema.String("卷标题")).Required(),
-		schema.Property("summary", schema.String("卷摘要（500字以内）")).Required(),
-		schema.Property("key_events", schema.Array("卷内关键事件", schema.String(""))).Required(),
+		schema.Property("title", schema.String("卷Tiêu đề")).Required(),
+		schema.Property("summary", schema.String("卷Tóm tắt（500字以内）")).Required(),
+		schema.Property("key_events", schema.Array("卷内Sự kiện trọng tâm", schema.String(""))).Required(),
 	)
 }
 

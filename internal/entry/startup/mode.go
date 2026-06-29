@@ -12,16 +12,16 @@ import "fmt"
 type Mode string
 
 const (
-	// ModeQuick 直接以用户输入作为创作起点。
+	// ModeQuick 直接以用户Nhập作为创作起点。
 	ModeQuick Mode = "quick"
-	// ModeCoCreate 先做多轮澄清，再产出创作草稿进入 Engine。
+	// ModeCoCreate 先做多轮澄清，再产出创作Bản nháp进入 Engine。
 	ModeCoCreate Mode = "cocreate"
-	// ModeContinueFromNovel 基于已有小说内容装配上下文后续写。
+	// ModeContinueFromNovel 基于已有小说内容装配Ngữ cảnh后续写。
 	ModeContinueFromNovel Mode = "continue_from_novel"
 )
 
-// Request 描述入口层提交给启动策略层的原始输入。
-// 宿主入口先收集用户输入，再由 startup 把它整理为可进入 Engine 的计划。
+// Request 描述入口层Nộp给启动策略层的原始Nhập。
+// 宿主入口先收集用户Nhập，再由 startup 把它整理为可进入 Engine 的计划。
 type Request struct {
 	Mode        Mode
 	UserPrompt  string
@@ -30,7 +30,7 @@ type Request struct {
 	Interactive bool
 }
 
-// Plan 描述启动策略层产出的结果。
+// Plan 描述启动策略层产出的Kết quả。
 // 宿主入口不应自己拼接正式启动 prompt，而应消费 Plan 再驱动 Engine。
 type Plan struct {
 	Mode        Mode
@@ -43,7 +43,7 @@ type Plan struct {
 var ErrNotImplemented = fmt.Errorf("startup mode not implemented")
 
 // PrepareContinueFromNovel 是“根据已有小说续写”的统一预留落点。
-// TUI/headless 未来都应先把输入整理到 Request，再从这里产出可进入 Engine 的 Plan。
+// TUI/headless 未来都应先把Nhập整理到 Request，再从这里产出可进入 Engine 的 Plan。
 func PrepareContinueFromNovel(req Request) (Plan, error) {
 	return Plan{}, fmt.Errorf("%w: %s", ErrNotImplemented, ModeContinueFromNovel)
 }

@@ -1,0 +1,118 @@
+# Bảng ánh xạ dịch tiếng Trung → tiếng Việt cho ainovel-cli Go source
+# Dùng cho sed thay thế hàng loạt
+# Format: Tiếng Trung | Tiếng Việt
+
+# === TUI labels & status ===
+未定书名|Chưa đặt tên sách
+正在运行|Đang chạy
+已完成|Đã hoàn thành
+准备就绪|Sẵn sàng
+正在等待|Đang chờ
+错误|Lỗi
+警告|Cảnh báo
+成功|Thành công
+失败|Thất bại
+暂停|Tạm dừng
+继续|Tiếp tục
+取消|Hủy
+确认|Xác nhận
+退出|Thoát
+保存|Lưu
+加载|Tải
+重试|Thử lại
+跳过|Bỏ qua
+选择|Chọn
+输入|Nhập
+搜索|Tìm kiếm
+刷新|Làm mới
+
+# === Common error/log messages ===
+错误:|Lỗi:
+警告:|Cảnh báo:
+无效的|Không hợp lệ
+未找到|Không tìm thấy
+无法|Không thể
+已存在|Đã tồn tại
+不支持|Không hỗ trợ
+已取消|Đã hủy
+已跳过|Đã bỏ qua
+正在|Đang
+请|Vui lòng
+
+# === Novel-specific terms ===
+书名|Tên sách
+章节|Chương
+大纲|Đại cương
+人物|Nhân vật
+世界观|Thế giới quan
+伏笔|伏笔
+草稿|Bản nháp
+正文|Chính văn
+标题|Tiêu đề
+摘要|Tóm tắt
+卷|Quyển
+弧|Vòng
+场景|Cảnh
+对话|Đối thoại
+叙述|叙事
+描写|Miêu tả
+铺垫|Lót nền
+高潮|Cao hồ
+结尾|Kết
+开头|Mở đầu
+回顾|Hồi thuật
+时间线|Thời gian
+状态|Trạng thái
+进度|Tiến độ
+快照|Chụp
+检查|Kiểm tra
+提交|Nộp
+审阅|审阅
+规划|规划
+写作|Viết
+编辑|Sửa
+读取|Đọc
+保存|Lưu
+更新|Cập nhật
+删除|Xóa
+创建|Tạo
+导出|Xuất
+导入|Nhập
+重启|Khởi động lại
+修复|Sửa chữa
+恢复|Phục hồi
+备份|Sao lưu
+还原|Hoàn nguyên
+
+# === Agent/tool names in comments ===
+协调器|Điều phối viên
+写手|Nhà văn
+编辑|Biên tập
+规划师|规划 sư
+建筑师|Kiến trúc sư
+分析器|Bộ phân tích
+
+# === Config terms ===
+配置|Cấu hình
+设置|Thiết lập
+模型|Mô hình
+提供商|Nhà cung cấp
+上下文|Ngữ cảnh
+窗口|Cửa sổ
+令牌|Token
+密钥|Khóa
+端点|Endpoint
+代理|Proxy
+
+# === CRUD/UI messages ===
+是否|Có hay không
+确认要|Xác nhận muốn
+删除所有|Xóa tất cả
+写入|Ghi
+读取|Đọc
+文件|Tập tin
+目录|Thư mục
+路径|Đường dẫn
+版本|Phiên bản
+更新可用|Có bản cập nhật
+已是最新|Đã là mới nhất

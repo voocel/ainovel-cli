@@ -7,7 +7,7 @@ import (
 	corecontext "github.com/voocel/agentcore/context"
 )
 
-// contextManagerConfig 聚合 ContextManager 的全部配置参数。
+// contextManagerConfig 聚合 ContextManager 的Tất cảCấu hình参数。
 type contextManagerConfig struct {
 	Model            agentcore.ChatModel
 	ContextWindow    int
@@ -55,8 +55,8 @@ func newContextManager(cfg contextManagerConfig) *corecontext.ContextEngine {
 	return engine
 }
 
-// contextRewriteCallback 创建上下文重写的日志回调。
-// 新架构简化为只写 slog,不再写 runtime queue 和 UIEvent。
+// contextRewriteCallback TạoNgữ cảnh重写的日志回调。
+// Mới架构简化为只写 slog,不再写 runtime queue 和 UIEvent。
 func contextRewriteCallback(agent string) func(corecontext.RewriteEvent) {
 	return func(ev corecontext.RewriteEvent) {
 		attrs := []any{
@@ -77,6 +77,6 @@ func contextRewriteCallback(agent string) func(corecontext.RewriteEvent) {
 				"duration_ms", info.Duration.Milliseconds(),
 			)
 		}
-		slog.Warn("上下文重写", attrs...)
+		slog.Warn("Ngữ cảnh重写", attrs...)
 	}
 }

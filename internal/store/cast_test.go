@@ -37,7 +37,7 @@ func TestCastMergeAppearances_NewEntries(t *testing.T) {
 			t.Errorf("expected BriefRole 客栈老板 for 老周, got %q", e.BriefRole)
 		}
 		if e.Name == "阿云" && e.BriefRole != "" {
-			t.Errorf("阿云 没有 intro，BriefRole 应为空，得到 %q", e.BriefRole)
+			t.Errorf("阿云 没有 intro，BriefRole 应为Rỗng，得到 %q", e.BriefRole)
 		}
 	}
 }
@@ -69,7 +69,7 @@ func TestCastMergeAppearances_IsIdempotent(t *testing.T) {
 	if err := s.Cast.MergeAppearances(5, []string{"老周"}, nil, nil); err != nil {
 		t.Fatalf("first merge: %v", err)
 	}
-	// 同一章 commit 重复触发（崩溃恢复或重写场景）
+	// 同一章 commit 重复触发（崩溃Phục hồi或重写Cảnh）
 	if err := s.Cast.MergeAppearances(5, []string{"老周"}, nil, nil); err != nil {
 		t.Fatalf("second merge: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestCastMergeAppearances_NoOverwriteBriefRole(t *testing.T) {
 	); err != nil {
 		t.Fatalf("first merge: %v", err)
 	}
-	// 第 8 章 Writer 错误地传了不同的 BriefRole（不应覆盖）
+	// 第 8 章 Writer Lỗi地传了不同的 BriefRole（不应覆盖）
 	if err := s.Cast.MergeAppearances(8,
 		[]string{"老周"},
 		[]domain.CastIntro{{Name: "老周", BriefRole: "赌坊打手"}},

@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Check 对章节正文按结构化规则进行机械检查，返回违规事实列表。
+// Check 对ChươngChính văn按结构化规则进行机械Kiểm tra，Quay lại违规事实列表。
 //
 // 设计契约：
 //   - 仅返事实，不下指令（铁律一）
@@ -14,9 +14,9 @@ import (
 //   - severity 按规则类型固定映射（参见 types.go 注释表）
 //
 // 参数：
-//   - text：章节正文（终稿或草稿都可）
-//   - wordCount：章节字数（rune 计数）。<0 时由 checker 自行计算，避免调用方重复 O(n) 扫描。
-//   - s：合并后的结构化规则；IsEmpty 时直接返回 nil。
+//   - text：ChươngChính văn（终稿或Bản nháp都可）
+//   - wordCount：Chương字数（rune 计数）。<0 时由 checker 自行计算，避免调用方重复 O(n) 扫描。
+//   - s：合并后的结构化规则；IsEmpty 时直接Quay lại nil。
 func Check(text string, wordCount int, s Structured) []Violation {
 	if s.IsEmpty() {
 		return nil

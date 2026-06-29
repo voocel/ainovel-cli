@@ -67,7 +67,7 @@ func commandRegistryInstance() commandRegistry {
 			Name:        "model",
 			Group:       "system",
 			Usage:       "/model [role]",
-			Description: "切换默认或角色模型",
+			Description: "切换Mặc định或角色Mô hình",
 			AutoExecute: true,
 			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
 				roleHint := ""
@@ -75,7 +75,7 @@ func commandRegistryInstance() commandRegistry {
 					roleHint = args[0]
 					if normalizeRoleKey(roleHint) == "" {
 						m.applyEvent(host.Event{
-							Time: time.Now(), Category: "ERROR", Summary: "未知角色：" + roleHint, Level: "error",
+							Time: time.Now(), Category: "ERROR", Summary: "Không rõ角色：" + roleHint, Level: "error",
 						})
 						m.refreshEventViewport()
 						return m, nil
@@ -110,7 +110,7 @@ func commandRegistryInstance() commandRegistry {
 				state, listenCmd, err := startImport(m.runtime, m.importSeq, args, m.width, m.height)
 				if err != nil {
 					m.applyEvent(host.Event{
-						Time: time.Now(), Category: "ERROR", Summary: "导入启动失败：" + err.Error(), Level: "error",
+						Time: time.Now(), Category: "ERROR", Summary: "Nhập启动Thất bại：" + err.Error(), Level: "error",
 					})
 					m.refreshEventViewport()
 					return m, nil
@@ -125,7 +125,7 @@ func commandRegistryInstance() commandRegistry {
 			Aliases:     []string{"plan"},
 			Group:       "writing",
 			Usage:       "/cocreate",
-			Description: "暂停创作，共创规划后续阶段走向",
+			Description: "Tạm dừng创作，共创规划后续阶段走向",
 			AutoExecute: true,
 			Run: func(m Model, _ []string) (tea.Model, tea.Cmd) {
 				if m.mode != modeRunning {
@@ -137,7 +137,7 @@ func commandRegistryInstance() commandRegistry {
 				}
 				if !m.runtime.PauseForCoCreate() {
 					m.applyEvent(host.Event{
-						Time: time.Now(), Category: "ERROR", Summary: "无法进入阶段共创：全书已完成或已在共创中", Level: "error",
+						Time: time.Now(), Category: "ERROR", Summary: "Không thể进入阶段共创：全书Đã hoàn thành或已在共创中", Level: "error",
 					})
 					m.refreshEventViewport()
 					return m, nil
@@ -152,14 +152,14 @@ func commandRegistryInstance() commandRegistry {
 			Name:        "simulate",
 			Group:       "writing",
 			Usage:       "/simulate",
-			Description: "读取 ./simulate 生成或增量更新仿写画像",
+			Description: "Đọc ./simulate 生成或增量更Mới仿写画像",
 			NeedsIdle:   true,
 			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
 				m.simSeq++
 				state, listenCmd, err := startSimulate(m.runtime, m.simSeq, args, m.width, m.height)
 				if err != nil {
 					m.applyEvent(host.Event{
-						Time: time.Now(), Category: "ERROR", Summary: "仿写画像启动失败：" + err.Error(), Level: "error",
+						Time: time.Now(), Category: "ERROR", Summary: "仿写画像启动Thất bại：" + err.Error(), Level: "error",
 					})
 					m.refreshEventViewport()
 					return m, nil
@@ -173,14 +173,14 @@ func commandRegistryInstance() commandRegistry {
 			Name:        "importsim",
 			Group:       "writing",
 			Usage:       "/importsim <profile.json>",
-			Description: "导入已有仿写画像并按语料指纹合并",
+			Description: "Nhập已有仿写画像并按语料指纹合并",
 			NeedsIdle:   true,
 			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
 				m.simSeq++
 				state, listenCmd, err := startImportSimulation(m.runtime, m.simSeq, args, m.width, m.height)
 				if err != nil {
 					m.applyEvent(host.Event{
-						Time: time.Now(), Category: "ERROR", Summary: "导入仿写画像失败：" + err.Error(), Level: "error",
+						Time: time.Now(), Category: "ERROR", Summary: "Nhập仿写画像Thất bại：" + err.Error(), Level: "error",
 					})
 					m.refreshEventViewport()
 					return m, nil
@@ -194,19 +194,19 @@ func commandRegistryInstance() commandRegistry {
 			Name:        "export",
 			Group:       "writing",
 			Usage:       "/export [path] [from=N] [to=M] [--overwrite]",
-			Description: "导出已完成章节为 TXT/EPUB",
+			Description: "XuấtĐã hoàn thànhChương为 TXT/EPUB",
 			AutoExecute: true,
 			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
 				cmd, err := startExport(m.runtime, args)
 				if err != nil {
 					m.applyEvent(host.Event{
-						Time: time.Now(), Category: "ERROR", Summary: "导出启动失败：" + err.Error(), Level: "error",
+						Time: time.Now(), Category: "ERROR", Summary: "Xuất启动Thất bại：" + err.Error(), Level: "error",
 					})
 					m.refreshEventViewport()
 					return m, nil
 				}
 				m.applyEvent(host.Event{
-					Time: time.Now(), Category: "SYSTEM", Summary: "正在导出...", Level: "info",
+					Time: time.Now(), Category: "SYSTEM", Summary: "Đang xuất...", Level: "info",
 				})
 				m.refreshEventViewport()
 				return m, cmd
@@ -223,14 +223,14 @@ func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
 	spec, ok := commandRegistryInstance().Find(cmd.name)
 	if !ok {
 		m.applyEvent(host.Event{
-			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
+			Time: time.Now(), Category: "ERROR", Summary: "Không rõ命令：/" + cmd.name, Level: "error",
 		})
 		m.refreshEventViewport()
 		return m, nil
 	}
 	if spec.NeedsIdle && m.snapshot.IsRunning {
 		m.applyEvent(host.Event{
-			Time: time.Now(), Category: "ERROR", Summary: "命令仅可在空闲状态执行：/" + spec.Name, Level: "error",
+			Time: time.Now(), Category: "ERROR", Summary: "命令仅可在Rỗng闲Trạng thái执行：/" + spec.Name, Level: "error",
 		})
 		m.refreshEventViewport()
 		return m, nil

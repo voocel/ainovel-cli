@@ -12,7 +12,7 @@ func TestLint_CleanText(t *testing.T) {
 }
 
 func TestLint_MarkdownResidue(t *testing.T) {
-	text := "# 第一章\n这是**重点**内容。\n## 小标题\n正文。"
+	text := "# 第一章\n这是**重点**内容。\n## 小Tiêu đề\nChính văn。"
 	vs := Lint(text)
 	bold := findViolation(vs, "markdown_residue", "**")
 	if bold == nil || bold.Actual != 2 {

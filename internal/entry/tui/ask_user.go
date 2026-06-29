@@ -82,7 +82,7 @@ func (s *askUserState) choiceLabel(idx int) string {
 	if idx < len(q.Options) {
 		return q.Options[idx].Label
 	}
-	return "自由输入"
+	return "自由Nhập"
 }
 
 func (s *askUserState) choiceDescription(idx int) string {
@@ -196,7 +196,7 @@ func renderAskUserModal(width, height int, state *askUserState) string {
 	}
 
 	var b strings.Builder
-	title := fmt.Sprintf("需要补充信息 %d/%d", state.index+1, len(state.request.questions))
+	title := fmt.Sprintf("Cần补充信息 %d/%d", state.index+1, len(state.request.questions))
 	b.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(title))
 	b.WriteString("\n\n")
 	if q.Header != "" {
@@ -231,7 +231,7 @@ func renderAskUserModal(width, height int, state *askUserState) string {
 		b.WriteString("\n")
 		content := state.input
 		if content == "" {
-			content = "请输入..."
+			content = "Vui lòng nhập..."
 		}
 		style := lipgloss.NewStyle().
 			Width(boxW-8).
@@ -242,12 +242,12 @@ func renderAskUserModal(width, height int, state *askUserState) string {
 		b.WriteString("\n")
 	}
 
-	hint := "↑↓ 选择 · Enter 确认 · Esc 关闭"
+	hint := "↑↓ Chọn · Enter Xác nhận · Esc 关闭"
 	if q.MultiSelect {
-		hint = "↑↓ 选择 · Space 勾选 · Enter 提交 · Esc 关闭"
+		hint = "↑↓ Chọn · Space 勾选 · Enter Nộp · Esc 关闭"
 	}
 	if state.typing {
-		hint = "输入补充内容 · Enter 确认 · Esc 返回选项"
+		hint = "Nhập补充内容 · Enter Xác nhận · Esc Quay lại选项"
 	}
 	b.WriteString("\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render(hint))

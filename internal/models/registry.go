@@ -1,5 +1,5 @@
-// Package models 提供 LLM 模型元数据注册表（上下文窗口、输出上限、价格），
-// 数据源 OpenRouter API，编译期基线 + 运行期刷新。
+// Package models 提供 LLM Mô hình元数据注册表（Cửa sổ ngữ cảnh、输出上限、价格），
+// 数据源 OpenRouter API，编译期基线 + 运行期Làm mới。
 package models
 
 //go:generate go run gen_models.go
@@ -9,26 +9,26 @@ import (
 	"sync"
 )
 
-// ModelEntry 描述一个已知的 LLM 模型。
+// ModelEntry 描述一个已知的 LLM Mô hình。
 type ModelEntry struct {
 	Provider            string  `json:"provider"`               // OpenRouter 规范化后的厂商名 (anthropic/openai/gemini/...)
-	ID                  string  `json:"id"`                     // 模型 ID (不含厂商前缀)
+	ID                  string  `json:"id"`                     // Mô hình ID (不含厂商前缀)
 	Name                string  `json:"name"`                   // 展示名
-	ContextWindow       int     `json:"context_window"`         // 输入窗口
+	ContextWindow       int     `json:"context_window"`         // NhậpCửa sổ
 	MaxTokens           int     `json:"max_tokens"`             // 单次输出上限
-	InputCostPer1M      float64 `json:"input_cost_per_1m"`      // 输入价格 (USD/1M tokens)
+	InputCostPer1M      float64 `json:"input_cost_per_1m"`      // Nhập价格 (USD/1M tokens)
 	OutputCostPer1M     float64 `json:"output_cost_per_1m"`     // 输出价格
-	CacheReadCostPer1M  float64 `json:"cache_read_cost_per_1m"` // 缓存读取价格
+	CacheReadCostPer1M  float64 `json:"cache_read_cost_per_1m"` // 缓存Đọc价格
 	CacheWriteCostPer1M float64 `json:"cache_write_cost_per_1m"`
 }
 
-// ModelRegistry 保存已知模型，支持模糊解析与运行期合并。
+// ModelRegistry Lưu已知Mô hình，支持模糊解析与运行期合并。
 type ModelRegistry struct {
 	mu     sync.RWMutex
 	models []ModelEntry
 }
 
-// NewModelRegistry 返回一个已加载编译期基线的注册表。
+// NewModelRegistry Quay lại一个已加载编译期基线的注册表。
 func NewModelRegistry() *ModelRegistry {
 	r := &ModelRegistry{}
 	r.models = append(r.models, generatedModels...)
@@ -40,8 +40,8 @@ var (
 	defaultRegistryOnce sync.Once
 )
 
-// DefaultRegistry 返回全局注册表（懒加载，线程安全）。
-// 启动阶段调用 StartPricingRefresh 可让后台刷新价格/窗口信息。
+// DefaultRegistry Quay lại全局注册表（懒加载，线程安全）。
+// 启动阶段调用 StartPricingRefresh 可让后台Làm mới价格/Cửa sổ信息。
 func DefaultRegistry() *ModelRegistry {
 	defaultRegistryOnce.Do(func() {
 		defaultRegistry = NewModelRegistry()
@@ -49,14 +49,14 @@ func DefaultRegistry() *ModelRegistry {
 	return defaultRegistry
 }
 
-// Resolve 按照一个模型标识（可能是 "provider/model"、完整 ID、或局部名）查找条目。
+// Resolve 按照一个Mô hình标识（可能是 "provider/model"、完整 ID、或局部名）查找条目。
 //
 // 匹配顺序：
 //  1. 若包含 "/"，按 "provider/model" 精确查找
 //  2. 精确/日期后缀匹配
 //  3. 子串匹配（ID 或 Name 包含 pattern）
 //
-// 命中多个时，优先返回不含日期后缀的别名（例如 claude-sonnet-4 优先于 claude-sonnet-4-20250514）。
+// 命中多个时，优先Quay lại不含日期后缀的别名（例如 claude-sonnet-4 优先于 claude-sonnet-4-20250514）。
 func (r *ModelRegistry) Resolve(pattern string) (*ModelEntry, bool) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
@@ -107,7 +107,7 @@ func (r *ModelRegistry) Resolve(pattern string) (*ModelEntry, bool) {
 	return &entry, true
 }
 
-// ResolveContextWindow 返回某个模型的上下文窗口；未命中返回 0。
+// ResolveContextWindow Quay lại某个Mô hình的Cửa sổ ngữ cảnh；未命中Quay lại 0。
 func (r *ModelRegistry) ResolveContextWindow(pattern string) int {
 	if e, ok := r.Resolve(pattern); ok {
 		return e.ContextWindow
@@ -115,7 +115,7 @@ func (r *ModelRegistry) ResolveContextWindow(pattern string) int {
 	return 0
 }
 
-// List 返回所有模型（可选 filter，空字符串表示全量）。
+// List Quay lại所有Mô hình（可选 filter，Rỗng字符串表示全量）。
 func (r *ModelRegistry) List(filter string) []ModelEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -138,7 +138,7 @@ func (r *ModelRegistry) List(filter string) []ModelEntry {
 }
 
 // MergeModels 按 provider+id 大小写不敏感合并。
-// 非零价格/窗口/MaxTokens/Name 会覆盖已有条目；新增条目直接追加。
+// 非零价格/Cửa sổ/MaxTokens/Name 会覆盖已有条目；Mới增条目直接追加。
 func (r *ModelRegistry) MergeModels(fetched []ModelEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

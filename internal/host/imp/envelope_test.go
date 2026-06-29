@@ -6,8 +6,8 @@ func TestParseTaggedEnvelope_Basic(t *testing.T) {
 	src := `prelude noise
 
 === PREMISE ===
-# 书名
-正文
+# Tên sách
+Chính văn
 
 === CHARACTERS ===
 [{"name":"A"}]
@@ -19,7 +19,7 @@ func TestParseTaggedEnvelope_Basic(t *testing.T) {
 	if env["PREMISE"] == "" || env["CHARACTERS"] == "" || env["WORLD_RULES"] == "" {
 		t.Fatalf("missing tags: %+v", env)
 	}
-	if env["PREMISE"] != "# 书名\n正文" {
+	if env["PREMISE"] != "# Tên sách\nChính văn" {
 		t.Errorf("premise body: %q", env["PREMISE"])
 	}
 }

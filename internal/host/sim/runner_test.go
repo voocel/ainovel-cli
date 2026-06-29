@@ -103,7 +103,7 @@ func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
 		if ev.Err != nil {
 			t.Fatalf("rerun errored: %v", ev.Err)
 		}
-		if strings.Contains(ev.Message, "画像已是最新") {
+		if strings.Contains(ev.Message, "画像已是最Mới") {
 			upToDate = true
 		}
 	}
