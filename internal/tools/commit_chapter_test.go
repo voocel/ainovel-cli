@@ -5,11 +5,32 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
+
+func TestCommitChapterSchemaDescribesFeedbackAsObject(t *testing.T) {
+	tool := NewCommitChapterTool(store.NewStore(t.TempDir()))
+	schema := tool.Schema()
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties missing: %#v", schema["properties"])
+	}
+	feedback, ok := props["feedback"].(map[string]any)
+	if !ok {
+		t.Fatalf("feedback schema missing: %#v", props["feedback"])
+	}
+	desc, _ := feedback["description"].(string)
+	if !strings.Contains(desc, "JSON object") || !strings.Contains(desc, "字符串化 JSON") {
+		t.Fatalf("feedback description should warn against stringified JSON, got %q", desc)
+	}
+	if got := feedback["type"]; got != "object" {
+		t.Fatalf("feedback type = %v, want object", got)
+	}
+}
 
 func TestCommitChapterRejectsNonPendingRewrite(t *testing.T) {
 	dir := t.TempDir()

@@ -78,6 +78,7 @@ func (t *CommitChapterTool) Schema() map[string]any {
 		schema.Property("deviation", schema.String("偏离Đại cương的描述")).Required(),
 		schema.Property("suggestion", schema.String("对后续Đại cương的调整建议")).Required(),
 	)
+	feedbackSchema["description"] = "对后续大纲的建议对象；必须直接传 JSON object，不要传字符串化 JSON"
 	return schema.Object(
 		schema.Property("chapter", schema.Int("Chương号")).Required(),
 		schema.Property("summary", schema.String("本章内容Tóm tắt（200字以内）")).Required(),
