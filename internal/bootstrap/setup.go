@@ -40,12 +40,14 @@ type setupProvider struct {
 	name           string
 	label          string
 	baseURL        string // 预填的 base_url
+	providerType   string // 已知但不在 litellm 注册表中的 provider 显式声明的 API 协议（如 requesty -> openai）
 	needType       bool   // 自定义代理需要额外问 type 和 base_url
 	apiKeyOptional bool   // true 表示 API Key 允许留空
 }
 
 var setupProviders = []setupProvider{
 	{name: "openrouter", label: "OpenRouter", baseURL: "https://openrouter.ai/api/v1"},
+	{name: "requesty", label: "Requesty", baseURL: "https://router.requesty.ai/v1", providerType: "openai"},
 	{name: "anthropic", label: "Anthropic"},
 	{name: "gemini", label: "Gemini"},
 	{name: "openai", label: "OpenAI"},
@@ -118,6 +120,12 @@ func RunSetup() (Config, error) {
 		return Config{}, err
 	}
 	pc.BaseURL = baseURL
+
+	// 已知但不在 litellm 注册表中的 provider（如 Requesty）显式声明 API 协议，
+	// 否则 ProviderType 会因找不到注册项而报错。
+	if sp.providerType != "" {
+		pc.Type = sp.providerType
+	}
 	if baseURL != "" {
 		printStepDone("Base URL", baseURL)
 	} else {
