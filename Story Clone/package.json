@@ -1,0 +1,84 @@
+{
+  "name": "story-clone",
+  "version": "3.6.0",
+  "private": true,
+  "description": "Phần mềm tạo truyện tiểu thuyết bằng AI phát triển bới 1TouchPro",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev:clean": "node scripts/dev-clean.cjs",
+    "backend": "cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8766 --reload --reload-exclude data --reload-delay 1",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:electron": "node scripts/run-electron-dev.cjs",
+    "dev": "npm run dev:clean && concurrently -k \"npm:backend\" \"npm:dev:renderer\" \"wait-on -t 60000 http://127.0.0.1:5173 http-get://127.0.0.1:8766/health && npm run dev:electron\"",
+    "build": "tsc -p electron/tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit -p renderer/tsconfig.json && tsc --noEmit -p electron/tsconfig.json",
+    "pack": "npm run build && electron-builder",
+    "build:enc": "node scripts/build-encrypted.cjs",
+    "build:enc:dir": "node scripts/build-encrypted.cjs --dir"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest",
+    "wait-on": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "bytenode": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "javascript-obfuscator": "^5.4.3",
+    "typescript": "latest"
+  },
+  "build": {
+    "appId": "com.storyclone.app",
+    "productName": "Story Clone",
+    "directories": {
+      "output": "dist-packaged"
+    },
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Story Clone",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "icon.png",
+      "icon.ico",
+      "backend/dist/**/*",
+      "backend/**/*",
+      "!backend/.venv/**/*",
+      "!backend/build/**/*",
+      "!backend/__pycache__/**/*",
+      "!backend/app/**/__pycache__/**/*"
+    ],
+    "asar": false
+  }
+}

@@ -1,0 +1,8 @@
+# Story Clone — dependencies phát triển & đóng gói backend
+#
+#   pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6

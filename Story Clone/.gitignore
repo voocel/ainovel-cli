@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-electron/
+dist-packaged/
+backend/.venv/
+backend/dist/
+backend/build/
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+data/*.sqlite3
+data/*.sqlite3-*
+__pycache__/
+*.pyc
+*.egg-info/
+.cursor/
+*.log
+debug*.log
+# License & secret tools — KHÔNG commit
+tools/generate_key.py
+license.dat

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kích hoạt Story Clone</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+
+    :root {
+      --accent: #6d5df6;
+      --accent-2: #8b6cf6;
+      --accent-soft: #eeeaff;
+      --line: #e2e7f4;
+      --text-soft: #8290ad;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0f0c24 0%, #1a1340 45%, #12102a 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      color: #e8eaf6;
+    }
+
+    /* Animated background orbs */
+    .bg-orb {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: 0.18;
+      animation: orb-float 8s ease-in-out infinite;
+      pointer-events: none;
+    }
+    .bg-orb-1 { width: 600px; height: 600px; background: #6d5df6; top: -200px; left: -150px; animation-delay: 0s; }
+    .bg-orb-2 { width: 400px; height: 400px; background: #8b6cf6; bottom: -100px; right: -100px; animation-delay: -3s; }
+    .bg-orb-3 { width: 300px; height: 300px; background: #5bc7ad; top: 40%; left: 50%; animation-delay: -5s; }
+
+    @keyframes orb-float {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-30px) scale(1.05); }
+    }
+
+    /* Glass card */
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 28px;
+      padding: 48px 44px 40px;
+      width: 480px;
+      max-width: 92vw;
+      box-shadow: 0 40px 100px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(109, 93, 246, 0.15) inset;
+      animation: card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(28px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Logo */
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+    .logo-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 16px;
+      background: linear-gradient(145deg, #7866f8, #5f4ce0);
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      font-weight: 900;
+      color: white;
+      box-shadow: 0 14px 30px rgba(109, 93, 246, 0.45), 0 0 0 1px rgba(255,255,255,0.1) inset;
+      flex-shrink: 0;
+    }
+    .logo-text { display: flex; flex-direction: column; }
+    .logo-name { font-size: 20px; font-weight: 900; color: #fff; letter-spacing: -0.01em; }
+    .logo-sub { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.45); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 2px; }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+      margin-bottom: 28px;
+    }
+
+    /* Section title */
+    .section-label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.38);
+      margin-bottom: 10px;
+    }
+
+    /* Machine code display */
+    .machine-code-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(109, 93, 246, 0.35);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .machine-code-box:hover { border-color: rgba(109, 93, 246, 0.65); background: rgba(109, 93, 246, 0.08); }
+    .machine-code-value {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      color: #b8adff;
+      user-select: all;
+      flex: 1;
+      text-align: center;
+    }
+    .copy-btn {
+      flex-shrink: 0;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      border: none;
+      background: rgba(109, 93, 246, 0.25);
+      color: #a89fff;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      font-size: 16px;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .copy-btn:hover { background: rgba(109, 93, 246, 0.4); transform: scale(1.08); }
+    .copy-btn:active { transform: scale(0.95); }
+
+    .copy-hint {
+      font-size: 11px;
+      color: rgba(255,255,255,0.3);
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    /* Activation key input */
+    .input-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .key-input {
+      width: 100%;
+      height: 54px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1.5px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 0 18px;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: #fff;
+      outline: none;
+      text-transform: uppercase;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      margin-bottom: 6px;
+    }
+    .key-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; letter-spacing: 0.06em; font-size: 14px; }
+    .key-input:focus { border-color: rgba(109, 93, 246, 0.7); box-shadow: 0 0 0 4px rgba(109, 93, 246, 0.18); }
+    .key-input.error { border-color: rgba(255, 80, 80, 0.7); box-shadow: 0 0 0 4px rgba(255, 80, 80, 0.12); animation: shake 0.3s ease; }
+    .key-input.success { border-color: rgba(91, 199, 173, 0.7); box-shadow: 0 0 0 4px rgba(91, 199, 173, 0.15); }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-6px); }
+      75% { transform: translateX(6px); }
+    }
+
+    /* Status message */
+    .status-msg {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      min-height: 18px;
+      padding: 0 2px;
+    }
+    .status-msg.error { color: #ff7070; }
+    .status-msg.success { color: #5bc7ad; }
+
+    /* Activate button */
+    .activate-btn {
+      width: 100%;
+      height: 52px;
+      border: none;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #6d5df6, #8b6cf6);
+      color: white;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      box-shadow: 0 14px 36px rgba(109, 93, 246, 0.45);
+      transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .activate-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent);
+      border-radius: 14px;
+    }
+    .activate-btn:hover { transform: translateY(-2px); box-shadow: 0 20px 48px rgba(109, 93, 246, 0.55); }
+    .activate-btn:active { transform: translateY(0); }
+    .activate-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* Success overlay */
+    .success-overlay {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 16px;
+      padding: 16px 0;
+    }
+    .success-overlay.show { display: flex; }
+    .success-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #5bc7ad, #3da88e);
+      display: grid;
+      place-items: center;
+      font-size: 32px;
+      box-shadow: 0 16px 40px rgba(91, 199, 173, 0.4);
+      animation: pop-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes pop-in {
+      from { transform: scale(0.5); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+    .success-title { font-size: 22px; font-weight: 900; color: #fff; }
+    .success-sub { font-size: 14px; color: rgba(255,255,255,0.5); line-height: 1.5; }
+
+    .form-area { }
+  </style>
+</head>
+<body>
+  <div class="bg-orb bg-orb-1"></div>
+  <div class="bg-orb bg-orb-2"></div>
+  <div class="bg-orb bg-orb-3"></div>
+
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">SC</div>
+      <div class="logo-text">
+        <span class="logo-name">Story Clone</span>
+        <span class="logo-sub">Xưởng viết tiểu thuyết AI</span>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <!-- Form kích hoạt -->
+    <div class="form-area" id="formArea">
+      <p class="section-label">Mã máy của bạn</p>
+      <div class="machine-code-box" onclick="copyMachineCode()" title="Nhấn để sao chép">
+        <span class="machine-code-value" id="machineCodeDisplay">----  ----  ----  ----</span>
+        <button class="copy-btn" id="copyBtn" title="Sao chép">⎘</button>
+      </div>
+      <p class="copy-hint">Gửi mã trên cho nhà phát triển để nhận mã kích hoạt</p>
+
+      <label class="input-label" for="keyInput">Nhập mã kích hoạt</label>
+      <input
+        class="key-input"
+        id="keyInput"
+        type="text"
+        placeholder="XXXX-XXXX-XXXX-XXXX"
+        maxlength="19"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <p class="status-msg" id="statusMsg"></p>
+
+      <button class="activate-btn" id="activateBtn" onclick="doActivate()">
+        ✦ &nbsp;Kích hoạt ứng dụng
+      </button>
+    </div>
+
+    <!-- Thành công -->
+    <div class="success-overlay" id="successOverlay">
+      <div class="success-icon">✓</div>
+      <div class="success-title">Kích hoạt thành công!</div>
+      <p class="success-sub">Ứng dụng đang khởi động…</p>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    let machineCode = '';
+
+    // Tự động thêm dấu gạch ngang khi gõ
+    const keyInput = document.getElementById('keyInput');
+    keyInput.addEventListener('input', (e) => {
+      let val = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (val.length > 16) val = val.slice(0, 16);
+      let formatted = '';
+      for (let i = 0; i < val.length; i++) {
+        if (i > 0 && i % 4 === 0) formatted += '-';
+        formatted += val[i];
+      }
+      e.target.value = formatted;
+      keyInput.classList.remove('error', 'success');
+      document.getElementById('statusMsg').textContent = '';
+      document.getElementById('statusMsg').className = 'status-msg';
+    });
+
+    keyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doActivate();
+    });
+
+    // Lấy machine code
+    async function loadMachineCode() {
+      try {
+        machineCode = await ipcRenderer.invoke('get-machine-code');
+        const display = document.getElementById('machineCodeDisplay');
+        display.textContent = machineCode;
+      } catch (err) {
+        document.getElementById('machineCodeDisplay').textContent = 'Lỗi đọc mã máy';
+      }
+    }
+
+    // Sao chép machine code
+    async function copyMachineCode() {
+      if (!machineCode) return;
+      try {
+        await navigator.clipboard.writeText(machineCode);
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = '✓';
+        btn.style.color = '#5bc7ad';
+        setTimeout(() => { btn.textContent = '⎘'; btn.style.color = ''; }, 2000);
+      } catch {}
+    }
+
+    // Kích hoạt
+    async function doActivate() {
+      const key = keyInput.value.trim();
+      const statusMsg = document.getElementById('statusMsg');
+      const activateBtn = document.getElementById('activateBtn');
+
+      if (!key || key.replace(/-/g, '').length < 16) {
+        statusMsg.textContent = 'Vui lòng nhập đầy đủ mã kích hoạt.';
+        statusMsg.className = 'status-msg error';
+        keyInput.classList.add('error');
+        return;
+      }
+
+      activateBtn.disabled = true;
+      activateBtn.textContent = 'Đang xác thực…';
+
+      try {
+        const result = await ipcRenderer.invoke('verify-license', key);
+        if (result.ok) {
+          keyInput.classList.add('success');
+          statusMsg.textContent = '';
+          document.getElementById('formArea').style.display = 'none';
+          document.getElementById('successOverlay').classList.add('show');
+          setTimeout(() => {
+            ipcRenderer.send('license-accepted');
+          }, 1800);
+        } else {
+          keyInput.classList.add('error');
+          statusMsg.textContent = '❌ Mã kích hoạt không hợp lệ. Vui lòng kiểm tra lại.';
+          statusMsg.className = 'status-msg error';
+          activateBtn.disabled = false;
+          activateBtn.textContent = '✦  Kích hoạt ứng dụng';
+        }
+      } catch (err) {
+        statusMsg.textContent = 'Lỗi xác thực. Thử lại sau.';
+        statusMsg.className = 'status-msg error';
+        activateBtn.disabled = false;
+        activateBtn.textContent = '✦  Kích hoạt ứng dụng';
+      }
+    }
+
+    loadMachineCode();
+  </script>
+</body>
+</html>

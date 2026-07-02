@@ -1,0 +1,33 @@
+# Story Clone — Backend Python dependencies
+# Python >= 3.11 (đã kiểm tra trên 3.12, Windows)
+#
+# Cài đặt nhanh (khuyến nghị):
+#   cd backend
+#   python -m venv .venv
+#   .venv\Scripts\activate          # Windows
+#   python -m pip install --upgrade pip
+#   pip install -r requirements.txt
+#
+# Cài đặt khớp 100% với .venv hiện tại:
+#   pip install -r requirements-lock.txt
+#
+# Đóng gói backend (PyInstaller):
+#   pip install -r requirements-dev.txt
+#
+# Hoặc qua pyproject.toml:
+#   pip install -e ".[dev]"
+
+# --- API & server ---
+fastapi==0.138.2
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+
+# --- Gọi LLM (OpenAI-compatible, Anthropic, v.v.) ---
+httpx==0.28.1
+
+# --- Upload / form (FastAPI) ---
+python-multipart==0.0.32
+
+# --- Xuất tài liệu (Word .docx, PDF; EPUB dùng thư viện chuẩn) ---
+python-docx==1.2.0
+reportlab==5.0.0

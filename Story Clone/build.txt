@@ -1,0 +1,2 @@
+cd "D:\PYTHON2\Ainovel-cli\Story Clone"
+powershell -ExecutionPolicy Bypass -File .\setup-portable.ps1 -Package -DesktopShortcut
