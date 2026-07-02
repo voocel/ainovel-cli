@@ -401,10 +401,17 @@ func (h *Host) Continue(text string) error {
 	h.pauser.ReconcileOnResume()
 	h.refreshWriterRestore()
 	h.observer.setAborting(false)
+	h.router.ResetRepeat()
+	h.router.Enable()
 	_, err := h.coordinator.Inject(interventionMsg(text))
 	if err != nil {
 		return fmt.Errorf("inject: %w", err)
 	}
+	// 与 Resume 对称：干预注入后主动派发一次当前路由指令。否则 Coordinator 只有
+	// 用户文本没有 Host 指令，若它对干预只回文字，StopGuard 的拦截又要求执行
+	// Host 指令，会陷入"无指令可执行"的僵局（继续后连续拦截直至熔断）。
+	// 派发晚于 Inject：用户干预先入上下文，指令后到，干预优先级不受影响。
+	h.router.Dispatch()
 	h.mu.Lock()
 	h.lifecycle = lifecycleRunning
 	h.mu.Unlock()

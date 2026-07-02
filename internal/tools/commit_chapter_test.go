@@ -636,6 +636,200 @@ func TestCommitChapterLayeredAutoCompletesWhenDone(t *testing.T) {
 	}
 }
 
+// TestCommitChapterFinaleVolumeCompletesDespiteOpenThreads 验证收官卷全链路：
+// 已宣告收官卷（append_volume 带 final:true）后——
+//  1. 末章 commit 不完结：完结不抢在卷末收尾三连（弧评审/弧摘要/卷摘要）之前，
+//     结局必须过 editor 质量闸；
+//  2. 三连齐备、卷摘要落盘（save_volume_summary 触发点）即完结，不再要求
+//     伏笔/长线双归零——否则 estimated_scale 高估的书永远无法合法完本。
+//
+// 与下方 NoAutoCompleteWithOpenThreads 互为对照：同样带未收长线，未宣告不完结、已宣告完结。
+func TestCommitChapterFinaleVolumeCompletesDespiteOpenThreads(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+
+	foundation := NewSaveFoundationTool(s)
+	layeredArgs, _ := json.Marshal(map[string]any{
+		"type": "layered_outline",
+		"content": []map[string]any{{
+			"index": 1, "title": "卷一", "theme": "主题",
+			"arcs": []map[string]any{{
+				"index": 1, "title": "弧一", "goal": "目标",
+				"chapters": []map[string]any{{"title": "首章", "core_event": "起", "hook": "续"}},
+			}},
+		}},
+		"scale": "long",
+	})
+	if _, err := foundation.Execute(context.Background(), layeredArgs); err != nil {
+		t.Fatalf("Execute layered: %v", err)
+	}
+
+	// 卷末宣告收官卷：append_volume 带 final:true
+	appendArgs, _ := json.Marshal(map[string]any{
+		"type": "append_volume",
+		"content": map[string]any{
+			"index": 2, "title": "终卷", "theme": "收束", "final": true,
+			"arcs": []map[string]any{{
+				"index": 1, "title": "收官弧", "goal": "回收所有长线",
+				"chapters": []map[string]any{{"title": "终章", "core_event": "合", "hook": "终"}},
+			}},
+		},
+	})
+	raw, err := foundation.Execute(context.Background(), appendArgs)
+	if err != nil {
+		t.Fatalf("Execute append_volume: %v", err)
+	}
+	var appendOut map[string]any
+	if err := json.Unmarshal(raw, &appendOut); err != nil {
+		t.Fatalf("Unmarshal append result: %v", err)
+	}
+	if appendOut["final_volume"] != true {
+		t.Fatalf("append_volume 应返回 final_volume=true 事实, got %v", appendOut)
+	}
+
+	// 长线未收束（未宣告时这会阻止完结，见对照测试）
+	if err := s.Outline.SaveCompass(domain.StoryCompass{EndingDirection: "主角归乡", OpenThreads: []string{"宿敌未除"}}); err != nil {
+		t.Fatalf("SaveCompass: %v", err)
+	}
+	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
+
+	tool := NewCommitChapterTool(s)
+	commit := func(ch int) map[string]any {
+		if err := s.Drafts.SaveDraft(ch, fmt.Sprintf("第 %d 章正文内容，用于收官卷完结测试。", ch)); err != nil {
+			t.Fatalf("SaveDraft %d: %v", ch, err)
+		}
+		args, _ := json.Marshal(map[string]any{
+			"chapter": ch, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+		})
+		raw, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("Execute ch%d: %v", ch, err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("Unmarshal ch%d: %v", ch, err)
+		}
+		return out
+	}
+
+	// 第 1 章（非终卷末章）：不应完结
+	if bc, _ := commit(1)["book_complete"].(bool); bc {
+		t.Fatal("收官卷尚未写完不应完结")
+	}
+	// 第 2 章（收官卷末章）：卷末收尾三连未齐，完结不得抢在 editor 评审/摘要之前
+	if bc, _ := commit(2)["book_complete"].(bool); bc {
+		t.Fatal("末章 commit 时三连未齐，不应完结")
+	}
+	if p, _ := s.Progress.Load(); p.Phase == domain.PhaseComplete {
+		t.Fatal("完结不应发生在卷末评审与摘要之前")
+	}
+
+	// 卷末收尾三连：弧评审 + 弧摘要落盘后，卷摘要（save_volume_summary）是完结触发点
+	if err := s.World.SaveReview(domain.ReviewEntry{Chapter: 2, Scope: "arc", Verdict: "accept", Summary: "末弧评审"}); err != nil {
+		t.Fatalf("SaveReview: %v", err)
+	}
+	if err := s.Summaries.SaveArcSummary(domain.ArcSummary{Volume: 2, Arc: 1, Title: "收官弧", Summary: "收束", KeyEvents: []string{"终局"}}); err != nil {
+		t.Fatalf("SaveArcSummary: %v", err)
+	}
+	volTool := NewSaveVolumeSummaryTool(s)
+	volArgs, _ := json.Marshal(map[string]any{
+		"volume": 2, "title": "终卷", "summary": "全卷收束", "key_events": []string{"终局"},
+	})
+	volRaw, err := volTool.Execute(context.Background(), volArgs)
+	if err != nil {
+		t.Fatalf("Execute save_volume_summary: %v", err)
+	}
+	var volOut map[string]any
+	if err := json.Unmarshal(volRaw, &volOut); err != nil {
+		t.Fatalf("Unmarshal volume summary result: %v", err)
+	}
+	if volOut["book_complete"] != true {
+		t.Fatalf("卷摘要落盘应触发收官完结并回显 book_complete, got %v", volOut)
+	}
+	if p, _ := s.Progress.Load(); p.Phase != domain.PhaseComplete {
+		t.Fatalf("expected phase=complete, got %s", p.Phase)
+	}
+}
+
+// TestCommitChapterFinaleSkeletonArcBlocksCompletion 验证收官完结的结构闸门：
+// 收官卷仍有骨架弧（规划内容未写）时，即使三连齐备也不得完结——这是防止
+// "过早完结"的唯一防线（layeredStructurallyComplete 条件 2）。
+func TestCommitChapterFinaleSkeletonArcBlocksCompletion(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+
+	foundation := NewSaveFoundationTool(s)
+	// 收官卷：第一弧展开 1 章，第二弧仍是骨架
+	layeredArgs, _ := json.Marshal(map[string]any{
+		"type": "layered_outline",
+		"content": []map[string]any{{
+			"index": 1, "title": "终卷", "theme": "收束", "final": true,
+			"arcs": []map[string]any{
+				{"index": 1, "title": "收官弧", "goal": "收线",
+					"chapters": []map[string]any{{"title": "首章", "core_event": "起", "hook": "续"}}},
+				{"index": 2, "title": "骨架弧", "goal": "待展开", "estimated_chapters": 5},
+			},
+		}},
+		"scale": "long",
+	})
+	if _, err := foundation.Execute(context.Background(), layeredArgs); err != nil {
+		t.Fatalf("Execute layered: %v", err)
+	}
+	if err := s.Outline.SaveCompass(domain.StoryCompass{EndingDirection: "归乡"}); err != nil {
+		t.Fatalf("SaveCompass: %v", err)
+	}
+	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
+
+	tool := NewCommitChapterTool(s)
+	if err := s.Drafts.SaveDraft(1, "第一章正文。"); err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"chapter": 1, "summary": "摘要", "characters": []string{"主角"}, "key_events": []string{"事件"},
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// 三连齐备也不放行：骨架弧意味着规划内容还没写
+	if err := s.World.SaveReview(domain.ReviewEntry{Chapter: 1, Scope: "arc", Verdict: "accept", Summary: "弧评审"}); err != nil {
+		t.Fatalf("SaveReview: %v", err)
+	}
+	if err := s.Summaries.SaveArcSummary(domain.ArcSummary{Volume: 1, Arc: 1, Title: "收官弧", Summary: "s", KeyEvents: []string{"e"}}); err != nil {
+		t.Fatalf("SaveArcSummary: %v", err)
+	}
+	volTool := NewSaveVolumeSummaryTool(s)
+	volArgs, _ := json.Marshal(map[string]any{
+		"volume": 1, "title": "终卷", "summary": "s", "key_events": []string{"e"},
+	})
+	volRaw, err := volTool.Execute(context.Background(), volArgs)
+	if err != nil {
+		t.Fatalf("Execute save_volume_summary: %v", err)
+	}
+	var volOut map[string]any
+	_ = json.Unmarshal(volRaw, &volOut)
+	if volOut["book_complete"] == true {
+		t.Fatal("收官卷仍有骨架弧时不得完结")
+	}
+	if p, _ := s.Progress.Load(); p.Phase == domain.PhaseComplete {
+		t.Fatal("骨架弧未展开，phase 不应为 complete")
+	}
+}
+
+// TestCommitChapterLayeredNoAutoCompleteWithOpenThreads 验证保守性：仍有活跃长线时
+// 即使章节写满也不自动完结，把"是否继续"的裁定权留给架构师。
+
 // TestCommitChapterLayeredNoAutoCompleteWithOpenThreads 验证保守性：仍有活跃长线时
 // 即使章节写满也不自动完结，把"是否继续"的裁定权留给架构师。
 func TestCommitChapterLayeredNoAutoCompleteWithOpenThreads(t *testing.T) {

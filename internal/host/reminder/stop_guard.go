@@ -66,7 +66,9 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 
 func blockMessage(st *store.Store, progress *domain.Progress) string {
 	if progress != nil && flow.Route(flow.LoadState(st)) != nil {
-		return "禁止结束对话。Phase 尚未 Complete；请等待并执行 Host 下达的 [Host 下达指令]，不要自行调用 novel_context 或 subagent。"
+		// 指令在每个流程边界与 Start/Resume/Continue 时都会下达，此刻必已在上下文中；
+		// 让 LLM"等待"新指令是死路——派发只发生在边界，原地不动就永远等不到。
+		return "禁止结束对话。Phase 尚未 Complete；请立即执行上下文中最近一条 [Host 下达指令]（调 subagent 派发对应子代理），不要原地等待。若你判断故事已到终点而不应执行该指令，按提示词'完结分歧'规则改派 architect_long 做完结裁定——这是唯一允许的偏离，其余情况不要自行改派。"
 	}
 	return "禁止结束对话。Phase 尚未 Complete，且当前没有 Host 路由指令；这是 Coordinator 裁定场景，请按 coordinator.md 的裁定规则继续处理，不要空等 Host 指令。"
 }

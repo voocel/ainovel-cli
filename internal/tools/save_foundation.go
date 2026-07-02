@@ -22,7 +22,7 @@ func NewSaveFoundationTool(store *store.Store) *SaveFoundationTool {
 
 func (t *SaveFoundationTool) Name() string { return "save_foundation" }
 func (t *SaveFoundationTool) Description() string {
-	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是唯一持久化入口**：未经此工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 展开骨架弧的详细章节（需 volume + arc）；append_volume 追加新卷（content 为完整 VolumeOutline JSON，含弧结构）；update_compass 更新终局方向（content 为 StoryCompass JSON）；complete_book 宣告全书完结（content 传空对象 {}，直接推 Phase=Complete；调用前必须先通过终卷判定清单，且无返工队列）。scale 可选，仅允许 short / mid / long。"
+	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是唯一持久化入口**：未经此工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 展开骨架弧的详细章节（需 volume + arc）；append_volume 追加新卷（content 为完整 VolumeOutline JSON，含弧结构；顶层带 \"final\": true 即宣告收官卷——全书在该卷收束，所有章节写完后自动完结，无需再调 complete_book）；update_compass 更新终局方向（content 为 StoryCompass JSON）；complete_book 宣告全书完结（content 传空对象 {}，直接推 Phase=Complete；调用前必须先通过终卷判定清单，且无返工队列）。scale 可选，仅允许 short / mid / long。"
 }
 func (t *SaveFoundationTool) Label() string { return "保存设定" }
 
@@ -174,10 +174,17 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err := decode("append_volume", &vol); err != nil {
 			return nil, err
 		}
+		prior, _ := t.store.Outline.LoadLayeredOutline()
 		if err := t.store.AppendVolume(vol); err != nil {
 			return nil, fmt.Errorf("append volume: %w: %w", errs.ErrStoreWrite, err)
 		}
 		result["volume"] = vol.Index
+		if vol.Final {
+			result["final_volume"] = true
+		} else if domain.FinaleVolume(prior) > 0 {
+			// 事实回显：此前宣告的收官态因追加普通新卷而解除（新卷成为末卷）
+			result["finale_released"] = true
+		}
 		result["arcs"] = len(vol.Arcs)
 		chCount := 0
 		for _, arc := range vol.Arcs {

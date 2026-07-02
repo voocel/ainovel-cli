@@ -396,6 +396,15 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 
 	if state.profile.Layered {
 		t.loadLayeredSummaries(envelope.Working, state.chapter, state.profile.SummaryWindow, warn)
+		// 收官纪律：本章属于已宣告的收官卷时注入，防 writer 在收官段临章再开新钩子
+		//（收官卷写完即自动完结，此时新埋的伏笔永远没有机会回收）。
+		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
+			if fv := domain.FinaleVolume(volumes); fv > 0 {
+				if b, berr := t.store.Outline.CheckArcBoundary(state.chapter); berr == nil && b != nil && b.Volume == fv {
+					envelope.Working["finale"] = "本卷为全书收官卷：不再新开长线或埋新伏笔，优先回收既有伏笔、收拢关系线，按大纲把故事推向终局。"
+				}
+			}
+		}
 	} else {
 		if summaries, err := t.store.Summaries.LoadRecentSummaries(state.chapter, state.profile.SummaryWindow); err == nil && len(summaries) > 0 {
 			envelope.Working["recent_summaries"] = summaries
@@ -624,6 +633,9 @@ func (t *ContextTool) completionSignals(layered []domain.VolumeOutline, compass 
 	if len(layered) > 0 {
 		signals["planned_chapters"] = len(domain.FlattenOutline(layered))
 		signals["volumes_total"] = len(layered)
+		if fv := domain.FinaleVolume(layered); fv > 0 {
+			signals["final_volume"] = fv
+		}
 	}
 	if compass != nil {
 		if compass.EstimatedScale != "" {

@@ -143,6 +143,17 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 Signals：`PendingCommit`（commit 中断恢复）/ `PendingSteer`（停机期间用户干预）。启动/恢复时读，运行时不读。
 
+### 4.4 分层大纲与完本收敛（收官卷）
+
+滚动规划（compass 锚点 + 卷骨架 + 弧按需展开）解决"开与滚"，但让"何时结束"从一个数字变成每卷末的开放裁定——完本收敛必须显式设计，否则出现两类僵局：账面写完收不了尾（越界续写死循环，已由结构兜底修复）与叙事写完账面不让停（estimated_scale 高估 + 完结门槛硬否决 → 注水或熔断）。
+
+**收官卷是收敛的一等概念**，完本 = 一次方向裁定 + 一段确定性滑行：
+
+- **宣告（LLM 语义裁定）**：架构师在卷末三选一——append_volume（继续）/ append_volume 带 `"final": true`（收官卷：整卷以收线为目标，open_threads 与活跃伏笔全部分配进各弧）/ complete_book（条件当下全满足）。estimated_scale 在完结判定里是**证据不是否决权**：语义条件已满足而规模未达 → 宣布收官卷提前收束并下调 scale，禁止注水。
+- **执行（代码事实查表）**：收官事实 = `domain.FinaleVolume`（最后一卷带 Final）。宣告后 `completion_signals.final_volume` 与 writer 信封 `finale` 纪律（禁开新线）随事实曝光；终卷结构写完（`layeredStructurallyComplete`）**且卷末收尾三连齐备（弧评审/弧摘要/卷摘要，`finaleWrapped`）**即自动 MarkComplete，**不再要求伏笔/长线归零**——但完结不抢在 editor 质量闸之前，结局必须过末弧评审。完结检查发生在"最后一块事实落地"的工具里：正向主路径为 `save_volume_summary`（卷摘要是三连最后一块），返工 drain 后三连已齐时为 `commit_chapter`。未宣告的书仍走质量级 `layeredBookComplete`（伏笔+长线归零），防大纲耗尽处过早收尾。
+- **解除（数据推导，无撤销工具）**：宣告后又追加未标记新卷 → 新卷成为最后一卷，收束态自然解除。状态永远可从 layered_outline 推导，无跨层状态。
+- **分歧出口**：Coordinator 认为故事已到终点而 Host 仍派单时，路由到 architect 走完结裁定（coordinator.md"完结分歧"），不允许以 end_turn 表达立场（StopGuard 会拦截至熔断）。
+
 ---
 
 ## 5. 工具规约

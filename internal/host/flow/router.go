@@ -134,8 +134,8 @@ func Route(s State) *Instruction {
 		case b.NeedsNewVolume:
 			return &Instruction{
 				Agent:  "architect_long",
-				Task:   "评估后调用 save_foundation type=append_volume（继续写）或 type=complete_book（全书结束）",
-				Reason: "卷末需决定追加新卷或结束全书",
+				Task:   "创建下一卷：按完结判定清单评估后调用 save_foundation——故事继续 → type=append_volume；故事接近终点 → type=append_volume 且卷 JSON 顶层带 \"final\": true（收官卷，整卷收线，写完自动完结）；全部完结条件当下已满足 → type=complete_book",
+				Reason: "卷末需决定追加新卷、收官卷或结束全书",
 			}
 		}
 	}

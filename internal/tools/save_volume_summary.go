@@ -69,7 +69,18 @@ func (t *SaveVolumeSummaryTool) Execute(_ context.Context, args json.RawMessage)
 		return nil, fmt.Errorf("checkpoint volume summary: %w", err)
 	}
 
-	return json.Marshal(map[string]any{
+	result := map[string]any{
 		"saved": true, "type": "volume_summary", "volume": a.Volume,
-	})
+	}
+	// 收官主路径的完结触发点：卷末收尾三连的最后一块拼图是卷摘要，落盘后若全书已
+	// 满足完结条件则就地 MarkComplete（完结检查始终发生在最后一块事实落地的工具里，
+	// 与 commit_chapter 同一模式；谓词见 commit_chapter.go 的 layeredComplete）。
+	if p, _ := t.store.Progress.Load(); p != nil && p.Layered && p.Phase == domain.PhaseWriting {
+		if layeredComplete(t.store, p) {
+			if err := t.store.Progress.MarkComplete(); err == nil {
+				result["book_complete"] = true
+			}
+		}
+	}
+	return json.Marshal(result)
 }

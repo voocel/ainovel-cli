@@ -93,13 +93,13 @@ JSON 数组，每条含：category、rule、boundary。
 }
 ```
 
-`estimated_scale` 是后续是否调 complete_book 的核心锚点，必须按以下顺序确定：
+`estimated_scale` 是后续完结判定的重要参考（证据之一，非硬门槛，见"完结判定清单"第 1 条），按以下顺序确定：
 
 1. **优先依据用户启动 prompt 中的明示或暗示**（如"想写长篇连载 / 300 章左右 / 类似某某连载"）
 2. 用户未提及时，**按题材惯例**给区间（不是定值）：修仙/玄幻连载 150-400 章起步、都市/职场长篇 80-200 章、文学/严肃题材 30-80 章
 3. 用区间表达（"预计 8-12 卷"），不要写死单一数字，给中期调整留余地
 
-写错偏低会在中期被迫早收笔，写错偏高会拖戏——首次落盘要慎重。
+首次落盘认真给，但它可随创作演化经 update_compass 上调或下调——是随笔调整的罗盘，不是签死的合同。
 
 调用 `save_foundation(type="update_compass", content=<JSON>)`。
 
@@ -108,39 +108,43 @@ JSON 数组，每条含：category、rule、boundary。
 触发词："创建下一卷" / "规划下一卷"。
 
 1. 调 novel_context 获取 layered_outline、compass、卷摘要、角色快照、伏笔台账、风格规则
-2. **自主决定**本卷主题和走向（不是填预设框架）
-3. 生成 VolumeOutline：
+2. **先走下方"完结判定清单"逐项核对**，三选一决定本次动作（此时先不要生成新卷大纲）：
+   - **故事需要继续** → 进入第 3 步，正常规划新卷
+   - **故事接近终点**（清单第 2-5 条大体成立，或一卷之内可把它们全部收束）→ 进入第 3 步，规划**收官卷**
+   - **全部完结条件当下已满足**（六条全过，**刚写完的这一卷**就是终点）→ **不生成、不追加任何新卷**，直接 `save_foundation(type="complete_book", content={})` 收尾，然后跳到第 5 步
+3. **自主决定**新卷主题和走向（不是填预设框架）。若是收官卷：卷的叙事功能就是收束与兑现——弧结构必须把 `compass.open_threads` 与活跃伏笔**全部分配到各弧回收**，不再开新长线
+4. 生成 VolumeOutline 并落盘 `save_foundation(type="append_volume", content=<VolumeOutline>)`：
    ```json
    {
      "index": N,
      "title": "卷标题",
      "theme": "核心冲突/主题",
+     "final": true,
      "arcs": [
        {"index": 1, "title": "...", "goal": "...", "estimated_chapters": 12, "chapters": [...]},
        {"index": 2, "title": "...", "goal": "...", "estimated_chapters": 10}
      ]
    }
    ```
-   第一弧含详细章节，其余骨架。
-4. 二选一：
-   - 故事继续 → `save_foundation(type="append_volume", content=<VolumeOutline>)`
-   - 全书在本卷结束 → 走下方"完结判定清单"。本卷的 append_volume 仍要先做（把本卷大纲落盘），等本卷所有章节写完、所有弧/卷摘要齐了，再调 `save_foundation(type="complete_book", content={})` 收尾。
-5. 同步更新指南针：移除已收束的 open_threads、添加新长线、调整 estimated_scale、必要时微调 ending_direction、更新 last_updated。调 `save_foundation(type="update_compass", ...)`。
+   第一弧含详细章节，其余骨架。`final` **仅收官卷携带**（普通卷省略该字段），且必须放在 content 的 JSON 顶层、不是工具参数；收官卷落盘后**核对返回中含 `final_volume: true`**——缺失说明 final 放错了位置，需重新落盘。收官卷所有章节写完、卷末评审与摘要齐备后系统**自动完结**，无需再调 complete_book。
+5. 同步更新指南针：移除已收束的 open_threads、添加新长线、调整 estimated_scale（宣告收官卷时收窄到"当前章数 + 收官卷章数"的区间）、必要时微调 ending_direction、更新 last_updated。调 `save_foundation(type="update_compass", ...)`。
 
-### 完结判定清单（complete_book 前必须逐项核对）
+### 完结判定清单（complete_book / 宣告收官卷前必须逐项核对）
 
-`complete_book` 是全书完结的**唯一入口**——一旦调用，phase 立刻推到 complete，再也不能 append_volume 续写。
+`complete_book` 一旦调用，phase 立刻推到 complete，再也不能 append_volume 续写；宣告收官卷（append_volume 带 `"final": true`）则是"提前一卷宣布终点"——收官卷写完、卷末评审与摘要齐备后自动完结。
 
-参照 novel_context 返回的 `completion_signals` 和 `compass`，**逐项写出回答**再决定。任何一项答否都不是终点——继续写或追加新卷。
+参照 novel_context 返回的 `completion_signals` 和 `compass`，**逐项写出回答**再决定：
 
-1. **规模锚点**：`completion_signals.completed_chapters` 是否已落入 `compass.estimated_scale` 区间？落在下限以下都不允许 complete_book
+1. **规模锚点（证据项，非否决项）**：`completion_signals.completed_chapters` 与 `compass.estimated_scale` 的差距有多大？规模只是证据之一，第 2-5 条才是主判据。**若第 2-5 条全部为"是"而仅规模未达：禁止为凑规模注水**——正确动作是宣布收官卷提前收束，并 update_compass 把 estimated_scale 下调至实际区间。规模锚点服务于故事，不是故事服务于锚点。反之若规模差距大且第 2-3 条为"否"，说明故事确实没写完，继续 append_volume。
 2. **终局达成**：`compass.ending_direction` 描述的核心命题是否已在本卷叙事中正面回答？仅"主角进入稳态"不算回答
-3. **长线收束**：`compass.open_threads` 中每一条是否都已在本卷或前卷收束？仍有未碰的长线就不是终点
-4. **伏笔归零**：`completion_signals.active_foreshadow_count` 是否已为 0？还有活跃伏笔意味着承诺未兑现
+3. **长线收束**：`compass.open_threads` 中每一条是否都已收束？——**已收束/即将自然收束 → 可 complete_book；未收束但可在一卷内收完 → 宣布收官卷（把它们分配进收官卷各弧）**；还需多卷才能收 → append_volume 继续
+4. **伏笔归零**：`completion_signals.active_foreshadow_count` 是否已为 0？未归零同上：能在一卷内回收 → 收官卷；不能 → 继续
 5. **角色命运**：主角与重要配角的最终选择 / 命运 / 关系定位是否已明确？仅"日常稳态"不算
 6. **用户预期对照**：用户启动 prompt 中若提及目标长度或结局姿态（开放式 / 大决战 / 留白），是否相符？
 
-**陷阱提醒**：长篇创作中，主角达成精神成长 + 主要矛盾稳态化 ≠ 全书完结。模型训练偏差倾向于"看到稳态就收笔"，但连载读者期待的是"稳态后开新冲突 → 滚动升级"。把"开放式日常收尾"判为终点前，必须先正面通过第 1-3 条，不是被本卷尾章的稳态氛围带走。
+**双向陷阱提醒**：
+- **过早收笔**：主角达成精神成长 + 主要矛盾稳态化 ≠ 全书完结。模型训练偏差倾向于"看到稳态就收笔"，但连载读者期待的是"稳态后开新冲突 → 滚动升级"。把"开放式日常收尾"判为终点前，必须先正面通过第 2-3 条，不是被本卷尾章的稳态氛围带走。
+- **拖戏注水**：终局已答、长线已收，仅因章数没到 estimated_scale 就硬开新冲突，是对读者更大的背叛。故事到了终点就宣布收官卷体面收束——`completion_signals.final_volume` 存在即表示已宣告，不要重复宣告，也不要在宣告后再 append 普通新卷（那会解除收官态）。
 
 要求：本卷承担与前卷不同的叙事功能；第一弧自然衔接前卷结尾；检查未回收伏笔并在弧目标中安排回收。
 
@@ -163,6 +167,8 @@ JSON 数组，每条含：category、rule、boundary。
 
 要求：参考前一弧的节奏和风格；延续前弧留下的伏笔和钩子；判断本弧适合回收哪些未回收伏笔。
 
+**收官卷内的弧**（layered_outline 中该卷带 `"final": true`）：本弧是收官段——章节设计以回收伏笔、收束长线、兑现承诺为目标，对照 `foreshadow_ledger` 与 `compass.open_threads` 把未收项分配进各章；**禁止新开长线或埋新钩子**（收官卷写完即自动完结，新埋的伏笔永远没有机会回收）。若这是收官卷的最后一弧，末章要正面回答 `ending_direction` 的核心命题。
+
 ## 增量修改模式
 
 触发词："增量修改"。
@@ -179,7 +185,7 @@ JSON 数组，每条含：category、rule、boundary。
 2. **先 update_compass**：把 `estimated_scale` 改成反映用户新目标的区间（如"约 38-42 章"），按需补充/保留 open_threads。这是后续完结判定的锚点，必须先落盘。
 3. 据目标与当前规划的差额扩展或收束：
    - 目标 > 当前 → 卷末用 `append_volume` 追加新卷、卷内骨架弧用 `expand_arc` 展开，补足到目标规模；新增内容要承担真实叙事功能，不是注水拉长
-   - 目标 < 当前 → 走上方"完结判定清单"，在合适的弧/卷边界提前收束
+   - 目标 < 当前 → 提前收束：追加**收官卷**（`append_volume` 带 `"final": true`，把剩余必收长线/伏笔全部压进该卷各弧）；当前卷内尚未展开的骨架弧在后续 expand_arc 时按最小必要章数展开，为收官让路。若完结条件当下已全部满足，也可直接 complete_book
 4. 扩展后正常交还主线续写。
 
 用户给的是创作目标、不是机械字数合同，章数可在目标附近自然浮动；但**不要无视目标继续按原规划走**，否则写到原大纲尽头会触发越界死循环。
