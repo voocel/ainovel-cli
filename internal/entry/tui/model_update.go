@@ -73,6 +73,10 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleImportKey)
 	case m.simulator != nil:
 		return m.handleBlockingModalKey(msg, m.handleSimulationKey)
+	case m.materials != nil:
+		return m.handleBlockingModalKey(msg, m.handleMaterialsKey)
+	case m.rewriteConfirm != nil:
+		return m.handleBlockingModalKey(msg, m.handleRewriteConfirmKey)
 	default:
 		return m, nil, false
 	}
@@ -127,8 +131,31 @@ func (m Model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 
 	switch msg.Type {
 	case tea.KeyEsc:
+		// Skill 子菜单：Esc 返回命令列表
+		// 命令列表：Esc 关闭菜单
+		if m.compLevel == paletteLevelSkills {
+			m.exitSkillSubMenu()
+			return m, nil, true
+		}
 		m.clearCommandPalette()
 		return m, nil, true
+	case tea.KeyLeft:
+		// ← 在 Skill 子菜单返回上级；命令列表忽略
+		if m.compLevel == paletteLevelSkills {
+			m.exitSkillSubMenu()
+			return m, nil, true
+		}
+		return m, nil, false
+	case tea.KeyRight:
+		// → 在命令列表选中 Skill 入口时进入子菜单；其他情况忽略
+		if m.compLevel == paletteLevelCommands {
+			item, ok := m.selectedCommandItem()
+			if ok && item.Kind == kindSkillEntry {
+				m.enterSkillSubMenu()
+				return m, nil, true
+			}
+		}
+		return m, nil, false
 	case tea.KeyUp:
 		if m.compIdx > 0 {
 			m.compIdx--
@@ -139,14 +166,13 @@ func (m Model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 			m.compIdx++
 		}
 		return m, nil, true
-	case tea.KeyTab:
-		m.acceptCommandCompletion()
-		return m, nil, true
-	case tea.KeyEnter:
+	case tea.KeyTab, tea.KeyEnter:
 		item, ok := m.acceptCommandCompletion()
+		// ok=false 表示"已切换层级"（进入或退出子菜单），textarea 已重置，等下次按键循环
 		if !ok {
 			return m, nil, true
 		}
+		// Skill 入口不会走到这里（acceptCommandCompletion 一级 Skill 入口返回 ok=false）
 		if item.AutoExecute {
 			m.textarea.Reset()
 			next, cmd := m.handleSlashCommand(slashCommand{name: item.Name})
@@ -289,6 +315,13 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	m.pushInputHistory(text)
 	m.textarea.Reset()
 	m.refitTextareaHeight()
+	return m.submitUserText(text)
+}
+
+// submitUserText 把一段文本作为用户输入提交到当前模式（modeNew/modeRunning/modeDone）。
+// 抽出来是为了让 skill 注入（/skill-name 展开）能复用同一套提交流程——
+// skill 注入本质上是把 /name + 用户消息替换为一段更长的用户消息。
+func (m Model) submitUserText(text string) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeNew:
 		m.err = nil
@@ -512,6 +545,23 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m, listenSimulationEvent(msg.reqID, msg.ch), true
+	case materialsCollectResultMsg:
+		// 后台 LLM 收集完成：把候选填充到 state 并切到 selecting 阶段。
+		// m.materials 为空说明用户已 Esc 取消，结果丢弃即可。
+		if m.materials == nil {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR",
+				Summary: "素材收集失败：" + msg.err.Error(), Level: "error",
+			})
+			m.refreshEventViewport()
+			m.materials = nil
+			return m, nil, true
+		}
+		m.materials.applyCollect(msg.candidates, msg.raw)
+		return m, nil, true
 	case exportDoneMsg:
 		if msg.err != nil {
 			m.applyEvent(host.Event{

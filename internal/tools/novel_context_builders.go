@@ -560,6 +560,15 @@ func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope
 		}
 	}
 
+	// 注入项目级素材：writer 写新场景/新角色时按命名表、术语表取用。
+	// 空库不写 materials 字段，避免污染 chapter context；architect 路径会始终注入。
+	if lib, err := t.store.Materials.Load(); err == nil && len(lib.Items) > 0 {
+		envelope.References["materials"] = map[string]any{
+			"items": lib.Items,
+			"count": len(lib.Items),
+		}
+	}
+
 	envelope.References["references"] = t.writerReferences(state.chapter)
 }
 
@@ -692,6 +701,17 @@ func (t *ContextTool) buildArchitectReferences(envelope *architectContextEnvelop
 		envelope.References["style_rules"] = styleRules
 	} else {
 		warn("style_rules", err)
+	}
+
+	// 注入项目级素材：architect 规划 / 扩展大纲时直接消费 meta/materials.json。
+	// 空库也注入 {items:[], count:0}，让 LLM 看到字段稳定存在（避免误判为"未启用"）。
+	if lib, err := t.store.Materials.Load(); err == nil {
+		envelope.References["materials"] = map[string]any{
+			"items": lib.Items,
+			"count": len(lib.Items),
+		}
+	} else {
+		warn("materials", err)
 	}
 
 	envelope.References["references"] = t.architectReferences()

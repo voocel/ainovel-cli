@@ -25,6 +25,7 @@ import (
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	"github.com/voocel/ainovel-cli/internal/notify"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/userrules"
@@ -42,6 +43,8 @@ type Host struct {
 	coordinatorCtxMgr *corecontext.ContextEngine // 切 default/coordinator 模型时联动 SetContextWindow + SetReserveTokens
 	thinkingApplier   agents.ApplyThinking       // /model 调推理强度时联动 live agent（coordinator + 子代理）
 	askUser           *tools.AskUserTool
+	webSearch         *tools.WebSearchTool
+	skillStore        *skills.Store
 	writerRestore     *ctxpack.WriterRestorePack
 	observer          *observer
 	router            *flow.Dispatcher
@@ -121,7 +124,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	var pauser *PausePointSentinel
 	// onGuardBlock 与 router/budget 同款前置声明：h 构造后才能挂事件浮出闭包。
 	var onGuardBlock func(agent, reason string, consecutive int32)
-	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
+	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking, webSearchTool, skillStore := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
 		if budget != nil && budget.HandleBoundary() {
 			return
 		}
@@ -148,6 +151,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		coordinatorCtxMgr: coordinatorCtxMgr,
 		thinkingApplier:   applyThinking,
 		askUser:           askUser,
+		webSearch:         webSearchTool,
+		skillStore:        skillStore,
 		writerRestore:     restore,
 		usage:             usage,
 		usageCancel:       usageCancel,
@@ -1119,13 +1124,13 @@ func (h *Host) ReplayQueue(afterSeq int64) ([]domain.RuntimeQueueItem, error) {
 
 // CoCreateStream 冷启动共创：从零澄清需求，产出整本书的创作指令。
 func (h *Host) CoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string)) (CoCreateReply, error) {
-	return coCreateStream(ctx, h.models, h.store.Sessions, coCreateSystemPrompt, history, onProgress)
+	return coCreateStream(ctx, h.models, h.store.Sessions, coCreateSystemPrompt, history, onProgress, h.webSearch)
 }
 
 // StageCoCreateStream 阶段共创：在已写内容的基础上规划后续方向。
 // 系统提示 = 阶段 prompt + 当前故事状态摘要，让助手知道"已经写了什么"。
 func (h *Host) StageCoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string)) (CoCreateReply, error) {
-	return coCreateStream(ctx, h.models, h.store.Sessions, stageSystemPrompt(h.store), history, onProgress)
+	return coCreateStream(ctx, h.models, h.store.Sessions, stageSystemPrompt(h.store), history, onProgress, h.webSearch)
 }
 
 // stagePlanPrefix 把共创产出的"后续方向 brief"包装成一条阶段规划干预，交 Coordinator 裁定。
@@ -1283,4 +1288,94 @@ func (h *Host) guardExclusive(action string) error {
 // 只读到 Progress.CompletedChapters + 章节终稿 + 大纲 + premise 的一致快照。
 func (h *Host) Export(ctx context.Context, opts exp.Options) (*exp.Result, error) {
 	return exp.Run(ctx, exp.Deps{Store: h.store}, opts)
+}
+
+// SkillStore 返回跨书 skill 库的引用。nil 表示 skill 库未启用
+// （路径解析失败或被禁用），调用方应优雅降级。
+func (h *Host) SkillStore() *skills.Store {
+	if h == nil {
+		return nil
+	}
+	return h.skillStore
+}
+
+// SkillInject 把 /skill-name 用户消息展开为最终发给 LLM 的文本。
+// 调用方（TUI / cocreate）先用 skills.ParseSkillRef 解析原始输入，
+// 命中再调本方法。返回 (展开后文本, 是否命中, 错误提示)。
+//
+// host 自身不解析输入——拆分"解析"和"展开"两个职责让 cocreate 等场景
+// 可以独立测试解析逻辑。
+func (h *Host) SkillInject(req skills.InjectRequest) skills.InjectResult {
+	if h == nil {
+		return skills.InjectResult{
+			Expanded: false,
+			Hint:     "host 未初始化",
+		}
+	}
+	return h.skillStore.InjectSkill(req)
+}
+
+// ── 素材收集（项目级素材库）──
+
+// MaterialsCollect 触发一次素材收集：单轮 LLM 调用产出 8-15 条候选素材，
+// 调用方（TUI）展示候选给用户筛选，选中条目走 MaterialsApprove 落盘。
+//
+// onProgress 在流式事件到达时被回调（kind=thinking/reply），可用于渲染加载动画。
+// webSearch 是否可用取决于 Provider 配置；不可用时纯靠模型自身知识。
+func (h *Host) MaterialsCollect(ctx context.Context, userPrompt string, onProgress func(kind, text string)) ([]MaterialsCandidate, string, error) {
+	if h == nil {
+		return nil, "", fmt.Errorf("host 未初始化")
+	}
+	return materialsCollect(ctx, h.models, userPrompt, onProgress, h.webSearch)
+}
+
+// MaterialsApprove 把用户筛选后的候选批量落盘到 meta/materials.json。
+// 调用方应只传用户实际选中的条目；本小姐不做二次校验（信任 TUI 已经过滤）。
+// 返回每条的最终 ID，便于 TUI 在事件流提示"保存了哪几条"。
+func (h *Host) MaterialsApprove(items []MaterialsCandidate) ([]domain.MaterialItem, error) {
+	if h == nil {
+		return nil, fmt.Errorf("host 未初始化")
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	conv := make([]domain.MaterialItem, 0, len(items))
+	for _, c := range items {
+		conv = append(conv, domain.MaterialItem{
+			Category: c.Category,
+			Title:    c.Title,
+			Content:  c.Content,
+			Source:   c.Source,
+		})
+	}
+	return h.store.Materials.AddBatch(conv)
+}
+
+// MaterialsList 列出当前项目素材库。便于 TUI 在收集前展示已有素材。
+func (h *Host) MaterialsList() ([]domain.MaterialItem, error) {
+	if h == nil {
+		return nil, fmt.Errorf("host 未初始化")
+	}
+	lib, err := h.store.Materials.Load()
+	if err != nil {
+		return nil, err
+	}
+	return lib.Items, nil
+}
+
+// MaterialsRemove 按 ID 删除单条素材。
+func (h *Host) MaterialsRemove(id string) error {
+	if h == nil {
+		return fmt.Errorf("host 未初始化")
+	}
+	return h.store.Materials.Remove(id)
+}
+
+// LoadPremise 返回本书的 premise（Markdown 字符串）。空表示尚未规划。
+// 给 TUI 在 /materials 不带参数时复用规划前提作收集 prompt。
+func (h *Host) LoadPremise() (string, error) {
+	if h == nil {
+		return "", fmt.Errorf("host 未初始化")
+	}
+	return h.store.Outline.LoadPremise()
 }

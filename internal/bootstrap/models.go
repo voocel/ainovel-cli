@@ -14,7 +14,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/errs"
 )
 
-// 长输出 + 长 ctx 场景下，reasoning-aware provider（mimo / deepseek-r1 等）
+// 长输出 + 长 ctx 场景下，reasoning-aware provider（如某些支持 reasoning 的模型）
 // 思考阶段如果 server 端不流式发 reasoning delta，SSE 整段会保持沉默。
 // litellm 默认 watchdog 是 2 分钟，对 8000 字写作章节经常触发误杀。
 // 5 分钟覆盖绝大多数实测案例（参见 tasks/todo.md plan→draft 思考时长统计），
