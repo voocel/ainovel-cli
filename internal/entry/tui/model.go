@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
@@ -65,9 +66,13 @@ type Model struct {
 	importSeq      int
 	simulator      *simulationState
 	simSeq         int
+	materials      *materialsState
+	materialsSeq   int
+	rewriteConfirm *rewriteConfirmState
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
+	compLevel      paletteLevel // 当前菜单层级：命令列表 / skill 子菜单
 	snapshot       host.UISnapshot
 	events         []host.Event
 	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
@@ -618,6 +623,12 @@ func (m Model) View() string {
 	if m.simulator != nil {
 		return renderSimulationModal(m.width, m.height, m.simulator)
 	}
+	if m.materials != nil {
+		return renderMaterialsModal(m.width, m.height, m.materials, m.currentSpinnerFrame())
+	}
+	if m.rewriteConfirm != nil {
+		return renderRewriteConfirmModal(m.width, m.height, m.rewriteConfirm)
+	}
 
 	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version)
 	inputBox := m.renderBottomBar()
@@ -661,7 +672,7 @@ func (m Model) View() string {
 		commandBar := renderModelSwitchBar(m.width, m.modelSwitch)
 		view = overlayAboveInput(view, commandBar, inputH)
 	} else if m.compActive {
-		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
+		commandBar := renderCommandPalette(m.width, m.compLevel, m.compItems, m.compIdx)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
 	return view
@@ -738,6 +749,33 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 让 Enter 节流先于 awaiting 屏蔽——这样粘贴的 \n 残片仍能补空格。
 
 	switch msg.Type {
+	case tea.KeyCtrlE:
+		if state.awaiting {
+			return m, nil
+		}
+		draft := strings.TrimSpace(state.draftPrompt())
+		if draft == "" {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR",
+				Summary: "AI 还未整理出创作指令，暂无可导出内容", Level: "error",
+			})
+			m.refreshEventViewport()
+			return m, nil
+		}
+		path, err := m.runtime.SaveCoCreateDoc(draft)
+		if err != nil {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR",
+				Summary: "导出失败：" + err.Error(), Level: "error",
+			})
+		} else {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "SYSTEM",
+				Summary: "已导出创作指令到：" + path, Level: "info",
+			})
+		}
+		m.refreshEventViewport()
+		return m, nil
 	case tea.KeyCtrlS:
 		if state.awaiting {
 			return m, nil
@@ -783,6 +821,21 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := utils.CleanInputLine(m.textarea.Value())
 		if text == "" {
 			return m, nil
+		}
+		// /skill-name 主动调用：展开为 skill 全文 + 用户补充
+		if req, ok := skills.ParseSkillRef(text); ok {
+			if m.runtime != nil {
+				result := m.runtime.SkillInject(req)
+				if result.Expanded {
+					text = result.Text
+				} else if hint := strings.TrimSpace(result.Hint); hint != "" {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: hint, Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+			}
 		}
 		m.err = nil
 		state.appendUser(text)

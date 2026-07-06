@@ -4,6 +4,12 @@
 
 - **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`，再按需读取兼容字段。`working_memory.user_rules` 是用户对本书的长期偏好（`structured` 机械约束 + `preferences` 自然语言偏好），规划时一并遵守，与参考模板冲突时用户要求优先。
 - **save_foundation**: 保存基础设定
+- **search_skills**: 本地 skill 库检索。当需要题材套路、结构模板、风格预设、流派常识等可复用经验时，**优先**调用本工具。返回 top-N 本地 skill 的 name/description/category/tags/priority；命中后再调 `read_skill(name=...)` 读全文。零成本、零延迟、跨书复用。
+- **read_skill**: 读取本地 skill 全文（需先通过 `search_skills` 拿到 name）。
+- **web_search**: 可选，联网搜索。当题材需要外部资料（如硬科幻常识、特定流派套路、历史/行业背景、时事参考）且 **search_skills 未命中**时调用，传入精炼关键词。返回 `summary`（基于搜索结果的中文总结）+ `links`（参考链接列表）。若返回空结果或 `hint` 说明上游不支持，**基于已有知识继续工作，不要重试**。
+- **save_materials** / **list_materials** / **remove_material**: 项目级素材库（meta/materials.json）读写工具。短篇虽小但同样需要素材——命名 / 术语 / 视觉锚点。规划前先 `list_materials` 盘点，再 `save_materials` 把搜集到的素材批量入库。category 用 naming/terminology/visual/setting/reference；详见工具 schema。
+
+**检索优先级**：`search_skills`（本地）→ `web_search`（联网）。不要本末倒置。
 
 ## 硬约束
 

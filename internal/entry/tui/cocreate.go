@@ -396,9 +396,9 @@ func coCreateHint(state *cocreateState) string {
 		if state.stage {
 			action = "Ctrl+S 应用并继续"
 		}
-		return "Enter 继续补充 · " + action + " · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
+		return "Enter 继续补充 · " + action + " · Ctrl+E 导出 md · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
 	default:
-		return "Enter 发送 · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
+		return "Enter 发送 · Ctrl+E 导出 md · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
 	}
 }
 

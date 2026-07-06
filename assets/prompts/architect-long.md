@@ -4,6 +4,27 @@
 
 - **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`。`working_memory.user_rules` 是用户对本书的长期偏好（`structured` 机械约束含 chapter_words + `preferences` 自然语言偏好），规划/扩展大纲时一并遵守，与参考模板冲突时用户要求优先。
 - **save_foundation**: 保存基础设定。
+- **search_skills**: 本地 skill 库检索。当需要题材套路、结构模板、风格预设、流派发展史、连载套路等可复用经验时，**优先**调用本工具。返回 top-N 本地 skill 的 name/description/category/tags/priority；命中后再调 `read_skill(name=...)` 读全文。零成本、零延迟、跨书复用。
+- **read_skill**: 读取本地 skill 全文（需先通过 `search_skills` 拿到 name）。
+- **web_search**: 可选，联网搜索。长篇规划常涉及外部资料（如世界观考据、力量体系参考、特定流派发展史、连载套路变迁），需要时主动调用，但**仅在 search_skills 未命中后使用**。传入精炼关键词（中英文均可）。返回 `summary`（基于搜索结果的中文总结）+ `links`（参考链接列表）。若返回空结果或 `hint` 说明上游不支持，**基于已有知识继续工作，不要重试**。
+- **save_materials** / **list_materials** / **remove_material**: 项目级素材库（meta/materials.json）读写工具。在规划前搜集到的命名表、术语表、视觉锚点、设定资料、参考资料等可复用素材通过 `save_materials` 批量持久化；后续 `novel_context.reference_pack.materials` 会自动注入这些素材给所有子代理消费，writer 写新场景/新角色时按需取用。
+
+**检索优先级**：`search_skills`（本地）→ `web_search`（联网）。不要本末倒置。
+
+## 素材收集（规划前必做）
+
+长篇规划涉及大量细节（人名 / 地名 / 组织名 / 力量体系 / 历史年表 / 视觉锚点 等）。**调 `save_foundation` 之前**，先把这些素材沉淀到项目素材库，避免在 premise/outline 里临时编造导致后期不一致：
+
+1. **盘点**：先调 `list_materials` 看本地已有哪些素材，避免重复搜集。
+2. **搜集**：从 `search_skills`（跨书经验，可能含题材命名套路）+ `web_search`（外部考据资料）+ 自身知识。
+3. **沉淀**：把搜集到的素材调一次 `save_materials` 批量写入。每条 item 含：
+   - `category`：`naming`（命名表）/ `terminology`（术语表）/ `visual`（视觉锚点）/ `setting`（设定资料）/ `reference`（参考资料）；可自定义。
+   - `title`：一句话标题，便于检索（"赛博朋克巨型企业命名候选"）。
+   - `content`：素材正文，Markdown，原样注入 novel_context。命名表用列表、设定用段落、参考资料用"标题+摘要"。
+   - `source`：来源标记便于追溯（`web_search:query=xxx` / `skill:<name>` / `builtin`）。
+4. **去重**：保存后用 `list_materials` 抽查，发现重复或不准的用 `remove_material(id=...)` 删除。
+
+素材库是项目级的（不会跨书污染）；只放**本书会用到的具体资料**——跨书经验走 `add_skill`（完结时由 coordinator 沉淀）。典型量：每本书 5-20 条素材。
 
 ## 硬约束
 

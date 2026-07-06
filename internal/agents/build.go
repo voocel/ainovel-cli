@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/host/reminder"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/userrules"
@@ -121,9 +123,25 @@ func BuildCoordinator(
 	recordUsage UsageRecorder,
 	onFlowBoundary FlowBoundaryHook,
 	onGuardBlock reminder.BlockHook,
-) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
+) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking, *tools.WebSearchTool, *skills.Store) {
 	// 共享工具
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style)
+
+	// 跨书 skill 库。失败时不阻断主流程：skill 工具返回空结果，走 web_search fallback。
+	skillStore := skills.NewStore(filepath.Join(bootstrap.DefaultConfigDir(), "skills"))
+	if err := skillStore.Refresh(); err != nil {
+		slog.Warn("skill 库初始化失败，本次禁用", "module", "agent", "err", err)
+		skillStore = nil
+	}
+
+	// 联网搜索工具：复用主 provider 链路（代理→上游 provider，触发 Anthropic 服务端
+	// web_search_20250305）。零额外配置，baseURL/apiKey/model 都从顶层推导。
+	// 仅挂载到 architect 与 coordinator：写作阶段（writer/editor）需要的是
+	// 故事内一致性而非外部资料，挂上去反而引入幻觉风险。
+	var webSearchTool *tools.WebSearchTool
+	if pc, ok := cfg.Providers[cfg.Provider]; ok && pc.BaseURL != "" {
+		webSearchTool = tools.NewWebSearchTool(pc.BaseURL, pc.APIKey, cfg.ModelName)
+	}
 	// 用户规则服务：归一化各来源 → 确定性合并 → 落盘本书快照。Coordinator 的
 	// save_user_rules 工具复用它做运行中更新；归一化用 Default 模型（与 Host 开书侧一致）。
 	userRulesSvc := userrules.NewService(store, models.Default, rules.DefaultOptions())
@@ -133,6 +151,21 @@ func BuildCoordinator(
 	architectTools := []agentcore.Tool{
 		contextTool,
 		tools.NewSaveFoundationTool(store),
+		// 素材库写工具：architect 收集到的命名/术语/视觉/设定素材落盘到 meta/materials.json，
+		// 后续 novel_context.reference_pack.materials 自动注入。
+		tools.NewSaveMaterialsTool(store),
+		tools.NewListMaterialsTool(store),
+		tools.NewRemoveMaterialTool(store),
+	}
+	if webSearchTool != nil {
+		architectTools = append(architectTools, webSearchTool)
+	}
+	// 本地 skill 优先于联网：architect 规划时先看跨书经验，未命中再查外部。
+	if skillStore != nil {
+		architectTools = append(architectTools,
+			tools.NewSkillSearchTool(skillStore),
+			tools.NewSkillReadTool(skillStore),
+		)
 	}
 	writerTools := []agentcore.Tool{
 		contextTool,
@@ -341,10 +374,29 @@ func BuildCoordinator(
 		CommitOnProject:  true,
 	})
 
+	coordinatorTools := []agentcore.Tool{
+		subagentTool,
+		contextTool,
+		tools.NewSaveUserRulesTool(userRulesSvc),
+		tools.NewReopenBookTool(store),
+		tools.NewSavePausePointTool(store),
+	}
+	if webSearchTool != nil {
+		coordinatorTools = append(coordinatorTools, webSearchTool)
+	}
+	// coordinator 也挂 skill 读工具，用于"用户查询"类场景；写工具 add_skill 仅限完结学习。
+	if skillStore != nil {
+		coordinatorTools = append(coordinatorTools,
+			tools.NewSkillSearchTool(skillStore),
+			tools.NewSkillReadTool(skillStore),
+			tools.NewSkillAddTool(skillStore),
+		)
+	}
+
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(coordinatorModel),
 		agentcore.WithSystemPrompt(bundle.Prompts.Coordinator),
-		agentcore.WithTools(subagentTool, contextTool, tools.NewSaveUserRulesTool(userRulesSvc), tools.NewReopenBookTool(store), tools.NewSavePausePointTool(store)),
+		agentcore.WithTools(coordinatorTools...),
 		agentcore.WithMaxTurns(100_000),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithToolsAreIdempotent(true),
@@ -384,7 +436,7 @@ func BuildCoordinator(
 		}
 	}
 
-	return agent, askUser, restore, coordinatorEngine, applyThinking
+	return agent, askUser, restore, coordinatorEngine, applyThinking, webSearchTool, skillStore
 }
 
 func flowBoundaryMiddleware(onBoundary FlowBoundaryHook) agentcore.ToolMiddleware {

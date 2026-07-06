@@ -27,7 +27,7 @@ func (o *observer) handleSubagentDelta(p *agentcore.ProgressPayload) {
 
 	cur, ok := o.streamExtractors[p.Agent]
 	// 同工具调用 args 已闭合（顶层 } 命中）后，仍可能收到 trailing delta：
-	// 某些 provider（deepseek-v4-flash 实测）会把单次 args 拆成多个 chunk，
+	// 某些 provider（实测）会把单次 args 拆成多个 chunk，
 	// 最末一个 chunk 在 `}` 之后还跟着空白或重复字符。此时若按"工具名匹配 +
 	// Done 即重建"处理，新 extractor 又会 emit 一次 ✻ header 并把尾段 token
 	// 当作新 args 解析。这些 delta 是冗余尾巴，丢弃即可。
