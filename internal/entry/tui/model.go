@@ -293,7 +293,11 @@ func (m *Model) updateViewportSize() {
 	m.detailVP.Height = bodyH
 	leftW := m.sidebarWidth()
 	m.stateVP.Width = max(1, leftW-2)
-	m.stateVP.Height = max(1, bodyH-2) // -2 为状态栏 Padding(1,1) 的上下留白
+	m.stateVP.Height = max(1, bodyH-1) // -1 为顶部留白，底行直接显示内容
+	// 高度或内容变短后，自由滚动的左右两栏可能停在越界偏移上（bubbles 的
+	// SetContent 只防越过末行），viewport 会用空行补满底部。SetYOffset 自钳。
+	m.stateVP.SetYOffset(m.stateVP.YOffset)
+	m.detailVP.SetYOffset(m.detailVP.YOffset)
 }
 
 // splitHeights 计算事件流和流式输出的高度分配。

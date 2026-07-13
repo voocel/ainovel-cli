@@ -434,11 +434,19 @@ func renderCacheSidebar(snap host.UISnapshot, width int) string {
 		b.WriteString(renderField("链路断裂", v))
 	}
 
-	if len(snap.CachePerAgent) > 0 {
+	// Arbiter 按设计不参与 prompt cache（KB 级一次性裁定，无稳定前缀可复用），
+	// 常驻"未启用"或"0%"只会引人排查；用量面板仍完整记它的账。
+	var roles []host.AgentCacheStat
+	for _, a := range snap.CachePerAgent {
+		if a.Role != "arbiter" {
+			roles = append(roles, a)
+		}
+	}
+	if len(roles) > 0 {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).
 			Render(strings.Repeat("·", max(8, width-12))))
 		b.WriteString("\n")
-		for _, a := range snap.CachePerAgent {
+		for _, a := range roles {
 			b.WriteString(renderCacheAgentLine(a, width))
 			b.WriteString("\n")
 		}

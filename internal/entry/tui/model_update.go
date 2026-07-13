@@ -15,6 +15,11 @@ import (
 const maxPromptEventCols = 160
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// body 高度依赖顶栏/底栏的实时高度（新建页模式栏、多行输入都会改变它），
+	// 每条消息前同步一次，避免 viewport 停在旧高度、面板底部补空行。幂等且廉价。
+	if m.width > 0 {
+		m.updateViewportSize()
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

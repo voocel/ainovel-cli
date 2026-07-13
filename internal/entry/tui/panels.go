@@ -112,7 +112,7 @@ func renderStatePanel(vp viewport.Model, width, height int, focused bool) string
 		MaxHeight(height).
 		Border(baseBorder, false, true, false, false).
 		BorderForeground(borderColor).
-		Padding(1, 1)
+		Padding(1, 1, 0, 1)
 	return style.Render(vp.View())
 }
 
