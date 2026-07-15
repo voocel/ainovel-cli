@@ -99,6 +99,7 @@ func (m *SwappableModel) Current() (provider, name string) {
 
 // ModelSet 持有按角色分配的模型实例，未配置的角色回退到默认模型。
 type ModelSet struct {
+	mu        sync.RWMutex
 	Default   *SwappableModel
 	models    map[string]*SwappableModel
 	fallbacks map[string][]modelTarget
@@ -107,6 +108,8 @@ type ModelSet struct {
 
 // ForRole 返回指定角色的模型，未配置时返回默认模型。
 func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	if m, ok := ms.models[role]; ok {
 		return m
 	}
@@ -116,6 +119,8 @@ func (ms *ModelSet) ForRole(role string) agentcore.ChatModel {
 // ForRoleWithFailover 返回带有单次请求级 fallback 的角色模型。
 // 仅当该角色显式配置了 fallbacks 时生效；未配置时退化为普通模型。
 func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) agentcore.ChatModel {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	primary, ok := ms.models[role]
 	if !ok {
 		return ms.Default
@@ -125,15 +130,14 @@ func (ms *ModelSet) ForRoleWithFailover(role string, report FailoverReporter) ag
 		return primary
 	}
 	return &failoverModel{
-		role:      role,
-		primary:   primary,
-		fallbacks: append([]modelTarget(nil), targets...),
-		report:    report,
+		role: role, primary: primary, set: ms, report: report,
 	}
 }
 
 // Summary 返回模型分配摘要（供日志使用）。
 func (ms *ModelSet) Summary() string {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	var parts []string
 	for role, m := range ms.models {
 		provider, name := m.Current()
@@ -150,6 +154,8 @@ func (ms *ModelSet) Summary() string {
 // CurrentSelection 返回角色当前生效的 provider/model。
 // role 为空或 "default" 时返回默认模型。
 func (ms *ModelSet) CurrentSelection(role string) (provider, model string, explicit bool) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	if role == "" || role == "default" {
 		provider, model = ms.Default.Current()
 		return provider, model, true
@@ -165,6 +171,8 @@ func (ms *ModelSet) CurrentSelection(role string) (provider, model string, expli
 // Swap 切换默认模型或指定角色模型。
 // role 为空或 "default" 时切换默认模型；其他角色切换为显式覆盖。
 func (ms *ModelSet) Swap(role, provider, model string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	pc, ok := ms.config.Providers[provider]
 	if !ok {
 		return fmt.Errorf("provider %q is not configured: %w", provider, errs.ErrConfig)
@@ -176,6 +184,8 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 
 	if role == "" || role == "default" {
 		ms.Default.Swap(provider, model, next)
+		ms.config.Provider = provider
+		ms.config.ModelName = model
 		return nil
 	}
 
@@ -185,10 +195,58 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 
 	if existing, ok := ms.models[role]; ok {
 		existing.Swap(provider, model, next)
-		return nil
+	} else {
+		ms.models[role] = NewSwappableModel(provider, model, next)
 	}
-	ms.models[role] = NewSwappableModel(provider, model, next)
+	if ms.config.Roles == nil {
+		ms.config.Roles = make(map[string]RoleConfig)
+	}
+	rc := ms.config.Roles[role]
+	rc.Provider = provider
+	rc.Model = model
+	ms.config.Roles[role] = rc
 	return nil
+}
+
+// ResolveContextWindow 使用 ModelSet 的最新配置解析窗口，供运行时热切换后的
+// ContextManagerFactory 使用，避免捕获启动时的 Config 副本。
+func (ms *ModelSet) ResolveContextWindow(provider, model string) (int, ContextWindowSource) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.config.ResolveContextWindow(provider, model)
+}
+
+// ApplyPrepared 提交一个已成功构建的候选 ModelSet。已有 SwappableModel 的地址
+// 保持不变，因此已装配的 Worker/Arbiter 会在下一次请求自动使用新客户端。
+func (ms *ModelSet) ApplyPrepared(candidate *ModelSet) {
+	if candidate == nil {
+		return
+	}
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	defaultProvider, defaultName := candidate.Default.Current()
+	ms.Default.Swap(defaultProvider, defaultName, candidate.Default.SwappableModel.Current())
+
+	nextModels := make(map[string]*SwappableModel, len(candidate.models))
+	for role, next := range candidate.models {
+		provider, name := next.Current()
+		if existing, ok := ms.models[role]; ok {
+			existing.Swap(provider, name, next.SwappableModel.Current())
+			nextModels[role] = existing
+		} else {
+			nextModels[role] = next
+		}
+	}
+	ms.models = nextModels
+	ms.fallbacks = candidate.fallbacks
+	ms.config = CloneConfig(candidate.config)
+}
+
+func (ms *ModelSet) fallbackTargets(role string) []modelTarget {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return append([]modelTarget(nil), ms.fallbacks[role]...)
 }
 
 // ModelName 从 ChatModel 中提取当前模型名，失败返回空字符串。
@@ -196,6 +254,17 @@ func (ms *ModelSet) Swap(role, provider, model string) error {
 func ModelName(m agentcore.ChatModel) string {
 	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
 		return info.Info().Name
+	}
+	return ""
+}
+
+// ModelProvider 从 ChatModel 中提取当前 provider 名称，失败返回空字符串。
+func ModelProvider(m agentcore.ChatModel) string {
+	if info, ok := m.(interface{ Info() llm.ModelInfo }); ok {
+		return info.Info().Provider
+	}
+	if provider, ok := m.(interface{ ProviderName() string }); ok {
+		return provider.ProviderName()
 	}
 	return ""
 }
@@ -296,10 +365,10 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 }
 
 type failoverModel struct {
-	role      string
-	primary   *SwappableModel
-	fallbacks []modelTarget
-	report    FailoverReporter
+	role    string
+	primary *SwappableModel
+	set     *ModelSet
+	report  FailoverReporter
 }
 
 func (m *failoverModel) Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
@@ -418,7 +487,11 @@ func (m *failoverModel) pickFallback(current modelTarget, err error) (modelTarge
 		return modelTarget{}, agentcore.FailoverReason(err), false
 	}
 	reason := agentcore.FailoverReason(err)
-	for _, target := range m.fallbacks {
+	var targets []modelTarget
+	if m.set != nil {
+		targets = m.set.fallbackTargets(m.role)
+	}
+	for _, target := range targets {
 		if target.provider == current.provider && target.name == current.name {
 			continue
 		}

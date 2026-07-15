@@ -88,6 +88,23 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "config",
+			Group:       "system",
+			Usage:       "/config",
+			Description: "新增或编辑 Provider、模型与上下文窗口",
+			AutoExecute: true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				if len(args) != 0 {
+					m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: "用法：/config", Level: "error"})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.modelConfig = newModelConfigState(m.runtime)
+				m.textarea.Blur()
+				return m, nil
+			},
+		},
+		{
 			Name:        "diag",
 			Group:       "analysis",
 			Usage:       "/diag",

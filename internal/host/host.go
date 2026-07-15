@@ -49,6 +49,7 @@ type Host struct {
 	budget          *BudgetSentinel     // 预算政策；未启用为 nil（方法 nil 安全）
 	gate            *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
 	notifier        *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
+	configTargets   []bootstrap.ConfigTarget
 
 	events   chan Event
 	streamCh chan string
@@ -76,8 +77,17 @@ const (
 	lifecycleCompleted lifecycle = "completed"
 )
 
-// New 创建 Host。
+type Options struct {
+	ConfigPath string
+}
+
+// New 创建使用默认配置目标的 Host。
 func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
+	return NewWithOptions(cfg, bundle, Options{})
+}
+
+// NewWithOptions 创建 Host，并保留启动时的配置来源供 TUI /config 选择写入目标。
+func NewWithOptions(cfg bootstrap.Config, bundle assets.Bundle, opts Options) (*Host, error) {
 	cfg.FillDefaults()
 	if err := cfg.ValidateBase(); err != nil {
 		return nil, err
@@ -147,6 +157,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		userRules:       userrules.NewService(store, models.Default, rules.DefaultOptions()),
 		usage:           usage,
 		usageCancel:     usageCancel,
+		configTargets:   bootstrap.ConfigTargets(opts.ConfigPath),
 		events:          make(chan Event, 100),
 		streamCh:        make(chan string, 256),
 		done:            make(chan struct{}, 4),
@@ -865,10 +876,12 @@ func (h *Host) Snapshot() UISnapshot {
 	h.mu.Lock()
 	state := h.lifecycle
 	provider, model, _ := h.models.CurrentSelection("default")
+	modelWindow, _ := h.cfg.ResolveContextWindow(provider, model)
+	thinkingLevel := h.cfg.ResolveReasoningEffort("default")
+	style := h.cfg.Style
 	h.mu.Unlock()
 
-	// 动态解析当前模型的上下文窗口，/model 切换后下一次 Snapshot 自动反映
-	modelWindow, _ := h.cfg.ResolveContextWindow(model)
+	// 动态解析当前模型的上下文窗口，/model 或 /config 切换后下一次 Snapshot 自动反映。
 	cost, tokIn, tokOut, cacheRead, cacheWrite := h.usage.Totals()
 	saved := h.usage.SavedUSD()
 	overallCapable := h.usage.OverallCacheCapable()
@@ -909,8 +922,8 @@ func (h *Host) Snapshot() UISnapshot {
 		Provider:               provider,
 		ModelName:              model,
 		ModelContextWindow:     modelWindow,
-		ThinkingLevel:          h.cfg.ResolveReasoningEffort("default"),
-		Style:                  h.cfg.Style,
+		ThinkingLevel:          thinkingLevel,
+		Style:                  style,
 		RuntimeState:           string(state),
 		IsRunning:              state == lifecycleRunning,
 		TotalInputTokens:       tokIn,
@@ -1129,7 +1142,7 @@ func (h *Host) SwitchModel(role, provider, model string) error {
 	if logRole == "" {
 		logRole = "default"
 	}
-	window, source := h.cfg.ResolveContextWindow(model)
+	window, source := h.cfg.ResolveContextWindow(provider, model)
 	bootstrap.LogContextWindowChoice(logRole, model, window, source)
 
 	// 无常驻上下文需要联动:writer/architect/editor 的 ContextManager 走

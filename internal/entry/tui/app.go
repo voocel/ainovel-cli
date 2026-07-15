@@ -13,8 +13,8 @@ import (
 // 1. 快速模式、共创模式属于“启动编排”；
 // 2. 正式创作会话进入 host.Host；
 // 3. 未来若新增“续写已有小说”等共享模式，统一落到 internal/entry/startup。
-func Run(cfg bootstrap.Config, bundle assets.Bundle, version string) error {
-	rt, err := host.New(cfg, bundle)
+func Run(cfg bootstrap.Config, bundle assets.Bundle, version, configPath string) error {
+	rt, err := host.NewWithOptions(cfg, bundle, host.Options{ConfigPath: configPath})
 	if err != nil {
 		return err
 	}

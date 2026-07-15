@@ -50,6 +50,42 @@ func projectConfigPath() string {
 	return filepath.Join(configDirName, "config.json")
 }
 
+// ConfigTarget 是 /config 可选择的配置写入位置。
+type ConfigTarget struct {
+	ID         string
+	Label      string
+	Path       string
+	Precedence int
+	Exists     bool
+}
+
+// ConfigTargets 返回从高到低排列的可写配置目标。flagPath 为空时不提供指定文件项。
+func ConfigTargets(flagPath string) []ConfigTarget {
+	var targets []ConfigTarget
+	seen := make(map[string]bool)
+	add := func(id, label, path string, precedence int) {
+		if path == "" {
+			return
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		_, err := os.Stat(path)
+		targets = append(targets, ConfigTarget{
+			ID: id, Label: label, Path: path, Precedence: precedence, Exists: err == nil,
+		})
+	}
+	add("flag", "--config 指定文件", flagPath, 3)
+	add("project", "当前项目配置", projectConfigPath(), 2)
+	add("global", "全局配置", DefaultConfigPath(), 1)
+	return targets
+}
+
 // LoadConfig 按优先级加载并合并配置：
 //  1. ~/.ainovel/config.json（全局）
 //  2. ./.ainovel/config.json（项目级覆盖）
@@ -153,20 +189,25 @@ func mergeConfig(base, overlay Config) Config {
 		}
 		for k, v := range overlay.Providers {
 			existing := base.Providers[k]
-			if v.Type != "" {
+			if v.typeSet || v.Type != "" {
 				existing.Type = v.Type
+				existing.typeSet = true
 			}
-			if v.API != "" {
+			if v.apiSet || v.API != "" {
 				existing.API = v.API
+				existing.apiSet = true
 			}
-			if v.APIKey != "" {
+			if v.apiKeySet || v.APIKey != "" {
 				existing.APIKey = v.APIKey
+				existing.apiKeySet = true
 			}
-			if v.BaseURL != "" {
+			if v.baseURLSet || v.BaseURL != "" {
 				existing.BaseURL = v.BaseURL
+				existing.baseURLSet = true
 			}
-			if len(v.Models) > 0 {
-				existing.Models = append([]string(nil), v.Models...)
+			if v.modelsSet || len(v.Models) > 0 {
+				existing.Models = append([]ModelConfig(nil), v.Models...)
+				existing.modelsSet = true
 			}
 			if len(v.ExtraBody) > 0 {
 				existing.ExtraBody = cloneMap(v.ExtraBody)
@@ -221,6 +262,44 @@ func cloneMap(m map[string]any) map[string]any {
 		c[k] = v
 	}
 	return c
+}
+
+// CloneConfig 深拷贝配置中会在运行时修改的 map/slice，避免候选配置污染当前配置。
+func CloneConfig(cfg Config) Config {
+	clone := cfg
+	clone.Providers = make(map[string]ProviderConfig, len(cfg.Providers))
+	for name, pc := range cfg.Providers {
+		pc.Models = append([]ModelConfig(nil), pc.Models...)
+		pc.Extra = cloneMap(pc.Extra)
+		pc.ExtraBody = cloneMap(pc.ExtraBody)
+		clone.Providers[name] = pc
+	}
+	clone.Roles = make(map[string]RoleConfig, len(cfg.Roles))
+	for role, rc := range cfg.Roles {
+		rc.Fallbacks = append([]ModelRef(nil), rc.Fallbacks...)
+		clone.Roles[role] = rc
+	}
+	clone.Notify.Events = append([]string(nil), cfg.Notify.Events...)
+	return clone
+}
+
+// SaveModelConfig 补丁式更新目标配置层的 provider 库和默认模型。
+// 目标不存在时创建最小配置；目标损坏时拒绝覆盖。
+func SaveModelConfig(path string, provider string, pc ProviderConfig, model string) error {
+	target, found, err := loadOptionalJSON(path)
+	if err != nil {
+		return err
+	}
+	if !found {
+		target = Config{}
+	}
+	if target.Providers == nil {
+		target.Providers = make(map[string]ProviderConfig)
+	}
+	target.Provider = provider
+	target.ModelName = model
+	target.Providers[provider] = pc
+	return SaveConfig(path, target)
 }
 
 // stripJSONComments 去除 JSON 中的 // 行注释，跟踪引号状态避免误删字符串内容。
@@ -305,5 +384,33 @@ func SaveConfig(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }

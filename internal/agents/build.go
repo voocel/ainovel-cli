@@ -159,8 +159,8 @@ func BuildWorkers(
 	editorModel := models.ForRoleWithFailover("editor", reportFailover)
 
 	// Writer 的 ContextManager 由工厂每次调用重建，窗口随模型 swap 动态跟随（见下方工厂）。
-	_, writerModelName, _ := models.CurrentSelection("writer")
-	writerContextWindow, writerSource := cfg.ResolveContextWindow(writerModelName)
+	writerProvider, writerModelName, _ := models.CurrentSelection("writer")
+	writerContextWindow, writerSource := cfg.ResolveContextWindow(writerProvider, writerModelName)
 	bootstrap.LogContextWindowChoice("writer", writerModelName, writerContextWindow, writerSource)
 
 	// modelLookup 写入 session 时给每条 assistant 消息附 _meta:{provider,model}，
@@ -251,7 +251,7 @@ func BuildWorkers(
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
 			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
 			// /model 切换 writer 后下一章自动用新窗口。
-			window, _ := cfg.ResolveContextWindow(bootstrap.ModelName(model))
+			window, _ := models.ResolveContextWindow(bootstrap.ModelProvider(model), bootstrap.ModelName(model))
 			return newContextManager(contextManagerConfig{
 				Model:            model,
 				ContextWindow:    window,

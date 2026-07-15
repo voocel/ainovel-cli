@@ -44,6 +44,15 @@ type setupProvider struct {
 	apiKeyOptional bool   // true 表示 API Key 允许留空
 }
 
+// ProviderPreset 是首次引导和运行时 /config 共用的 provider 目录项。
+type ProviderPreset struct {
+	Name           string
+	Label          string
+	BaseURL        string
+	NeedType       bool
+	APIKeyOptional bool
+}
+
 var setupProviders = []setupProvider{
 	{name: "openrouter", label: "OpenRouter", baseURL: "https://openrouter.ai/api/v1"},
 	{name: "anthropic", label: "Anthropic"},
@@ -56,6 +65,18 @@ var setupProviders = []setupProvider{
 	{name: "ollama", label: "Ollama", baseURL: "http://localhost:11434/v1", apiKeyOptional: true},
 	{name: "bedrock", label: "Bedrock", apiKeyOptional: true},
 	{name: "custom", label: "Custom Proxy", needType: true, apiKeyOptional: true},
+}
+
+// ProviderPresets 返回一份可安全修改的预设列表。
+func ProviderPresets() []ProviderPreset {
+	out := make([]ProviderPreset, 0, len(setupProviders))
+	for _, preset := range setupProviders {
+		out = append(out, ProviderPreset{
+			Name: preset.name, Label: preset.label, BaseURL: preset.baseURL,
+			NeedType: preset.needType, APIKeyOptional: preset.apiKeyOptional,
+		})
+	}
+	return out
 }
 
 // RunSetup 运行首次引导，返回生成的配置。
@@ -130,6 +151,7 @@ func RunSetup() (Config, error) {
 		return Config{}, err
 	}
 	printStepDone("Model", modelName)
+	pc.Models = []ModelConfig{{Name: modelName}}
 
 	cfg := Config{
 		Provider:  providerName,

@@ -68,6 +68,8 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleAskUserKey)
 	case m.cocreate != nil:
 		return m.handleBlockingModalKey(msg, m.handleCoCreateKey)
+	case m.modelConfig != nil:
+		return m.handleBlockingModalKey(msg, m.handleModelConfigKey)
 	case m.help != nil:
 		return m.handleBlockingModalKey(msg, m.handleHelpKey)
 	case m.modelSwitch != nil:
@@ -382,7 +384,7 @@ func (m Model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	if m.modelSwitch != nil || m.askState != nil {
+	if m.modelSwitch != nil || m.modelConfig != nil || m.askState != nil {
 		return m, nil
 	}
 	if pane, ok := m.paneAtMouse(msg.X, msg.Y); ok {
@@ -529,6 +531,17 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		m.refreshEventViewport()
 		return m, nil, true
+	case modelConfigSavedMsg:
+		if m.modelConfig == nil {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			m.modelConfig.saving = false
+			m.modelConfig.message = msg.err.Error()
+			return m, nil, true
+		}
+		m.modelConfig = nil
+		return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus()), true
 	case startResultMsg:
 		next, cmd := m.handleStartResultMsg(msg)
 		return next, cmd, true
