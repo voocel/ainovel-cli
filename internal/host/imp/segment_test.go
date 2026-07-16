@@ -213,11 +213,12 @@ func TestResolveSegmentationAbsorbsLeadingText(t *testing.T) {
 	}
 }
 
-// TestValidateProjectedBoundariesOwnedDiscipline 守护调用期校验的覆盖面：owned 区内的
-// 非法 kind 与坏 anchor 必须在调用期带反馈重问——放行会随块进缓存，终局 resolve 才发现时
-// 重跑零调用复读同一份坏数据；上下文区边界注定被裁掉，不为其重问。
-func TestValidateProjectedBoundariesOwnedDiscipline(t *testing.T) {
-	_, units := segFixture()
+// TestChunkValidatorOwnedDiscipline 守护调用期校验的覆盖面：owned 区内的非法 kind、
+// 坏 anchor、同位语义冲突、首块起始未归属必须在调用期带反馈重问——放行会随块进缓存，
+// 终局 resolve 才发现时重跑零调用复读同一份坏数据；上下文区边界注定被裁掉，不为其重问；
+// 同位完全相同的重复是机械冗余，放行后由 resolve 静默去重。
+func TestChunkValidatorOwnedDiscipline(t *testing.T) {
+	norm, units := segFixture()
 	unitByID := map[string]SourceUnit{}
 	proj, owned := map[string]bool{}, map[string]bool{}
 	for _, u := range units {
@@ -225,25 +226,48 @@ func TestValidateProjectedBoundariesOwnedDiscipline(t *testing.T) {
 		proj[u.ID] = true
 	}
 	owned["L1"], owned["L2"], owned["L3"] = true, true, true
+	v := chunkValidator{projIDs: proj, ownedIDs: owned, unitByID: unitByID, normalized: norm}
 
 	cases := []struct {
 		name    string
-		b       BoundaryDecision
+		bs      []BoundaryDecision
 		wantErr bool
 	}{
-		{"owned 非法 kind", BoundaryDecision{UnitID: "L1", Kind: "volume"}, true},
-		{"owned 坏 anchor", BoundaryDecision{UnitID: "L3", Kind: kindChapter, Anchor: "不存在的锚"}, true},
-		{"owned 合法 anchor", BoundaryDecision{UnitID: "L3", Kind: kindChapter, Anchor: "第一章"}, false},
-		{"上下文区非法 kind 不重问", BoundaryDecision{UnitID: "L6", Kind: "volume"}, false},
-		{"投影外幻觉 ID", BoundaryDecision{UnitID: "L99", Kind: kindChapter}, true},
+		{"owned 非法 kind", []BoundaryDecision{{UnitID: "L1", Kind: "volume"}}, true},
+		{"owned 坏 anchor", []BoundaryDecision{{UnitID: "L3", Kind: kindChapter, Anchor: "不存在的锚"}}, true},
+		{"owned 合法 anchor", []BoundaryDecision{{UnitID: "L3", Kind: kindChapter, Anchor: "第一章"}}, false},
+		{"上下文区非法 kind 不重问", []BoundaryDecision{{UnitID: "L6", Kind: "volume"}}, false},
+		{"投影外幻觉 ID", []BoundaryDecision{{UnitID: "L99", Kind: kindChapter}}, true},
+		{"同位语义冲突重问", []BoundaryDecision{
+			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
+			{UnitID: "L1", Kind: kindFrontMatter, Title: "前言"},
+		}, true},
+		{"同位完全重复放行", []BoundaryDecision{
+			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
+			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := validateProjectedBoundaries([]BoundaryDecision{c.b}, proj, owned, unitByID)
-			if (err != nil) != c.wantErr {
+			if err := v.validate(c.bs); (err != nil) != c.wantErr {
 				t.Fatalf("wantErr=%v，得 %v", c.wantErr, err)
 			}
 		})
+	}
+
+	// 首块起始覆盖：L1/L2 非空却无边界归属 → 重问；补上起点边界后通过。
+	vs := v
+	vs.coverStart = true
+	if err := vs.validate([]BoundaryDecision{{UnitID: "L3", Kind: kindChapter}}); err == nil {
+		t.Fatal("首块起始未归属应重问")
+	}
+	if err := vs.validate([]BoundaryDecision{
+		{UnitID: "L1", Kind: kindFrontMatter}, {UnitID: "L3", Kind: kindChapter},
+	}); err != nil {
+		t.Fatalf("起点已覆盖应通过：%v", err)
+	}
+	if err := vs.validate(nil); err == nil {
+		t.Fatal("首块零边界应重问（全部起始文本未归属）")
 	}
 }
 
@@ -377,7 +401,7 @@ func TestResolveSegmentationAbsorbsEmptyChapter(t *testing.T) {
 // 相邻块会在自己的 owned 区间报告它，保留会造成跨块重复/乱序。
 func TestSegmentClipsContextBoundaries(t *testing.T) {
 	norm, units := segFixture()
-	chunks := planChunks(units, 40)
+	chunks := planChunks(units, planningBudget(40, "sys", "")) // 与 Segment 内部规划一致
 	if len(chunks) < 2 {
 		t.Fatalf("fixture 应分出至少 2 块，得 %d", len(chunks))
 	}
@@ -413,7 +437,7 @@ func TestSegmentClipsContextBoundaries(t *testing.T) {
 // 零模型调用直接复用——切分是最昂贵阶段，任何一块失败不应重付已完成块（与 analyze/synthesize 同哲学）。
 func TestSegmentReusesChunkArtifacts(t *testing.T) {
 	norm, units := segFixture()
-	chunks := planChunks(units, 40)
+	chunks := planChunks(units, planningBudget(40, "sys", "")) // 与 Segment 内部规划一致
 	responses := make([]string, len(chunks))
 	for ci, owned := range chunks {
 		responses[ci] = fmt.Sprintf(`{"boundaries":[{"unit_id":%q,"kind":"chapter","title":"第%d章"}]}`, units[owned[0]].ID, ci+1)
@@ -445,6 +469,53 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 	}
 	if m3.i != len(chunks) {
 		t.Fatalf("身份变化应全部重做（%d 次调用），得 %d", len(chunks), m3.i)
+	}
+}
+
+// TestSegmentShrinksChunkOnTruncation 守护输出预算回路：大量短章节会让单块边界 JSON
+// 超出可见输出（stop=length），必须对半缩块重试而非整体失败——与 analyze 缩批同哲学。
+func TestSegmentShrinksChunkOnTruncation(t *testing.T) {
+	norm, units := segFixture() // 7 个 unit，单块 [0,7)，mid=3
+	left := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"}]}`
+	right := `{"boundaries":[{"unit_id":"L6","kind":"chapter","title":"第二章"}]}`
+	m := &mockModel{
+		responses: []string{`{"boundaries":[]}`, left, right},
+		stops:     []agentcore.StopReason{agentcore.StopReasonLength}, // 首调截断，两个半块正常
+	}
+	seg, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, nil, "")
+	if err != nil {
+		t.Fatalf("截断应缩块重试而非失败：%v", err)
+	}
+	if m.i != 3 {
+		t.Fatalf("应为 1 次截断 + 2 次半块调用，得 %d", m.i)
+	}
+	if len(seg.Chapters) != 2 {
+		t.Fatalf("缩块结果应完整覆盖（2 章），得 %d", len(seg.Chapters))
+	}
+}
+
+// TestPlanningBudget 守护切分规划预算的结构性开销扣除：owned 正文只是请求的一部分。
+func TestPlanningBudget(t *testing.T) {
+	if got := planningBudget(0, "sys", "g"); got != 0 {
+		t.Fatalf("无预算应透传，得 %d", got)
+	}
+	if got := planningBudget(1000, strings.Repeat("s", 100), strings.Repeat("g", 100)); got != 600 {
+		t.Fatalf("(1000-200)*3/4 应为 600，得 %d", got)
+	}
+	if got := planningBudget(1000, strings.Repeat("s", 2000), ""); got != 250 {
+		t.Fatalf("超长提示应触发下限 chunkBytes/4=250，得 %d", got)
+	}
+}
+
+// TestBuildProjectionContextByteCap 守护上下文区字节上限：超长行虚拟分片（单片可达
+// MaxUnitBytes）会吞掉输入预算，上下文只是参考信息，按字节上限收缩而非照单全收。
+func TestBuildProjectionContextByteCap(t *testing.T) {
+	_, units := segFixture()
+	if _, ids := buildProjection(units, [2]int{2, 3}, 2, 1, ""); len(ids) != 1 || !ids["L3"] {
+		t.Fatalf("字节上限应裁掉上下文单元，只剩 owned：%v", ids)
+	}
+	if _, ids := buildProjection(units, [2]int{2, 3}, 2, 0, ""); len(ids) != 5 {
+		t.Fatalf("无字节上限时应含前后各 2 个上下文单元（共 5），得 %v", ids)
 	}
 }
 

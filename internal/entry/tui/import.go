@@ -264,7 +264,13 @@ func renderImportLine(ln importLine, contentW int, now time.Time) string {
 		}
 		return out.String()
 	}
-	lines := strings.Split(wrapText(text, wrapW), "\n")
+	// 多行块消息（如切分确认预览）：首行跟在前缀后，其余行整体浅缩进——若按前缀宽
+	// 对齐续行，40+ 列的前缀会把整块内容挤到面板右半，左半全空。
+	head, body := text, ""
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		head, body = text[:i], strings.TrimRight(text[i+1:], "\n")
+	}
+	lines := strings.Split(wrapText(head, wrapW), "\n")
 	var out strings.Builder
 	out.WriteString(prefix)
 	out.WriteString(style.Render(lines[0]))
@@ -273,6 +279,12 @@ func renderImportLine(ln importLine, contentW int, now time.Time) string {
 		out.WriteString("\n")
 		out.WriteString(pad)
 		out.WriteString(style.Render(l))
+	}
+	if body != "" {
+		for _, l := range strings.Split(wrapText(body, contentW-2), "\n") {
+			out.WriteString("\n  ")
+			out.WriteString(style.Render(l))
+		}
 	}
 	return out.String()
 }
@@ -364,14 +376,15 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// confirmImportSegmentation 把"看过预览后放行"缩成一个按键：底层与用户重敲 /import --yes 完全相同
-// （恢复是无状态的，管线从 confirmation 缺失处继续）。AutoConfirm 只随本次 Options 生效、
-// 不写 intent.json，因此之后 --guide 重切出的新切分仍会停下核对。
+// confirmImportSegmentation 把"看过预览后放行"缩成一个按键：原地重跑导入并带上
+// AcceptSegmentation（恢复是无状态的，管线从 confirmation 缺失处继续）。它与 --yes 的
+// 区别是"看过预览的显式裁定"——带容错说明（Notes）的切分 --yes 不放行、y 放行；
+// 只随本次 Options 生效、不写 intent.json，之后 --guide 重切出的新切分仍会停下核对。
 // 沿用旧面板的源文件名与流程日志，让章节预览在继续分析时仍可回滚查看。
 func (m Model) confirmImportSegmentation() (tea.Model, tea.Cmd) {
 	prev := m.importer
 	m.importSeq++
-	state, listenCmd, err := startImport(m.runtime, m.importSeq, []string{"--yes"}, m.width, m.height)
+	state, listenCmd, err := startImportRun(m.runtime, m.importSeq, imp.Options{AcceptSegmentation: true}, m.width, m.height)
 	if err != nil {
 		m.applyEvent(host.Event{
 			Time: time.Now(), Category: "ERROR", Summary: "确认切分失败：" + err.Error(), Level: "error",
@@ -401,12 +414,17 @@ type importClosedMsg struct {
 }
 
 // startImport 启动一次外部小说导入：解析参数 → 创建 modal state → 监听事件流。
-// width/height 用于初始化 viewport；cancel 函数挂在 state 上供 Esc 取消。
 func startImport(rt *host.Host, reqID int, args []string, width, height int) (*importState, tea.Cmd, error) {
 	opts, err := parseImportArgs(args)
 	if err != nil {
 		return nil, nil, err
 	}
+	return startImportRun(rt, reqID, opts, width, height)
+}
+
+// startImportRun 以既定 Options 启动导入（y 确认等内部重入不经参数解析）。
+// width/height 用于初始化 viewport；cancel 函数挂在 state 上供 Esc 取消。
+func startImportRun(rt *host.Host, reqID int, opts imp.Options, width, height int) (*importState, tea.Cmd, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := rt.ImportFrom(ctx, opts)
 	if err != nil {

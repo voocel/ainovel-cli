@@ -78,6 +78,33 @@ func TestRenderImportLineWrapsWithoutClipping(t *testing.T) {
 	}
 }
 
+// TestRenderImportLineMultilineBlock 守护多行块消息（切分确认预览）的排版：续行整体
+// 浅缩进（2 列），不得按前缀宽对齐——40+ 列前缀会把整块章节列表挤到面板右半，左半全空。
+func TestRenderImportLineMultilineBlock(t *testing.T) {
+	ln := importLine{
+		at:      time.Now(),
+		stage:   imp.StageAwaitingConfirmation,
+		current: 157, total: 157,
+		message: "已切分 157 章，请核对：\n  第1章 引子\n  第2章 我故意的\n",
+	}
+	const contentW = 100
+	out := strings.Split(renderImportLine(ln, contentW, time.Now()), "\n")
+	if len(out) != 3 {
+		t.Fatalf("应为前缀行 + 2 个正文行，得 %d 行：%q", len(out), out)
+	}
+	for i, line := range out[1:] {
+		if w := lipgloss.Width(line); w > contentW {
+			t.Fatalf("第 %d 行超宽 %d：%q", i+1, w, line)
+		}
+		if strings.HasPrefix(line, strings.Repeat(" ", 20)) {
+			t.Fatalf("多行块续行不应按前缀宽对齐：%q", line)
+		}
+		if !strings.HasPrefix(line, "  ") {
+			t.Fatalf("多行块续行应浅缩进 2 列：%q", line)
+		}
+	}
+}
+
 // TestWrapTextResetsAtNewlines 守护多行消息换行：'\n' 处必须重置行宽计数，否则只要
 // 任一行触发换行，其后每行都会被误判超宽插入伪换行+缩进，整份确认预览被打散。
 func TestWrapTextResetsAtNewlines(t *testing.T) {

@@ -211,9 +211,10 @@ func readArtifact[T any](w *Workspace, rel string) (*Artifact[T], error) {
 	return &a, nil
 }
 
-// clearDir best-effort 删除工作区内某个中间缓存目录：阶段最终工件落盘后，块级缓存即失去意义。
-func (w *Workspace) clearDir(rel string) {
-	_ = os.RemoveAll(w.path(rel))
+// clearDir 删除工作区内某个中间缓存目录。错误必须交调用方处置：吞掉会让「已清除」的
+// 文案撒谎——下次重跑照样复用坏缓存（Windows 反病毒/句柄占用是真实场景，Debug-First）。
+func (w *Workspace) clearDir(rel string) error {
+	return os.RemoveAll(w.path(rel))
 }
 
 // FailureMeta 是最近一次失败的诊断元数据（RFC §14.2）。

@@ -58,7 +58,11 @@ type Host struct {
 	lifecycle  lifecycle
 	cocreating bool   // 阶段共创占用：paused 窗口内堵住 import/simulate/continue 的并发介入
 	exclusive  string // 后台独占作业占用（导入/仿写）：非空表示某作业在跑，堵住并发独占入口
-	closeOnce  sync.Once
+	// exclusiveCancel 是当前独占作业的取消函数：预算硬停/手动暂停须能停掉正在烧钱的
+	// 导入，而不仅是 Engine——abortWithEvent 在 Engine 未运行时取消它（预算哨兵的
+	// abort 回调与手动 Abort 共用同一停机机制）。releaseExclusive 一并清空。
+	exclusiveCancel context.CancelFunc
+	closeOnce       sync.Once
 
 	interMu sync.Mutex // 干预裁定 FIFO 串行(同一时刻至多一次在途咨询)
 
@@ -713,16 +717,24 @@ func (h *Host) abortWithEvent(summary, level string) bool {
 	if running {
 		h.lifecycle = lifecyclePaused
 	}
+	cancelExclusive := h.exclusiveCancel
 	h.mu.Unlock()
-	if !running {
-		return false
+	if running {
+		// 置位必须在 engine.abort 之前：cancel 传播会立刻引发 stream init / worker
+		// 失败事件，observer 凭此标志识别为 abort 衍生噪声并抑制。
+		h.observer.setAborting(true)
+		h.engine.abort()
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
+		return true
 	}
-	// 置位必须在 engine.abort 之前：cancel 传播会立刻引发 stream init / worker
-	// 失败事件，observer 凭此标志识别为 abort 衍生噪声并抑制。
-	h.observer.setAborting(true)
-	h.engine.abort()
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
-	return true
+	// Engine 未运行但独占作业（导入等）在跑：它同样在烧钱，预算硬停/手动暂停必须
+	// 能停掉它——否则预算政策对导入形同虚设（docs/import-pipeline.md §13.1）。
+	if cancelExclusive != nil {
+		cancelExclusive()
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: level})
+		return true
+	}
+	return false
 }
 
 // Close 终止引擎并关闭事件通道。
@@ -1410,9 +1422,20 @@ func truncate(s string, maxRunes int) string {
 // 导入完成后由 AdvanceHold 决定是否续写。
 // 返回的事件通道由 imp.Run 关闭，调用方负责消费（满则丢弃以防阻塞管线协程）。
 func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Event, error) {
+	// 预算启动前置检查与 Start/Resume/Continue 同一纪律：导入是全流程模型调用，
+	// 预算已超时不得启动（§13.1「纳入现有预算哨兵」）。
+	if err := h.budget.Refuse(); err != nil {
+		return nil, err
+	}
 	if err := h.acquireExclusive("导入"); err != nil {
 		return nil, err
 	}
+	// 登记取消函数：预算硬停/手动暂停经 abortWithEvent 取消导入自己的 context
+	//（否则哨兵只会去暂停并未运行的 Engine，导入继续烧钱）。
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
 
 	deps := imp.Deps{
 		Store:         h.store,
@@ -1524,8 +1547,10 @@ func (h *Host) acquireExclusive(action string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch {
-	case h.lifecycle == lifecycleRunning:
-		return fmt.Errorf("创作引擎运行中，请先暂停后再%s", action)
+	// engine.isRunning() 必查：Abort 先置 lifecycle=paused 再异步等 goroutine 退出，
+	// 该窗口内 lifecycle 已非 running 但引擎仍可能在写 store（与启动门禁同一纪律）。
+	case h.lifecycle == lifecycleRunning || h.engine.isRunning():
+		return fmt.Errorf("创作引擎运行中或正在停止，请稍候再%s", action)
 	case h.cocreating:
 		return fmt.Errorf("阶段共创进行中，请先结束共创后再%s", action)
 	case h.exclusive != "":
@@ -1535,11 +1560,16 @@ func (h *Host) acquireExclusive(action string) error {
 	return nil
 }
 
-// releaseExclusive 释放后台独占作业槽。
+// releaseExclusive 释放后台独占作业槽（连同已登记的取消函数）。
 func (h *Host) releaseExclusive() {
 	h.mu.Lock()
+	cancel := h.exclusiveCancel
 	h.exclusive = ""
+	h.exclusiveCancel = nil
 	h.mu.Unlock()
+	if cancel != nil {
+		cancel() // 作业已结束：释放派生 context；对已退出的 runner 无副作用
+	}
 }
 
 // superviseExclusive 转发独占作业事件，通道关闭（作业结束）时释放占用槽。

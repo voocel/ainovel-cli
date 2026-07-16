@@ -14,6 +14,9 @@ type Options struct {
 	StoryResolution string // --story=open|closed：仅 synthesis 返回 uncertain 时预选
 	ContinueAfter   bool   // --continue：不创建导入完成 Hold
 	Guidance        string // --guide：自然语言切分指导，落盘工作区后自然使旧切分失配重识别
+	// AcceptSegmentation：TUI 预览后的显式人工确认（y）。一次性放行当前切分，不写 intent；
+	// 与 --yes 的区别：--yes 是未看预览的盲授权，不放行带容错说明（Notes）的切分，y 是看过预览的裁定。
+	AcceptSegmentation bool
 }
 
 // intent 从 Options 抽取需持久化的用户授权。

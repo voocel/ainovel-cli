@@ -18,6 +18,7 @@ func newFlagTestHost(lc lifecycle, cocreating bool) *Host {
 	return &Host{
 		lifecycle:  lc,
 		cocreating: cocreating,
+		engine:     &engine{}, // acquireExclusive 查 engine.isRunning()（停止窗口门禁）
 		events:     make(chan Event, 16),
 	}
 }
@@ -102,6 +103,13 @@ func TestAcquireExclusive(t *testing.T) {
 		{"busy", lifecycleIdle, false, "导入", "进行中"},
 		{"idle free", lifecycleIdle, false, "", ""},
 		{"paused free", lifecyclePaused, false, "", ""},
+	}
+	// Abort 停止窗口：lifecycle 已置 paused 但引擎 goroutine 尚未退净，仍须拒绝——
+	// 否则导入会与引擎收尾并发写同一 store。
+	drain := newFlagTestHost(lifecyclePaused, false)
+	drain.engine.running = true
+	if err := drain.acquireExclusive("导入"); err == nil {
+		t.Fatal("引擎排水期应拒绝独占作业")
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

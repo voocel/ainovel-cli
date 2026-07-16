@@ -20,6 +20,7 @@ const (
 	segmentPromptVersion = "seg-v1"
 	analyzePromptVersion = "analyze-v1"
 	confirmMethodAuto    = "auto_authorized"
+	confirmMethodUser    = "user_confirmed" // TUI 预览后按 y 的显式人工确认
 )
 
 // Prompts 是各语义函数的系统提示词。综合分两阶段：Synthesize 出全书 BookSynthesis，
@@ -159,8 +160,9 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		deps.Budgets = budgetsFromDeps(deps)
 	}
 	// 导入流程日志独立成文件：一次导入的完整转录（事件、重试、完整错误链）不与
-	// 引擎/TUI 日志混流，排查时只看这一个文件。
-	log, closeLog := logger.FileLogger(deps.Store.Dir(), "import.log")
+	// 引擎/TUI 日志混流，排查时只看这一个文件。创建失败须回显——面板会指引用户
+	// 查看 logs/import.log，静默回退等于指向一个不存在的文件（Debug-First）。
+	log, closeLog, logErr := logger.FileLogger(deps.Store.Dir(), "import.log")
 	log.Info("imp 导入模型运行时",
 		"segment_ctx", deps.Segment.Runtime.ContextTokens,
 		"analyze_ctx", deps.Analyze.Runtime.ContextTokens,
@@ -172,6 +174,9 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		defer close(events)
 		defer closeLog()
 		r := &runner{deps: deps, opts: opts, events: events, ws: OpenWorkspace(deps.Store.Dir()), log: log}
+		if logErr != nil {
+			r.emit(StageIngesting, 0, 0, fmt.Sprintf("导入日志文件创建失败（%v），本次转录改走默认日志", logErr), nil)
+		}
 		r.run(ctx)
 	}()
 	return events, nil
@@ -419,7 +424,10 @@ func (r *runner) segment(ctx context.Context) error {
 	if err := writeArtifact(r.ws, fileSegmentation, digest, *seg); err != nil {
 		return err
 	}
-	r.ws.clearDir(dirSegmentChunks) // 最终切分已落盘，块级缓存完成使命
+	// 最终切分已落盘，块级缓存完成使命；清理失败无碍正确性（digest 仍一致），但要留痕。
+	if cerr := r.ws.clearDir(dirSegmentChunks); cerr != nil {
+		r.emit(StageSegmenting, 0, 0, fmt.Sprintf("块级缓存清理失败（不影响切分结果）：%v", cerr), nil)
+	}
 	r.emit(StageSegmenting, len(seg.Chapters), len(seg.Chapters),
 		fmt.Sprintf("切分完成：%d 章、%d 个附属区域", len(seg.Chapters), len(seg.Matter)), nil)
 	return nil
@@ -433,10 +441,21 @@ func (r *runner) confirm() bool {
 		return false
 	}
 	in, _ := r.ws.LoadIntent()
+	accept := r.opts.AcceptSegmentation
 	auto := r.opts.AutoConfirm || (in != nil && in.AutoConfirm)
-	if !auto {
-		r.emit(StageAwaitingConfirmation, len(seg.Payload.Chapters), len(seg.Payload.Chapters),
-			buildConfirmPreview(&seg.Payload), nil)
+	// 语义容错发生过（Notes 非空：空章吸收/起始兜底/重合去重）的切分不由 --yes 盲放行：
+	// 结构被确定性改写过，必须人工核对——否则容错说明在 --yes 下无人看见，等于静默改写。
+	// TUI 预览后按 y 走 AcceptSegmentation（看过预览的显式裁定），不受此限。
+	blockedByNotes := auto && !accept && len(seg.Payload.Notes) > 0
+	if blockedByNotes {
+		auto = false
+	}
+	if !auto && !accept {
+		msg := buildConfirmPreview(&seg.Payload)
+		if blockedByNotes {
+			msg += "  ! 存在切分容错说明，--yes 未自动放行，请人工核对\n"
+		}
+		r.emit(StageAwaitingConfirmation, len(seg.Payload.Chapters), len(seg.Payload.Chapters), msg, nil)
 		return false
 	}
 	raw, err := r.ws.readBytes(fileSegmentation)
@@ -444,12 +463,16 @@ func (r *runner) confirm() bool {
 		r.fail("读取切分工件", err)
 		return false
 	}
-	conf := Confirmation{Method: confirmMethodAuto, Chapters: len(seg.Payload.Chapters)}
+	method, doneMsg := confirmMethodAuto, "已自动接受切分（--yes）"
+	if accept {
+		method, doneMsg = confirmMethodUser, "已确认切分（人工核对）"
+	}
+	conf := Confirmation{Method: method, Chapters: len(seg.Payload.Chapters)}
 	if err := writeArtifact(r.ws, fileConfirmation, Digest(raw), conf); err != nil {
 		r.fail("写确认工件", err)
 		return false
 	}
-	r.emit(StageAwaitingConfirmation, len(seg.Payload.Chapters), len(seg.Payload.Chapters), "已自动接受切分（--yes）", nil)
+	r.emit(StageAwaitingConfirmation, len(seg.Payload.Chapters), len(seg.Payload.Chapters), doneMsg, nil)
 	return true
 }
 

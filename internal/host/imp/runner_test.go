@@ -163,6 +163,41 @@ func TestRunRejectsDifferentSource(t *testing.T) {
 	}
 }
 
+// TestConfirmNotesGate 守护 --yes 的容错门槛：语义容错（Notes 非空）发生过的切分结构
+// 被确定性改写过，不由未看预览的 --yes 盲放行；TUI 预览后按 y（AcceptSegmentation）放行，
+// 确认方法记 user_confirmed 溯源。
+func TestConfirmNotesGate(t *testing.T) {
+	newRunner := func(opts Options, notes []string) *runner {
+		ws := &Workspace{dir: t.TempDir()}
+		seg := Segmentation{Chapters: []ChapterSpan{{Number: 1, Title: "第一章", End: 10}}, Notes: notes}
+		if err := writeArtifact(ws, fileSegmentation, "d", seg); err != nil {
+			t.Fatal(err)
+		}
+		return &runner{opts: opts, events: make(chan Event, 8), ws: ws}
+	}
+	r := newRunner(Options{AutoConfirm: true}, []string{"空正文占位并入前段"})
+	if r.confirm() {
+		t.Fatal("--yes 不应放行带容错说明的切分")
+	}
+	if ev := <-r.events; !strings.Contains(ev.Message, "未自动放行") {
+		t.Fatalf("预览应说明未放行原因：%q", ev.Message)
+	}
+	if !newRunner(Options{AutoConfirm: true}, nil).confirm() {
+		t.Fatal("--yes 应放行无容错说明的切分")
+	}
+	r = newRunner(Options{AcceptSegmentation: true}, []string{"空正文占位并入前段"})
+	if !r.confirm() {
+		t.Fatal("预览后的人工 y 应放行带容错说明的切分")
+	}
+	conf, err := readArtifact[Confirmation](r.ws, fileConfirmation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conf.Payload.Method != confirmMethodUser {
+		t.Fatalf("人工确认应记 user_confirmed，得 %q", conf.Payload.Method)
+	}
+}
+
 // TestStoryChoiceIgnoresStaleResolution 守护 #5：重新综合后旧故事裁定失效，
 // storyChoice 不得把旧 open/closed 静默套到新 synthesis 上（否则用户不会被重新征询）。
 func TestStoryChoiceIgnoresStaleResolution(t *testing.T) {
