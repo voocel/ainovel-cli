@@ -246,6 +246,9 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 // 归一化失败只降级不报错（增强路径）；只有快照无法落盘才返回 error 中止开书——
 // 后续运行将没有稳定事实源（见设计 §失败与降级）。
 func (h *Host) PrepareUserRules(rawPrompt string) error {
+	if err := h.refuseNewBookOverExisting(); err != nil {
+		return err
+	}
 	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
 	snap, err := svc.Build(context.Background(), rawPrompt)
 	if err != nil {
@@ -306,6 +309,9 @@ func (h *Host) StartPrepared(rawRequirement string) error {
 	if rawRequirement == "" {
 		return fmt.Errorf("prompt is required")
 	}
+	if err := h.refuseNewBookOverExisting(); err != nil {
+		return err
+	}
 	if err := h.budget.Refuse(); err != nil {
 		return err
 	}
@@ -356,6 +362,26 @@ func (h *Host) StartPrepared(rawRequirement string) error {
 		return fmt.Errorf("Engine 已在运行或正在停止，无法启动新书")
 	}
 	return nil
+}
+
+// refuseNewBookOverExisting 拒绝在已有成章的书目录里开新书：StartPrepared 会重置
+// checkpoints 与 progress，误触即静默清掉整本书的进度链（导入完成后停在欢迎页
+// 误按 Enter 是最典型场景）。只看已完成章数——规划阶段/启动失败的残留没有成章，
+// 放行以保留共创 Ctrl+S 同会话重试与恢复补裁的自愈路径。
+func (h *Host) refuseNewBookOverExisting() error {
+	progress, err := h.store.Progress.Load()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if progress == nil || len(progress.CompletedChapters) == 0 {
+		return nil
+	}
+	name := strings.TrimSpace(progress.NovelName)
+	if name == "" {
+		name = "未定书名"
+	}
+	return fmt.Errorf("输出目录已有《%s》的 %d 章创作进度，新建会重置其进度与检查点：续写请走恢复入口（重启应用自动恢复），新书请更换输出目录",
+		name, len(progress.CompletedChapters))
 }
 
 // startEngine 统一的引擎启动入口(Start/Resume/Continue/干预重启共用)。

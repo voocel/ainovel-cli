@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/voocel/ainovel-cli/internal/host/imp"
@@ -117,6 +119,47 @@ func TestWrapTextResetsAtNewlines(t *testing.T) {
 	}
 	if !strings.Contains(out, "\n短行一\n短行二") {
 		t.Fatalf("原有短行不得被打散：%q", out)
+	}
+}
+
+// TestImportEscResumeGate 守护导入面板 Esc 的落点：从欢迎页发起的导入成功收尾后，
+// 关面板必须补跑一次恢复（bootstrap 的 Resume 只在启动时跑），否则用户被留在没有
+// 续写入口的欢迎页；出错终态与工作台场景只关面板；运行中 Esc 仍是取消而非关闭。
+func TestImportEscResumeGate(t *testing.T) {
+	esc := tea.KeyMsg{Type: tea.KeyEsc}
+	// tea.Batch 执行后返回 BatchMsg（子命令不被执行），以此区分"焦点+恢复"与纯焦点。
+	isBatch := func(cmd tea.Cmd) bool {
+		_, ok := cmd().(tea.BatchMsg)
+		return ok
+	}
+	newM := func(mode appMode, st *importState) Model {
+		return Model{mode: mode, importer: st, textarea: textarea.New()}
+	}
+
+	m := newM(modeNew, &importState{done: true, stage: imp.StageDone})
+	next, cmd := m.handleImportKey(esc)
+	if next.(Model).importer != nil {
+		t.Fatal("终态 Esc 应关闭面板")
+	}
+	if !isBatch(cmd) {
+		t.Fatal("欢迎页导入成功关面板应附带恢复命令")
+	}
+
+	m = newM(modeNew, &importState{done: true, stage: imp.StageError, err: errors.New("boom")})
+	if _, cmd := m.handleImportKey(esc); isBatch(cmd) {
+		t.Fatal("出错终态不应触发恢复（书可能根本没导入成功）")
+	}
+
+	m = newM(modeRunning, &importState{done: true, stage: imp.StageDone})
+	if _, cmd := m.handleImportKey(esc); isBatch(cmd) {
+		t.Fatal("工作台自有门禁，不应重复触发恢复")
+	}
+
+	canceled := false
+	m = newM(modeNew, &importState{cancel: func() { canceled = true }})
+	next, _ = m.handleImportKey(esc)
+	if !canceled || next.(Model).importer == nil {
+		t.Fatal("运行中 Esc 应取消导入且保留面板等 runner 收尾")
 	}
 }
 

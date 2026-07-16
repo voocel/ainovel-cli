@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
@@ -19,25 +20,37 @@ func TestRenderTopBarShowsVersion(t *testing.T) {
 	}
 }
 
-func TestBuildRightInfoShowsThinkingLevelAfterModel(t *testing.T) {
-	out := buildRightInfo(host.UISnapshot{
+// TestRenderStatusBar 守护底部状态栏的信息契约：模型身份（窗口+思考）、会话令牌、
+// 花费/预算、书目录都必须在（样式剥离后按纯文本断言）。
+func TestRenderStatusBar(t *testing.T) {
+	out := ansi.Strip(renderStatusBar(host.UISnapshot{
 		Provider:           "openrouter",
 		ModelName:          "test-model",
 		ModelContextWindow: 200000,
 		ThinkingLevel:      "medium",
-	}, "/tmp/output")
-	if !strings.Contains(out, "test-model(200K,med)") {
-		t.Fatalf("right info missing compact thinking level: %q", out)
+		TotalInputTokens:   1_234_000,
+		TotalOutputTokens:  89_300,
+		TotalCostUSD:       0.31,
+		BudgetLimitUSD:     5,
+		TotalSavedUSD:      0.12,
+	}, "/tmp/output", 120))
+	for _, want := range []string{"test-model(200K,med)", "↑1.2M", "↓89.3k", "$0.31/$5.00", "省$0.12", "./output"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("状态栏缺少 %q：%q", want, out)
+		}
 	}
 }
 
-func TestBuildRightInfoShowsAutoThinkingWhenUnset(t *testing.T) {
-	out := buildRightInfo(host.UISnapshot{
+func TestRenderStatusBarAutoThinkingAndEmpty(t *testing.T) {
+	out := ansi.Strip(renderStatusBar(host.UISnapshot{
 		ModelName:          "test-model",
 		ModelContextWindow: 128000,
-	}, "")
+	}, "", 120))
 	if !strings.Contains(out, "test-model(128K,auto)") {
-		t.Fatalf("right info missing auto thinking level: %q", out)
+		t.Fatalf("缺思考等级 auto 括注：%q", out)
+	}
+	if out := ansi.Strip(renderStatusBar(host.UISnapshot{}, "", 120)); out != "READY" {
+		t.Fatalf("空快照应回退 READY，得 %q", out)
 	}
 }
 

@@ -213,6 +213,27 @@ func TestResolveSegmentationAbsorbsLeadingText(t *testing.T) {
 	}
 }
 
+// TestResolveSegmentationNotesDuplicateTitles 守护同名章的可见性：有标题规约的源里章名
+// 不该重复，重复是"同章被误切"的确定性信号——只记 Notes（阻断 --yes、预览呈现）交人工
+// 核对，是否合并不由 Go 裁定。
+func TestResolveSegmentationNotesDuplicateTitles(t *testing.T) {
+	norm, units := segFixture()
+	seg, err := resolveSegmentation(norm, units, []BoundaryDecision{
+		{UnitID: "L1", Kind: kindFrontMatter, Title: "前言"},
+		{UnitID: "L3", Kind: kindChapter, Title: "第一章 风起"},
+		{UnitID: "L6", Kind: kindChapter, Title: "第一章风起"}, // 同名（空白差异忽略）
+	})
+	if err != nil {
+		t.Fatalf("同名章应放行并记 Notes：%v", err)
+	}
+	if len(seg.Chapters) != 2 {
+		t.Fatalf("应得 2 章，得 %d", len(seg.Chapters))
+	}
+	if len(seg.Notes) != 1 || !strings.Contains(seg.Notes[0], "标题相同") {
+		t.Fatalf("应记一条同名核对说明：%v", seg.Notes)
+	}
+}
+
 // TestChunkValidatorOwnedDiscipline 守护调用期校验的覆盖面：owned 区内的非法 kind、
 // 坏 anchor、同位语义冲突、首块起始未归属必须在调用期带反馈重问——放行会随块进缓存，
 // 终局 resolve 才发现时重跑零调用复读同一份坏数据；上下文区边界注定被裁掉，不为其重问；
@@ -239,13 +260,19 @@ func TestChunkValidatorOwnedDiscipline(t *testing.T) {
 		{"上下文区非法 kind 不重问", []BoundaryDecision{{UnitID: "L6", Kind: "volume"}}, false},
 		{"投影外幻觉 ID", []BoundaryDecision{{UnitID: "L99", Kind: kindChapter}}, true},
 		{"同位语义冲突重问", []BoundaryDecision{
-			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
+			{UnitID: "L1", Kind: kindChapter, Title: "前言"},
 			{UnitID: "L1", Kind: kindFrontMatter, Title: "前言"},
 		}, true},
 		{"同位完全重复放行", []BoundaryDecision{
-			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
-			{UnitID: "L1", Kind: kindChapter, Title: "开篇"},
+			{UnitID: "L1", Kind: kindChapter, Title: "前言"},
+			{UnitID: "L1", Kind: kindChapter, Title: "前言"},
 		}, false},
+		// 标题回显：章名/卷名必须真实存在于边界单元原文——幻影边界的编造标题在此被拦。
+		{"编造章节标题重问", []BoundaryDecision{{UnitID: "L2", Kind: kindChapter, Title: "第某章 我编的"}}, true},
+		{"归纳标题须 uncertain 放行", []BoundaryDecision{{UnitID: "L2", Kind: kindChapter, Title: "第某章 我编的", Uncertain: true}}, false},
+		{"回显容忍空白差异", []BoundaryDecision{{UnitID: "L3", Kind: kindChapter, Title: "第一章风起"}}, false},
+		{"编造卷名重问", []BoundaryDecision{{UnitID: "L2", Kind: kindGroup, Title: "卷九"}}, true},
+		{"附属描述性标题不核对", []BoundaryDecision{{UnitID: "L2", Kind: kindFrontMatter, Title: "引言"}}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -405,12 +432,13 @@ func TestSegmentClipsContextBoundaries(t *testing.T) {
 	if len(chunks) < 2 {
 		t.Fatalf("fixture 应分出至少 2 块，得 %d", len(chunks))
 	}
-	// 每块响应：owned 首单元一个章节边界；第一块额外夹带一个下一块首单元（上下文区）的边界。
+	// 每块响应：owned 首单元一个章节边界（无标题走 firstLine 回退，规避标题回显核对——
+	// 这里测的是坐标纪律）；第一块额外夹带一个下一块首单元（上下文区）的边界。
 	responses := make([]string, len(chunks))
 	for ci, owned := range chunks {
-		bs := fmt.Sprintf(`{"unit_id":%q,"kind":"chapter","title":"第%d章"}`, units[owned[0]].ID, ci+1)
+		bs := fmt.Sprintf(`{"unit_id":%q,"kind":"chapter"}`, units[owned[0]].ID)
 		if ci == 0 {
-			bs += fmt.Sprintf(`,{"unit_id":%q,"kind":"chapter","title":"越界"}`, units[chunks[1][0]].ID)
+			bs += fmt.Sprintf(`,{"unit_id":%q,"kind":"chapter"}`, units[chunks[1][0]].ID)
 		}
 		responses[ci] = `{"boundaries":[` + bs + `]}`
 	}
@@ -440,7 +468,7 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 	chunks := planChunks(units, planningBudget(40, "sys", "")) // 与 Segment 内部规划一致
 	responses := make([]string, len(chunks))
 	for ci, owned := range chunks {
-		responses[ci] = fmt.Sprintf(`{"boundaries":[{"unit_id":%q,"kind":"chapter","title":"第%d章"}]}`, units[owned[0]].ID, ci+1)
+		responses[ci] = fmt.Sprintf(`{"boundaries":[{"unit_id":%q,"kind":"chapter"}]}`, units[owned[0]].ID)
 	}
 	w := &Workspace{dir: t.TempDir()}
 	m1 := &mockModel{responses: responses}
@@ -476,8 +504,8 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 // 超出可见输出（stop=length），必须对半缩块重试而非整体失败——与 analyze 缩批同哲学。
 func TestSegmentShrinksChunkOnTruncation(t *testing.T) {
 	norm, units := segFixture() // 7 个 unit，单块 [0,7)，mid=3
-	left := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"}]}`
-	right := `{"boundaries":[{"unit_id":"L6","kind":"chapter","title":"第二章"}]}`
+	left := `{"boundaries":[{"unit_id":"L1","kind":"chapter"}]}`
+	right := `{"boundaries":[{"unit_id":"L6","kind":"chapter","title":"第二章 云涌"}]}`
 	m := &mockModel{
 		responses: []string{`{"boundaries":[]}`, left, right},
 		stops:     []agentcore.StopReason{agentcore.StopReasonLength}, // 首调截断，两个半块正常

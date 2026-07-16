@@ -17,7 +17,7 @@ import (
 
 // prompt/schema 版本纳入各阶段 InputDigest；升级 prompt 契约时递增以自然失效下游工件。
 const (
-	segmentPromptVersion = "seg-v1"
+	segmentPromptVersion = "seg-v2" // v2：边界只落真实分隔处、标题逐字复制（配合标题回显校验）
 	analyzePromptVersion = "analyze-v1"
 	confirmMethodAuto    = "auto_authorized"
 	confirmMethodUser    = "user_confirmed" // TUI 预览后按 y 的显式人工确认

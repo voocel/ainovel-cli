@@ -187,7 +187,7 @@ func (s *importState) refresh(contentW int) {
 	case s.done:
 		b.WriteString(okStyle.Render("导入完成，Foundation 与章节已就绪"))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Esc 关闭面板；如需续写请在主界面按正常门禁继续"))
+		b.WriteString(dimStyle.Render("Esc 关闭面板并接通续写门禁（引擎停在下一章边界，等你验收放行）"))
 	default:
 		b.WriteString(dimStyle.Render("Esc 取消导入"))
 	}
@@ -356,7 +356,14 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.importer.cancel()
 			return m, nil
 		}
+		succeeded := m.importer.stage == imp.StageDone && m.importer.err == nil
 		m.importer = nil
+		// 从欢迎页发起的导入成功收尾：欢迎页没有续写入口（bootstrap 的 Resume 只在
+		// 启动时跑一次），关面板时补跑恢复，让用户落到工作台的导入完成 Hold 门禁上，
+		// 而不是留在误按 Enter 即"开新书"的欢迎页。
+		if succeeded && m.mode == modeNew {
+			return m, tea.Batch(m.textarea.Focus(), resumeAfterImport(m.runtime))
+		}
 		return m, m.textarea.Focus()
 	case tea.KeyUp:
 		m.importer.viewport.ScrollUp(1)

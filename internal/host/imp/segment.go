@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // BoundaryDecision 是模型对单个 owned range 的边界判断（RFC §8.2）。
@@ -179,7 +180,29 @@ func resolveSegmentation(normalized []byte, units []SourceUnit, decisions []Boun
 	if chapterNo == 0 {
 		return nil, fmt.Errorf("切分未产出任何章节（group 不计入章节）")
 	}
+	// 同名章节是"同章被误切"的确定性信号（有标题规约的源里章名不该重复），只记 Notes
+	// 交确认预览人工核对（Notes 非空即阻断 --yes）——是否合并不由 Go 裁定。
+	titleAt := make(map[string]int, len(seg.Chapters))
+	for _, c := range seg.Chapters {
+		key := squashSpace(c.Title)
+		if first, ok := titleAt[key]; ok && key != "" {
+			seg.Notes = append(seg.Notes, fmt.Sprintf("第 %d 章与第 %d 章标题相同（%q），疑似同章被误切，请核对",
+				c.Number, first, snippet(c.Title, 24)))
+		} else {
+			titleAt[key] = c.Number
+		}
+	}
 	return seg, nil
+}
+
+// squashSpace 去除全部空白，用于标题回显与同名比对——空白/装饰差异不构成语义差异。
+func squashSpace(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // firstLine 返回 [start,end) 内首行去空白后的文本。
@@ -466,6 +489,16 @@ func (v chunkValidator) validate(bs []BoundaryDecision) error {
 		at, err := resolveBoundaryByte(v.unitByID, b.UnitID, b.Anchor)
 		if err != nil {
 			return err
+		}
+		// 标题回显：chapter/group 的标题必须真实存在于边界单元原文（忽略空白差异）——
+		// 编造的标题在此被事实拦下（实测某源 157 章里 67 章是模型在章中续文上造的边界+
+		// 编的标题）。语义裁量仍归模型：真无标题规约的源可置 uncertain 保留归纳标题；
+		// front/back matter 的描述性标题低风险，不核对。
+		if (b.Kind == kindChapter || b.Kind == kindGroup) && !b.Uncertain {
+			if t := squashSpace(b.Title); t != "" && !strings.Contains(squashSpace(v.unitByID[b.UnitID].Text), t) {
+				return fmt.Errorf("边界 %s 的标题 %q 在该单元原文中找不到：若这里是上一章的延续正文，请不要为它设边界（由前文边界归属，boundaries 可为空）；若源文此处确实没有标题行、标题是你归纳的，请置 uncertain=true",
+					b.UnitID, snippet(b.Title, 24))
+			}
 		}
 		// 同位冲突（kind/标题不同）是语义问题，保留哪个不由 Go 裁定；完全相同的重复
 		// 是机械冗余，放行后由 resolve 静默去重。

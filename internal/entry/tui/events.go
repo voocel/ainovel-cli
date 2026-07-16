@@ -109,6 +109,16 @@ func bootstrapRuntime(rt *host.Host) tea.Cmd {
 	}
 }
 
+// resumeAfterImport 在关闭"导入完成"面板后补跑一次恢复门禁：欢迎页没有续写入口，
+// bootstrap 的 Resume 只在启动时跑一次。不重放事件队列——本会话事件已由常驻
+// listenEvents 呈现过，重放会重复回显。引擎起来后被导入完成 Hold 拦在下一章边界等验收。
+func resumeAfterImport(rt *host.Host) tea.Cmd {
+	return func() tea.Msg {
+		label, err := rt.Resume()
+		return bootstrapMsg{resumed: label != "", err: err}
+	}
+}
+
 func startRuntime(rt *host.Host, plan startup.Plan) tea.Cmd {
 	return func() tea.Msg {
 		// 启动侧确定性生成本书用户规则快照（用原始 prompt 归一化），须在 StartPrepared 前。
