@@ -501,12 +501,29 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		if msg.ev.Stage == imp.StageDone {
-			// 导入成功 → 自动接力续写：Resume 会启用 Router 并派发首条指令，
-			// 走与"重开项目恢复"完全一致的续写流程（补上同会话导入→续写的衔接）。
-			// 随后的 bootstrapMsg 处理会 enterRunning() 切到创作态。
-			return m, bootstrapRuntime(m.runtime), true
+			if msg.ev.Continued {
+				// host 已真实启动 Engine 自动接力（Continued 由 host 依权威决策置位，非 TUI 臆测）。
+				// 关面板落到工作台，由 Init 常驻的 listenEvents/listenDone 承接引擎事件，tickSnapshot 刷新运行态。
+				m.importer = nil
+				enableMouse := m.enterRunning()
+				m.resizeTextarea()
+				m.textarea.Placeholder = defaultSteerPlaceholder()
+				return m, tea.Batch(enableMouse, m.textarea.Focus()), true
+			}
+			// 未接力（默认/审阅/接力失败）：停在面板等用户核对 Foundation 与章节，Esc 关闭。
+			return m, nil, true
 		}
 		return m, listenImportEvent(msg.reqID, msg.ch), true
+	case importClosedMsg:
+		// 通道关闭且未终态 → 管线在 awaiting 处停下（等 --yes / --story）。标记面板可关闭，
+		// 否则 Esc 只会取消已结束的 ctx，面板永远关不掉（卡死）。
+		if m.importer == nil || msg.reqID != m.importer.reqID || m.importer.done {
+			return m, nil, true
+		}
+		m.importer.paused = true
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.importer.refresh(paddedModalContentWidth(boxW))
+		return m, nil, true
 	case simEventMsg:
 		if m.simulator == nil || msg.reqID != m.simulator.reqID {
 			return m, nil, true
@@ -578,6 +595,13 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			// 顺便把 dirty 一并清掉，flush tick 紧跟着不必重复刷。
 			m.refreshStreamViewport()
 			m.streamDirty = false
+		}
+		if s := m.importer; s != nil && !s.done && !s.paused {
+			// 导入运行中：尾随星标与重试倒计时都在 viewport 内容里，按 tick 重算。
+			// 挂在 cursor tick（120ms）上与流式面板光标同速——同款星星不该一快一慢。
+			s.frame = m.cursorIdx
+			boxW, _ := reportModalSize(m.width, m.height)
+			s.refresh(paddedModalContentWidth(boxW))
 		}
 		return m, tickCursor(), true
 	case streamDeltaMsg:
@@ -746,6 +770,10 @@ func (m *Model) applyEvent(ev host.Event) {
 			// Summary 非空时允许覆盖（结束态可能带补充信息）；否则保留首次
 			if ev.Summary != "" {
 				existing.Summary = ev.Summary
+			}
+			// 重试事件同 ID 跨 attempt 更新，新截止时刻要跟上，倒计时才会随之重置
+			if !ev.RetryAt.IsZero() {
+				existing.RetryAt = ev.RetryAt
 			}
 			return
 		}

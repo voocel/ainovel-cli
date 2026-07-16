@@ -395,7 +395,7 @@ internal/
     guard/        subagent_guards.go (CheckpointDeltaGuard ×3,Worker 事实护栏)
   host/           host.go (生命周期/干预编排) + engine.go (确定性执行循环) + observer*.go
                   + events.go + usage*.go + budget.go + advance_gate.go + resume.go + cocreate.go
-    imp/          外部小说反推导入：split → foundation → 逐章分析
+    imp/          外部小说语义编译导入：ingest → segment → analyze → synthesize → publish（纯状态推导 + LLM 作函数）
     exp/          已完成章节导出：TXT / EPUB 3；纯只读
   entry/          tui (Bubble Tea) / headless / startup
   bootstrap/      config + ModelSet + provider failover + setup 向导
@@ -422,6 +422,7 @@ assets/
 | 2026-05-02 | agentcore 慢思考/流式修复；删除 `idleResumeCount` 续跑补丁 | mimo / 慢思考流式跑通 |
 | 2026-06-05 | 滚动规划闭环 + `/import` 反推续写 | 200+ 章首次跑通 |
 | 2026-07-12 | **Engine + Arbiter 控制面更替**：Coordinator 长循环及七项补丁生态退役；文风层三层覆盖；五轮对抗评审加固 | 每边界省一次 LLM 转发；控制面 100% 离线可测；语义裁定可回放 |
+| 2026-07-15 | **`/import` 语义编译管线**：硬编码切分规则退役，改为 ingest→segment→analyze→synthesize→publish 分阶段编译；纯状态推导（`NextAction(Facts)`）+ 输入指纹绑定工件，全程可恢复幂等 | 切分随模型能力自然增强；无漂移阶段枚举；中断可续、控制面离线可测 |
 
 实测：hy3-preview free 12 章 / 73 分钟、mimo-v2.5-pro 10 章 / 8.4 万字，均一次跑完；长篇 gpt-5.4《凡骨》235 章 / 127 万字滚动规划闭环跑通（Coordinator 时代数据，Engine 时代首跑待补）。
 

@@ -141,7 +141,7 @@ func renderDetailPanel(vp viewport.Model, width, height int, focused bool) strin
 }
 
 // renderWelcome 渲染新建态首屏。
-func renderWelcome(width, height int, errMsg string, mode startupMode) string {
+func renderWelcome(width, height int, errMsg string, mode startupMode, importHint string) string {
 	// 简洁标题
 	title := lipgloss.NewStyle().
 		Foreground(colorAccent).
@@ -220,6 +220,15 @@ func renderWelcome(width, height int, errMsg string, mode startupMode) string {
 	b.WriteString(prompt)
 	b.WriteString("\n\n")
 	b.WriteString(exBlock)
+	b.WriteString("\n\n")
+	if importHint != "" {
+		// 这本书停在导入半路：显著提示恢复入口，替代常规导入提示。
+		b.WriteString(lipgloss.NewStyle().Foreground(colorAccent2).Bold(true).
+			Render("! " + importHint))
+	} else {
+		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).
+			Render("已有小说存稿想接着写？输入 /import <文件路径> 导入后续写"))
+	}
 	b.WriteString("\n\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Italic(true).
 		Render("Tab 切换模式 · 快速开始下 Enter 直接创作 · 共创规划下 Enter 进入对话"))

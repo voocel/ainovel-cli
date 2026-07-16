@@ -133,10 +133,15 @@ type RoleConfig struct {
 
 // knownRoles 支持的可配置角色名。Arbiter 当前不开放角色级配置，
 // 统一使用顶层默认模型（host.arbiterModel 用 models.Default）。
+// import_* 是导入语义函数的模型档位旋钮（docs/import-pipeline.md §13.1）：
+// 未配置时落 architect，配置后可把机械性更强的函数指到更便宜档位。
 var knownRoles = map[string]bool{
-	"architect": true,
-	"writer":    true,
-	"editor":    true,
+	"architect":         true,
+	"writer":            true,
+	"editor":            true,
+	"import_segment":    true,
+	"import_analyze":    true,
+	"import_synthesize": true,
 }
 
 // Config 小说应用配置。
@@ -249,7 +254,7 @@ func (c *Config) ValidateBase() error {
 			return err
 		}
 		if !knownRoles[role] {
-			return fmt.Errorf("unknown role %q in roles config (valid: architect/writer/editor): %w", role, errs.ErrConfig)
+			return fmt.Errorf("unknown role %q in roles config (valid: architect/writer/editor/import_segment/import_analyze/import_synthesize): %w", role, errs.ErrConfig)
 		}
 		if rc.Provider == "" || rc.Model == "" {
 			return fmt.Errorf("role %q must have both provider and model: %w", role, errs.ErrConfig)

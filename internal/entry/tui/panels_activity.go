@@ -124,7 +124,12 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		if ev.Level == "warn" {
 			sumColor = colorAccent
 		}
-		sum := lipgloss.NewStyle().Foreground(sumColor).Render(truncate(ev.Summary, maxSumW))
+		text := truncate(ev.Summary, maxSumW)
+		if cd := retryCountdown(ev.RetryAt, time.Now()); cd != "" {
+			cd = " · " + cd
+			text = truncate(ev.Summary, max(20, maxSumW-lipgloss.Width(cd))) + cd
+		}
+		sum := lipgloss.NewStyle().Foreground(sumColor).Render(text)
 		return tsStr + " " + indent + icon + " " + sum
 
 	case ev.Category == "USER":
@@ -153,6 +158,21 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		icon := lipgloss.NewStyle().Foreground(colorDim).Render("·")
 		return tsStr + " " + indent + icon + " " + truncate(ev.Summary, maxSumW)
 	}
+}
+
+// retryCountdown 返回重试倒计时文案（"7s 后重试"）；未设截止或已到点（请求已在途）返回空。
+// 事件只携带截止时刻，剩余秒数在渲染时计算——spinner tick 驱动重绘即形成逐秒倒数，
+// 事件面板与导入面板共用（对齐"同 ID/Key 一行跳动"的原地更新机制）。
+func retryCountdown(retryAt, now time.Time) string {
+	if retryAt.IsZero() {
+		return ""
+	}
+	remain := retryAt.Sub(now)
+	if remain <= 0 {
+		return ""
+	}
+	secs := int((remain + time.Second - 1) / time.Second)
+	return fmt.Sprintf("%ds 后重试", secs)
 }
 
 // renderDispatchSummary 渲染 DISPATCH 摘要：Agent 名用角色色，任务用淡色。

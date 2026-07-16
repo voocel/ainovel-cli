@@ -30,8 +30,10 @@ type Prompts struct {
 	ArchitectLong    string
 	Writer           string // 协议模板,含 {{VOICE}} 占位符;终稿经 BuildWriterPrompt 组装
 	Editor           string
-	ImportFoundation string
-	ImportAnalyzer   string
+	ImportSegment    string // 语义切分：识别章节/卷/附属文本边界
+	ImportAnalyze    string // 连续批次逐章事实提取
+	ImportSynthesize string // 分层综合与卷弧划分（全书 BookSynthesis）
+	ImportRange      string // 长书 Map 阶段连续区间摘要（RangeDigest）
 	SimulationSource string
 	SimulationMerge  string
 
@@ -176,8 +178,10 @@ func loadPrompts() Prompts {
 		ArchitectLong:    WithSimulationGuidance(mustRead(promptsFS, "prompts/architect-long.md"), "architect"),
 		Writer:           WithSimulationGuidance(mustRead(promptsFS, "prompts/writer.md"), "writer"),
 		Editor:           WithSimulationGuidance(mustRead(promptsFS, "prompts/editor.md"), "editor"),
-		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
-		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
+		ImportSegment:    mustRead(promptsFS, "prompts/import-segment.md"),
+		ImportAnalyze:    mustRead(promptsFS, "prompts/import-analyze.md"),
+		ImportSynthesize: mustRead(promptsFS, "prompts/import-synthesize.md"),
+		ImportRange:      mustRead(promptsFS, "prompts/import-range.md"),
 		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
 		SimulationMerge:  mustRead(promptsFS, "prompts/simulation-merge.md"),
 

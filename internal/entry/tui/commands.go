@@ -147,8 +147,8 @@ func commandRegistryInstance() commandRegistry {
 		{
 			Name:        "import",
 			Group:       "writing",
-			Usage:       "/import <path> [from=N]",
-			Description: "反推外部小说续写",
+			Usage:       "/import <path> [--yes] [--story=open|closed] [--continue] [--guide=<切分指导>]",
+			Description: "语义导入外部小说（无参数则恢复未完成导入；--guide 用自然语言调整切分）",
 			NeedsIdle:   true,
 			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
 				m.importSeq++
@@ -161,6 +161,7 @@ func commandRegistryInstance() commandRegistry {
 					return m, nil
 				}
 				m.importer = state
+				m.importHint = "" // 已进入导入流程，欢迎屏的恢复提示完成使命
 				m.textarea.Blur()
 				return m, listenCmd
 			},

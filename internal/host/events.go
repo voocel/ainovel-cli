@@ -27,6 +27,7 @@ type Event struct {
 	Level      string        // info / warn / error / success
 	Depth      int           // 0 = Engine 层, 1 = Worker 层
 	Duration   time.Duration // 完成时的执行耗时
+	RetryAt    time.Time     // 重试类事件：下次重试的截止时刻；UI 据此逐秒倒计时，到点即清（请求已在途）
 }
 
 // Running 返回事件是否处于进行中。

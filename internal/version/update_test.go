@@ -3,6 +3,7 @@ package version
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -70,12 +71,17 @@ func TestReplaceExecutable(t *testing.T) {
 	if string(data) != "new" {
 		t.Fatalf("content = %q", data)
 	}
-	info, err := os.Stat(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("mode = %v", info.Mode().Perm())
+	// 权限保持断言只在有 POSIX 权限位语义的平台上有意义：Windows 把一切上报为
+	// 0666/0444、执行位永不出现（可执行性来自 .exe 扩展名），此断言在该平台恒假。
+	// 替换/回滚/备份清理断言与平台相关（Windows rename 语义不同），必须继续运行。
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("mode = %v", info.Mode().Perm())
+		}
 	}
 	if _, err := os.Stat(dst + ".old"); !os.IsNotExist(err) {
 		t.Fatalf("backup should be removed, err=%v", err)

@@ -48,8 +48,12 @@ func TestObserverSubagentRetryEventsUpdateSameLinePerAgent(t *testing.T) {
 	if events[0].ID == "" || events[1].ID != events[0].ID {
 		t.Fatalf("writer retry events should share ID: %+v", events)
 	}
-	if events[1].Agent != "writer" || !strings.Contains(events[1].Summary, "重试 (2/7，2s后)") {
-		t.Fatalf("event = %+v, want writer retry 2/7 with delay", events[1])
+	// Summary 不嵌静态延时（UI 依 RetryAt 倒计时）；延时以截止时刻形式携带，静态快照留在 Detail 供日志。
+	if events[1].Agent != "writer" || !strings.Contains(events[1].Summary, "重试 (2/7)") {
+		t.Fatalf("event = %+v, want writer retry 2/7 without inline delay", events[1])
+	}
+	if events[1].RetryAt.IsZero() || !strings.Contains(events[1].Detail, "重试 (2/7，2s后)") {
+		t.Fatalf("event = %+v, want RetryAt deadline + static delay in Detail", events[1])
 	}
 }
 

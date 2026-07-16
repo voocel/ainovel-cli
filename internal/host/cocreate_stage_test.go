@@ -18,6 +18,7 @@ func newFlagTestHost(lc lifecycle, cocreating bool) *Host {
 	return &Host{
 		lifecycle:  lc,
 		cocreating: cocreating,
+		engine:     &engine{}, // acquireExclusive 查 engine.isRunning()（停止窗口门禁）
 		events:     make(chan Event, 16),
 	}
 }
@@ -89,25 +90,42 @@ func TestResumeFromCoCreate_RejectsWhenNotCocreating(t *testing.T) {
 	}
 }
 
-func TestGuardExclusive(t *testing.T) {
+func TestAcquireExclusive(t *testing.T) {
 	cases := []struct {
 		name       string
 		lc         lifecycle
 		cocreating bool
+		exclusive  string
 		wantErr    string // 空=期望放行
 	}{
-		{"running", lifecycleRunning, false, "运行中"},
-		{"cocreating", lifecyclePaused, true, "阶段共创"},
-		{"idle free", lifecycleIdle, false, ""},
-		{"paused free", lifecyclePaused, false, ""},
+		{"running", lifecycleRunning, false, "", "运行中"},
+		{"cocreating", lifecyclePaused, true, "", "阶段共创"},
+		{"busy", lifecycleIdle, false, "导入", "进行中"},
+		{"idle free", lifecycleIdle, false, "", ""},
+		{"paused free", lifecyclePaused, false, "", ""},
+	}
+	// Abort 停止窗口：lifecycle 已置 paused 但引擎 goroutine 尚未退净，仍须拒绝——
+	// 否则导入会与引擎收尾并发写同一 store。
+	drain := newFlagTestHost(lifecyclePaused, false)
+	drain.engine.running = true
+	if err := drain.acquireExclusive("导入"); err == nil {
+		t.Fatal("引擎排水期应拒绝独占作业")
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := newFlagTestHost(c.lc, c.cocreating)
-			err := h.guardExclusive("导入")
+			h.exclusive = c.exclusive
+			err := h.acquireExclusive("导入")
 			if c.wantErr == "" {
 				if err != nil {
 					t.Fatalf("应放行，得 %v", err)
+				}
+				if h.exclusive != "导入" {
+					t.Fatalf("放行后应登记占用，得 %q", h.exclusive)
+				}
+				h.releaseExclusive()
+				if h.exclusive != "" {
+					t.Fatalf("释放后占用应清空，得 %q", h.exclusive)
 				}
 				return
 			}
@@ -118,6 +136,23 @@ func TestGuardExclusive(t *testing.T) {
 				t.Errorf("错误文案应带 action %q，得 %v", "导入", err)
 			}
 		})
+	}
+}
+
+// TestExclusiveBlocksCreationEntries 守护 #2：后台独占作业（导入/仿写）进行中时，
+// 不仅第二个后台作业被堵，创作写入口（Continue/Resume）与新后台作业也必须被堵，
+// 否则 Continue 会在引擎被门禁拦下前就让 Arbiter 改状态、Resume/next 期间引擎可抢跑。
+func TestExclusiveBlocksCreationEntries(t *testing.T) {
+	h := newFlagTestHost(lifecycleIdle, false)
+	h.exclusive = "导入"
+	if _, err := h.ImportFrom(context.Background(), imp.Options{}); err == nil {
+		t.Error("独占作业期间 ImportFrom 应被拒")
+	}
+	if err := h.Continue("继续写"); err == nil {
+		t.Error("独占作业期间 Continue 应被拒（须在 Arbiter 裁定前挡住）")
+	}
+	if _, err := h.Resume(); err == nil {
+		t.Error("独占作业期间 Resume 应被拒")
 	}
 }
 

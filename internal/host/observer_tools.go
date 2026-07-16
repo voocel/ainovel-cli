@@ -88,18 +88,21 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 	case agentcore.ProgressRetry:
 		// Arbiter 在 Meta 里保留实际 Retry-After；旧 Worker relay 尚未携带 Delay，
 		// 对它按 agentcore 的标准指数退避还原展示值。
+		// Summary 不嵌静态延时——UI 依 RetryAt 逐秒倒计时；Detail/日志保留发出时的延时快照。
 		delay := retryProgressDelay(ev.Progress)
-		prefix := retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, delay)
 		retryEv := Event{
 			ID:       o.retryEventID(ev.Progress.Agent, ev.Progress.Attempt),
 			Time:     time.Now(),
 			Category: "SYSTEM",
 			Agent:    ev.Progress.Agent,
-			Summary:  prefix + truncate(ev.Progress.Message, 80),
-			Detail:   prefix + ev.Progress.Message,
+			Summary:  retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, 0) + truncate(ev.Progress.Message, 80),
+			Detail:   retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, delay) + ev.Progress.Message,
 			Kind:     errorKind(nil, ev.Progress.Message),
 			Level:    "warn",
 			Depth:    1,
+		}
+		if delay > 0 {
+			retryEv.RetryAt = retryEv.Time.Add(delay)
 		}
 		o.emitEv(retryEv)
 		o.persistEvent(retryEv)

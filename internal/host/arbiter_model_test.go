@@ -36,7 +36,7 @@ func TestUsageTrackedModelPreservesOptionalCapabilities(t *testing.T) {
 		Thinking: llm.ThinkingCapabilities{Supported: llm.SupportNo},
 	}
 	inner := &capableTrackedTestModel{plainTrackedTestModel: &plainTrackedTestModel{}, caps: want}
-	wrapped := newUsageTrackedModel(inner, func(string, string, agentcore.AgentMessage) {})
+	wrapped := newUsageTrackedModel(inner, "arbiter", func(string, string, agentcore.AgentMessage) {})
 	cp, ok := wrapped.(llm.CapabilityProvider)
 	if !ok {
 		t.Fatal("usage wrapper dropped CapabilityProvider")
@@ -45,7 +45,7 @@ func TestUsageTrackedModelPreservesOptionalCapabilities(t *testing.T) {
 		t.Fatalf("capabilities changed through wrapper: %+v", got)
 	}
 
-	plain := newUsageTrackedModel(&plainTrackedTestModel{}, func(string, string, agentcore.AgentMessage) {})
+	plain := newUsageTrackedModel(&plainTrackedTestModel{}, "arbiter", func(string, string, agentcore.AgentMessage) {})
 	if _, ok := plain.(llm.CapabilityProvider); ok {
 		t.Fatal("wrapper must not invent capabilities for an unknown model")
 	}
