@@ -51,8 +51,13 @@ func TestCommandChannelEnvAndStdin(t *testing.T) {
 
 	command := `echo "$NOTIFY_KIND|$NOTIFY_LEVEL|$NOTIFY_TITLE|$NOTIFY_BODY" > ` + shellQuote(envFile) + ` && cat > ` + shellQuote(jsonFile)
 	if runtime.GOOS == "windows" {
-		command = `Set-Content -LiteralPath ` + powerShellQuote(envFile) + ` -Value "$env:NOTIFY_KIND|$env:NOTIFY_LEVEL|$env:NOTIFY_TITLE|$env:NOTIFY_BODY"; ` +
-			`[Console]::In.ReadToEnd() | Set-Content -LiteralPath ` + powerShellQuote(jsonFile) + ` -NoNewline`
+		// Explicit UTF-8 (no BOM) so Chinese title/body survive PowerShell's default code page.
+		command = `$utf8 = New-Object System.Text.UTF8Encoding $false; ` +
+			`$line = "$env:NOTIFY_KIND|$env:NOTIFY_LEVEL|$env:NOTIFY_TITLE|$env:NOTIFY_BODY"; ` +
+			`[System.IO.File]::WriteAllText(` + powerShellQuote(envFile) + `, $line, $utf8); ` +
+			`$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), $utf8); ` +
+			`$payload = $reader.ReadToEnd(); ` +
+			`[System.IO.File]::WriteAllText(` + powerShellQuote(jsonFile) + `, $payload, $utf8)`
 	}
 	n := New(command, nil)
 	nt := Notification{Kind: KindBudget, Level: "warn", Title: "ainovel: 预算", Body: "已花费 $8.00"}
