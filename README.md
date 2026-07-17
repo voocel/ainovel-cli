@@ -254,7 +254,7 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 
 ### 配置文件
 
-首次运行时自动引导生成配置文件 `~/.ainovel/config.json`，后续可直接编辑该文件调整设置。删除配置文件后重新运行会再次进入引导流程。
+首次运行时自动引导生成配置文件 `~/.ainovel/config.json`。进入 TUI 后可输入 `/config` 新增或编辑 Provider、保存多个模型并为每个模型设置上下文窗口；保存后立即生效。`/model` 用于在这些已保存模型之间切换。
 
 也可以手动创建配置文件，参考仓库根目录的 `config.example.jsonc`。首次引导也会复制一份到 `~/.ainovel/config.example.jsonc`，方便本机离线查看。
 
@@ -267,7 +267,10 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
     "openrouter": {
       "api_key": "sk-or-v1-xxx",
       "base_url": "https://openrouter.ai/api/v1",
-      "models": ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
+      "models": [
+        { "name": "google/gemini-2.5-flash", "context_window": 200000 },
+        { "name": "google/gemini-2.5-pro", "context_window": 1000000 }
+      ],
       "extra": {
         "user_agent": "my-client/1.0",
         "headers": { "X-Custom-Client": "my-client" }
@@ -291,11 +294,15 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 - 标量字段按后者覆盖前者，例如 `provider`、`model`、`reasoning_effort`、`style`
 - `providers` 和 `roles` 按 key 合并，同名项内部按字段覆盖
 - 未填写的字段会继承上层配置，例如项目级配置只写 `base_url` 时会保留全局配置中的 `api_key`
-- 当前不支持用空字符串显式清空上层已有值；如需清空，请直接编辑更高优先级的配置文件
+- 顶层标量当前不支持用空字符串清空上层值；Provider 的 `type` / `api` / `api_key` / `base_url` 可通过 `/config` 显式清空
 
 > ⚠️ `provider`（以及 `roles.*.provider`）的值是 `providers` 里的 **key 名**——一根指针，不是协议名。项目级若把 `provider` 切到一个全局 `providers` 里不存在的账号，必须在项目级同时补上该账号的凭证（`api_key` / `base_url`），否则启动会报“未配置凭证”。
 
-`providers.<name>.models` 为可选字段，用于声明该 provider 下允许在 TUI `/model` 面板中切换的模型列表；如果未配置，系统会回退为当前配置文件里已经出现过的该 provider 模型。
+`providers.<name>.models` 为可选模型对象列表，`name` 是传给 Provider 的模型名，`context_window` 是该模型专属的上下文压缩窗口。旧版字符串数组仍可读取，下一次通过 `/config` 保存时会规范化为对象列表。如果未配置，系统会回退为配置中已经出现过的同 Provider 模型。
+
+上下文窗口按“模型专属值 → 旧顶层 `context_window` → 模型注册表 → 200K 兜底”的顺序解析。它只影响本地上下文压缩时机，不改变远端 API 的真实请求限制。
+
+`/config` 的模型列表中，`A` 新增、`E` 编辑窗口、`D` 删除、`Enter` 设为默认、`S` 进入保存；窗口可输入整数、`128K`、`1M`，留空表示自动解析。保存时可选择全局配置、当前项目配置或本次 `--config` 指定文件，界面会提示更高优先级覆盖风险。API Key 输入始终隐藏。
 
 `reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。TUI `/model` 面板切换 provider、model 或推理强度后，会写回全局配置 `~/.ainovel/config.json`。
 
@@ -474,7 +481,11 @@ output/novel/meta/simulation_profile.json
       "type": "openai",
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com/v1",
-      "models": ["gpt-5.4", "gpt-5.4-mini", "MiniMax-M3"],
+      "models": [
+        { "name": "gpt-5.4", "context_window": 400000 },
+        { "name": "gpt-5.4-mini" },
+        { "name": "MiniMax-M3", "context_window": 1000000 }
+      ],
       "api": "responses",
       "extra": {
         "user_agent": "codex-tui/0.142.3 (Mac OS 26.5.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.142.3)",

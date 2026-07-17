@@ -59,6 +59,7 @@ type Model struct {
 	cocreate       *cocreateState
 	help           *helpState
 	modelSwitch    *modelSwitchState
+	modelConfig    *modelConfigState
 	report         *reportState
 	version        string
 	importer       *importState
@@ -626,6 +627,9 @@ func (m Model) View() string {
 	}
 	if m.cocreate != nil {
 		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View(), m.spinnerIdx, m.quitPending)
+	}
+	if m.modelConfig != nil {
+		return renderModelConfigModal(m.width, m.height, m.modelConfig)
 	}
 	if m.help != nil {
 		return renderHelpModal(m.width, m.height, m.help)

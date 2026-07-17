@@ -2,7 +2,7 @@
   // 默认使用的 provider、model 和推理强度。
   // ★ provider 的值是下面 providers 里的一个 key 名（一根“指针”），不是协议名——
   //   改 provider 必须保证 providers 里有同名条目，否则启动会报“未配置凭证”。
-  //   运行时用 /model 面板切换会写回全局配置 ~/.ainovel/config.json。
+  //   运行时用 /config 管理 Provider/模型库，用 /model 在已保存模型间切换。
   "provider": "openrouter",
   "model": "google/gemini-2.5-flash",
   // 可选。默认推理强度：off / low / medium / high / xhigh / max。
@@ -16,8 +16,11 @@
     "openrouter": {
       "api_key": "sk-or-v1-xxx",
       "base_url": "https://openrouter.ai/api/v1",
-      // 可选。声明 /model 面板候选；省略时回退到配置中已出现过的同 provider 模型。
-      "models": ["google/gemini-3.0-flash", "google/gemini-3.1-pro"],
+      // 可选。声明 /model 面板候选及模型专属上下文窗口；旧字符串数组仍兼容。
+      "models": [
+        { "name": "google/gemini-3.0-flash", "context_window": 200000 },
+        { "name": "google/gemini-3.1-pro", "context_window": 1000000 }
+      ],
       // 可选。透传给该 provider 每次请求的额外参数（采样参数如 temperature/top_p/
       // min_p，或厂商特有键如 nvidia 开 think 的 chat_template_kwargs），逐字并入请求体。
       // 仅对 OpenAI 兼容类 provider 生效（openrouter/deepseek/qwen/glm/grok/ollama…）；
@@ -32,13 +35,13 @@
     },
     "anthropic": {
       "api_key": "sk-ant-xxx",
-      "models": ["claude-sonnet-4", "claude-opus-4"]
+      "models": [{ "name": "claude-sonnet-4" }, { "name": "claude-opus-4" }]
     },
     "ollama": {
       // ollama / bedrock / 显式 type 的自定义代理可以省略 api_key
       // base_url 需带 /v1（ollama 的 OpenAI 兼容端点在 /v1 下）
       "base_url": "http://localhost:11434/v1",
-      "models": ["qwen3:14b"],
+      "models": [{ "name": "qwen3:14b", "context_window": 32768 }],
       // 可选。流式空闲看门狗（Go duration，默认 "5m"）：LocalAI/ollama 等
       // 本地慢推理首块可超 5 分钟，按 provider 放宽，不影响其它通道
       "stream_idle_timeout": "15m"
@@ -50,7 +53,7 @@
       "type": "anthropic",
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com",
-      "models": ["claude-sonnet-4-6"],
+      "models": [{ "name": "claude-sonnet-4-6", "context_window": 1000000 }],
       "extra": {
         "user_agent": "claude-code/2.1.183",
         "anthropic_beta": "claude-code-20250219",
@@ -68,7 +71,11 @@
       "type": "openai",
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com/v1",
-      "models": ["gpt-5.4", "gpt-5.4-mini", "MiniMax-M3"],
+      "models": [
+        { "name": "gpt-5.4", "context_window": 400000 },
+        { "name": "gpt-5.4-mini" },
+        { "name": "MiniMax-M3", "context_window": 1000000 }
+      ],
       // 可选。OpenAI 协议 endpoint：chat（默认 /v1/chat/completions）/
       // responses（/v1/responses）。Codex 类代理通常需要 responses。
       "api": "responses",
@@ -105,10 +112,8 @@
   // 写作风格：default / suspense / fantasy / romance。
   "style": "default"
 
-  // 可选。显式指定上下文压缩使用的窗口大小。省略 / 0 = 按模型名自动解析
-  //（registry 命中用真实窗口，未命中兜底 200k）。配了就优先用：既能给 registry
-  // 查不到的自定义模型指定真实窗口，也能把名义 1M 窗口钉在 300k 提前触发压缩，
-  // 避免在注意力衰退区才压缩。仅影响压缩阈值，不改变 API 实际请求长度。
+  // 旧版全局上下文窗口，保留作所有模型的回退。优先级低于 models[].context_window，
+  // 高于模型注册表和 200k 默认值。仅影响压缩阈值，不改变 API 实际请求长度。
   // "context_window": 300000
 
   // 可选。单本书（output 目录）的成本预算，挂机保险丝。book_usd > 0 才启用。

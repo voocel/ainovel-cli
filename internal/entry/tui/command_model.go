@@ -7,11 +7,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type modelRuntime interface {
 	ConfiguredProviders() []string
-	ConfiguredModels(provider string) []string
+	ConfiguredModelOptions(provider string) []host.ConfiguredModel
 	CurrentModelSelection(role string) (string, string, bool)
 	AvailableThinking(role string) []agentcore.ThinkingLevel
 	CurrentThinking(role string) string
@@ -91,7 +92,7 @@ type modelSwitchState struct {
 	modelIdx    int
 	thinkingIdx int
 	providers   []string
-	models      []string
+	models      []host.ConfiguredModel
 	thinking    []thinkingOption
 	message     string
 }
@@ -145,7 +146,18 @@ func (s *modelSwitchState) model() string {
 	if len(s.models) == 0 || s.modelIdx < 0 || s.modelIdx >= len(s.models) {
 		return ""
 	}
-	return s.models[s.modelIdx]
+	return s.models[s.modelIdx].Name
+}
+
+func (s *modelSwitchState) modelLabel() string {
+	if len(s.models) == 0 || s.modelIdx < 0 || s.modelIdx >= len(s.models) {
+		return ""
+	}
+	model := s.models[s.modelIdx]
+	if window := formatContextWindow(model.ContextWindow); window != "" {
+		return model.Name + " · " + window
+	}
+	return model.Name
 }
 
 func (s *modelSwitchState) thinkingKey() string {
@@ -212,14 +224,14 @@ func (s *modelSwitchState) syncSelection(rt modelRuntime) {
 }
 
 func (s *modelSwitchState) syncModels(rt modelRuntime, preferred string) {
-	s.models = rt.ConfiguredModels(s.provider())
+	s.models = rt.ConfiguredModelOptions(s.provider())
 	s.modelIdx = 0
 	if len(s.models) == 0 {
 		return
 	}
 	preferred = strings.TrimSpace(preferred)
 	for i, model := range s.models {
-		if model == preferred {
+		if model.Name == preferred {
 			s.modelIdx = i
 			return
 		}
@@ -299,7 +311,7 @@ func renderModelSwitchBar(width int, state *modelSwitchState) string {
 
 	row1 := renderModelField("角色", state.roleLabel(), state.focus == modelFocusRole)
 	row2 := renderModelField("Provider", state.provider(), state.focus == modelFocusProvider)
-	row3 := renderModelField("模型", state.model(), state.focus == modelFocusModel)
+	row3 := renderModelField("模型", state.modelLabel(), state.focus == modelFocusModel)
 	row4 := renderModelField("推理强度", state.thinkingLabel(), state.focus == modelFocusThinking)
 	hint := lipgloss.NewStyle().
 		Foreground(colorDim).

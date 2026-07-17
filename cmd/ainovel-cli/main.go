@@ -120,7 +120,7 @@ func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
 	if opts.Prompt != "" || opts.PromptFile != "" {
 		die("error: --prompt/--prompt-file 仅能在 --headless 模式下使用")
 	}
-	if err := tui.Run(cfg, bundle, versionInfo().Version); err != nil {
+	if err := tui.Run(cfg, bundle, versionInfo().Version, opts.ConfigPath); err != nil {
 		die("error: %v", err)
 	}
 }
