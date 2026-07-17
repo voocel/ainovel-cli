@@ -1,6 +1,8 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -156,6 +158,24 @@ func TestExpandArcCalibratesUnwrittenPlan(t *testing.T) {
 	if err := s.ExpandArc(1, 2, expansion); err != nil {
 		t.Fatalf("same expansion must be idempotent: %v", err)
 	}
+	// 模拟上次只写完 layered JSON、派生 flat outline 与 Progress 尚未补齐。
+	if err := os.Remove(filepath.Join(s.Dir(), "outline.json")); err != nil {
+		t.Fatalf("remove flat outline: %v", err)
+	}
+	if err := s.Progress.SetTotalChapters(1); err != nil {
+		t.Fatalf("set stale total: %v", err)
+	}
+	if err := s.ExpandArc(1, 2, expansion); err != nil {
+		t.Fatalf("idempotent retry should repair derived state: %v", err)
+	}
+	flat, err = s.Outline.LoadOutline()
+	if err != nil || len(flat) != 3 {
+		t.Fatalf("flat outline was not repaired: len=%d err=%v", len(flat), err)
+	}
+	progress, err = s.Progress.Load()
+	if err != nil || progress.TotalChapters != 3 {
+		t.Fatalf("progress total was not repaired: progress=%+v err=%v", progress, err)
+	}
 	changed := expansion
 	changed.Goal = "事后改写已展开弧"
 	if err := s.ExpandArc(1, 2, changed); err == nil {
@@ -255,13 +275,19 @@ func TestOutlineFeedbackPool(t *testing.T) {
 	if err := s.Outline.AppendOutlineFeedback(ChapterFeedback{Chapter: 3, Deviation: "支线膨胀", Suggestion: "下一弧收线"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
+	if err := s.Outline.AppendOutlineFeedback(ChapterFeedback{Chapter: 3, Deviation: "支线膨胀", Suggestion: "下一弧收线"}); err != nil {
+		t.Fatalf("append duplicate: %v", err)
+	}
 	if err := s.Outline.AppendOutlineFeedback(ChapterFeedback{Chapter: 4, Suggestion: "反派提前登场"}); err != nil {
 		t.Fatalf("append2: %v", err)
 	}
 
 	// 跨重启(新 Store 实例)可读——不是内存态
 	s2 := NewStore(dir)
-	fbs := s2.Outline.LoadPendingOutlineFeedback()
+	fbs, err := s2.Outline.LoadPendingOutlineFeedback()
+	if err != nil {
+		t.Fatalf("load feedback: %v", err)
+	}
 	if len(fbs) != 2 || fbs[0].Chapter != 3 || fbs[1].Suggestion != "反派提前登场" {
 		t.Fatalf("跨重启读取失败: %+v", fbs)
 	}
@@ -274,11 +300,32 @@ func TestOutlineFeedbackPool(t *testing.T) {
 	if err := s2.Outline.ClearOutlineFeedback(); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if left := s2.Outline.LoadPendingOutlineFeedback(); len(left) != 0 {
+	if left, err := s2.Outline.LoadPendingOutlineFeedback(); err != nil || len(left) != 0 {
 		t.Fatalf("消费后应为空: %+v", left)
 	}
 	// 幂等清空
 	if err := s2.Outline.ClearOutlineFeedback(); err != nil {
 		t.Fatalf("clear idempotent: %v", err)
+	}
+}
+
+func TestOutlineFeedbackCorruptionIsNotSilentlyConsumed(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	path := filepath.Join(dir, outlineFeedbackFile)
+	if err := os.WriteFile(path, []byte("{\n"), 0o644); err != nil {
+		t.Fatalf("write corrupt feedback: %v", err)
+	}
+	if _, err := s.Outline.LoadPendingOutlineFeedback(); err == nil {
+		t.Fatal("corrupt feedback must return a read error")
+	}
+	if err := s.Outline.ClearOutlineFeedback(); err == nil {
+		t.Fatal("corrupt feedback must not be cleared as if it had been consumed")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("corrupt feedback should remain for diagnosis: %v", err)
 	}
 }

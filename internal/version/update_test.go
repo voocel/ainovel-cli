@@ -1,6 +1,11 @@
 package version
 
 import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,6 +44,54 @@ func TestSelectAsset(t *testing.T) {
 	}
 	if asset.BrowserDownloadURL != "right" {
 		t.Fatalf("asset = %+v", asset)
+	}
+}
+
+func TestSelectChecksumAsset(t *testing.T) {
+	rel := &release{TagName: "v1.2.3", Assets: []releaseAsset{
+		{Name: "ainovel-cli_checksums.txt", BrowserDownloadURL: "checksum"},
+	}}
+	asset, err := selectChecksumAsset(rel, "ainovel-cli")
+	if err != nil {
+		t.Fatalf("selectChecksumAsset: %v", err)
+	}
+	if asset.BrowserDownloadURL != "checksum" {
+		t.Fatalf("asset = %+v", asset)
+	}
+}
+
+func TestVerifyChecksum(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "ainovel-cli_1.2.3_Linux_x86_64.tar.gz")
+	content := []byte("release archive")
+	if err := os.WriteFile(archive, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	checksums := filepath.Join(dir, "checksums.txt")
+	line := fmt.Sprintf("%x  %s\n", sum, filepath.Base(archive))
+	if err := os.WriteFile(checksums, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyChecksum(archive, checksums, filepath.Base(archive)); err != nil {
+		t.Fatalf("verifyChecksum: %v", err)
+	}
+	if err := os.WriteFile(archive, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyChecksum(archive, checksums, filepath.Base(archive)); err == nil {
+		t.Fatal("tampered archive should fail checksum verification")
+	}
+}
+
+func TestDownloadRejectsAssetSizeMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer server.Close()
+	dst := filepath.Join(t.TempDir(), "asset.tar.gz")
+	if err := download(context.Background(), server.Client(), server.URL, dst, 4); err == nil {
+		t.Fatal("download with mismatched GitHub asset size should fail")
 	}
 }
 

@@ -30,7 +30,7 @@ type FailureDecision struct {
 	Reason   string      `json:"reason"`
 }
 
-func (d *FailureDecision) Validate() error {
+func (d *FailureDecision) ValidateAgainst(f FailureFacts) error {
 	if strings.TrimSpace(d.Reason) == "" {
 		return fmt.Errorf("reason 不能为空")
 	}
@@ -41,7 +41,10 @@ func (d *FailureDecision) Validate() error {
 		if d.Dispatch == nil {
 			return fmt.Errorf("reroute 必须附 dispatch")
 		}
-		return d.Dispatch.validate()
+		if err := d.Dispatch.validate(); err != nil {
+			return err
+		}
+		return validateDispatchAgainst(d.Dispatch, f.Phase)
 	default:
 		return fmt.Errorf("action 非法: %q（可选 retry / reroute / abort）", d.Action)
 	}
@@ -50,5 +53,7 @@ func (d *FailureDecision) Validate() error {
 // DecideFailure 失败/僵局咨询。失败语义:返回 error → Engine 按最保守路径处理
 // (暂停 + notify),绝不无限咨询。
 func DecideFailure(ctx context.Context, model agentcore.ChatModel, systemPrompt string, facts FailureFacts) (FailureDecision, error) {
-	return decide(ctx, model, systemPrompt, marshalPayload(facts), (*FailureDecision).Validate)
+	return decide(ctx, model, systemPrompt, marshalPayload(facts), func(d *FailureDecision) error {
+		return d.ValidateAgainst(facts)
+	})
 }

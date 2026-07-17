@@ -134,6 +134,19 @@ func TestCheckpointStore_RestoreFromDisk(t *testing.T) {
 	}
 }
 
+func TestStoreInitRejectsCorruptCheckpointLog(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "meta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, checkpointsFile), []byte("{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewStore(dir).Init(); err == nil {
+		t.Fatal("损坏的 checkpoint 日志必须阻止 Store 初始化")
+	}
+}
+
 func TestCheckpointStore_AllReturnsCopy(t *testing.T) {
 	cs, _ := newTestCheckpointStore(t)
 	cs.Append(domain.ChapterScope(1), "plan", "p", "sha256:1")

@@ -64,6 +64,8 @@ type Host struct {
 	// abort 回调与手动 Abort 共用同一停机机制）。releaseExclusive 一并清空。
 	exclusiveCancel context.CancelFunc
 	closeOnce       sync.Once
+	asyncWG         sync.WaitGroup
+	closing         bool
 
 	interMu sync.Mutex // 干预裁定 FIFO 串行(同一时刻至多一次在途咨询)
 
@@ -399,6 +401,9 @@ func (h *Host) startEngine(initial *flow.Instruction) bool {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closing {
+		return false
+	}
 	// 后台独占作业（导入/仿写）进行中时，引擎不得抢跑，避免与其写入竞争。这是所有引擎启动路径
 	// （Resume/Continue 重启/自动接力/next）的统一 backstop——入口守卫是第一道，这里是最后一道。
 	if h.exclusive != "" {
@@ -494,15 +499,13 @@ func (h *Host) Resume() (string, error) {
 	// 否则引擎可能抢在裁定前继续写出与干预相悖的章节。同步执行(阻塞数秒可接受,
 	// UI 已显示"恢复创作");doIntervention 成功后自行清除 PendingSteer 并按
 	// restart=true 拉起引擎。无待处理干预 → 直接续跑。
-	if meta, _ := h.store.RunMeta.Load(); meta != nil && meta.PendingSteer != "" {
-		h.doIntervention(meta.PendingSteer, true)
-		// 裁定失败(已回显)时也要恢复续跑——书不能因一条无法理解的旧干预卡死。
-		if !h.engine.isRunning() {
-			if err := h.budget.Refuse(); err == nil {
-				if !h.startEngine(nil) {
-					return label, fmt.Errorf("Engine 正在完成上一轮停止，请稍后重试恢复")
-				}
-			}
+	meta, err := h.store.RunMeta.Load()
+	if err != nil {
+		return label, fmt.Errorf("读取待处理干预: %w", err)
+	}
+	if meta != nil && meta.PendingSteer != "" {
+		if err := h.doIntervention(meta.PendingSteer, true); err != nil {
+			return label, err
 		}
 	} else {
 		// 只恢复事实,不恢复会话(RFC §6):Engine 从 store 重算路由续跑。
@@ -515,30 +518,41 @@ func (h *Host) Resume() (string, error) {
 	return label, nil
 }
 
-// handleIntervention 用户干预的统一裁定路径:Collect → Decide → 执行。
+// handleIntervention 适配 Engine 的无返回值重询回调；错误已由 doIntervention 发出事件。
+func (h *Host) handleIntervention(text string) {
+	_ = h.doIntervention(text, false)
+}
+
+// doIntervention 是用户干预的统一裁定路径:Collect → Decide → 执行。
 // FIFO 串行(同一时刻至多一次在途咨询);answer/rules 即时执行,控制态动作
 // (hold/reopen/dispatch)引擎运行中排队边界提交、停机时立即执行。
 // restart=true(Continue 语义)时干预处理完确保引擎运行。
-func (h *Host) handleIntervention(text string) {
-	h.doIntervention(text, false)
-}
-
-func (h *Host) doIntervention(text string, restart bool) {
+func (h *Host) doIntervention(text string, restart bool) error {
 	h.interMu.Lock()
 	defer h.interMu.Unlock()
 
 	// 崩溃保护:裁定前先持久化(PendingSteer),成功应用或已当面回显失败后原子清除
 	// (ClearHandledSteer 同时复位 FlowSteering)。裁定期间崩溃 → 下次 Resume 重放。
 	if err := h.store.RunMeta.SetPendingSteer(text); err != nil {
-		slog.Warn("干预持久化失败(继续裁定,但崩溃保护失效)", "module", "host", "err", err)
+		wrapped := fmt.Errorf("干预持久化失败，已停止裁定: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
 	}
-	clearPending := func() {
+	clearPending := func() error {
 		if err := h.store.ClearHandledSteer(); err != nil {
-			slog.Warn("清除已处理干预失败", "module", "host", "err", err)
+			return fmt.Errorf("清除已处理干预失败: %w", err)
 		}
+		return nil
 	}
 
-	facts := arbiter.CollectInterventionFacts(h.store)
+	facts, err := arbiter.CollectInterventionFacts(h.store)
+	if err != nil {
+		wrapped := fmt.Errorf("收集干预事实失败，未调用 Arbiter: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
+	}
 	facts.Running = h.engine.isRunning()
 
 	start := time.Now()
@@ -563,7 +577,10 @@ func (h *Host) doIntervention(text string, restart bool) {
 		rec.Error = derr.Error()
 	}
 	if _, err := h.store.Decisions.Append(rec); err != nil {
-		slog.Warn("裁定审计落盘失败", "module", "host", "err", err)
+		wrapped := fmt.Errorf("干预裁定审计落盘失败，拒绝执行动作: %w", err)
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
+			Summary: wrapped.Error(), Detail: wrapped.Error(), Level: "error"})
+		return wrapped
 	}
 
 	if derr != nil {
@@ -571,8 +588,10 @@ func (h *Host) doIntervention(text string, restart bool) {
 		// 输出校验错误共用同一 error 通道,必须原样回显,不得统一伪装成"未能理解"。
 		// 已当面告知 → 清除 pending(否则下次 Resume 会自动重放同一条失败干预)。
 		h.emitEvent(newInterventionFailureEvent(derr))
-		clearPending()
-		return
+		if err := clearPending(); err != nil {
+			return fmt.Errorf("%v；%w", derr, err)
+		}
+		return derr
 	}
 
 	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "裁定: " + decision.Reason, Level: "info"})
@@ -581,11 +600,11 @@ func (h *Host) doIntervention(text string, restart bool) {
 	}
 	// 任一动作持久化失败 → 保留 PendingSteer(恢复时整条重放重新裁定;
 	// hold/reopen 幂等、dispatch 经新事实重询,重放安全)。
-	actionsFailed := false
+	var actionErr error
 	if decision.Rules != "" {
 		if snap, _, err := h.userRules.AddRuntimeRule(h.runCtx, decision.Rules); err != nil {
 			h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Summary: "写作规则落盘失败: " + err.Error(), Level: "error"})
-			actionsFailed = true
+			actionErr = err
 		} else if snap != nil {
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "写作规则已更新并持久化", Level: "info"})
 		}
@@ -598,7 +617,7 @@ func (h *Host) doIntervention(text string, restart bool) {
 			if err := h.engine.applyControlOp(context.Background(), op); err != nil {
 				h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
 					Summary: "干预动作执行失败,已保留;恢复/继续时将自动重试"})
-				return
+				return err
 			}
 			// reopen/dispatch 表达了继续创作的意图,拉起引擎。
 			if decision.Reopen != nil || decision.Dispatch != nil {
@@ -606,28 +625,33 @@ func (h *Host) doIntervention(text string, restart bool) {
 			}
 		}
 	}
-	if actionsFailed {
+	if actionErr != nil {
 		// 保留 PendingSteer:恢复/继续时整条重放重新裁定。
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
 			Summary: "部分干预动作未成功,干预已保留;恢复/继续时自动重试"})
-		return
+		return actionErr
 	}
 	// 动作已成功应用/入队,清除崩溃保护(入队后引擎侧失败或退出竞态由 engine
 	// 回存 PendingSteer 兜底)。
-	clearPending()
+	if err := clearPending(); err != nil {
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error", Summary: err.Error()})
+		return err
+	}
 
 	if restart && !h.engine.isRunning() {
 		if err := h.budget.Refuse(); err != nil {
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: err.Error(), Level: "warn"})
-			return
+			return err
 		}
 		h.refreshWriterRestore()
 		if !h.startEngine(nil) {
 			// 此时干预动作已生效并清除 PendingSteer，只是引擎未能立即拉起——不能谎称"已保存"。
 			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
 				Summary: "干预已生效，但 Engine 未能立即续跑；请稍后在输入框继续或重启应用恢复"})
+			return fmt.Errorf("干预已生效，但 Engine 未能立即续跑")
 		}
 	}
+	return nil
 }
 
 func newInterventionFailureEvent(err error) Event {
@@ -670,9 +694,14 @@ func (h *Host) Continue(text string) error {
 		return err
 	}
 
-	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[继续] " + text, Level: "info"})
-	go h.doIntervention(text, true)
-	return nil
+	err, launched := h.runAsync(func() error {
+		h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[继续] " + text, Level: "info"})
+		return h.doIntervention(text, true)
+	})
+	if !launched {
+		return fmt.Errorf("Host 正在关闭，不能继续创作")
+	}
+	return err
 }
 
 // SetAdvanceMode 确定性切换章节推进模式。它只写入用户运行意图，
@@ -759,10 +788,17 @@ func (h *Host) AdvanceOneChapter() error {
 	return nil
 }
 
-// Steer 提交用户干预(运行中随时可用;停机时裁定后视动作决定是否拉起引擎)。
-func (h *Host) Steer(text string) {
-	h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[用户干预] " + text, Level: "info"})
-	go h.handleIntervention(text)
+// Steer 提交用户干预（运行中随时可用；停机时裁定后视动作决定是否拉起引擎）。
+// TUI 通过 tea.Cmd 等待结果，因此能收到真实裁定/持久化错误而不会阻塞界面。
+func (h *Host) Steer(text string) error {
+	err, launched := h.runAsync(func() error {
+		h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[用户干预] " + text, Level: "info"})
+		return h.doIntervention(text, false)
+	})
+	if !launched {
+		return fmt.Errorf("Host 正在关闭，不能提交干预")
+	}
+	return err
 }
 
 // Abort 暂停当前引擎循环。
@@ -804,19 +840,31 @@ func (h *Host) abortWithEvent(summary, level string) bool {
 // 再补一次同步 SaveNow 收尾。终止后 in-flight LLM 调用的最末几百 token
 // 丢失由下次启动时 session jsonl replay 自动补回。
 func (h *Host) Close() {
-	h.observer.setAborting(true)
-	if h.runCancel != nil {
-		h.runCancel() // 中断在途的宿主侧裁定调用
-	}
-	h.engine.abort()
-	if h.usageCancel != nil {
-		h.usageCancel()
-		h.usageCancel = nil
-	}
-	if err := h.usage.SaveNow(); err != nil {
-		slog.Warn("usage 退出前落盘失败", "module", "usage", "err", err)
-	}
 	h.closeOnce.Do(func() {
+		h.mu.Lock()
+		h.closing = true
+		cancelExclusive := h.exclusiveCancel
+		h.mu.Unlock()
+
+		h.observer.setAborting(true)
+		if h.runCancel != nil {
+			h.runCancel() // 中断在途的宿主侧裁定调用与 supervisor 转发
+		}
+		if cancelExclusive != nil {
+			cancelExclusive()
+		}
+		h.engine.abort()
+		h.engine.wait()
+		h.asyncWG.Wait()
+
+		if h.usageCancel != nil {
+			h.usageCancel()
+			h.usageCancel = nil
+		}
+		h.usage.WaitAutoSave()
+		if err := h.usage.SaveNow(); err != nil {
+			slog.Warn("usage 退出前落盘失败", "module", "usage", "err", err)
+		}
 		close(h.done)
 		close(h.events)
 		close(h.streamCh)
@@ -827,12 +875,23 @@ func (h *Host) Close() {
 //   - Phase=Complete  → 标记 completed，发"创作完成"事件
 //   - 其它            → 标记 idle/paused，发"创作停止"事件
 func (h *Host) runEnded() {
-	// 退出期 Close() 可能已 close(h.done)，末尾发送会 panic;recover 兜住竞态。
-	defer func() { recover() }()
 	h.observer.finalize()
 
 	h.mu.Lock()
-	progress, _ := h.store.Progress.Load()
+	progress, err := h.store.Progress.Load()
+	if err != nil {
+		if h.lifecycle == lifecycleRunning {
+			h.lifecycle = lifecycleIdle
+		}
+		h.mu.Unlock()
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error",
+			Summary: "引擎结束时读取进度失败: " + err.Error()})
+		select {
+		case h.done <- struct{}{}:
+		default:
+		}
+		return
+	}
 	if progress != nil && progress.Phase == domain.PhaseComplete {
 		h.lifecycle = lifecycleCompleted
 		// 完本收尾:确定性生成(store 已有全部事实,不花 LLM 调用;RFC 末节)。
@@ -900,6 +959,9 @@ func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
 // ── 事件发射 ──
 
 func (h *Host) emitEvent(ev Event) {
+	// 退出期 Close() 可能已 close(h.events)，此时并发 emit 的通道发送会 panic
+	// （select/default 挡不住关通道发送）。emitEvent 是所有事件的唯一漏斗，在此兜住
+	// 竞态即可覆盖引擎/asyncWG 之外的同步 emit 者（Abort/abortWithEvent、预算哨兵等）。
 	defer func() { recover() }()
 	// 所有事件的唯一 slog 入口。observer 翻译的 agentcore 事件和 Host 自发的
 	// SYSTEM 事件（Start/Abort/Resume…）都在这里落日志，避免 ESC abort 与外部
@@ -938,6 +1000,7 @@ func (h *Host) emitEvent(ev Event) {
 }
 
 func (h *Host) emitDelta(delta string) {
+	// 同 emitEvent：兜住退出期 h.streamCh 已 close 时的并发发送竞态。
 	defer func() { recover() }()
 	select {
 	case h.streamCh <- delta:
@@ -1533,6 +1596,10 @@ func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
 	if err := h.acquireExclusive("生成仿写画像"); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -1560,6 +1627,10 @@ func (h *Host) ImportSimulationProfile(ctx context.Context, path string) (<-chan
 	if err := h.acquireExclusive("导入仿写画像"); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.exclusiveCancel = cancel
+	h.mu.Unlock()
 	ch, err := sim.RunImport(ctx, h.store, path)
 	if err != nil {
 		h.releaseExclusive()
@@ -1575,6 +1646,8 @@ func (h *Host) acquireExclusive(action string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch {
+	case h.closing:
+		return fmt.Errorf("Host 正在关闭，不能%s", action)
 	// engine.isRunning() 必查：Abort 先置 lifecycle=paused 再异步等 goroutine 退出，
 	// 该窗口内 lifecycle 已非 running 但引擎仍可能在写 store（与启动门禁同一纪律）。
 	case h.lifecycle == lifecycleRunning || h.engine.isRunning():
@@ -1603,13 +1676,23 @@ func (h *Host) releaseExclusive() {
 // superviseExclusive 转发独占作业事件，通道关闭（作业结束）时释放占用槽。
 func superviseExclusive[T any](h *Host, src <-chan T) <-chan T {
 	out := make(chan T, 32)
-	go func() {
+	if !h.launchAsync(func() {
 		defer close(out)
 		defer h.releaseExclusive()
 		for ev := range src {
-			out <- ev
+			select {
+			case out <- ev:
+			case <-h.runCtx.Done():
+				// 关闭期继续排空源通道，避免 producer 因终态事件阻塞而无法退出。
+				for range src {
+				}
+				return
+			}
 		}
-	}()
+	}) {
+		close(out)
+		h.releaseExclusive()
+	}
 	return out
 }
 
@@ -1618,7 +1701,7 @@ func superviseExclusive[T any](h *Host, src <-chan T) <-chan T {
 // 不再用本地 --continue 标志臆测运行态（消除 Runner/Host/TUI 三方各自解释导致的时序竞态）。
 func (h *Host) superviseImport(src <-chan imp.Event, opts imp.Options) <-chan imp.Event {
 	out := make(chan imp.Event, 32)
-	go func() {
+	if !h.launchAsync(func() {
 		defer close(out)
 		released := false
 		release := func() {
@@ -1633,10 +1716,45 @@ func (h *Host) superviseImport(src <-chan imp.Event, opts imp.Options) <-chan im
 				release() // 先释放独占槽，接力的 startEngine 才能通过独占门禁
 				ev.Continued = h.continueAfterImport(opts)
 			}
-			out <- ev
+			select {
+			case out <- ev:
+			case <-h.runCtx.Done():
+				for range src {
+				}
+				return
+			}
 		}
-	}()
+	}) {
+		close(out)
+		h.releaseExclusive()
+	}
 	return out
+}
+
+// launchAsync 在 Host 生命周期内登记一个后台任务。closing 与 WaitGroup.Add 受同一
+// 把锁保护，保证 Close 开始 Wait 后不会再出现新的 Add。
+func (h *Host) launchAsync(fn func()) bool {
+	h.mu.Lock()
+	if h.closing {
+		h.mu.Unlock()
+		return false
+	}
+	h.asyncWG.Add(1)
+	h.mu.Unlock()
+	go func() {
+		defer h.asyncWG.Done()
+		fn()
+	}()
+	return true
+}
+
+// runAsync 复用 Host 已有的后台任务登记，同时把业务错误交还调用方。
+func (h *Host) runAsync(fn func() error) (error, bool) {
+	result := make(chan error, 1)
+	if !h.launchAsync(func() { result <- fn() }) {
+		return nil, false
+	}
+	return <-result, true
 }
 
 // continueAfterImport 决定并执行 --continue 的真正自动接力，返回 Engine 是否已启动。

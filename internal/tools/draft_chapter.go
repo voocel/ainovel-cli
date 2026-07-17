@@ -72,9 +72,16 @@ func (t *DraftChapterTool) Execute(_ context.Context, args json.RawMessage) (jso
 	if err := EnsureChapterExpanded(t.store, a.Chapter); err != nil {
 		return nil, err
 	}
-	if t.store.Progress.IsChapterCompleted(a.Chapter) {
+	completed, err := t.store.Progress.IsChapterCompleted(a.Chapter)
+	if err != nil {
+		return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+	}
+	if completed {
 		// 打磨/重写路径：章节虽已完成，但仍在 pending_rewrites 中，允许覆盖草稿
-		progress, _ := t.store.Progress.Load()
+		progress, err := t.store.Progress.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+		}
 		inRewriteQueue := progress != nil && slices.Contains(progress.PendingRewrites, a.Chapter)
 		if !inRewriteQueue {
 			return json.Marshal(map[string]any{

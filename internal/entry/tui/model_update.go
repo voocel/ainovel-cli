@@ -585,6 +585,12 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		next, cmd := m.handleCoCreateDoneMsg(msg)
 		return next, cmd, true
 	case steerResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: msg.err.Error(), Level: "error"})
+			m.refreshEventViewport()
+			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus()), true
+		}
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime)), true
 	case continueResultMsg:
 		if msg.err != nil {

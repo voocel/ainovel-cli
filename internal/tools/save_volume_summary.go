@@ -75,11 +75,20 @@ func (t *SaveVolumeSummaryTool) Execute(_ context.Context, args json.RawMessage)
 	// 收官主路径的完结触发点：卷末收尾三连的最后一块拼图是卷摘要，落盘后若全书已
 	// 满足完结条件则就地 MarkComplete（完结检查始终发生在最后一块事实落地的工具里，
 	// 与 commit_chapter 同一模式；谓词见 commit_chapter.go 的 layeredComplete）。
-	if p, _ := t.store.Progress.Load(); p != nil && p.Layered && p.Phase == domain.PhaseWriting {
-		if layeredComplete(t.store, p) {
-			if err := t.store.Progress.MarkComplete(); err == nil {
-				result["book_complete"] = true
+	p, err := t.store.Progress.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load progress: %w", err)
+	}
+	if p != nil && p.Layered && p.Phase == domain.PhaseWriting {
+		complete, err := layeredComplete(t.store, p)
+		if err != nil {
+			return nil, fmt.Errorf("evaluate book completion: %w", err)
+		}
+		if complete {
+			if err := t.store.Progress.MarkComplete(); err != nil {
+				return nil, fmt.Errorf("mark book complete: %w", err)
 			}
+			result["book_complete"] = true
 		}
 	}
 	return json.Marshal(result)

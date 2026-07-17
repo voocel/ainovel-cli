@@ -185,6 +185,15 @@ func waitEngineDone(t *testing.T, done chan struct{}) {
 	}
 }
 
+func mustInterventionFacts(t *testing.T, st *storepkg.Store) arbiter.InterventionFacts {
+	t.Helper()
+	facts, err := arbiter.CollectInterventionFacts(st)
+	if err != nil {
+		t.Fatalf("CollectInterventionFacts: %v", err)
+	}
+	return facts
+}
+
 func TestEngine_ReviewPermitWritesExactlyOneNewChapter(t *testing.T) {
 	st := storepkg.NewStore(t.TempDir())
 	if err := st.Init(); err != nil {
@@ -728,7 +737,7 @@ func TestEngine_PauseWithEditorDispatchWaitsForRewriteQueue(t *testing.T) {
 	e.applyControlOp(context.Background(), controlOp{
 		hold:     &arbiter.AdvanceHoldOp{After: domain.AdvanceHoldAfterRewritesDrained, Reason: "重写第1章语气,改完暂停验收"},
 		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: "复核第 1 章:语气改冷,save_review(verdict=rewrite, affected_chapters=[1])"},
-		facts:    arbiter.CollectInterventionFacts(st),
+		facts:    mustInterventionFacts(t, st),
 	})
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -797,7 +806,7 @@ func TestEngine_BoundaryHoldDoesNotDispatchAnotherWorker(t *testing.T) {
 	// 第 1 章写作期间到达 hold-only 干预（与真实 Steer 时序一致）。
 	e.enqueue(controlOp{
 		hold:  &arbiter.AdvanceHoldOp{After: domain.AdvanceHoldAtBoundary, Reason: "先停一下我看看"},
-		facts: arbiter.CollectInterventionFacts(st),
+		facts: mustInterventionFacts(t, st),
 	})
 	waitEngineDone(t, done)
 
@@ -850,7 +859,7 @@ func TestEngine_ExitRaceRestoresPendingDispatch(t *testing.T) {
 		hold:     &arbiter.AdvanceHoldOp{After: domain.AdvanceHoldAfterRewritesDrained, Reason: "验收"},
 		dispatch: &arbiter.DispatchOp{Agent: "writer", Task: "重写第 1 章"},
 		text:     "重写第1章然后停下来",
-		facts:    arbiter.CollectInterventionFacts(st),
+		facts:    mustInterventionFacts(t, st),
 	})
 	e.abort()
 	waitEngineDone(t, done)

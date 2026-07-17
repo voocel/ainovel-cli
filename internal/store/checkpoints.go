@@ -20,9 +20,10 @@ const checkpointsFile = "meta/checkpoints.jsonl"
 // 不变量：cache 是 checkpoints.jsonl 的镜像，由 Append/Reset 单点维护。
 // 并发：cache 受 io.mu 保护，写走 Lock、读走 RLock。
 type CheckpointStore struct {
-	io     *IO
-	seqGen atomic.Int64
-	cache  []domain.Checkpoint
+	io      *IO
+	seqGen  atomic.Int64
+	cache   []domain.Checkpoint
+	loadErr error
 }
 
 // NewCheckpointStore 创建 checkpoint 存储，从磁盘一次性加载已有 checkpoint 到 cache。
@@ -37,7 +38,7 @@ func (cs *CheckpointStore) loadFromDisk() {
 	cs.io.mu.Lock()
 	defer cs.io.mu.Unlock()
 
-	cs.cache = readCheckpointsFile(cs.io.path(checkpointsFile))
+	cs.cache, cs.loadErr = readCheckpointsFile(cs.io.path(checkpointsFile))
 	var maxSeq int64
 	for _, cp := range cs.cache {
 		if cp.Seq > maxSeq {
@@ -52,6 +53,9 @@ func (cs *CheckpointStore) loadFromDisk() {
 func (cs *CheckpointStore) Append(scope domain.Scope, step, artifact, digest string) (*domain.Checkpoint, error) {
 	cs.io.mu.Lock()
 	defer cs.io.mu.Unlock()
+	if cs.loadErr != nil {
+		return nil, fmt.Errorf("checkpoint store 初始化失败: %w", cs.loadErr)
+	}
 
 	if digest != "" {
 		for i := len(cs.cache) - 1; i >= 0; i-- {
@@ -159,29 +163,47 @@ func (cs *CheckpointStore) Reset() error {
 	}
 	cs.seqGen.Store(0)
 	cs.cache = nil
+	cs.loadErr = nil
 	return nil
 }
 
-// readCheckpointsFile 解析 jsonl；跳过格式错误行以容忍尾部截断。
-func readCheckpointsFile(path string) []domain.Checkpoint {
+// InitError 返回构造时加载 checkpoint 镜像的错误。Store.Init 必须先检查它，
+// 防止损坏的 jsonl 被解释成“没有 checkpoint”。
+func (cs *CheckpointStore) InitError() error {
+	cs.io.mu.RLock()
+	defer cs.io.mu.RUnlock()
+	return cs.loadErr
+}
+
+// readCheckpointsFile 严格解析 jsonl；尾部截断也是需要用户可见的持久化错误。
+func readCheckpointsFile(path string) ([]domain.Checkpoint, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 
 	var result []domain.Checkpoint
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNo := 0
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
+		lineNo++
+		raw := scanner.Bytes()
+		if len(raw) == 0 {
 			continue
 		}
 		var cp domain.Checkpoint
-		if json.Unmarshal(line, &cp) == nil {
-			result = append(result, cp)
+		if err := json.Unmarshal(raw, &cp); err != nil {
+			return nil, fmt.Errorf("parse %s line %d: %w", checkpointsFile, lineNo, err)
 		}
+		result = append(result, cp)
 	}
-	return result
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan %s: %w", checkpointsFile, err)
+	}
+	return result, nil
 }

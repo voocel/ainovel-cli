@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,7 +74,8 @@ func TestDecisionStore_InputTruncation(t *testing.T) {
 	}
 }
 
-func TestDecisionStore_RecentSkipsCorruptLines(t *testing.T) {
+// 文件中部的已提交损坏行(其后仍有完整提交的行)必须硬失败——不能在残缺历史上裁定。
+func TestDecisionStore_RecentRejectsCommittedCorruptLine(t *testing.T) {
 	s := NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
 		t.Fatalf("init: %v", err)
@@ -80,15 +83,93 @@ func TestDecisionStore_RecentSkipsCorruptLines(t *testing.T) {
 	if _, err := s.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "好的"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	// 模拟崩溃留下的尾部残行
-	if err := s.Decisions.io.AppendLine(decisionsFile, []byte(`{"schema_version":1,"kind":"interv`)); err != nil {
+	// 已 '\n' 收尾的损坏行(完整提交却损坏),其后再追加一条完整记录。
+	if err := s.Decisions.io.AppendLine(decisionsFile, []byte("{\"schema_version\":1,\"kind\":\"interv\n")); err != nil {
 		t.Fatalf("append corrupt: %v", err)
+	}
+	if _, err := s.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "之后"}); err != nil {
+		t.Fatalf("append trailing: %v", err)
+	}
+	if _, err := s.Decisions.Recent(10); err == nil {
+		t.Fatal("文件中部的已提交损坏行必须显式报错")
+	}
+}
+
+// 崩溃留下的尾部残行(末字节非 '\n' 的未提交追加)按 not-exist 容忍:丢弃残行、返回其前
+// 的完整记录,不硬失败——否则一次崩溃就永久毒化 append-only 审计。
+func TestDecisionStore_RecentToleratesUncommittedTail(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := s.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "好的"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	// 模拟崩溃打断的尾部残行:无换行结尾。
+	if err := s.Decisions.io.AppendLine(decisionsFile, []byte(`{"schema_version":1,"kind":"interv`)); err != nil {
+		t.Fatalf("append partial: %v", err)
 	}
 	recent, err := s.Decisions.Recent(10)
 	if err != nil {
-		t.Fatalf("损坏行不应让读取失败: %v", err)
+		t.Fatalf("尾部残行应被容忍,不应报错: %v", err)
 	}
 	if len(recent) != 1 || recent[0].Input != "好的" {
-		t.Fatalf("应跳过损坏行保留完整记录, got %+v", recent)
+		t.Fatalf("应丢弃残行并保留已提交记录,得到: %+v", recent)
+	}
+	// 恢复必须真正截断磁盘尾部，而不是只在本次读取中忽略；否则下一次追加会把两段
+	// JSON 拼成永久损坏。追加后再次读取应保持完整闭环。
+	if _, err := s.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "恢复后"}); err != nil {
+		t.Fatalf("append after recovery: %v", err)
+	}
+	recent, err = s.Decisions.Recent(10)
+	if err != nil {
+		t.Fatalf("recent after append: %v", err)
+	}
+	if len(recent) != 2 || recent[0].Input != "好的" || recent[1].Input != "恢复后" {
+		t.Fatalf("尾部恢复后应可继续追加，得到: %+v", recent)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, decisionsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(raw), "\n") {
+		t.Fatalf("恢复后的审计文件必须以提交换行结尾: %q", raw)
+	}
+}
+
+// 即使尾部恰好是完整 JSON，只要没有协议要求的换行，也属于未提交记录；恢复必须丢弃
+// 它并确保后续追加不会发生 `}{` 拼接。
+func TestDecisionStore_RecoveryDropsValidJSONWithoutCommitNewline(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := s.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "已提交"}); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := json.Marshal(DecisionRecord{SchemaVersion: decisionSchemaVersion, Kind: "intervention", Input: "未提交"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Decisions.io.AppendLine(decisionsFile, partial); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟重启：下一次读取或追加就是审计恢复边界。
+	reopened := NewStore(dir)
+	if err := reopened.Init(); err != nil {
+		t.Fatalf("restart init: %v", err)
+	}
+	if _, err := reopened.Decisions.Append(DecisionRecord{Kind: "intervention", Decider: "arbiter", Input: "重启后"}); err != nil {
+		t.Fatal(err)
+	}
+	recent, err := reopened.Decisions.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 || recent[0].Input != "已提交" || recent[1].Input != "重启后" {
+		t.Fatalf("未提交的无换行 JSON 不应被接纳，得到: %+v", recent)
 	}
 }

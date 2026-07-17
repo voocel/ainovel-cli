@@ -67,6 +67,12 @@ func TestStartChapter(t *testing.T) {
 	store := NewStore(dir)
 	_ = store.Progress.Init("test", 10)
 
+	if err := store.Progress.StartChapter(1); err == nil {
+		t.Fatal("expected StartChapter outside writing phase to fail")
+	}
+	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("UpdatePhase writing: %v", err)
+	}
 	if err := store.Progress.StartChapter(1); err != nil {
 		t.Fatalf("StartChapter: %v", err)
 	}
@@ -90,18 +96,19 @@ func TestIsChapterCompleted(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 	_ = store.Progress.Init("test", 10)
+	_ = store.Progress.UpdatePhase(domain.PhaseWriting)
 
-	if store.Progress.IsChapterCompleted(1) {
+	if completed, err := store.Progress.IsChapterCompleted(1); err != nil || completed {
 		t.Fatal("chapter 1 should not be completed initially")
 	}
 
 	_ = store.Progress.StartChapter(1)
 	_ = store.Progress.MarkChapterComplete(1, 5000, "", "")
 
-	if !store.Progress.IsChapterCompleted(1) {
+	if completed, err := store.Progress.IsChapterCompleted(1); err != nil || !completed {
 		t.Fatal("chapter 1 should be completed after MarkChapterComplete")
 	}
-	if store.Progress.IsChapterCompleted(2) {
+	if completed, err := store.Progress.IsChapterCompleted(2); err != nil || completed {
 		t.Fatal("chapter 2 should not be completed")
 	}
 }

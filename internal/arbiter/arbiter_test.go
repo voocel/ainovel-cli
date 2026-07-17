@@ -191,6 +191,8 @@ func TestInterventionDecision_ValidateAgainst(t *testing.T) {
 		{"完本期 reopen", InterventionDecision{Reopen: &ReopenOp{Chapters: []int{3}}, Reason: "返工"}, complete, false},
 		{"完本期 reopen 越界", InterventionDecision{Reopen: &ReopenOp{Chapters: []int{99}}, Reason: "r"}, complete, true},
 		{"完本期直接派单", InterventionDecision{Dispatch: &DispatchOp{Agent: "writer", Task: "x"}, Reason: "r"}, complete, true},
+		{"规划期禁止 writer", InterventionDecision{Dispatch: &DispatchOp{Agent: "writer", Task: "写第1章"}, Reason: "r"}, InterventionFacts{Phase: string(domain.PhaseOutline)}, true},
+		{"规划期允许 architect", InterventionDecision{Dispatch: &DispatchOp{Agent: "architect_long", Task: "补齐大纲"}, Reason: "r"}, InterventionFacts{Phase: string(domain.PhaseOutline)}, false},
 		{"一次性暂停缺条件", InterventionDecision{Hold: &AdvanceHoldOp{Reason: "停"}, Reason: "r"}, writing, true},
 		{"一次性暂停缺摘要", InterventionDecision{Hold: &AdvanceHoldOp{After: domain.AdvanceHoldAtBoundary}, Reason: "r"}, writing, true},
 		{"取消一次性暂停", InterventionDecision{Hold: &AdvanceHoldOp{Cancel: true}, Answer: "继续", Reason: "r"}, writing, false},
@@ -207,16 +209,22 @@ func TestInterventionDecision_ValidateAgainst(t *testing.T) {
 }
 
 func TestFailureDecision_Validate(t *testing.T) {
+	facts := FailureFacts{Kind: "worker_failure", Phase: string(domain.PhaseWriting)}
 	ok := FailureDecision{Action: "reroute", Dispatch: &DispatchOp{Agent: "architect_long", Task: "先 expand_arc"}, Reason: "错误指明出路"}
-	if err := ok.Validate(); err != nil {
+	if err := ok.ValidateAgainst(facts); err != nil {
 		t.Fatalf("合法 reroute 被拒: %v", err)
 	}
 	bad := FailureDecision{Action: "reroute", Reason: "r"}
-	if err := bad.Validate(); err == nil {
+	if err := bad.ValidateAgainst(facts); err == nil {
 		t.Fatal("reroute 无 dispatch 应被拒")
 	}
-	if err := (&FailureDecision{Action: "escalate", Reason: "r"}).Validate(); err == nil {
+	if err := (&FailureDecision{Action: "escalate", Reason: "r"}).ValidateAgainst(facts); err == nil {
 		t.Fatal("非法 action 应被拒")
+	}
+	planning := FailureFacts{Kind: "worker_failure", Phase: string(domain.PhaseOutline)}
+	writer := FailureDecision{Action: "reroute", Dispatch: &DispatchOp{Agent: "writer", Task: "写第1章"}, Reason: "尝试绕过规划"}
+	if err := writer.ValidateAgainst(planning); err == nil {
+		t.Fatal("失败裁定不得在规划期派发 writer")
 	}
 }
 
@@ -241,7 +249,10 @@ func TestCollectInterventionFacts(t *testing.T) {
 		t.Fatalf("append decision: %v", err)
 	}
 
-	f := CollectInterventionFacts(st)
+	f, err := CollectInterventionFacts(st)
+	if err != nil {
+		t.Fatalf("CollectInterventionFacts: %v", err)
+	}
 	if f.NovelName != "测试书" {
 		t.Fatalf("facts 应含书名, got %+v", f)
 	}
@@ -266,7 +277,10 @@ func TestCollectInterventionFacts(t *testing.T) {
 	if err := st.Progress.ReopenContinue(); err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	f = CollectInterventionFacts(st)
+	f, err = CollectInterventionFacts(st)
+	if err != nil {
+		t.Fatalf("CollectInterventionFacts after reopen: %v", err)
+	}
 	if f.ReopenCount != 1 || f.Phase != string(domain.PhaseWriting) {
 		t.Fatalf("重开事实缺失: phase=%s reopen_count=%d", f.Phase, f.ReopenCount)
 	}

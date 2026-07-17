@@ -29,7 +29,7 @@ type Store struct {
 	Simulation  *SimulationStore
 	Decisions   *DecisionStore
 
-	crossMu sync.Mutex // 保护跨域原子操作
+	crossMu sync.Mutex // 串行化跨域协调；不代表多个文件具备事务原子性
 }
 
 // NewStore 创建状态管理器，dir 为小说输出根目录。
@@ -102,31 +102,59 @@ func (s *Store) CheckConsistency() []string {
 }
 
 // FoundationMissing 返回基础设定中尚缺的项，按用于 Prompt/Reminder 的稳定顺序排列。
-// 长篇模式（已有 layered_outline）额外要求 compass。
-func (s *Store) FoundationMissing() []string {
+// 长篇模式（已有 layered_outline）额外要求 compass。读取失败必须原样返回，不能把
+// 损坏或无权限读取的工件误判成“尚未创建”，否则调用方可能覆盖真实数据。
+func (s *Store) FoundationMissing() ([]string, error) {
 	var missing []string
-	if p, _ := s.Outline.LoadPremise(); p == "" {
+	premise, err := s.Outline.LoadPremise()
+	if err != nil {
+		return nil, fmt.Errorf("load premise: %w", err)
+	}
+	if premise == "" {
 		missing = append(missing, "premise")
 	}
-	if o, _ := s.Outline.LoadOutline(); len(o) == 0 {
+	outline, err := s.Outline.LoadOutline()
+	if err != nil {
+		return nil, fmt.Errorf("load outline: %w", err)
+	}
+	if len(outline) == 0 {
 		missing = append(missing, "outline")
 	}
-	if c, _ := s.Characters.Load(); len(c) == 0 {
+	characters, err := s.Characters.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load characters: %w", err)
+	}
+	if len(characters) == 0 {
 		missing = append(missing, "characters")
 	}
-	if r, _ := s.World.LoadWorldRules(); len(r) == 0 {
+	rules, err := s.World.LoadWorldRules()
+	if err != nil {
+		return nil, fmt.Errorf("load world rules: %w", err)
+	}
+	if len(rules) == 0 {
 		missing = append(missing, "world_rules")
 	}
-	if layered, _ := s.Outline.LoadLayeredOutline(); len(layered) > 0 {
-		if c, _ := s.Outline.LoadCompass(); c == nil {
+	layered, err := s.Outline.LoadLayeredOutline()
+	if err != nil {
+		return nil, fmt.Errorf("load layered outline: %w", err)
+	}
+	if len(layered) > 0 {
+		compass, err := s.Outline.LoadCompass()
+		if err != nil {
+			return nil, fmt.Errorf("load compass: %w", err)
+		}
+		if compass == nil {
 			missing = append(missing, "compass")
 		}
 	}
-	return missing
+	return missing, nil
 }
 
 // Init 创建所需的子目录结构。
 func (s *Store) Init() error {
+	if err := s.Checkpoints.InitError(); err != nil {
+		return fmt.Errorf("load checkpoints: %w", err)
+	}
 	return s.Progress.io.EnsureDirs([]string{
 		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks", "meta/sessions", "meta/sessions/agents",
 	})
@@ -188,29 +216,22 @@ func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
 	return s.Progress.saveUnlocked(p)
 }
 
-// ClearHandledSteer 原子性清除 PendingSteer 并重置 FlowSteering 状态
-// （RunMeta + Progress 联动）。
+// ClearHandledSteer 清除 PendingSteer 并重置旧版 FlowSteering 状态。
+// 两个文件无法组成文件系统事务，因此先写可重复的 Progress，最后才删除恢复意图；
+// 任一步失败都至少保留 PendingSteer，下一次 Resume 可以安全重放。
 func (s *Store) ClearHandledSteer() error {
 	s.crossMu.Lock()
 	defer s.crossMu.Unlock()
 
 	s.RunMeta.io.mu.Lock()
 	defer s.RunMeta.io.mu.Unlock()
+	s.Progress.io.mu.Lock()
+	defer s.Progress.io.mu.Unlock()
 
 	meta, err := s.RunMeta.loadUnlocked()
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if meta != nil && meta.PendingSteer != "" {
-		meta.PendingSteer = ""
-		if err := s.RunMeta.saveUnlocked(*meta); err != nil {
-			return err
-		}
-	}
-
-	s.Progress.io.mu.Lock()
-	defer s.Progress.io.mu.Unlock()
-
 	p, err := s.Progress.loadUnlocked()
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -221,6 +242,12 @@ func (s *Store) ClearHandledSteer() error {
 		}
 		p.Flow = domain.FlowWriting
 		if err := s.Progress.saveUnlocked(p); err != nil {
+			return err
+		}
+	}
+	if meta != nil && meta.PendingSteer != "" {
+		meta.PendingSteer = ""
+		if err := s.RunMeta.saveUnlocked(*meta); err != nil {
 			return err
 		}
 	}

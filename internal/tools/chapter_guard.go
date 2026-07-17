@@ -8,18 +8,26 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// EnsureChapterExpanded verifies that a chapter is inside the currently
-// expanded layered outline. Non-layered books and non-writing phases have no
-// layered range constraint.
+// EnsureChapterExpanded verifies that chapter work is in the writing phase and,
+// for layered books, inside the currently expanded outline.
 func EnsureChapterExpanded(st *store.Store, chapter int) error {
-	if st == nil || chapter <= 0 {
-		return nil
+	if st == nil {
+		return fmt.Errorf("store 不能为空: %w", errs.ErrToolPrecondition)
+	}
+	if chapter <= 0 {
+		return fmt.Errorf("chapter must be > 0: %w", errs.ErrToolArgs)
 	}
 	progress, err := st.Progress.Load()
 	if err != nil {
 		return fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
 	}
-	if progress == nil || !progress.Layered || progress.Phase != domain.PhaseWriting {
+	if progress == nil {
+		return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+	}
+	if progress.Phase != domain.PhaseWriting {
+		return fmt.Errorf("章节写作仅允许在 writing 阶段（当前 phase=%s）: %w", progress.Phase, errs.ErrToolPrecondition)
+	}
+	if !progress.Layered {
 		return nil
 	}
 	boundary, err := st.Outline.CheckArcBoundary(chapter)

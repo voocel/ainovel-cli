@@ -1,11 +1,12 @@
 package store
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -63,38 +64,75 @@ func (s *DecisionStore) Append(rec DecisionRecord) (DecisionRecord, error) {
 	if err != nil {
 		return rec, fmt.Errorf("marshal decision: %w", err)
 	}
-	if err := s.io.AppendLine(decisionsFile, append(data, '\n')); err != nil {
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	// 上一次追加可能在换行写入前崩溃。先删除协议上可证明未提交的尾部，避免把新 JSON
+	// 直接拼到残行后面；完整换行记录绝不自动修改。
+	if _, err := s.committedDataUnlocked(); err != nil {
+		return rec, fmt.Errorf("repair decision tail: %w", err)
+	}
+	if err := s.io.AppendLineUnlocked(decisionsFile, append(data, '\n')); err != nil {
 		return rec, err
 	}
 	return rec, nil
 }
 
-// Recent 返回最近 n 条记录(旧→新);文件缺失返回空。损坏行跳过——审计文件
-// 尾部截断(崩溃)不应让读取整体失败。
+// Recent 返回最近 n 条记录(旧→新);文件缺失返回空。
+//
+// 已提交损坏行必须显式返回错误——Arbiter 不能在缺失部分历史的事实包上继续裁定。
+// 崩溃打断的尾部残行（末字节非 '\n'）由 committedDataUnlocked 截断并显式告警；这不是
+// 猜测式修复，因为本文件协议规定只有换行结束的记录才算提交。
 func (s *DecisionStore) Recent(n int) ([]DecisionRecord, error) {
-	s.io.mu.RLock()
-	defer s.io.mu.RUnlock()
-	f, err := os.Open(s.io.path(decisionsFile))
+	s.io.mu.Lock()
+	defer s.io.mu.Unlock()
+	data, err := s.committedDataUnlocked()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	defer f.Close()
-
-	var all []DecisionRecord
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for sc.Scan() {
-		var rec DecisionRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			continue
-		}
-		all = append(all, rec)
+	all, err := parseDecisionRecords(data)
+	if err != nil {
+		return nil, err
 	}
 	if n > 0 && len(all) > n {
 		all = all[len(all)-n:]
+	}
+	return all, nil
+}
+
+// committedDataUnlocked 返回完整换行记录，并把换行之后的残留字节从磁盘截断。调用方
+// 必须持有 io.mu 写锁。截断是幂等的，失败时原文件保留，错误明确上抛。
+func (s *DecisionStore) committedDataUnlocked() ([]byte, error) {
+	data, err := s.io.ReadFileUnlocked(decisionsFile)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return data, nil
+	}
+	keep := bytes.LastIndexByte(data, '\n') + 1
+	if err := os.Truncate(s.io.path(decisionsFile), int64(keep)); err != nil {
+		return nil, err
+	}
+	slog.Warn("已修复裁定审计的未提交尾部",
+		"module", "store", "file", decisionsFile, "discarded_bytes", len(data)-keep)
+	return data[:keep], nil
+}
+
+func parseDecisionRecords(data []byte) ([]DecisionRecord, error) {
+	var all []DecisionRecord
+	lines := bytes.Split(data, []byte{'\n'})
+	for i, raw := range lines {
+		if i == len(lines)-1 && len(raw) == 0 {
+			break
+		}
+		var rec DecisionRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			return nil, fmt.Errorf("parse %s line %d: %w", decisionsFile, i+1, err)
+		}
+		all = append(all, rec)
 	}
 	return all, nil
 }

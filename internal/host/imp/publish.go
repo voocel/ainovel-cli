@@ -32,7 +32,9 @@ func publishFoundation(st *store.Store, f *Foundation) error {
 		return fmt.Errorf("premise：%w", err)
 	}
 	if name := domain.ExtractNovelNameFromPremise(f.Premise); name != "" {
-		_ = st.Progress.SetNovelName(name) // 展示用书名，失败不影响正式状态一致性
+		if err := st.Progress.SetNovelName(name); err != nil {
+			return fmt.Errorf("novel name：%w", err)
+		}
 	}
 	if err := st.Progress.UpdatePhase(domain.PhasePremise); err != nil {
 		return fmt.Errorf("phase premise：%w", err)
@@ -87,12 +89,19 @@ func publishFoundation(st *store.Store, f *Foundation) error {
 	if _, err := st.Checkpoints.AppendArtifact(domain.GlobalScope(), "compass", "meta/compass.json"); err != nil {
 		return fmt.Errorf("checkpoint compass：%w", err)
 	}
-	// foundation 完整 → 推进 writing 阶段
-	if len(st.FoundationMissing()) == 0 {
-		if p, _ := st.Progress.Load(); p != nil && p.Phase != domain.PhaseWriting && p.Phase != domain.PhaseComplete {
-			if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
-				return fmt.Errorf("phase writing：%w", err)
-			}
+	// 导入 Foundation 的全部正式写入均已成功，可以显式进入 writing。
+	// 不能复用普通创作流程的 FoundationMissing：导入允许 world_rules 为空，
+	// 把“合法空值”当成缺失会令进度永远停在 outline，随后 StartChapter 被阶段门禁拒绝。
+	p, err := st.Progress.Load()
+	if err != nil {
+		return fmt.Errorf("load progress：%w", err)
+	}
+	if p == nil {
+		return fmt.Errorf("load progress：progress 未初始化")
+	}
+	if p.Phase != domain.PhaseWriting && p.Phase != domain.PhaseComplete {
+		if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+			return fmt.Errorf("phase writing：%w", err)
 		}
 	}
 	return nil
@@ -144,12 +153,20 @@ func jsonEqual(a, b any) bool {
 
 // publishChapter 复用 commit_chapter 发布单章；已完成章节由其幂等检查跳过（RFC §12.3）。
 func publishChapter(ctx context.Context, st *store.Store, commit ChapterCommitter, chapter int, content string, f ImportedChapterFacts) error {
-	if st.Progress.IsChapterCompleted(chapter) {
+	completed, err := st.Progress.IsChapterCompleted(chapter)
+	if err != nil {
+		return fmt.Errorf("load progress ch%d：%w", chapter, err)
+	}
+	if completed {
 		// 崩溃可能落在 MarkChapterComplete 与 ClearPendingCommit 之间：pending_commit 残留
 		// 指向本章。直接跳过会绕开 commit 工具专为此窗口准备的清理分支（补 checkpoint+清残留），
 		// 下一章 Execute 将以「存在未恢复的章节提交」拒绝，导入每次重跑都死在同一处且
 		// 需手工删 meta/pending_commit.json 才能解锁。命中残留时仍走工具幂等路径完成清理。
-		if pending, _ := st.Signals.LoadPendingCommit(); pending != nil && pending.Chapter == chapter {
+		pending, err := st.Signals.LoadPendingCommit()
+		if err != nil {
+			return fmt.Errorf("load pending commit ch%d：%w", chapter, err)
+		}
+		if pending != nil && pending.Chapter == chapter {
 			raw, err := json.Marshal(commitArgs(chapter, f))
 			if err != nil {
 				return fmt.Errorf("marshal commit ch%d：%w", chapter, err)

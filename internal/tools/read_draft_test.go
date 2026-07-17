@@ -143,6 +143,9 @@ func TestDraftChapterWrite(t *testing.T) {
 	if err := store.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
+	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
+	}
 
 	tool := NewDraftChapterTool(store)
 	args, _ := json.Marshal(map[string]any{
@@ -197,6 +200,9 @@ func TestDraftChapterAppend(t *testing.T) {
 	}
 	if err := store.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
 	}
 	if err := store.Drafts.SaveDraft(2, "前半部分。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
@@ -260,6 +266,9 @@ func TestPlanChapterMarksInProgress(t *testing.T) {
 	}
 	if err := store.Progress.Init("test", 10); err != nil {
 		t.Fatalf("InitProgress: %v", err)
+	}
+	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("UpdatePhase: %v", err)
 	}
 
 	tool := NewPlanChapterTool(store)

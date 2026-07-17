@@ -269,7 +269,10 @@ func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain
 					Chapters: volumes[vi].Arcs[ai].Chapters,
 				}
 				if reflect.DeepEqual(current, expansion) {
-					return volumes, nil
+					// 幂等重试仍须重写下方所有派生视图；上次可能只完成了
+					// layered_outline.json，尚未写 flat outline/Markdown。
+					found = true
+					break
 				}
 				return nil, fmt.Errorf("arc already expanded: volume=%d, arc=%d", volumeIdx, arcIdx)
 			}
@@ -309,10 +312,17 @@ func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.
 	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
 		return nil, fmt.Errorf("load layered_outline: %w", err)
 	}
-	if err := validateAppendVolume(volumes, vol); err != nil {
-		return nil, err
+	// AppendVolume 的下一步还要更新 Progress。若进程在“大纲已追加、Progress
+	// 未更新”之间中断，恢复会用同一持久化载荷重试；完全相同的末卷应视为幂等，
+	// 让同参数重试继续补齐 Progress，而不是因重复 Index 永久卡死。
+	if len(volumes) == 0 || !reflect.DeepEqual(volumes[len(volumes)-1], vol) {
+		if err := validateAppendVolume(volumes, vol); err != nil {
+			return nil, err
+		}
+		volumes = append(volumes, vol)
 	}
-	volumes = append(volumes, vol)
+	// 即使末卷已存在也重写全部派生视图；上次可能恰好在 layered JSON 落盘后、
+	// flat outline/Markdown 写入前中断。
 	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
 		return nil, err
 	}
@@ -428,45 +438,77 @@ type ChapterFeedback struct {
 
 const outlineFeedbackFile = "meta/outline_feedback.jsonl"
 
-// AppendOutlineFeedback 追加一条 writer 反馈(best-effort 附属事实,不参与 commit 原子性)。
+// AppendOutlineFeedback 追加一条 writer 反馈。相同章节与内容视为同一事实，
+// 使 commit 在 ProgressMarked 前崩溃重放时不会重复累加附属反馈。
 func (s *OutlineStore) AppendOutlineFeedback(fb ChapterFeedback) error {
-	if fb.At == "" {
-		fb.At = time.Now().Format(time.RFC3339)
-	}
-	data, err := json.Marshal(fb)
-	if err != nil {
-		return err
-	}
-	return s.io.AppendLine(outlineFeedbackFile, append(data, '\n'))
+	return s.io.WithWriteLock(func() error {
+		existing, err := s.io.ReadFileUnlocked(outlineFeedbackFile)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		currentFeedback, err := parseOutlineFeedback(existing)
+		if err != nil {
+			return err
+		}
+		for _, current := range currentFeedback {
+			if current.Chapter == fb.Chapter && current.Deviation == fb.Deviation && current.Suggestion == fb.Suggestion {
+				return nil
+			}
+		}
+		if fb.At == "" {
+			fb.At = time.Now().Format(time.RFC3339)
+		}
+		data, err := json.Marshal(fb)
+		if err != nil {
+			return err
+		}
+		return s.io.AppendLineUnlocked(outlineFeedbackFile, append(data, '\n'))
+	})
 }
 
-// LoadPendingOutlineFeedback 读取未消费的反馈(旧→新);损坏行跳过。
-func (s *OutlineStore) LoadPendingOutlineFeedback() []ChapterFeedback {
+// LoadPendingOutlineFeedback 读取未消费的反馈(旧→新)。损坏行显式返回错误，
+// 防止 Architect 在缺失部分反馈的上下文上继续结构操作并随后清空原文件。
+func (s *OutlineStore) LoadPendingOutlineFeedback() ([]ChapterFeedback, error) {
 	s.io.mu.RLock()
 	defer s.io.mu.RUnlock()
 	data, err := os.ReadFile(s.io.path(outlineFeedbackFile))
-	if err != nil {
-		return nil
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return parseOutlineFeedback(data)
+}
+
+func parseOutlineFeedback(data []byte) ([]ChapterFeedback, error) {
 	var out []ChapterFeedback
-	for _, line := range strings.Split(string(data), "\n") {
+	for lineNo, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		var fb ChapterFeedback
-		if json.Unmarshal([]byte(line), &fb) == nil {
-			out = append(out, fb)
+		if err := json.Unmarshal([]byte(line), &fb); err != nil {
+			return nil, fmt.Errorf("parse %s line %d: %w", outlineFeedbackFile, lineNo+1, err)
 		}
+		out = append(out, fb)
 	}
-	return out
+	return out, nil
 }
 
 // ClearOutlineFeedback 清空反馈池(architect 结构操作成功 = 反馈已被参考)。
 func (s *OutlineStore) ClearOutlineFeedback() error {
 	s.io.mu.Lock()
 	defer s.io.mu.Unlock()
-	err := os.Remove(s.io.path(outlineFeedbackFile))
+	data, err := os.ReadFile(s.io.path(outlineFeedbackFile))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := parseOutlineFeedback(data); err != nil {
+		return err
+	}
+	err = os.Remove(s.io.path(outlineFeedbackFile))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

@@ -26,6 +26,12 @@ func TestPublishChapterHandlesStalePendingCommit(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Progress.Init("test", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Progress.StartChapter(1); err != nil {
 		t.Fatal(err)
 	}

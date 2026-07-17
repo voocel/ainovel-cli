@@ -59,7 +59,12 @@ func (s *CharacterStore) LoadSnapshots(volume, arc int) ([]domain.CharacterSnaps
 
 // LoadLatestSnapshots 加载最近一次角色快照（按卷弧倒序查找）。
 func (s *CharacterStore) LoadLatestSnapshots() ([]domain.CharacterSnapshot, error) {
-	volumes, _ := s.outline.LoadLayeredOutline()
+	// 大纲缺失→(nil,nil) 已在 LoadLayeredOutline 内消化;损坏必须上抛，否则角色快照
+	// 会随分层大纲损坏一起静默消失，写作丢失角色连续性却无人知晓。
+	volumes, err := s.outline.LoadLayeredOutline()
+	if err != nil {
+		return nil, err
+	}
 	if len(volumes) == 0 {
 		return nil, nil
 	}

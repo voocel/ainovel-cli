@@ -446,13 +446,16 @@ func (t *ContextTool) architectReferences() map[string]string {
 // 与 save_foundation 工具共用 store.FoundationMissing 判定逻辑，保证 LLM 从
 // novel_context 看到的 ready/missing 与 save_foundation 返回的 foundation_ready
 // 永远一致（长篇 compass 必需项等细节不会漂移）。
-func (t *ContextTool) foundationStatus() map[string]any {
-	missing := t.store.FoundationMissing()
+func (t *ContextTool) foundationStatus() (map[string]any, error) {
+	missing, err := t.store.FoundationMissing()
+	if err != nil {
+		return nil, err
+	}
 	status := map[string]any{"ready": len(missing) == 0}
 	if len(missing) > 0 {
 		status["missing"] = missing
 	}
-	return status
+	return status, nil
 }
 
 // ContextSummary 返回当前状态的简要摘要（供日志使用）。

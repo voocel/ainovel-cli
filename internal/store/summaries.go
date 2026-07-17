@@ -55,16 +55,22 @@ func (s *SummaryStore) SaveArcSummary(sum domain.ArcSummary) error {
 	return s.io.WriteJSON(fmt.Sprintf("summaries/arc-v%02da%02d.json", sum.Volume, sum.Arc), sum)
 }
 
-// HasArcSummary 检查指定弧是否已保存摘要。读失败按"未保存"处理。
-func (s *SummaryStore) HasArcSummary(volume, arc int) bool {
+// HasArcSummary 检查指定弧是否已保存摘要。
+func (s *SummaryStore) HasArcSummary(volume, arc int) (bool, error) {
 	sum, err := s.LoadArcSummary(volume, arc)
-	return err == nil && sum != nil
+	if err != nil {
+		return false, err
+	}
+	return sum != nil, nil
 }
 
-// HasVolumeSummary 检查指定卷是否已保存摘要。读失败按"未保存"处理。
-func (s *SummaryStore) HasVolumeSummary(volume int) bool {
+// HasVolumeSummary 检查指定卷是否已保存摘要。
+func (s *SummaryStore) HasVolumeSummary(volume int) (bool, error) {
 	sum, err := s.LoadVolumeSummary(volume)
-	return err == nil && sum != nil
+	if err != nil {
+		return false, err
+	}
+	return sum != nil, nil
 }
 
 // LoadArcSummary 读取指定弧的摘要。

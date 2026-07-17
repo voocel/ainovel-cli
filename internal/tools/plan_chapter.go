@@ -57,7 +57,11 @@ func (t *PlanChapterTool) Execute(_ context.Context, args json.RawMessage) (json
 	if plan.Chapter <= 0 {
 		return nil, fmt.Errorf("chapter must be > 0: %w", errs.ErrToolArgs)
 	}
-	if t.store.Progress.IsChapterCompleted(plan.Chapter) {
+	completed, err := t.store.Progress.IsChapterCompleted(plan.Chapter)
+	if err != nil {
+		return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+	}
+	if completed {
 		return json.Marshal(map[string]any{
 			"chapter":   plan.Chapter,
 			"skipped":   true,

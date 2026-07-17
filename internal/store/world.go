@@ -328,18 +328,26 @@ func (s *WorldStore) SaveReview(r domain.ReviewEntry) error {
 }
 
 // HasArcReview 检查指定章节（弧末章）是否已保存 scope=arc 的评审。
-// 读失败按"未保存"处理，让 Router 倾向于重派而不是跳过。
-func (s *WorldStore) HasArcReview(chapter int) bool {
+func (s *WorldStore) HasArcReview(chapter int) (bool, error) {
 	rv, err := s.LoadReview(chapter)
-	return err == nil && rv != nil && rv.Scope == "arc"
+	if err != nil {
+		return false, err
+	}
+	return rv != nil && rv.Scope == "arc", nil
 }
 
 // HasGlobalReview 检查指定章节是否已保存 scope=global 的全局审阅
 // (save_review 落盘为 reviews/%02d-global.json;非分层书按 ReviewInterval 触发)。
-func (s *WorldStore) HasGlobalReview(chapter int) bool {
+func (s *WorldStore) HasGlobalReview(chapter int) (bool, error) {
 	var r domain.ReviewEntry
 	err := s.io.ReadJSON(fmt.Sprintf("reviews/%02d-global.json", chapter), &r)
-	return err == nil && r.Scope == "global"
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return r.Scope == "global", nil
 }
 
 // LoadReview 读取章节审阅结果。

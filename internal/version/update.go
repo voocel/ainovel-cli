@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type release struct {
 type releaseAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
 }
 
 func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
@@ -68,6 +70,10 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	checksumAsset, err := selectChecksumAsset(rel, opts.BinaryName)
+	if err != nil {
+		return nil, err
+	}
 
 	tmp, err := os.MkdirTemp("", "ainovel-cli-update-*")
 	if err != nil {
@@ -76,7 +82,14 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	defer os.RemoveAll(tmp)
 
 	archivePath := filepath.Join(tmp, "pkg.tar.gz")
-	if err := download(ctx, client, asset.BrowserDownloadURL, archivePath); err != nil {
+	if err := download(ctx, client, asset.BrowserDownloadURL, archivePath, asset.Size); err != nil {
+		return nil, err
+	}
+	checksumPath := filepath.Join(tmp, "checksums.txt")
+	if err := download(ctx, client, checksumAsset.BrowserDownloadURL, checksumPath, checksumAsset.Size); err != nil {
+		return nil, err
+	}
+	if err := verifyChecksum(archivePath, checksumPath, asset.Name); err != nil {
 		return nil, err
 	}
 	extracted, err := extractBinary(archivePath, tmp, opts.BinaryName)
@@ -128,12 +141,26 @@ func selectAsset(rel *release, binaryName string) (releaseAsset, error) {
 	if err != nil {
 		return releaseAsset{}, err
 	}
+	versions := []string{strings.TrimPrefix(rel.TagName, "v"), rel.TagName}
+	for _, version := range versions {
+		expected := binaryName + "_" + version + suffix
+		for _, asset := range rel.Assets {
+			if asset.Name == expected && asset.BrowserDownloadURL != "" {
+				return asset, nil
+			}
+		}
+	}
+	return releaseAsset{}, fmt.Errorf("release %s 未找到当前平台的精确安装包 %s_<version>%s", rel.TagName, binaryName, suffix)
+}
+
+func selectChecksumAsset(rel *release, binaryName string) (releaseAsset, error) {
+	expected := binaryName + "_checksums.txt"
 	for _, asset := range rel.Assets {
-		if strings.Contains(asset.Name, binaryName+"_") && strings.HasSuffix(asset.Name, suffix) && asset.BrowserDownloadURL != "" {
+		if asset.Name == expected && asset.BrowserDownloadURL != "" {
 			return asset, nil
 		}
 	}
-	return releaseAsset{}, fmt.Errorf("release %s 未找到当前平台安装包 *%s", rel.TagName, suffix)
+	return releaseAsset{}, fmt.Errorf("release %s 缺少校验文件 %s，拒绝自更新", rel.TagName, expected)
 }
 
 func assetSuffix() (string, error) {
@@ -158,7 +185,7 @@ func assetSuffix() (string, error) {
 	return "_" + osName + "_" + arch + ".tar.gz", nil
 }
 
-func download(ctx context.Context, client *http.Client, url, dst string) error {
+func download(ctx context.Context, client *http.Client, url, dst string, expectedSize int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -176,8 +203,53 @@ func download(ctx context.Context, client *http.Client, url, dst string) error {
 		return fmt.Errorf("create archive: %w", err)
 	}
 	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	written, err := io.Copy(f, resp.Body)
+	if err != nil {
 		return fmt.Errorf("write archive: %w", err)
+	}
+	if expectedSize > 0 && written != expectedSize {
+		return fmt.Errorf("download size mismatch: got %d bytes, expected %d", written, expectedSize)
+	}
+	return nil
+}
+
+// verifyChecksum 校验 GoReleaser 生成的 SHA256 清单。清单与安装包必须来自同一个
+// release；缺项、格式错误或摘要不匹配均拒绝替换当前可执行文件。
+func verifyChecksum(archivePath, checksumPath, assetName string) error {
+	data, err := os.ReadFile(checksumPath)
+	if err != nil {
+		return fmt.Errorf("read checksum file: %w", err)
+	}
+	var expected string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == assetName {
+			expected = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if expected == "" {
+		return fmt.Errorf("checksum 清单中未找到 %s", assetName)
+	}
+	if len(expected) != sha256.Size*2 {
+		return fmt.Errorf("%s 的 SHA256 格式非法", assetName)
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open archive for checksum: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash archive: %w", err)
+	}
+	actual := fmt.Sprintf("%x", h.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("%s SHA256 校验失败：got %s, expected %s", assetName, actual, expected)
 	}
 	return nil
 }

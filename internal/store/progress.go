@@ -105,7 +105,8 @@ func (s *ProgressStore) UpdatePhase(phase domain.Phase) error {
 	})
 }
 
-// StartChapter 标记某章进入写作中状态。纯 IO，不做状态验证。
+// StartChapter 标记某章进入写作中状态。它不能承担阶段迁移职责；调用方必须先由
+// foundation/import 流程把 Progress 明确推进到 writing，避免错误派单绕过规划阶段。
 func (s *ProgressStore) StartChapter(chapter int) error {
 	if chapter <= 0 {
 		return fmt.Errorf("chapter must be > 0")
@@ -116,9 +117,11 @@ func (s *ProgressStore) StartChapter(chapter int) error {
 			return err
 		}
 		if p == nil {
-			p = &domain.Progress{}
+			return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
 		}
-		p.Phase = domain.PhaseWriting
+		if p.Phase != domain.PhaseWriting {
+			return fmt.Errorf("章节写作仅允许在 writing 阶段（当前 phase=%s）: %w", p.Phase, errs.ErrToolPrecondition)
+		}
 		if p.Flow != domain.FlowRewriting && p.Flow != domain.FlowPolishing {
 			p.Flow = domain.FlowWriting
 		}
@@ -131,13 +134,17 @@ func (s *ProgressStore) StartChapter(chapter int) error {
 	})
 }
 
-// IsChapterCompleted 检查章节是否已提交完成。
-func (s *ProgressStore) IsChapterCompleted(chapter int) bool {
+// IsChapterCompleted 检查章节是否已提交完成。读取失败显式返回，不能把损坏的
+// progress 当成“未完成”后继续覆盖章节。
+func (s *ProgressStore) IsChapterCompleted(chapter int) (bool, error) {
 	p, err := s.Load()
-	if err != nil || p == nil {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return slices.Contains(p.CompletedChapters, chapter)
+	if p == nil {
+		return false, nil
+	}
+	return slices.Contains(p.CompletedChapters, chapter), nil
 }
 
 // MarkChapterComplete 标记章节完成，原子性更新进度。
@@ -418,14 +425,18 @@ func (s *ProgressStore) ClearPendingRewrites() error {
 }
 
 // ValidateChapterWork 校验当前章节是否允许被规划或提交。
-// 打磨/重写流程下，只允许处理 PendingRewrites 中的章节。
+// Writer 只能在 writing 阶段工作；打磨/重写流程下，只允许处理 PendingRewrites
+// 中的章节。阶段约束在 Store 边界再守一次，避免错误的 Arbiter 派单绕过 Router。
 func (s *ProgressStore) ValidateChapterWork(chapter int) error {
 	p, err := s.Load()
 	if err != nil {
 		return err
 	}
 	if p == nil {
-		return nil
+		return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+	}
+	if p.Phase != domain.PhaseWriting {
+		return fmt.Errorf("章节写作仅允许在 writing 阶段（当前 phase=%s）: %w", p.Phase, errs.ErrToolPrecondition)
 	}
 	if p.Flow != domain.FlowRewriting && p.Flow != domain.FlowPolishing {
 		return nil

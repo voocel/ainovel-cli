@@ -82,10 +82,23 @@ func (t *EditChapterTool) Execute(ctx context.Context, args json.RawMessage) (js
 	if a.OldString == a.NewString {
 		return nil, fmt.Errorf("old_string 与 new_string 相同，无需修改: %w", errs.ErrToolArgs)
 	}
+	if err := t.store.Progress.ValidateChapterWork(a.Chapter); err != nil {
+		return nil, err
+	}
+	if err := EnsureChapterExpanded(t.store, a.Chapter); err != nil {
+		return nil, err
+	}
 
 	// 归属检查：已完成章节必须在重写队列中，避免污染终稿
-	if t.store.Progress.IsChapterCompleted(a.Chapter) {
-		progress, _ := t.store.Progress.Load()
+	completed, err := t.store.Progress.IsChapterCompleted(a.Chapter)
+	if err != nil {
+		return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+	}
+	if completed {
+		progress, err := t.store.Progress.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load progress: %w: %w", errs.ErrStoreRead, err)
+		}
 		if progress == nil || !slices.Contains(progress.PendingRewrites, a.Chapter) {
 			return nil, fmt.Errorf("第 %d 章已完成且不在 PendingRewrites 队列中，不能编辑；需修改请先由 editor 评审触发重写/打磨: %w", a.Chapter, errs.ErrToolPrecondition)
 		}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -221,6 +222,10 @@ func runSelfUpdate(target string) error {
 }
 
 func loadPrompt(opts cliOptions) (string, error) {
+	return loadPromptFrom(opts, os.Stdin)
+}
+
+func loadPromptFrom(opts cliOptions, stdin io.Reader) (string, error) {
 	if opts.PromptFile == "" {
 		return strings.TrimSpace(opts.Prompt), nil
 	}
@@ -228,7 +233,7 @@ func loadPrompt(opts cliOptions) (string, error) {
 	var data []byte
 	var err error
 	if opts.PromptFile == "-" {
-		data, err = os.ReadFile("/dev/stdin")
+		data, err = io.ReadAll(stdin)
 	} else {
 		data, err = os.ReadFile(opts.PromptFile)
 	}

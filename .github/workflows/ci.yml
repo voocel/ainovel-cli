@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format check
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        env:
+          GOWORK: "off"
+        run: go vet ./...
+
+      - name: Test
+        env:
+          GOWORK: "off"
+        run: go test -buildvcs=false -count=1 ./...
+
+      - name: Race test critical state paths
+        if: runner.os == 'Linux'
+        env:
+          GOWORK: "off"
+        run: go test -race -buildvcs=false -count=1 ./internal/host ./internal/store ./internal/tools

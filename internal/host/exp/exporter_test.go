@@ -23,6 +23,9 @@ func newTestStore(t *testing.T, novelName string, completed []int) (*store.Store
 	if err := s.Progress.Init(novelName, len(completed)); err != nil {
 		t.Fatalf("init progress: %v", err)
 	}
+	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("phase writing: %v", err)
+	}
 	for _, ch := range completed {
 		if err := s.Drafts.SaveFinalChapter(ch, fmt.Sprintf("正文 ch %d。", ch)); err != nil {
 			t.Fatalf("save chapter %d: %v", ch, err)

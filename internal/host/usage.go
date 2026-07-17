@@ -66,7 +66,9 @@ type UsageTracker struct {
 
 	// saveCh 由 Record 在累加后非阻塞触发；autoSaveLoop 监听并按 debounce 落盘。
 	// buffered=1：连续多次 Record 折叠为一次落盘信号；满了直接丢，下个 tick 一并写。
-	saveCh chan struct{}
+	saveCh       chan struct{}
+	autoSaveMu   sync.Mutex
+	autoSaveDone chan struct{}
 
 	// onCost 在每次记账后于锁外携带最新累计成本调用（BudgetSentinel 越线检测）。
 	// 必须在并发 Record 开始前通过 SetOnCost 设置，之后只读。
@@ -488,7 +490,28 @@ func (t *UsageTracker) StartAutoSave(ctx context.Context) {
 	if t == nil || t.store == nil {
 		return
 	}
-	go t.autoSaveLoop(ctx)
+	done := make(chan struct{})
+	t.autoSaveMu.Lock()
+	t.autoSaveDone = done
+	t.autoSaveMu.Unlock()
+	go func() {
+		defer close(done)
+		t.autoSaveLoop(ctx)
+	}()
+}
+
+// WaitAutoSave 等待取消后的最后一次 flush 完成。Host.Close 先调用 cancel，
+// 再等待这里，避免 autoSaveLoop 与退出前 SaveNow 并发写同一快照。
+func (t *UsageTracker) WaitAutoSave() {
+	if t == nil {
+		return
+	}
+	t.autoSaveMu.Lock()
+	done := t.autoSaveDone
+	t.autoSaveMu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // autoSaveLoop 把高频 dirty 信号节流为 500ms 一次的落盘。

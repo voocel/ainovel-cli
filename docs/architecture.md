@@ -35,7 +35,7 @@
 
 ### 2.2 工具是事实层唯一接口
 
-所有与文件系统、Progress、Checkpoint 的交互都由工具完成。**写类工具必须原子三件套**：artifact 落盘 + Progress 推进 + Checkpoint 追加，互斥锁内完成。重跑同一工具得到相同结果或直接跳过（digest 幂等）。
+所有与文件系统、Progress、Checkpoint 的交互都由工具完成。单个文件使用 `temp + fsync + rename` 原子替换；跨文件顺序写入不冒充数据库事务：章节提交使用持久化 `PendingCommit` Saga，结构写入使用确定性幂等重放并显式暴露失败。每一步都必须检查错误；只有已持久化恢复意图的流程才能承诺跨重启按原载荷恢复。
 
 ### 2.3 观察层只观察
 
@@ -83,7 +83,7 @@ UI、诊断、事件日志都是从事件流 / 只读工件投影出来的被动
 [Tools]  novel_context · read_chapter · plan_chapter · draft_chapter · edit_chapter
          check_consistency · commit_chapter · save_review · save_arc_summary
          save_volume_summary · save_foundation
-        │ 原子三件套
+        │ 单文件原子 + 幂等重放（commit 使用持久化 Saga）
 [Store: 文件系统 (tmp + rename)]
    Progress · Checkpoints · Outline · Drafts · Summaries · Characters · World
    · Signals · Decisions(裁定审计) · 反馈池 · 违规记录
@@ -95,7 +95,7 @@ UI、诊断、事件日志都是从事件流 / 只读工件投影出来的被动
 | Host/Engine | 生命周期、Route 执行、Worker 运行、哨兵边界、干预编排 | 文学判断；写创作事实（控制态动作经工具内核） |
 | Arbiter | 语义裁定（结构化决策） | 亲自创作；执行动作 |
 | Workers | 思考、写作、审阅 | 直接读写 Store（必须经工具） |
-| Tools | 原子 IO + checkpoint + 幂等 | 跨子代理调度指令 |
+| Tools | 单文件原子 IO + 显式错误 + 幂等；commit 使用 Saga | 跨子代理调度指令 |
 | Store | 文件系统落盘 | 业务逻辑 |
 
 依赖单向：`entry → host → agents/arbiter → tools → store → domain`；`flow` 为顶层纯策略包（store 之上、host 之下）。横向独立：`errs/` 可被任何层引用，`diag/` 订阅 host 事件流 + 只读 `store/`。
@@ -175,9 +175,9 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 `novel_context(scope)` / `read_chapter(n)` —— 任何时候可调用，不依赖前置状态，返回数据足够 LLM 独立决策。`novel_context(chapter=N)` 额外注入该章机械违规（如有）；architect 路径注入已完成卷/当前卷弧摘要、角色快照、大纲反馈池与 foundation 状态。扩弧时，已发生内容是事实，骨架只是计划；Architect 可在 `expand_arc` 中同步修订目标弧的 title/goal 并展开章节。
 
-### 5.2 写类工具（原子三件套）
+### 5.2 写类工具（单文件原子 + 分级恢复语义）
 
-每次成功调用必须：artifact 落盘 → Progress 推进 → checkpoint 追加。三步互斥锁内完成。
+单文件写入原子；跨文件步骤不承诺数据库式原子性。`commit_chapter` 的普通提交与返工提交共用 `PendingCommit`，按“完整意图 → artifact/状态 → Progress → checkpoint → 清除意图”推进；恢复只使用首次落盘的规范化 payload 与正文快照，禁止采用重启后模型重新生成的参数或被覆盖的 draft。`expand_arc` / `append_volume` 等结构操作没有持久化意图，只承诺同一参数的幂等重放、派生视图修复和错误显式返回。
 
 | 工具 | Artifact | Step |
 |---|---|---|
@@ -360,7 +360,7 @@ User: "一句话需求"
   → 全部动作成功 → 原子清除 PendingSteer(ClearHandledSteer)
 ```
 
-崩溃保护是 **best-effort 单在途持久化**：裁定期、动作失败（保留待重放）、正常退出/Abort（defer 回存残留派单）全程受保护；两个明确不保证的窗口——派单转入内存执行队列后被硬杀（毫秒级）、interMu 等待中的并发输入。用户在场可感知，重发成本秒级。
+崩溃保护是 **best-effort 单在途持久化**：首次 `SetPendingSteer` 失败会显式报错并停止裁定，绝不在无恢复记录时继续执行；裁定期、动作失败（保留待重放）、正常退出/Abort（defer 回存残留派单）受保护。仍有两个明确不保证的窗口——派单转入内存执行队列后被硬杀（毫秒级）、interMu 等待中的并发输入。用户在场可感知，重发成本秒级。
 
 **长效干预的持久层**：写作风格/质量规则由裁定的 `rules` 动作经 `userrules.Service` 归一化进本书规则快照，`novel_context` 注入 `working_memory.user_rules`——跨压缩、跨重启生效（详见 [用户规则快照](user-rules-runtime.md)）。其余出路本就落 store（篇幅/剧情→architect 派单，改旧章→editor 入队 PendingRewrites，完本返工→reopen）。
 
@@ -383,10 +383,10 @@ User: "一句话需求"
 internal/
   domain/         纯数据：Phase / FlowState / Progress / Checkpoint / Scope / Story / Plan /
                   Review / StateChange / Phase-Flow 迁移规则
-  store/          文件系统持久化（tmp+rename + 三件套）：progress / checkpoints / outline /
+  store/          文件系统持久化（tmp+rename + 幂等协调；commit 有 Saga 阶段事实）：progress / checkpoints / outline /
                   drafts / summaries / characters / world / signals / run_meta / runtime /
                   session / decisions(裁定审计)
-  tools/          11 个 Agent 工具，写类全部原子三件套 + digest 幂等 + ConcurrencySafe=false
+  tools/          11 个 Agent 工具，写类单文件原子 + 显式错误 + 幂等；commit 额外使用持久化 Saga
   flow/           路由策略（纯函数 + IO 边界）：router.go (Route 决策表) + state.go (LoadState)
                   + pause.go (停靠点裁定)
   arbiter/        语义裁定层（LLM-as-function）：plan_start / intervention / failure(deadlock)
@@ -497,7 +497,7 @@ assets/
 - 一张 Route 决策表（纯函数，12 万组合穷举规格）
 - 四个 Arbiter 裁定函数（事实进、结构化决策出、落盘可回放）
 - 三类职能 Worker（context 与模型独立，事实护栏零打扰）
-- 11 个原子工具 + 一个 jsonl checkpoint 文件
+- 11 个单文件原子、跨文件显式失败/幂等恢复的工具；其中 commit 使用持久化 Saga + 一个 jsonl checkpoint 文件
 
 模型升级的收益流向何处一目了然：创作更好（Writer/Architect/Editor 的全部输出）、裁定更准（Arbiter 四场景）、摘要更好（ctxpack）——全部换模型即得，外壳一行不改。控制面不吃模型红利，因为**查表不需要智力**；它需要的是被证明正确，而它已经被证明了。
 

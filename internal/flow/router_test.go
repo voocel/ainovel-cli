@@ -1,11 +1,27 @@
 package flow
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
+
+func TestLoadStateReturnsProgressReadError(t *testing.T) {
+	dir := t.TempDir()
+	st := storepkg.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta", "progress.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(st); err == nil {
+		t.Fatal("损坏的 progress 必须阻止路由")
+	}
+}
 
 // helper：构造一个处于 Writing 阶段、分层模式的 Progress。
 func writingProgress(completed []int, flow domain.FlowState) *domain.Progress {

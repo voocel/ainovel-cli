@@ -48,14 +48,23 @@ func (f InterventionFacts) QueueHead() int {
 	return 0
 }
 
-// CollectInterventionFacts 从 store 读齐分诊事实(IO 边界,读失败按保守默认)。
-func CollectInterventionFacts(st *storepkg.Store) InterventionFacts {
+// CollectInterventionFacts 从 store 读齐分诊事实。任何控制事实读取失败都显式
+// 返回错误，禁止 Arbiter 在零值拼成的不完整快照上做语义决策。
+func CollectInterventionFacts(st *storepkg.Store) (InterventionFacts, error) {
 	var f InterventionFacts
 	if st == nil {
-		return f
+		return f, fmt.Errorf("store 不能为空")
 	}
-	f.FoundationMissing = st.FoundationMissing()
-	if p, err := st.Progress.Load(); err == nil && p != nil {
+	missing, err := st.FoundationMissing()
+	if err != nil {
+		return f, fmt.Errorf("读取基础设定状态: %w", err)
+	}
+	f.FoundationMissing = missing
+	p, err := st.Progress.Load()
+	if err != nil {
+		return f, fmt.Errorf("读取进度: %w", err)
+	}
+	if p != nil {
 		f.Phase = string(p.Phase)
 		f.Flow = string(p.Flow)
 		f.NovelName = p.NovelName
@@ -65,7 +74,11 @@ func CollectInterventionFacts(st *storepkg.Store) InterventionFacts {
 		f.PendingRewrites = append([]int(nil), p.PendingRewrites...)
 		f.ReopenCount = p.ReopenCount
 	}
-	if meta, err := st.RunMeta.Load(); err == nil && meta != nil {
+	meta, err := st.RunMeta.Load()
+	if err != nil {
+		return f, fmt.Errorf("读取运行元信息: %w", err)
+	}
+	if meta != nil {
 		f.PlanningTier = string(meta.PlanningTier)
 		f.AdvanceMode = string(meta.AdvanceMode)
 		if meta.AdvanceHold != nil {
@@ -77,17 +90,19 @@ func CollectInterventionFacts(st *storepkg.Store) InterventionFacts {
 	if cp := st.Checkpoints.LatestGlobal(); cp != nil {
 		f.CheckpointSeq = cp.Seq
 	}
-	if recent, err := st.Decisions.Recent(5); err == nil {
-		for _, r := range recent {
-			if r.Kind != "intervention" {
-				continue
-			}
-			f.RecentDecisions = append(f.RecentDecisions, RecentDecision{
-				At: r.At, Input: truncateRunes(r.Input, 80), Reason: r.Reason,
-			})
-		}
+	recent, err := st.Decisions.Recent(5)
+	if err != nil {
+		return f, fmt.Errorf("读取近期裁定: %w", err)
 	}
-	return f
+	for _, r := range recent {
+		if r.Kind != "intervention" {
+			continue
+		}
+		f.RecentDecisions = append(f.RecentDecisions, RecentDecision{
+			At: r.At, Input: truncateRunes(r.Input, 80), Reason: r.Reason,
+		})
+	}
+	return f, nil
 }
 
 // AdvanceHoldOp 一次性暂停动作：在 Worker 边界或返工排空后暂停，也可取消。
@@ -125,6 +140,9 @@ func (d *InterventionDecision) ValidateAgainst(f InterventionFacts) error {
 	if err := d.Dispatch.validate(); err != nil {
 		return err
 	}
+	if err := validateDispatchAgainst(d.Dispatch, f.Phase); err != nil {
+		return err
+	}
 	complete := f.Phase == string(domain.PhaseComplete)
 	if d.Reopen != nil {
 		if !complete {
@@ -151,6 +169,27 @@ func (d *InterventionDecision) ValidateAgainst(f InterventionFacts) error {
 		}
 		if strings.TrimSpace(d.Hold.Reason) == "" {
 			return fmt.Errorf("设置一次性暂停必须带 reason（用户诉求摘要）")
+		}
+	}
+	return nil
+}
+
+// validateDispatchAgainst 把提示词中的阶段纪律落实为机械防线。Architect 可在规划期
+// 与写作期维护结构；Writer/Editor 只能消费已经完整且进入 writing 的作品事实。
+func validateDispatchAgainst(dispatch *DispatchOp, phase string) error {
+	if dispatch == nil {
+		return nil
+	}
+	if phase == "" {
+		return fmt.Errorf("缺少 phase，禁止执行派单")
+	}
+	if phase == string(domain.PhaseComplete) {
+		return fmt.Errorf("完本期禁止直接派单")
+	}
+	switch dispatch.Agent {
+	case "writer", "editor":
+		if phase != string(domain.PhaseWriting) {
+			return fmt.Errorf("%s 仅能在 writing 阶段派发（当前 phase=%s）", dispatch.Agent, phase)
 		}
 	}
 	return nil

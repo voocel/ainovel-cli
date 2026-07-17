@@ -507,7 +507,7 @@ LLM 驱动创作与裁定，Host 驱动流程路由。
 ### 6.3 事实层一致性的前置依赖
 
 - Router 基于 Progress + Checkpoint 做决策，事实层必须可靠
-- 当前 `withWriteLock` 封装良好，commit_chapter 的三件套原子完成
+- 单文件 `withWriteLock` + tmp/rename 保证原子替换；`commit_chapter` 跨文件步骤由 PendingCommit 完整载荷、正文快照和阶段化幂等重放恢复，结构操作则按同参数修复派生视图；均不宣称数据库式原子事务
 - 但如果事实层出现不一致（如 Progress 说第 3 章完成但 chapters/ 下没有），Router 会做错决策
 - 建议：启动时加一次**事实层一致性检查**（如发现 Progress.CompletedChapters 与 chapters/ 目录对不上，报 warning）
 
