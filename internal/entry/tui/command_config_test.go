@@ -218,3 +218,33 @@ func TestProviderMenuIsTwoLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestAtlasCloudPresetUsesOpenAICompatibleDefaults(t *testing.T) {
+	var preset *bootstrap.ProviderPreset
+	for _, value := range bootstrap.ProviderPresets() {
+		if value.Name == "atlascloud" {
+			copyValue := value
+			preset = &copyValue
+			break
+		}
+	}
+	if preset == nil {
+		t.Fatal("atlascloud preset not found")
+	}
+
+	state := &modelConfigState{}
+	state.applyProviderChoice(configProviderChoice{label: preset.Label, preset: preset})
+	if state.provider != "atlascloud" || state.providerType != "openai" {
+		t.Fatalf("provider/type = %q/%q", state.provider, state.providerType)
+	}
+	if state.baseURL != "https://api.atlascloud.ai/v1" {
+		t.Fatalf("baseURL = %q", state.baseURL)
+	}
+	if len(state.models) != 2 || state.models[0].Name != "qwen/qwen3.5-flash" {
+		t.Fatalf("atlascloud models = %#v", state.models)
+	}
+	ids := hubFieldIDs(state.hubFields())
+	if !slices.Contains(ids, "protocol") || !slices.Contains(ids, "api") {
+		t.Fatalf("atlascloud hub should expose OpenAI protocol and endpoint fields, got %v", ids)
+	}
+}
