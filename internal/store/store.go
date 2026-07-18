@@ -68,18 +68,25 @@ func (s *Store) Dir() string { return s.dir }
 func (s *Store) CheckConsistency() []string {
 	var warnings []string
 	progress, err := s.Progress.Load()
-	if err != nil || progress == nil {
+	if err != nil {
+		return append(warnings, fmt.Sprintf("progress 读取失败: %v", err))
+	}
+	if progress == nil {
 		return warnings
 	}
 	if n := len(progress.CompletedChapters); n > 0 {
 		lastCh := progress.CompletedChapters[n-1]
-		if text, err := s.Drafts.LoadChapterText(lastCh); err == nil && text == "" {
+		if text, err := s.Drafts.LoadChapterText(lastCh); err != nil {
+			warnings = append(warnings, fmt.Sprintf("第 %d 章终稿读取失败: %v", lastCh, err))
+		} else if text == "" {
 			warnings = append(warnings, fmt.Sprintf("progress 标记第 %d 章已完成，但 chapters/%02d.md 不存在或为空", lastCh, lastCh))
 		}
 	}
 	if progress.Layered && progress.CurrentVolume > 0 && progress.CurrentArc > 0 {
 		volumes, err := s.Outline.LoadLayeredOutline()
-		if err == nil && len(volumes) > 0 {
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("分层大纲读取失败: %v", err))
+		} else if len(volumes) > 0 {
 			found := false
 			for _, v := range volumes {
 				if v.Index != progress.CurrentVolume {

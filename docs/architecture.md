@@ -191,7 +191,7 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 | `save_volume_summary` | summaries/vol-vNN.json | volume_summary |
 | `save_foundation` | foundation/*.json（expand_arc/append_volume/update_compass 成功即消费反馈池） | premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book |
 
-`commit_chapter` 承担弧/卷/全书完成检测，返回 19 个事实字段；`save_review` 承担 verdict 升级（评分卡门禁、契约 missed → rewrite）。这些逻辑固化在工具内部。
+`commit_chapter` 承担弧/卷/全书完成检测，返回结构化事实；`save_review` 不做文学阈值裁定，只校验审阅事实并把 Editor 给出的 verdict 原子映射为 Flow 与返工队列。
 
 `edit_chapter` 是 `agentcore.EditTool` 的薄封装，归属检查保证已完成章节必须在 `PendingRewrites` 中才能编辑。
 

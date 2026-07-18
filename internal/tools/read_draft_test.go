@@ -70,6 +70,34 @@ func TestReadChapterDraft(t *testing.T) {
 	}
 }
 
+func TestReadChapterFinalDoesNotSubstituteDraft(t *testing.T) {
+	dir := t.TempDir()
+	st := store.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Drafts.SaveDraft(2, "只有草稿，不是终稿"); err != nil {
+		t.Fatal(err)
+	}
+
+	args, _ := json.Marshal(map[string]any{"chapter": 2, "source": "final"})
+	raw, err := NewReadChapterTool(st).Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Exists  bool   `json:"exists"`
+		Source  string `json:"source"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Exists || got.Source != "final" || got.Content != "" {
+		t.Fatalf("请求 final 不得静默替换为 draft: %+v", got)
+	}
+}
+
 func TestReadChapterDialogue(t *testing.T) {
 	dir := t.TempDir()
 	store := store.NewStore(dir)

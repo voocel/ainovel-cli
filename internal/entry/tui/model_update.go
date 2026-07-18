@@ -506,7 +506,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		boxW, _ := reportModalSize(m.width, m.height)
-		m.report.load(msg.report, paddedModalContentWidth(boxW), msg.exportPath, msg.finishedAt)
+		m.report.load(msg.report, paddedModalContentWidth(boxW), msg.exportPath, msg.exportErr, msg.finishedAt)
 		return m, nil, true
 	case importEventMsg:
 		if m.importer == nil || msg.reqID != m.importer.reqID {

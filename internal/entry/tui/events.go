@@ -28,6 +28,7 @@ type (
 		reqID      int
 		report     diag.Report
 		exportPath string // 脱敏诊断文件绝对路径；空 = 导出失败
+		exportErr  error
 		finishedAt time.Time
 	}
 	askUserMsg       askUserRequest
@@ -242,11 +243,12 @@ func loadReport(dir string, reqID int) tea.Cmd {
 		// Diagnose = 创作诊断 + 运行时检测，运行时 Finding 也进屏上报告。
 		rep, rc := diag.Diagnose(s)
 		// 复用 rep+rc 写出脱敏诊断文件（导出失败不影响屏上报告）。
-		exportPath, _ := diag.WriteExport(s, rep, rc)
+		exportPath, exportErr := diag.WriteExport(s, rep, rc)
 		return reportLoadedMsg{
 			reqID:      reqID,
 			report:     rep,
 			exportPath: exportPath,
+			exportErr:  exportErr,
 			finishedAt: time.Now(),
 		}
 	}

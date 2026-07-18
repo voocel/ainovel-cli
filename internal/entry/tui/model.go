@@ -69,6 +69,7 @@ type Model struct {
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
+	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
 	snapshot       host.UISnapshot
 	events         []host.Event
 	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
@@ -415,6 +416,7 @@ func (m *Model) tryHistoryUp() bool {
 	m.historyIdx--
 	m.textarea.SetValue(m.inputHistory[m.historyIdx])
 	m.textarea.CursorEnd()
+	m.syncCommandInputHighlight()
 	m.refitTextareaHeight()
 	return true
 }
@@ -432,6 +434,7 @@ func (m *Model) tryHistoryDown() bool {
 		m.textarea.SetValue(m.inputHistory[m.historyIdx])
 	}
 	m.textarea.CursorEnd()
+	m.syncCommandInputHighlight()
 	m.refitTextareaHeight()
 	return true
 }
@@ -585,8 +588,9 @@ func (m *Model) syncRuntimePlaceholder() {
 }
 
 func (m *Model) renderBottomBar() string {
+	inputView := highlightCommandToken(m.textarea.View(), m.textarea.Value(), m.commandToken)
 	inputBox := renderInputBox(
-		m.textarea.View(),
+		inputView,
 		m.inputHints(),
 		m.snapshot,
 		m.outputDir(),

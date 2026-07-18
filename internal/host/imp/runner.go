@@ -254,7 +254,7 @@ func (r *runner) saveFailure(err error) {
 }
 
 // facts 组合工作区事实与正式发布对账。
-func (r *runner) facts() Facts {
+func (r *runner) facts() (Facts, error) {
 	return CollectFacts(r.deps.Store, r.ws)
 }
 
@@ -284,13 +284,24 @@ func (r *runner) profileFor(c Caller, stage Stage) callProfile {
 // 不写手工失效规则。工作区未建立时先跳过，ingest 后的下一轮循环写入。
 func (r *runner) applyGuidance() error {
 	g := strings.TrimSpace(r.opts.Guidance)
-	if g == "" || !r.ws.Active() || r.ws.LoadGuidance() == g {
+	if g == "" || !r.ws.Active() {
+		return nil
+	}
+	existing, err := r.ws.LoadGuidance()
+	if err != nil {
+		return fmt.Errorf("读取已有切分指导: %w", err)
+	}
+	if existing == g {
 		return nil
 	}
 	// 发布开始后正式工件不可覆盖（§12.2）：此时重切必然在 publish 撞「拒绝覆盖」死墙，
 	// 且撞墙前会先重付切分/分析/综合的全链模型调用——把失败提前到零成本处。
 	// premise 是发布的第一笔写入，它非空即发布已开始（导入前置校验保证书原本为空）。
-	if p, _ := r.deps.Store.Outline.LoadPremise(); p != "" {
+	p, err := r.deps.Store.Outline.LoadPremise()
+	if err != nil {
+		return fmt.Errorf("读取正式 premise: %w", err)
+	}
+	if p != "" {
 		return fmt.Errorf("正式 Foundation 已开始发布，--guide 重切会与已发布内容冲突而被拒绝覆盖，不再接受切分指导")
 	}
 	return r.ws.writeAtomic(fileGuidance, []byte(g))
@@ -322,8 +333,7 @@ func (r *runner) run(ctx context.Context) {
 		r.fail("校验源文件身份", err)
 		return
 	}
-	var lastAct Action
-	repeats := 0
+	var previous *Facts
 	for {
 		if ctx.Err() != nil {
 			r.fail("用户取消", ctx.Err())
@@ -333,19 +343,20 @@ func (r *runner) run(ctx context.Context) {
 			r.fail("写入切分指导", err)
 			return
 		}
-		act := NextAction(r.facts())
-		r.act = act
-		// 防御：执行型动作连续重复而事实无进展 = bug，转成明确错误而非死循环。
-		if act == lastAct {
-			if repeats++; repeats > 2 {
-				r.fail("导入停滞", fmt.Errorf("动作 %q 反复执行但事实无进展", act))
-				return
-			}
-		} else {
-			repeats = 0
-			lastAct = act
+		facts, err := r.facts()
+		if err != nil {
+			r.fail("读取导入状态", err)
+			return
 		}
-		var err error
+		if previous != nil && facts == *previous {
+			r.fail("导入停滞", fmt.Errorf("动作执行后事实没有变化，下一动作仍为 %q", NextAction(facts)))
+			return
+		}
+		snapshot := facts
+		previous = &snapshot
+		act := NextAction(facts)
+		r.act = act
+		err = nil
 		switch act {
 		case ActionIngest:
 			err = r.ingest(ctx)
@@ -406,7 +417,10 @@ func (r *runner) segment(ctx context.Context) error {
 		return err
 	}
 	units := buildSourceUnits(src, r.deps.Budgets.MaxUnitBytes)
-	guidance := r.ws.LoadGuidance()
+	guidance, err := r.ws.LoadGuidance()
+	if err != nil {
+		return fmt.Errorf("读取切分指导: %w", err)
+	}
 	r.emit(StageSegmenting, 0, 0, fmt.Sprintf("语义识别章节边界（%d 个坐标单元）...", len(units)), nil)
 	digest := segmentInputDigest(Digest(src), guidance, segmentPromptVersion)
 	// 块缓存身份额外绑定 MaxUnitBytes：unit 表由（归一化源, MaxUnitBytes）唯一确定，换模型
@@ -438,7 +452,11 @@ func (r *runner) confirm() bool {
 		r.fail("读取切分结果", err)
 		return false
 	}
-	in, _ := r.ws.LoadIntent()
+	in, err := r.ws.LoadIntent()
+	if err != nil {
+		r.fail("读取导入意图", err)
+		return false
+	}
 	accept := r.opts.AcceptSegmentation
 	auto := r.opts.AutoConfirm || (in != nil && in.AutoConfirm)
 	// 语义容错发生过（Notes 非空：空章吸收/起始兜底/重合去重）的切分不由 --yes 盲放行：
@@ -628,25 +646,34 @@ func (r *runner) publish(ctx context.Context) error {
 // storyChoice 返回 uncertain 状态的有效裁定：优先绑定当前 synthesis 的已落盘裁定，其次本次 opts，再次原始 intent。
 // 已落盘裁定必须校验 InputDigest 与当前 synthesis 一致——重新综合后旧裁定失效，不能把旧 open/closed 静默
 // 套到新结果上，否则用户不会被重新征询（RFC §10.4）。显式 --story（intent）是用户跨综合的常驻指令，可保留。
-func (r *runner) storyChoice() string {
+func (r *runner) storyChoice() (string, error) {
 	if raw, err := r.ws.readBytes(fileSynthesis); err == nil {
 		if art, aerr := readArtifact[StoryResolution](r.ws, fileStoryResolve); aerr == nil && art.InputDigest == Digest(raw) {
-			return art.Payload.Choice
+			return art.Payload.Choice, nil
+		} else if aerr != nil && !os.IsNotExist(aerr) {
+			return "", fmt.Errorf("读取故事状态裁定: %w", aerr)
 		}
+	} else {
+		return "", fmt.Errorf("读取综合工件: %w", err)
 	}
 	if r.opts.StoryResolution != "" {
-		return r.opts.StoryResolution
+		return r.opts.StoryResolution, nil
 	}
-	if in, _ := r.ws.LoadIntent(); in != nil {
-		return in.StoryResolution
+	in, err := r.ws.LoadIntent()
+	if err != nil {
+		return "", fmt.Errorf("读取导入意图: %w", err)
 	}
-	return ""
+	return in.StoryResolution, nil
 }
 
 // resolveStoryStatus 在 uncertain 且已有显式裁定时落盘 story-resolution.json（绑定当前 synthesis），
 // 使下游 NextAction 自然放行；无裁定则展示等待并停止。
 func (r *runner) resolveStoryStatus() bool {
-	choice := r.storyChoice()
+	choice, err := r.storyChoice()
+	if err != nil {
+		r.fail("读取故事状态裁定", err)
+		return false
+	}
 	if choice != storyOpen && choice != storyClosed {
 		r.emit(StageAwaitingStoryStatus, 0, 0, "综合判定故事状态为 uncertain，请用 --story=open|closed 明确后重试", nil)
 		return false
@@ -671,7 +698,11 @@ func (r *runner) resolveStory(syn *BookSynthesis) (bool, error) {
 	case storyOpen:
 		return false, nil
 	case storyUncertain:
-		switch r.storyChoice() {
+		choice, err := r.storyChoice()
+		if err != nil {
+			return false, err
+		}
+		switch choice {
 		case storyClosed:
 			return true, nil
 		case storyOpen:
@@ -687,7 +718,10 @@ func (r *runner) resolveStory(syn *BookSynthesis) (bool, error) {
 // setCompletionHold 设置一次导入完成 Hold；仅 --continue 才跳过（RFC §12.4）。
 // 错误必须传播——Hold 是"导入后不误续写"的唯一保障，静默失败等于保护失效。
 func (r *runner) setCompletionHold() error {
-	in, _ := r.ws.LoadIntent()
+	in, err := r.ws.LoadIntent()
+	if err != nil {
+		return fmt.Errorf("读取导入意图: %w", err)
+	}
 	if r.opts.ContinueAfter || (in != nil && in.ContinueAfterImport) {
 		return nil
 	}

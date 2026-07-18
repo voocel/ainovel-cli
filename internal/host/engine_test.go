@@ -10,6 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/voocel/agentcore/subagent"
 	"github.com/voocel/ainovel-cli/internal/arbiter"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/flow"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -29,6 +32,30 @@ import (
 // scriptedChatModel 按回调产出响应的最小 ChatModel。
 type scriptedChatModel struct {
 	fn func(msgs []agentcore.Message) agentcore.Message
+}
+
+func TestFailureFactsKeepPartialStateAndWarnings(t *testing.T) {
+	dir := t.TempDir()
+	st := storepkg.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init("test", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "premise.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &engine{store: st}
+	workerErr := fmt.Errorf("writer exhausted: %w", agentcore.ErrMaxTurns)
+	facts := e.failureFacts("worker_failure", &flow.Instruction{Agent: "writer", Task: "续写"}, workerErr)
+	if facts.ErrorKind != "max_turns" || facts.Phase != string(domain.PhaseInit) {
+		t.Fatalf("应保留错误类型和可读取的进度事实: %+v", facts)
+	}
+	if len(facts.FactWarnings) == 0 {
+		t.Fatalf("不可读的基础事实必须作为告警交给 Arbiter: %+v", facts)
+	}
 }
 
 func TestInterventionDispatchTaskPreservesOriginalAuthority(t *testing.T) {

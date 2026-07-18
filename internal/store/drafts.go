@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -122,16 +123,21 @@ var dialogueRe = regexp.MustCompile(`"[^"]*"`)
 
 // ExtractDialogue 从已提交章节中提取指定角色的对话片段。
 // maxCompletedChapter 由调用方传入，避免跨域依赖。
-func (s *DraftStore) ExtractDialogue(characterName string, aliases []string, maxSamples, maxCompletedChapter int) []string {
+func (s *DraftStore) ExtractDialogue(characterName string, aliases []string, maxSamples, maxCompletedChapter int) ([]string, error) {
 	if maxSamples <= 0 {
 		maxSamples = 5
 	}
 	names := append([]string{characterName}, aliases...)
 
 	var samples []string
+	var readErrs []error
 	for ch := maxCompletedChapter; ch >= 1 && len(samples) < maxSamples; ch-- {
 		text, err := s.LoadChapterText(ch)
-		if err != nil || text == "" {
+		if err != nil {
+			readErrs = append(readErrs, fmt.Errorf("chapter %d: %w", ch, err))
+			continue
+		}
+		if text == "" {
 			continue
 		}
 		paragraphs := strings.Split(text, "\n")
@@ -160,20 +166,25 @@ func (s *DraftStore) ExtractDialogue(characterName string, aliases []string, max
 			}
 		}
 	}
-	return samples
+	return samples, errors.Join(readErrs...)
 }
 
 // ExtractStyleAnchors 从已提交章节中提取代表性段落作为风格锚点。
 // maxCompletedChapter 由调用方传入，避免跨域依赖。
-func (s *DraftStore) ExtractStyleAnchors(maxAnchors, maxCompletedChapter int) []string {
+func (s *DraftStore) ExtractStyleAnchors(maxAnchors, maxCompletedChapter int) ([]string, error) {
 	if maxAnchors <= 0 {
 		maxAnchors = 5
 	}
 
 	var anchors []string
+	var readErrs []error
 	for ch := 1; ch <= maxCompletedChapter && len(anchors) < maxAnchors; ch++ {
 		text, err := s.LoadChapterText(ch)
-		if err != nil || text == "" {
+		if err != nil {
+			readErrs = append(readErrs, fmt.Errorf("chapter %d: %w", ch, err))
+			continue
+		}
+		if text == "" {
 			continue
 		}
 		paragraphs := strings.Split(text, "\n\n")
@@ -192,5 +203,5 @@ func (s *DraftStore) ExtractStyleAnchors(maxAnchors, maxCompletedChapter int) []
 			anchors = append(anchors, para)
 		}
 	}
-	return anchors
+	return anchors, errors.Join(readErrs...)
 }

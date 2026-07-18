@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -95,9 +96,13 @@ func mergeContextSection(result map[string]any, section map[string]any) {
 
 // buildProgressStatus 在 Architect 不传 chapter 时返回进度摘要。
 // Writer/Editor 的章节路径不需要这些信息，避免干扰写作。
-func (t *ContextTool) buildProgressStatus(result map[string]any) {
+func (t *ContextTool) buildProgressStatus(result map[string]any, warn func(string, error)) {
 	progress, err := t.store.Progress.Load()
-	if err != nil || progress == nil {
+	if err != nil {
+		warn("progress_status", err)
+		return
+	}
+	if progress == nil {
 		return
 	}
 	status := map[string]any{
@@ -136,9 +141,12 @@ func (t *ContextTool) buildProgressStatus(result map[string]any) {
 //
 // 注入策略：只给 LLM 看 structured + preferences——这两项才是创作时需要遵循的偏好。
 // sources / conflicts 是诊断信息（用户冲突排查），不进 LLM；由 CLI 启动诊断面板按需展示。
-func (t *ContextTool) buildUserRules(result map[string]any) {
+func (t *ContextTool) buildUserRules(result map[string]any, warn func(string, error)) {
 	snap, err := t.store.UserRules.Load()
-	if err != nil || snap == nil {
+	if err != nil {
+		warn("user_rules", err)
+	}
+	if snap == nil {
 		// 快照尚未初始化时使用代码内置默认，保证机械底线（字数/禁语/疲劳词）始终存在。
 		def := rules.BuildSnapshot([]rules.Candidate{rules.SystemDefaults()})
 		snap = &def
@@ -329,9 +337,9 @@ func (t *ContextTool) buildChapterContext(result map[string]any, state contextBu
 
 	t.buildChapterEpisodicMemory(&envelope, state, warn)
 	t.buildChapterWorkingMemory(&envelope, state, warn)
-	t.buildChapterReferencePack(&envelope, state)
+	t.buildChapterReferencePack(&envelope, state, warn)
 	t.buildChapterSelectedMemory(&envelope, state, warn)
-	t.buildStyleStats(&envelope, state)
+	t.buildStyleStats(&envelope, state, warn)
 	envelope.apply(result)
 }
 
@@ -339,7 +347,7 @@ func (t *ContextTool) buildChapterContext(result map[string]any, state contextBu
 // 弧内评审窗口对"章均几十次的句式 tic、章末形态同构、跨章复读"天然失明，只有
 // 全书统计能暴露——统计归代码（确定性），裁定归 LLM（editor 在 aesthetic 维度
 // 按数字判分，writer 据此自避免）。章数不足时 stylestat 返回 nil，不注入。
-func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state contextBuildState) {
+func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state contextBuildState, warn func(string, error)) {
 	if state.progress == nil || len(state.progress.CompletedChapters) == 0 {
 		return
 	}
@@ -347,9 +355,10 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 	slices.Sort(completed)
 	chapters := make([]string, 0, len(completed))
 	for _, ch := range completed {
-		// 个别章读取失败跳过：统计是 best-effort 事实，不因单章缺失放弃全书视野
 		if text, err := t.store.Drafts.LoadChapterText(ch); err == nil && text != "" {
 			chapters = append(chapters, text)
+		} else {
+			warn(fmt.Sprintf("style_stats.chapter_%d", ch), err)
 		}
 	}
 
@@ -358,12 +367,14 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 		for _, entry := range outline {
 			titles = append(titles, entry.Title)
 		}
+	} else {
+		warn("style_stats.outline", err)
 	}
 
 	stats := stylestat.Compute(stylestat.Input{
 		Chapters:  chapters,
 		Titles:    titles,
-		Stopwords: t.styleStopwords(),
+		Stopwords: t.styleStopwords(warn),
 	})
 	if stats == nil {
 		return
@@ -372,19 +383,23 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 }
 
 // styleStopwords 收集角色名与别名供短语挖掘过滤——出场人名天然高频，不是文风问题。
-func (t *ContextTool) styleStopwords() []string {
+func (t *ContextTool) styleStopwords(warn func(string, error)) []string {
 	var words []string
 	if chars, err := t.store.Characters.Load(); err == nil {
 		for _, c := range chars {
 			words = append(words, c.Name)
 			words = append(words, c.Aliases...)
 		}
+	} else {
+		warn("style_stats.characters", err)
 	}
 	if cast, err := t.store.Cast.RecentActive(50); err == nil {
 		for _, e := range cast {
 			words = append(words, e.Name)
 			words = append(words, e.Aliases...)
 		}
+	} else {
+		warn("style_stats.cast", err)
 	}
 	return words
 }
@@ -524,7 +539,7 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 	}
 }
 
-func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope, state contextBuildState) {
+func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope, state contextBuildState, warn func(string, error)) {
 	if state.styleRules != nil {
 		envelope.References["style_rules"] = state.styleRules
 	} else {
@@ -532,18 +547,22 @@ func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope
 		if state.progress != nil {
 			maxCompleted = maxCompletedChapter(state.progress.CompletedChapters)
 		}
-		if anchors := t.store.Drafts.ExtractStyleAnchors(3, maxCompleted); len(anchors) > 0 {
+		anchors, err := t.store.Drafts.ExtractStyleAnchors(3, maxCompleted)
+		warn("style_anchors", err)
+		if len(anchors) > 0 {
 			envelope.References["style_anchors"] = anchors
 		}
 
 		if state.currentEntry != nil {
 			var voiceSamples []map[string]any
-			chars, _ := t.store.Characters.Load()
+			chars, err := t.store.Characters.Load()
+			warn("voice_samples.characters", err)
 			for _, c := range chars {
 				if c.Tier == "secondary" || c.Tier == "decorative" {
 					continue
 				}
-				samples := t.store.Drafts.ExtractDialogue(c.Name, c.Aliases, 3, maxCompleted)
+				samples, err := t.store.Drafts.ExtractDialogue(c.Name, c.Aliases, 3, maxCompleted)
+				warn("voice_samples."+c.Name, err)
 				if len(samples) > 0 {
 					voiceSamples = append(voiceSamples, map[string]any{
 						"character": c.Name,
@@ -631,15 +650,17 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 	// completion_signals 把"全书是否该结尾"的关键事实集中呈现，
 	// 让架构师在裁定 complete_book / append_volume 时一眼看到对照面。
 	// 散落在 progress / compass / foreshadow / layered_outline 里靠 LLM 脑算容易漏。
-	envelope.Planning["completion_signals"] = t.completionSignals(layered, compass)
+	envelope.Planning["completion_signals"] = t.completionSignals(layered, compass, warn)
 }
 
-func (t *ContextTool) completionSignals(layered []domain.VolumeOutline, compass *domain.StoryCompass) map[string]any {
+func (t *ContextTool) completionSignals(layered []domain.VolumeOutline, compass *domain.StoryCompass, warn func(string, error)) map[string]any {
 	signals := map[string]any{}
-	if progress, _ := t.store.Progress.Load(); progress != nil {
+	if progress, err := t.store.Progress.Load(); progress != nil {
 		signals["completed_chapters"] = len(progress.CompletedChapters)
 		signals["total_word_count"] = progress.TotalWordCount
 		signals["phase"] = string(progress.Phase)
+	} else {
+		warn("completion_signals.progress", err)
 	}
 	if len(layered) > 0 {
 		signals["planned_chapters"] = len(domain.FlattenOutline(layered))
@@ -656,6 +677,8 @@ func (t *ContextTool) completionSignals(layered []domain.VolumeOutline, compass 
 	}
 	if active, err := t.store.World.LoadActiveForeshadow(); err == nil {
 		signals["active_foreshadow_count"] = len(active)
+	} else {
+		warn("completion_signals.foreshadow", err)
 	}
 	return signals
 }

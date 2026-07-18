@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -30,10 +29,7 @@ func startExport(rt *host.Host, args []string) (tea.Cmd, error) {
 		return nil, err
 	}
 	return func() tea.Msg {
-		// 30s 足够本地写一本中长篇小说；超时只是兜底防卡死。
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		res, err := rt.Export(ctx, opts)
+		res, err := rt.Export(context.Background(), opts)
 		return exportDoneMsg{result: res, err: err}
 	}, nil
 }

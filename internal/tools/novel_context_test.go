@@ -67,6 +67,33 @@ func TestContextToolInjectsStyleStats(t *testing.T) {
 	}
 }
 
+func TestContextToolWarnsWhenUserRulesSnapshotIsCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	st := store.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta", "user_rules.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := NewContextTool(st, References{}, "default").Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	warnings, _ := got["_warnings"].([]any)
+	if len(warnings) == 0 || !strings.Contains(warnings[0].(string), "user_rules") {
+		t.Fatalf("损坏快照必须显式告警: %+v", got["_warnings"])
+	}
+	working, _ := got["working_memory"].(map[string]any)
+	if working["user_rules"] == nil {
+		t.Fatal("告警后仍应提供系统默认规则供模型继续决策")
+	}
+}
+
 func keysOf(m map[string]json.RawMessage) []string {
 	var keys []string
 	for k := range m {

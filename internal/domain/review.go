@@ -34,7 +34,7 @@ type RelationshipEntry struct {
 
 // ConsistencyIssue 一致性问题。
 type ConsistencyIssue struct {
-	Type        string `json:"type"`     // consistency / character / pacing / continuity / foreshadow / hook / aesthetic
+	Type        string `json:"type"`     // 模型依据 rubric 给出的具体问题维度
 	Severity    string `json:"severity"` // critical / error / warning
 	Description string `json:"description"`
 	Evidence    string `json:"evidence,omitempty"` // 证据：原文片段、具体情节或状态数据
@@ -43,9 +43,9 @@ type ConsistencyIssue struct {
 
 // DimensionScore 单维度评审评分。
 type DimensionScore struct {
-	Dimension string `json:"dimension"`         // consistency / character / pacing / continuity / foreshadow / hook / aesthetic
+	Dimension string `json:"dimension"`         // 由评审 rubric 定义，可按任务扩展
 	Score     int    `json:"score"`             // 0-100
-	Verdict   string `json:"verdict"`           // pass / warning / fail
+	Verdict   string `json:"verdict,omitempty"` // 兼容旧审阅；运行时不再用阈值覆盖模型判断
 	Comment   string `json:"comment,omitempty"` // 该维度的简要结论
 }
 

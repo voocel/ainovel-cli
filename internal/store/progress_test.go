@@ -214,6 +214,24 @@ func TestCompleteRewrite(t *testing.T) {
 	}
 }
 
+func TestApplyReviewOutcomePreservesExistingRewriteQueue(t *testing.T) {
+	s := NewStore(t.TempDir())
+	_ = s.Progress.Init("test", 3)
+	for _, ch := range []int{1, 2} {
+		_ = s.Progress.MarkChapterComplete(ch, 3000, "", "")
+	}
+	_ = s.Progress.SetPendingRewrites([]int{1, 2}, "已有返工")
+	_ = s.Progress.SetFlow(domain.FlowRewriting)
+
+	p, err := s.Progress.ApplyReviewOutcome(domain.FlowWriting, nil, "本次审阅通过")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Flow != domain.FlowRewriting || len(p.PendingRewrites) != 2 {
+		t.Fatalf("新审阅通过不能遗弃既有返工队列: flow=%s queue=%v", p.Flow, p.PendingRewrites)
+	}
+}
+
 func TestCompleteRewrite_NotInQueue(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

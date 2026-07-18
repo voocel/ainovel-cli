@@ -91,7 +91,7 @@
 - **`preferences`**：合并后的 Markdown 偏好正文（带来源标题）
 - **`sources`** / **`conflicts`**：来源链与异常清单（如有冲突需在 review 中说明）
 
-`commit_chapter` 已对结构化字段做了机械检查并落盘，结果经 `novel_context(chapter=N)` 顶层的 `rule_violations` 数组提供（无违规时该字段缺省）。审阅时按以下规则把违规事实映射进现有七维评审，**不新增第八维**：
+`commit_chapter` 已对结构化字段做了机械检查并落盘，结果经 `novel_context(chapter=N)` 顶层的 `rule_violations` 数组提供（无违规时该字段缺省）。机械违规优先映射进现有基础维度，不要为每条规则机械制造新维度：
 
 | violation.rule | 归到哪一维 | 处理建议 |
 |---|---|---|
@@ -110,18 +110,16 @@
 
 判定规则不变：accept / polish / rewrite 由现有 verdict 标准决定。机械违规只是事实，最终是否触发返工由整体审美判断决定。
 
-**追加约束语义**：user_rules 是本节"七维评审"的追加约束，不是覆盖。用户偏好与项目默认审美一致时直接合并；冲突时优先采用用户偏好但保留 verdict 升级逻辑、score→verdict 映射、severity 分级等系统底线不变。用户在创作过程中追加的长效要求也会进入 `user_rules.preferences`，逐条核对：违背即按上表语义归维出 issue。
+**追加约束语义**：user_rules 是本节基础 rubric 的追加约束，不是覆盖。用户偏好与项目默认审美一致时直接合并；冲突时优先采用用户偏好。用户在创作过程中追加的长效要求也会进入 `user_rules.preferences`，逐条核对：违背即归入最准确的现有维度；确实无法准确归类时可补充更具体的维度，不要为了凑枚举扭曲问题语义。
 
 ### 4. 输出审阅
 
 调用 save_review，给出。工具参数必须使用原生 JSON 结构，不要把数组或对象包成字符串。
 
-- **dimensions**：七个维度的评分
-  - 必须是数组，且正好 7 项，不要写成字符串
-  - 七个维度必须齐全：consistency/character/pacing/continuity/foreshadow/hook/aesthetic
-  - dimension：维度名（consistency/character/pacing/continuity/foreshadow/hook/aesthetic）
+- **dimensions**：基础七维的评分。通常应覆盖 consistency/character/pacing/continuity/foreshadow/hook/aesthetic；任务确有额外评价面时可以补充更准确的维度
+  - 必须是数组，不要写成字符串
+  - dimension：评价维度名
   - score：0-100 分
-  - verdict：可省略，系统按 score 自动推导（≥80 pass / 60-79 warning / <60 fail）
   - comment：每个维度必填；aesthetic 维度必须引用原文或具体统计事实
 
 正确形状示例：

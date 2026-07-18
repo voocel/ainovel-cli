@@ -2,6 +2,7 @@ package ctxpack
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/voocel/agentcore"
@@ -117,7 +118,11 @@ func (p *WriterRestorePack) Refresh(s *store.Store) {
 		return
 	}
 	progress, err := s.Progress.Load()
-	if err != nil || progress == nil {
+	if err != nil {
+		p.setWarning("progress 读取失败", err)
+		return
+	}
+	if progress == nil {
 		p.Clear()
 		return
 	}
@@ -131,7 +136,11 @@ func (p *WriterRestorePack) Refresh(s *store.Store) {
 	}
 
 	text, ok, err := buildWriterRestoreText(s, restoreBudgetTokens)
-	if err != nil || !ok {
+	if err != nil {
+		p.setWarning("恢复上下文读取失败", err)
+		return
+	}
+	if !ok {
 		p.Clear()
 		return
 	}
@@ -140,6 +149,13 @@ func (p *WriterRestorePack) Refresh(s *store.Store) {
 	defer p.mu.Unlock()
 	p.chapter = ch
 	p.text = text
+}
+
+func (p *WriterRestorePack) setWarning(scope string, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.chapter = 0
+	p.text = fmt.Sprintf("<post-compact-context>\n## 数据告警\n%s：%v\n</post-compact-context>", scope, err)
 }
 
 // Clear drops cached data (e.g., when switching chapters).

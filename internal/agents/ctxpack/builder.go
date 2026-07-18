@@ -27,6 +27,13 @@ type writerStoreSummaryState struct {
 	timeline          []domain.TimelineEvent
 	styleRules        *domain.WritingStyleRules
 	pendingReviews    []writerPendingReview
+	warnings          []string
+}
+
+func (s *writerStoreSummaryState) warn(scope string, err error) {
+	if s != nil && err != nil {
+		s.warnings = append(s.warnings, fmt.Sprintf("%s 读取失败: %v", scope, err))
+	}
 }
 
 type writerPendingReview struct {
@@ -113,41 +120,43 @@ func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool
 
 	state.chapterPlan, err = s.Drafts.LoadChapterPlan(chapter)
 	if err != nil {
-		return nil, false, err
+		state.warn("chapter_plan", err)
 	}
 	state.currentOutline, err = s.Outline.GetChapterOutline(chapter)
 	if err != nil {
-		state.currentOutline = nil
+		state.warn("chapter_outline", err)
 	}
 	if state.currentOutline == nil {
 		if outline, layeredErr := s.Outline.GetChapterFromLayered(chapter); layeredErr == nil {
 			state.currentOutline = outline
+		} else {
+			state.warn("layered_chapter_outline", layeredErr)
 		}
 	}
 
 	state.recentSummaries, err = s.Summaries.LoadRecentSummaries(chapter, profile.SummaryWindow)
 	if err != nil {
-		return nil, false, err
+		state.warn("recent_summaries", err)
 	}
 	state.snapshots, err = s.Characters.LoadLatestSnapshots()
 	if err != nil {
-		return nil, false, err
+		state.warn("character_snapshots", err)
 	}
 	state.foreshadow, err = s.World.LoadActiveForeshadow()
 	if err != nil {
-		return nil, false, err
+		state.warn("foreshadow", err)
 	}
 	state.timeline, err = s.World.LoadRecentTimeline(chapter, profile.TimelineWindow)
 	if err != nil {
-		return nil, false, err
+		state.warn("timeline", err)
 	}
 	state.styleRules, err = s.World.LoadStyleRules()
 	if err != nil {
-		return nil, false, err
+		state.warn("style_rules", err)
 	}
 	state.pendingReviews, err = loadPendingReviewsForStoreState(s, chapter)
 	if err != nil {
-		return nil, false, err
+		state.warn("pending_reviews", err)
 	}
 
 	loadLayeredSummariesForStoreState(s, progress, chapter, state)
@@ -186,18 +195,27 @@ func loadWriterRestoreState(s *store.Store) (*writerStoreSummaryState, error) {
 		progress: progress,
 		chapter:  chapter,
 	}
-	state.chapterPlan, _ = s.Drafts.LoadChapterPlan(chapter)
-	state.currentOutline, _ = s.Outline.GetChapterOutline(chapter)
+	state.chapterPlan, err = s.Drafts.LoadChapterPlan(chapter)
+	state.warn("chapter_plan", err)
+	state.currentOutline, err = s.Outline.GetChapterOutline(chapter)
+	state.warn("chapter_outline", err)
 	if state.currentOutline == nil {
-		state.currentOutline, _ = s.Outline.GetChapterFromLayered(chapter)
+		state.currentOutline, err = s.Outline.GetChapterFromLayered(chapter)
+		state.warn("layered_chapter_outline", err)
 	}
-	state.snapshots, _ = s.Characters.LoadLatestSnapshots()
-	state.foreshadow, _ = s.World.LoadActiveForeshadow()
-	state.pendingReviews, _ = loadPendingReviewsForStoreState(s, chapter)
-	state.styleRules, _ = s.World.LoadStyleRules()
-	state.timeline, _ = s.World.LoadRecentTimeline(chapter, profile.TimelineWindow)
+	state.snapshots, err = s.Characters.LoadLatestSnapshots()
+	state.warn("character_snapshots", err)
+	state.foreshadow, err = s.World.LoadActiveForeshadow()
+	state.warn("foreshadow", err)
+	state.pendingReviews, err = loadPendingReviewsForStoreState(s, chapter)
+	state.warn("pending_reviews", err)
+	state.styleRules, err = s.World.LoadStyleRules()
+	state.warn("style_rules", err)
+	state.timeline, err = s.World.LoadRecentTimeline(chapter, profile.TimelineWindow)
+	state.warn("timeline", err)
 	if chapter > 1 {
-		state.recentSummaries, _ = s.Summaries.LoadRecentSummaries(chapter, min(profile.SummaryWindow, 2))
+		state.recentSummaries, err = s.Summaries.LoadRecentSummaries(chapter, min(profile.SummaryWindow, 2))
+		state.warn("recent_summaries", err)
 	}
 	loadLayeredSummariesForStoreState(s, progress, chapter, state)
 	if isEmptySummarySection(state.chapterPlan) &&
@@ -235,6 +253,7 @@ func writerStoreProgressSection(state *writerStoreSummaryState) map[string]any {
 func writerStoreSummarySections(state *writerStoreSummaryState) []writerStoreSection {
 	return []writerStoreSection{
 		{heading: "当前进度", data: writerStoreProgressSection(state)},
+		{heading: "数据告警", data: state.warnings},
 		{heading: "最近章节摘要", data: state.recentSummaries},
 		{heading: "当前章节计划", data: state.chapterPlan},
 		{heading: "当前章节大纲", data: state.currentOutline},
@@ -251,6 +270,7 @@ func writerStoreSummarySections(state *writerStoreSummaryState) []writerStoreSec
 func writerRestoreSections(state *writerStoreSummaryState) []writerStoreSection {
 	return []writerStoreSection{
 		{heading: "当前进度", data: writerStoreProgressSection(state)},
+		{heading: "数据告警", data: state.warnings},
 		{heading: "当前章节计划", data: state.chapterPlan},
 		{heading: "当前章节大纲", data: state.currentOutline},
 		{heading: "待修审稿问题", data: state.pendingReviews},
@@ -291,7 +311,7 @@ func loadPendingReviewsForStoreState(s *store.Store, chapter int) ([]writerPendi
 	for ch := chapter - 1; ch >= start; ch-- {
 		review, err := s.World.LoadReview(ch)
 		if err != nil {
-			return nil, err
+			return pending, err
 		}
 		if compact, ok := compactPendingReview(review); ok {
 			pending = append(pending, compact)
@@ -299,7 +319,7 @@ func loadPendingReviewsForStoreState(s *store.Store, chapter int) ([]writerPendi
 	}
 	global, err := s.World.LoadLastReview(chapter - 1)
 	if err != nil {
-		return nil, err
+		return pending, err
 	}
 	if compact, ok := compactPendingReview(global); ok {
 		alreadyIncluded := false
@@ -351,12 +371,17 @@ func loadLayeredSummariesForStoreState(s *store.Store, progress *domain.Progress
 	if s == nil || progress == nil || state == nil {
 		return
 	}
+	if !progress.Layered {
+		return
+	}
 	volume, arc := progress.CurrentVolume, progress.CurrentArc
 	if volume <= 0 || arc <= 0 {
 		if v, a, err := s.Outline.LocateChapter(chapter); err == nil {
 			volume, arc = v, a
 		} else if v, a, err := s.Outline.LocateChapter(max(chapter-1, 1)); err == nil {
 			volume, arc = v, a
+		} else {
+			state.warn("chapter_location", err)
 		}
 	}
 	if volume <= 0 {
@@ -364,10 +389,14 @@ func loadLayeredSummariesForStoreState(s *store.Store, progress *domain.Progress
 	}
 	if sum, err := s.Summaries.LoadVolumeSummary(volume); err == nil {
 		state.currentVolSummary = sum
+	} else {
+		state.warn("volume_summary", err)
 	}
 	if arc > 0 {
 		if sum, err := s.Summaries.LoadArcSummary(volume, arc); err == nil {
 			state.currentArcSummary = sum
+		} else {
+			state.warn("arc_summary", err)
 		}
 	}
 }

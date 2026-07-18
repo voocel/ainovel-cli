@@ -15,12 +15,14 @@ type FailureFacts struct {
 	Kind          string   `json:"kind"` // worker_failure | deadlock
 	Agent         string   `json:"agent,omitempty"`
 	Task          string   `json:"task,omitempty"`
-	Error         string   `json:"error,omitempty"`   // worker_failure:错误文本
+	Error         string   `json:"error,omitempty"` // worker_failure:错误文本
+	ErrorKind     string   `json:"error_kind,omitempty"`
 	Repeats       int      `json:"repeats,omitempty"` // deadlock:同指令已派次数
 	Phase         string   `json:"phase,omitempty"`
 	NextChapter   int      `json:"next_chapter,omitempty"`
 	PendingQueue  []int    `json:"pending_rewrites,omitempty"`
 	FoundationGap []string `json:"foundation_missing,omitempty"`
+	FactWarnings  []string `json:"fact_warnings,omitempty"`
 }
 
 // FailureDecision 失败/僵局裁定。

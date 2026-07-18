@@ -10,6 +10,15 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
+func mustLoadState(t *testing.T, w *Workspace) Facts {
+	t.Helper()
+	f, err := LoadState(w)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	return f
+}
+
 func TestNextActionChain(t *testing.T) {
 	cases := []struct {
 		name string
@@ -46,7 +55,7 @@ func TestLoadStateReflectsWorkspace(t *testing.T) {
 	book := t.TempDir()
 	// 未建区：非活动 → ingest。
 	w := OpenWorkspace(book)
-	if NextAction(LoadState(w)) != ActionIngest {
+	if NextAction(mustLoadState(t, w)) != ActionIngest {
 		t.Fatal("空书应先 ingest")
 	}
 	// 建区后：workspace ready、未切分 → segment。
@@ -58,12 +67,30 @@ func TestLoadStateReflectsWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	f := LoadState(ws)
+	f := mustLoadState(t, ws)
 	if !f.WorkspaceReady || f.Segmented {
 		t.Fatalf("建区后事实不符：%+v", f)
 	}
 	if NextAction(f) != ActionSegment {
 		t.Fatal("建区后应 segment")
+	}
+}
+
+func TestLoadStateReportsCorruptArtifact(t *testing.T) {
+	book := t.TempDir()
+	src := filepath.Join(book, "book.txt")
+	if err := os.WriteFile(src, []byte("第一章\n正文\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, _, err := Ingest(book, src, Intent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.writeAtomic(fileSegmentation, []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(ws); err == nil || !strings.Contains(err.Error(), "切分工件") {
+		t.Fatalf("损坏工件不得伪装成尚未切分: %v", err)
 	}
 }
 
@@ -114,13 +141,13 @@ func TestGuidanceChangeInvalidatesSegmentation(t *testing.T) {
 	if err := writeArtifact(ws, fileSegmentation, segmentInputDigest(Digest(norm), "", segmentPromptVersion), seg); err != nil {
 		t.Fatal(err)
 	}
-	if !LoadState(ws).Segmented {
+	if !mustLoadState(t, ws).Segmented {
 		t.Fatal("无指导时切分应有效")
 	}
 	if err := ws.writeAtomic(fileGuidance, []byte("幕间也是独立章节")); err != nil {
 		t.Fatal(err)
 	}
-	if LoadState(ws).Segmented {
+	if mustLoadState(t, ws).Segmented {
 		t.Fatal("指导变化后旧切分应失效（需重识别）")
 	}
 }
@@ -186,7 +213,7 @@ func TestResumeStatusPublishedIsTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 未发布 + 切分失鲜：仍是半路导入，门禁应拦。
-	if active, done := ResumeStatus(st); !active || done {
+	if active, done, err := ResumeStatus(st); err != nil || !active || done {
 		t.Fatalf("未发布的失鲜工作区应判未完成（active=%v done=%v）", active, done)
 	}
 	// 正式库已按该切分全量落库 → 发布对账通过，终态不受上游失鲜影响。
@@ -199,7 +226,7 @@ func TestResumeStatusPublishedIsTerminal(t *testing.T) {
 	if err := st.Progress.Save(&domain.Progress{NovelName: "书", CompletedChapters: []int{1}}); err != nil {
 		t.Fatal(err)
 	}
-	if active, done := ResumeStatus(st); !active || !done {
+	if active, done, err := ResumeStatus(st); err != nil || !active || !done {
 		t.Fatalf("已发布书应判导入完成（active=%v done=%v）", active, done)
 	}
 	if got := ResumeSummary(st); got != "" {

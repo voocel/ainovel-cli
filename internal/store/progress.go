@@ -359,6 +359,47 @@ func (s *ProgressStore) SetPendingRewrites(chapters []int, reason string) error 
 	})
 }
 
+// ApplyReviewOutcome 原子应用审阅产生的流程状态。审阅语义由上层决定；Store 只负责
+// 校验 Flow 迁移和返工章节，并保证 Flow、PendingRewrites、RewriteReason 不出现中间态。
+func (s *ProgressStore) ApplyReviewOutcome(flow domain.FlowState, chapters []int, reason string) (*domain.Progress, error) {
+	var latest *domain.Progress
+	err := s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+		}
+		if len(chapters) > 0 {
+			if flow == domain.FlowWriting {
+				return fmt.Errorf("返工章节非空时 flow 不能为 writing: %w", errs.ErrToolConflict)
+			}
+			if err := domain.ValidateFlowTransition(p.Flow, flow); err != nil {
+				return err
+			}
+			normalized, err := normalizePendingRewrites(chapters, p.CompletedChapters)
+			if err != nil {
+				return err
+			}
+			p.PendingRewrites = normalized
+			p.RewriteReason = reason
+			p.Flow = flow
+		} else if len(p.PendingRewrites) == 0 {
+			if err := domain.ValidateFlowTransition(p.Flow, flow); err != nil {
+				return err
+			}
+			p.Flow = flow
+		}
+		if err := s.saveUnlocked(p); err != nil {
+			return err
+		}
+		latest = p
+		return nil
+	})
+	return latest, err
+}
+
 // ValidatePendingRewrites 校验章节列表是否可进入返工队列，不修改状态。
 func (s *ProgressStore) ValidatePendingRewrites(chapters []int) error {
 	s.io.mu.RLock()

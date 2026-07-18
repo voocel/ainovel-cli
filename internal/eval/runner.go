@@ -3,6 +3,7 @@ package eval
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -50,7 +51,11 @@ func RunCase(cfg bootstrap.Config, bundle assets.Bundle, c Case, opts RunOptions
 	// 落 logs/headless.log，diag 的运行时规则（stream idle storm 等）从中取证；
 	// 会话 jsonl 由引擎自写，无需额外接线。defer 顺序对齐 headless：Close 先于 cleanup
 	// 执行，收尾日志仍被文件捕获。
-	cleanup := logger.SetupFile(eng.Dir(), "headless.log", false)
+	cleanup, err := logger.SetupFile(eng.Dir(), "headless.log", false)
+	if err != nil {
+		slog.Warn("评测文件日志不可用，继续运行", "module", "eval", "err", err)
+		cleanup = func() {}
+	}
 	defer cleanup()
 	defer eng.Close()
 

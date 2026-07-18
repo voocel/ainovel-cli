@@ -428,11 +428,7 @@ func (e *engine) trackDeadlock(ctx context.Context, inst **flow.Instruction) (st
 		return true
 	}
 	// Arbiter 僵局咨询(repeats ∈ [consultAt, abortAt))。裁定 retry 不清零计数。
-	facts, factsErr := e.failureFacts("deadlock", in, "")
-	if factsErr != nil {
-		e.pauseWithNotify(notify.KindDeadlock, "僵局事实读取失败，已暂停: "+factsErr.Error())
-		return true
-	}
+	facts := e.failureFacts("deadlock", in, nil)
 	decision, err := runObservedDecision(e.observer, "僵局裁定", func() (arbiter.FailureDecision, error) {
 		return arbiter.DecideFailure(ctx, e.arbiterModel, e.failurePrompt, facts)
 	})
@@ -482,19 +478,13 @@ func (e *engine) runWorker(ctx context.Context, inst *flow.Instruction) error {
 	return err
 }
 
-// handleWorkerError 错误分类(RFC §4):确定性错误直接暂停(重试与裁定都无意义);
-// 其余同指令重试一次 → Arbiter → 最保守暂停。
+// handleWorkerError 对同一指令先重试一次，再把错误类型和当前事实交给 Arbiter。
+// Engine 不硬编码哪些执行错误“必然无法恢复”；语义改派由模型决定，Store 边界继续
+// 负责阻止不合法写入。
 func (e *engine) handleWorkerError(ctx context.Context, inst *flow.Instruction, werr error) (stop bool) {
 	msg := werr.Error()
 	e.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: inst.Agent,
 		Summary: truncate(fmt.Sprintf("%s 失败: %s", inst.Agent, msg), 120), Detail: msg, Level: "error"})
-
-	// 确定性分类先行:参数/配置类错误是代码或配置 bug,重试必然同错,
-	// 送 Arbiter 也给不出出路——直接暂停等人工。
-	if isDeterministicWorkerError(werr) {
-		e.pauseWithNotify(notify.KindWorkerFailure, "确定性错误(重试无意义),已暂停等待人工介入: "+truncate(msg, 200))
-		return true
-	}
 
 	key := inst.Agent + "\x00" + inst.Task
 	if e.failedKey != key {
@@ -503,11 +493,7 @@ func (e *engine) handleWorkerError(ctx context.Context, inst *flow.Instruction, 
 		return false
 	}
 	e.failedKey = ""
-	facts, factsErr := e.failureFacts("worker_failure", inst, msg)
-	if factsErr != nil {
-		e.pauseWithNotify(notify.KindWorkerFailure, "失败裁定事实读取失败，已暂停: "+factsErr.Error())
-		return true
-	}
+	facts := e.failureFacts("worker_failure", inst, werr)
 	decision, err := runObservedDecision(e.observer, "失败裁定", func() (arbiter.FailureDecision, error) {
 		return arbiter.DecideFailure(ctx, e.arbiterModel, e.failurePrompt, facts)
 	})
@@ -542,33 +528,32 @@ func contentFilterAdvice(werr error) string {
 	return "。这是服务商内容审核拦截(非本地错误),可选: /model 切到无审核层的服务商后输入「继续」;或修改本章草稿(drafts/)措辞后再继续;原样重试大概率仍被拦"
 }
 
-// errInvalidWriteTarget 标记 runWorker 前置校验拦下的非法写作目标——引擎自身
-// 产生的确定性错误,与 subagent.ErrUnknownAgent 同属"重试必然同错"类。
+// errInvalidWriteTarget 标记 runWorker 前置校验拦下的非法写作目标，供错误链和
+// Arbiter 事实保留稳定语义；是否重试或改派仍由统一失败流程决定。
 var errInvalidWriteTarget = errors.New("非法写作目标")
 
-// isDeterministicWorkerError 识别重试必然同错的错误。全部走类型化匹配:
-// agent 未注册(subagent.ErrUnknownAgent)与引擎前置校验失败——不再依赖错误文案。
-func isDeterministicWorkerError(err error) bool {
-	return errors.Is(err, subagent.ErrUnknownAgent) || errors.Is(err, errInvalidWriteTarget)
-}
-
-func (e *engine) failureFacts(kind string, inst *flow.Instruction, errMsg string) (arbiter.FailureFacts, error) {
-	f := arbiter.FailureFacts{Kind: kind, Agent: inst.Agent, Task: inst.Task, Error: errMsg, Repeats: e.repeats}
+func (e *engine) failureFacts(kind string, inst *flow.Instruction, workerErr error) arbiter.FailureFacts {
+	f := arbiter.FailureFacts{Kind: kind, Agent: inst.Agent, Task: inst.Task, Repeats: e.repeats}
+	if workerErr != nil {
+		f.Error = workerErr.Error()
+		f.ErrorKind = agentcore.ErrorKind(workerErr)
+	}
 	missing, err := e.store.FoundationMissing()
 	if err != nil {
-		return f, fmt.Errorf("load foundation state: %w", err)
+		f.FactWarnings = append(f.FactWarnings, "基础设定状态读取失败: "+err.Error())
+	} else {
+		f.FoundationGap = missing
 	}
-	f.FoundationGap = missing
 	p, err := e.store.Progress.Load()
 	if err != nil {
-		return f, fmt.Errorf("load progress: %w", err)
+		f.FactWarnings = append(f.FactWarnings, "创作进度读取失败: "+err.Error())
 	}
 	if p != nil {
 		f.Phase = string(p.Phase)
 		f.NextChapter = p.NextChapter()
 		f.PendingQueue = p.PendingRewrites
 	}
-	return f, nil
+	return f
 }
 
 func (e *engine) recordFailureDecision(kind string, inst *flow.Instruction, facts arbiter.FailureFacts, d arbiter.FailureDecision, derr error) {

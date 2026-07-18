@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"fmt"
+	"log/slog"
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
@@ -20,11 +24,24 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, version string) error {
 	}
 	bridge := newAskUserBridge()
 	rt.AskUser().SetHandler(bridge.handler)
-	cleanup := logger.SetupFile(rt.Dir(), "tui.log", false)
+	cleanup, err := logger.SetupFile(rt.Dir(), "tui.log", false)
+	var logWarning error
+	if err != nil {
+		logWarning = fmt.Errorf("文件日志不可用，已继续使用终端日志：%w", err)
+		slog.Warn("TUI 文件日志不可用，继续运行", "module", "tui", "err", err)
+		cleanup = func() {}
+	}
 	defer cleanup()
 	defer rt.Close()
 
 	m := NewModel(rt, bridge, version)
+	if logWarning != nil {
+		m.err = logWarning
+		m.applyEvent(host.Event{
+			Time: time.Now(), Category: "SYSTEM", Level: "warn",
+			Summary: logWarning.Error(), Detail: logWarning.Error(),
+		})
+	}
 	// 不在启动时全局开启鼠标上报：欢迎页用不到鼠标，关闭上报可保留终端原生
 	// 拖拽选中复制。进入创作工作台（modeRunning）时再由 enterRunning 打开上报，
 	// 以支持点击切面板 / 滚轮 / 拖拽侧边栏。

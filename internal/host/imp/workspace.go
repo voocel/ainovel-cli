@@ -174,15 +174,18 @@ func (w *Workspace) LoadSource() ([]byte, error) {
 	return os.ReadFile(w.path(fileSource))
 }
 
-// LoadGuidance 读取用户切分指导（RFC §18.3）；缺失即无指导，返回空串。
+// LoadGuidance 读取用户切分指导（RFC §18.3）；缺失即无指导。
 // 指导与 source.txt 同为切分的语义输入而非派生工件，由显式 --guide 更新，
 // 内容变化使 segmentation 及其下游 InputDigest 自然失配。
-func (w *Workspace) LoadGuidance() string {
+func (w *Workspace) LoadGuidance() (string, error) {
 	data, err := os.ReadFile(w.path(fileGuidance))
-	if err != nil {
-		return ""
+	if os.IsNotExist(err) {
+		return "", nil
 	}
-	return string(data)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // readBytes 读取工件原始字节，用于下游 InputDigest 绑定。

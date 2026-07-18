@@ -99,6 +99,26 @@ func analyzedChapters(w *Workspace, seg *Segmentation, normalized []byte, segIde
 	return n
 }
 
+// analyzedChaptersStrict 与 analyzedChapters 的新鲜度语义一致，但会暴露损坏或不可读
+// 的既有工件。状态恢复使用严格版本，避免把真实读取错误当成“尚未分析”后覆盖重做。
+func analyzedChaptersStrict(w *Workspace, seg *Segmentation, normalized []byte, segIdentity, promptVersion string) (int, error) {
+	n := 0
+	for c := 1; c <= len(seg.Chapters); c++ {
+		a, err := readArtifact[ChapterAnalysisPayload](w, analysisPath(c))
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return n, fmt.Errorf("读取第 %d 章分析工件: %w", c, err)
+		}
+		if a.InputDigest != chapterInputDigest(segIdentity, promptVersion, seg, normalized, c-1) {
+			break
+		}
+		n++
+	}
+	return n, nil
+}
+
 // discardAnalysesAfter 删除章号 > keep 的逐章分析工件，使"重分析某章即失效其后全部分析"成立（#4a）。
 // 正常前向分析时 keep 之后本就无工件，为幂等无操作；仅在中途重分析（越过新鲜前缀）时清理陈旧尾部。
 // 删除失败必须传播：这是该不变量的唯一执行点，吞掉错误会让陈旧尾部（逐章 digest 恒匹配）
@@ -123,6 +143,18 @@ func loadPriorFacts(w *Workspace, count int) []ImportedChapterFacts {
 		out = append(out, a.Payload.Facts)
 	}
 	return out
+}
+
+func loadPriorFactsStrict(w *Workspace, count int) ([]ImportedChapterFacts, error) {
+	out := make([]ImportedChapterFacts, 0, count)
+	for c := 1; c <= count; c++ {
+		a, err := readArtifact[ChapterAnalysisPayload](w, analysisPath(c))
+		if err != nil {
+			return out, fmt.Errorf("读取第 %d 章分析事实: %w", c, err)
+		}
+		out = append(out, a.Payload.Facts)
+	}
+	return out, nil
 }
 
 // buildLedger 从已分析章节派生紧凑连续性上下文：人物别名 + 活跃伏笔 ID + 最近状态。

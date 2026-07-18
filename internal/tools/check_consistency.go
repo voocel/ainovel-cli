@@ -49,6 +49,12 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	}
 
 	result := map[string]any{"chapter": a.Chapter}
+	var warnings []string
+	warn := func(scope string, err error) {
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s 读取失败: %v", scope, err))
+		}
+	}
 
 	// 章节内容
 	content, wordCount, err := t.store.Drafts.LoadChapterContent(a.Chapter)
@@ -62,16 +68,22 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	result["word_count"] = wordCount
 
 	// 对照数据：保留全局性的一致性检查数据，避免重复加载 novel_context 已有的窗口数据
-	if rules, _ := t.store.World.LoadWorldRules(); len(rules) > 0 {
+	if rules, err := t.store.World.LoadWorldRules(); len(rules) > 0 {
 		result["world_rules"] = rules
+	} else {
+		warn("world_rules", err)
 	}
-	if foreshadow, _ := t.store.World.LoadActiveForeshadow(); len(foreshadow) > 0 {
+	if foreshadow, err := t.store.World.LoadActiveForeshadow(); len(foreshadow) > 0 {
 		result["foreshadow_ledger"] = foreshadow
+	} else {
+		warn("foreshadow_ledger", err)
 	}
-	if relationships, _ := t.store.World.LoadRelationships(); len(relationships) > 0 {
+	if relationships, err := t.store.World.LoadRelationships(); len(relationships) > 0 {
 		result["relationships"] = relationships
+	} else {
+		warn("relationships", err)
 	}
-	if chars, _ := t.store.Characters.Load(); len(chars) > 0 {
+	if chars, err := t.store.Characters.Load(); len(chars) > 0 {
 		aliasMap := make(map[string]string)
 		for _, c := range chars {
 			for _, alias := range c.Aliases {
@@ -81,9 +93,13 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 		if len(aliasMap) > 0 {
 			result["alias_map"] = aliasMap
 		}
+	} else {
+		warn("characters", err)
 	}
-	if summaries, _ := t.store.Summaries.LoadRecentSummaries(a.Chapter, 2); len(summaries) > 0 {
+	if summaries, err := t.store.Summaries.LoadRecentSummaries(a.Chapter, 2); len(summaries) > 0 {
 		result["recent_summaries"] = summaries
+	} else {
+		warn("recent_summaries", err)
 	}
 
 	if _, err := t.store.Checkpoints.AppendArtifact(
@@ -91,6 +107,10 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 		fmt.Sprintf("drafts/%02d.draft.md", a.Chapter),
 	); err != nil {
 		return nil, fmt.Errorf("checkpoint consistency check: %w", err)
+	}
+	if len(warnings) > 0 {
+		result["status"] = "partial"
+		result["_warnings"] = warnings
 	}
 
 	return json.Marshal(result)

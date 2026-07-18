@@ -107,7 +107,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		}
 	} else {
 		// Architect 路径：只返回状态 + 结构化数据，不加载全量原文
-		t.buildProgressStatus(result)
+		t.buildProgressStatus(result, warn)
 		t.buildArchitectContext(result, warn)
 	}
 
@@ -120,7 +120,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		t.buildSimulationProfile(result, "planning_memory", warn)
 	}
 
-	t.buildUserRules(result)
+	t.buildUserRules(result, warn)
 
 	if len(warnings) > 0 {
 		result["_warnings"] = warnings

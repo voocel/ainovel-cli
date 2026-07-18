@@ -16,8 +16,14 @@ func buildStoryStateSummary(s *store.Store) string {
 		return ""
 	}
 	var b strings.Builder
+	var warnings []string
+	warn := func(scope string, err error) {
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s 读取失败: %v", scope, err))
+		}
+	}
 
-	if progress, _ := s.Progress.Load(); progress != nil {
+	if progress, err := s.Progress.Load(); progress != nil {
 		if name := strings.TrimSpace(progress.NovelName); name != "" {
 			fmt.Fprintf(&b, "- 书名：《%s》\n", name)
 		}
@@ -29,9 +35,11 @@ func buildStoryStateSummary(s *store.Store) string {
 		if progress.Layered && progress.CurrentVolume > 0 {
 			fmt.Fprintf(&b, "- 当前位置：第 %d 卷 第 %d 弧\n", progress.CurrentVolume, progress.CurrentArc)
 		}
+	} else {
+		warn("progress", err)
 	}
 
-	if compass, _ := s.Outline.LoadCompass(); compass != nil {
+	if compass, err := s.Outline.LoadCompass(); compass != nil {
 		if dir := strings.TrimSpace(compass.EndingDirection); dir != "" {
 			fmt.Fprintf(&b, "- 终局方向：%s\n", dir)
 		}
@@ -41,16 +49,20 @@ func buildStoryStateSummary(s *store.Store) string {
 		if len(compass.OpenThreads) > 0 {
 			fmt.Fprintf(&b, "- 活跃长线：%s\n", strings.Join(compass.OpenThreads, "；"))
 		}
+	} else {
+		warn("story_compass", err)
 	}
 
 	// 最近一卷摘要，让助手知道故事刚走到哪
-	if vols, _ := s.Summaries.LoadAllVolumeSummaries(); len(vols) > 0 {
+	if vols, err := s.Summaries.LoadAllVolumeSummaries(); len(vols) > 0 {
 		last := vols[len(vols)-1]
 		fmt.Fprintf(&b, "- 最近《%s》：%s\n", last.Title, truncate(last.Summary, 200))
+	} else {
+		warn("volume_summaries", err)
 	}
 
 	// 主要人物（core/important），最多 8 个
-	if chars, _ := s.Characters.Load(); len(chars) > 0 {
+	if chars, err := s.Characters.Load(); len(chars) > 0 {
 		var names []string
 		for _, c := range chars {
 			if c.Tier == "secondary" || c.Tier == "decorative" {
@@ -68,10 +80,12 @@ func buildStoryStateSummary(s *store.Store) string {
 		if len(names) > 0 {
 			fmt.Fprintf(&b, "- 主要人物：%s\n", strings.Join(names, "、"))
 		}
+	} else {
+		warn("characters", err)
 	}
 
 	// 未收伏笔，最多 6 条
-	if fs, _ := s.World.LoadActiveForeshadow(); len(fs) > 0 {
+	if fs, err := s.World.LoadActiveForeshadow(); len(fs) > 0 {
 		var items []string
 		for _, f := range fs {
 			items = append(items, truncate(f.Description, 40))
@@ -80,6 +94,12 @@ func buildStoryStateSummary(s *store.Store) string {
 			}
 		}
 		fmt.Fprintf(&b, "- 未收伏笔：%s\n", strings.Join(items, "；"))
+	} else {
+		warn("foreshadow", err)
+	}
+
+	if len(warnings) > 0 {
+		fmt.Fprintf(&b, "- 数据告警：%s\n", strings.Join(warnings, "；"))
 	}
 
 	return strings.TrimSpace(b.String())

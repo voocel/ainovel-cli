@@ -394,7 +394,13 @@ func (h *Host) refuseNewBookOverExisting() error {
 // UI 将永远显示"运行中"而引擎实际已停。
 func (h *Host) startEngine(initial *flow.Instruction) bool {
 	// 跨重启门禁：存在未完成导入工作区时，禁止普通 Engine 消费半发布状态（RFC §12.5）。
-	if active, done := imp.ResumeStatus(h.store); active && !done {
+	active, done, importErr := imp.ResumeStatus(h.store)
+	if importErr != nil {
+		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Level: "error",
+			Summary: "导入状态读取失败，已阻止普通创作覆盖现有工件：" + importErr.Error()})
+		return false
+	}
+	if active && !done {
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
 			Summary: "存在未完成的外部小说导入，请先执行 /import 恢复完成后再继续创作"})
 		return false
@@ -1763,7 +1769,12 @@ func (h *Host) runAsync(fn func() error) (error, bool) {
 func (h *Host) continueAfterImport(opts imp.Options) bool {
 	want := opts.ContinueAfter
 	if !want {
-		if in, err := imp.OpenWorkspace(h.store.Dir()).LoadIntent(); err == nil && in != nil {
+		in, err := imp.OpenWorkspace(h.store.Dir()).LoadIntent()
+		if err != nil {
+			slog.Warn("导入自动接力读取 Intent 失败", "module", "host", "err", err)
+			h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "warn",
+				Summary: "导入已完成，但自动接力意图读取失败：" + err.Error()})
+		} else if in != nil {
 			want = in.ContinueAfterImport
 		}
 	}

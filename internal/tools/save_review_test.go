@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,7 +79,7 @@ func TestSaveReviewRejectsMissingDimensions(t *testing.T) {
 	args, err := json.Marshal(map[string]any{
 		"chapter":    3,
 		"scope":      "chapter",
-		"dimensions": []map[string]any{{"dimension": "consistency", "score": 85, "verdict": "pass", "comment": "基本一致"}},
+		"dimensions": []map[string]any{},
 		"issues":     []map[string]any{},
 		"verdict":    "accept",
 		"summary":    "ok",
@@ -86,7 +88,7 @@ func TestSaveReviewRejectsMissingDimensions(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "dimensions must contain exactly") {
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "dimensions must contain at least one") {
 		t.Fatalf("expected dimensions validation error, got %v", err)
 	}
 }
@@ -187,10 +189,9 @@ func TestSaveReviewRejectsUnfinishedAffectedChapter(t *testing.T) {
 	}
 }
 
-// TestSaveReviewDerivesVerdictFromScore 验证：verdict 由 score 确定性推导，模型给的
-// 不一致 verdict（如 score=85 却填 warning）不再报错，而是被覆写成正确值（pass）。
-// 防回归 issue：弱模型 score/verdict 打架曾导致 save_review 反复失败。
-func TestSaveReviewDerivesVerdictFromScore(t *testing.T) {
+// TestSaveReviewKeepsModelDefinedDimension 验证工具不再把文学评价维度和分数阈值
+// 写死在 Go 中；Editor 可以按当前任务补充更准确的评价面。
+func TestSaveReviewKeepsModelDefinedDimension(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -206,15 +207,9 @@ func TestSaveReviewDerivesVerdictFromScore(t *testing.T) {
 	args, err := json.Marshal(map[string]any{
 		"chapter": 3,
 		"scope":   "chapter",
-		"dimensions": []map[string]any{
-			{"dimension": "consistency", "score": 85, "verdict": "pass", "comment": "一致"},
-			{"dimension": "character", "score": 82, "comment": "稳定"}, // 省略 verdict
-			{"dimension": "pacing", "score": 78, "verdict": "warning", "comment": "略慢"},
-			{"dimension": "continuity", "score": 84, "verdict": "pass", "comment": "连贯"},
-			{"dimension": "foreshadow", "score": 80, "verdict": "pass", "comment": "正常"},
-			{"dimension": "hook", "score": 76, "verdict": "warning", "comment": "钩子一般"},
-			{"dimension": "aesthetic", "score": 85, "verdict": "warning", "comment": "语言成立"}, // 不一致：85 却填 warning
-		},
+		"dimensions": []map[string]any{{
+			"dimension": "dialogue_subtext", "score": 85, "verdict": "warning", "comment": "潜台词仍可加强",
+		}},
 		"issues":  []map[string]any{},
 		"verdict": "accept",
 		"summary": "ok",
@@ -224,19 +219,15 @@ func TestSaveReviewDerivesVerdictFromScore(t *testing.T) {
 	}
 
 	if _, err := tool.Execute(context.Background(), args); err != nil {
-		t.Fatalf("Execute should succeed (verdict auto-derived), got %v", err)
+		t.Fatalf("Execute should accept model-defined dimension, got %v", err)
 	}
 
 	review, err := s.World.LoadReview(3)
 	if err != nil || review == nil {
 		t.Fatalf("LoadReview: %v", err)
 	}
-	// 85 → pass（覆写模型给的 warning）；82 省略 → pass。
-	if d := review.Dimension("aesthetic"); d == nil || d.Verdict != "pass" {
-		t.Fatalf("aesthetic verdict should be derived to pass, got %+v", d)
-	}
-	if d := review.Dimension("character"); d == nil || d.Verdict != "pass" {
-		t.Fatalf("character verdict should be derived to pass, got %+v", d)
+	if d := review.Dimension("dialogue_subtext"); d == nil || d.Verdict != "warning" {
+		t.Fatalf("model-defined assessment should be preserved, got %+v", d)
 	}
 }
 
@@ -309,8 +300,8 @@ func TestSaveReviewRejectsIssueWithoutEvidence(t *testing.T) {
 
 // TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition 防回归：返工排空中途
 // （Flow=rewriting、PendingRewrites=[8,9]）对已重写章复审得到 polish 时，
-// SetFlow(polishing) 与 rewriting 构成非法迁移。修复前先写队列再切 Flow，会把
-// 队列脏写成 [8] 丢失第 9 章；修复后 SetFlow 先行，非法迁移时队列保持不变。
+// Flow=polishing 与 rewriting 构成非法迁移。ApplyReviewOutcome 必须在同一次写锁中
+// 完成校验和写入，非法迁移时队列保持不变。
 func TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
@@ -356,7 +347,7 @@ func TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "set flow") {
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "apply review outcome") {
 		t.Fatalf("expected illegal flow transition error, got %v", err)
 	}
 
@@ -366,5 +357,51 @@ func TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition(t *testing.T) {
 	}
 	if p.Flow != domain.FlowRewriting {
 		t.Fatalf("Flow 应保持 rewriting，got %s", p.Flow)
+	}
+}
+
+func TestSaveReviewKeepsOutcomeWhenReviewArtifactWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 3); err != nil {
+		t.Fatalf("Progress.Init: %v", err)
+	}
+	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
+		t.Fatalf("MarkChapterComplete: %v", err)
+	}
+	// 让目标文件路径成为目录，稳定触发原子 rename 失败。
+	if err := os.MkdirAll(filepath.Join(dir, "reviews", "03.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	args, err := json.Marshal(map[string]any{
+		"chapter": 3, "scope": "chapter", "verdict": "polish", "summary": "需要补足衔接",
+		"affected_chapters": []int{3}, "issues": []map[string]any{},
+		"dimensions": []map[string]any{
+			{"dimension": "consistency", "score": 85, "comment": "一致"},
+			{"dimension": "character", "score": 82, "comment": "稳定"},
+			{"dimension": "pacing", "score": 78, "comment": "略快"},
+			{"dimension": "continuity", "score": 84, "comment": "连贯"},
+			{"dimension": "foreshadow", "score": 80, "comment": "正常"},
+			{"dimension": "hook", "score": 76, "comment": "可加强"},
+			{"dimension": "aesthetic", "score": 81, "comment": "语言成立"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSaveReviewTool(s).Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "save review") {
+		t.Fatalf("expected review write failure, got %v", err)
+	}
+
+	p, err := s.Progress.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Flow != domain.FlowPolishing || len(p.PendingRewrites) != 1 || p.PendingRewrites[0] != 3 {
+		t.Fatalf("审阅工件失败后返工意图必须保持可恢复，got flow=%s queue=%v", p.Flow, p.PendingRewrites)
 	}
 }

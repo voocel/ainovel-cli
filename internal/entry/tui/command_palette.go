@@ -77,7 +77,25 @@ func (m *Model) clearCommandPalette() {
 	m.compActive = false
 }
 
+// syncCommandInputHighlight 复用命令注册表识别第一个 token。只记录完整、已注册的
+// 命令；最终渲染时仅给这个 token 着色，参数保持普通正文色。
+func (m *Model) syncCommandInputHighlight() {
+	m.commandToken = ""
+	fields := strings.Fields(m.textarea.Value())
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return
+	}
+	command, ok := parseSlashCommand(fields[0])
+	if !ok {
+		return
+	}
+	if _, registered := commandRegistryInstance().Find(command.name); registered {
+		m.commandToken = fields[0]
+	}
+}
+
 func (m *Model) updateCommandPalette() {
+	m.syncCommandInputHighlight()
 	text := strings.TrimSpace(m.textarea.Value())
 	if !strings.HasPrefix(text, "/") {
 		m.clearCommandPalette()
@@ -115,6 +133,7 @@ func (m *Model) acceptCommandCompletion() (commandPaletteItem, bool) {
 	m.textarea.Reset()
 	m.textarea.SetValue("/" + item.Name + " ")
 	m.textarea.CursorEnd()
+	m.syncCommandInputHighlight()
 	m.compItems = nil
 	m.compIdx = 0
 	m.compActive = false

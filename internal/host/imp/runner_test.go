@@ -79,7 +79,7 @@ func TestRunEndToEnd(t *testing.T) {
 	if prog == nil || len(prog.CompletedChapters) != 2 {
 		t.Fatalf("应完成 2 章：%+v", prog)
 	}
-	if active, done := ResumeStatus(st); !active || !done {
+	if active, done, err := ResumeStatus(st); err != nil || !active || !done {
 		t.Fatalf("ResumeStatus 应为 active&done，得 active=%v done=%v", active, done)
 	}
 	// --continue：不设导入完成 Hold（交由 host 自动接力）。
@@ -169,6 +169,9 @@ func TestRunRejectsDifferentSource(t *testing.T) {
 func TestConfirmNotesGate(t *testing.T) {
 	newRunner := func(opts Options, notes []string) *runner {
 		ws := &Workspace{dir: t.TempDir()}
+		if err := ws.writeJSON(fileIntent, Intent{}); err != nil {
+			t.Fatal(err)
+		}
 		seg := Segmentation{Chapters: []ChapterSpan{{Number: 1, Title: "第一章", End: 10}}, Notes: notes}
 		if err := writeArtifact(ws, fileSegmentation, "d", seg); err != nil {
 			t.Fatal(err)
@@ -202,6 +205,9 @@ func TestConfirmNotesGate(t *testing.T) {
 // storyChoice 不得把旧 open/closed 静默套到新 synthesis 上（否则用户不会被重新征询）。
 func TestStoryChoiceIgnoresStaleResolution(t *testing.T) {
 	ws := OpenWorkspace(t.TempDir())
+	if err := ws.writeJSON(fileIntent, Intent{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeArtifact(ws, fileSynthesis, "d", BookSynthesis{Premise: "p1", StoryStatus: storyUncertain}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,14 +216,14 @@ func TestStoryChoiceIgnoresStaleResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &runner{ws: ws}
-	if got := r.storyChoice(); got != storyClosed {
+	if got, err := r.storyChoice(); err != nil || got != storyClosed {
 		t.Fatalf("绑定当前 synthesis 的裁定应返回 closed，得 %q", got)
 	}
 	// 重新综合：改写 synthesis → 旧裁定 InputDigest 失配，应被忽略，回到"需重新征询"（返回空）。
 	if err := writeArtifact(ws, fileSynthesis, "d", BookSynthesis{Premise: "p2", StoryStatus: storyUncertain}); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.storyChoice(); got != "" {
+	if got, err := r.storyChoice(); err != nil || got != "" {
 		t.Fatalf("重新综合后旧裁定应失效返回空，得 %q", got)
 	}
 }

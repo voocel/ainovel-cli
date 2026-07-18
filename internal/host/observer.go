@@ -3,6 +3,7 @@ package host
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -203,14 +204,16 @@ func (o *observer) persistEvent(ev Event) {
 	case "SYSTEM", "ERROR":
 		priority = domain.RuntimePriorityControl
 	}
-	_, _ = o.store.Runtime.AppendQueue(domain.RuntimeQueueItem{
+	if _, err := o.store.Runtime.AppendQueue(domain.RuntimeQueueItem{
 		Time:     ev.Time,
 		Kind:     domain.RuntimeQueueUIEvent,
 		Priority: priority,
 		Category: ev.Category,
 		Summary:  ev.Summary,
 		Payload:  ev,
-	})
+	}); err != nil {
+		slog.Warn("运行事件持久化失败", "module", "observer", "category", ev.Category, "err", err)
+	}
 }
 
 func (o *observer) updateAgent(name string, fn func(*agentState)) {

@@ -226,16 +226,27 @@ func commitArgs(chapter int, f ImportedChapterFacts) map[string]any {
 // 只对账导入真正产出的工件——premise、覆盖全章的扁平大纲、完成章节——而不复用
 // FoundationMissing()：后者是普通创作流程的“可写作”门禁，会把合法为空的 world_rules
 // 误判为未完成，导致发布对账永不收敛（RFC §12.3）。
-func isPublished(st *store.Store, expected int) bool {
+func isPublished(st *store.Store, expected int) (bool, error) {
 	if expected == 0 {
-		return false
+		return false, nil
 	}
-	if p, _ := st.Outline.LoadPremise(); p == "" {
-		return false
+	p, err := st.Outline.LoadPremise()
+	if err != nil {
+		return false, fmt.Errorf("读取正式 premise: %w", err)
 	}
-	if o, _ := st.Outline.LoadOutline(); len(o) < expected {
-		return false
+	if p == "" {
+		return false, nil
 	}
-	prog, _ := st.Progress.Load()
-	return prog != nil && len(prog.CompletedChapters) >= expected
+	o, err := st.Outline.LoadOutline()
+	if err != nil {
+		return false, fmt.Errorf("读取正式 outline: %w", err)
+	}
+	if len(o) < expected {
+		return false, nil
+	}
+	prog, err := st.Progress.Load()
+	if err != nil {
+		return false, fmt.Errorf("读取正式 progress: %w", err)
+	}
+	return prog != nil && len(prog.CompletedChapters) >= expected, nil
 }
