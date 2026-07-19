@@ -126,12 +126,7 @@ func TestToCompactCarriesEvidence(t *testing.T) {
 // TestSynthesizeRejectsRangeMismatch 守护 #4：长书 Map 阶段区间摘要的起止章必须与请求一致，
 // 否则归并时会把错位区间当作本区间摘要。
 func TestSynthesizeRejectsRangeMismatch(t *testing.T) {
-	facts := factsN(6)
-	budget := len(compactFact(facts[0])) * 2 // 约 2 章/区间 → 多区间，触发 RangeDigest 路径
-	// 区间摘要谎报 end_chapter，校验应拒绝并使整体综合失败。
-	bad := `{"start_chapter":1,"end_chapter":5,"plot":"错位区间"}`
-	m := &mockModel{responses: []string{bad}}
-	_, err := Synthesize(context.Background(), m, "book", "range", &Workspace{dir: t.TempDir()}, facts, budget, 4096, callProfile{})
+	err := validateRangeDigest(&RangeDigest{StartChapter: 1, EndChapter: 5, Plot: "错位区间"}, 1, 2, "range digest")
 	if err == nil {
 		t.Fatal("区间起止章与请求不符应拒绝")
 	}
@@ -170,8 +165,8 @@ func TestReduceToFitMergesUntilBudget(t *testing.T) {
 	budget := len(mustJSON(t, ds[0]))*2 + 10
 	// 每组归并出一个小摘要：第 1-10 章、第 11-20 章。
 	m := &mockModel{responses: []string{
-		`{"start_chapter":1,"end_chapter":10,"plot":"合并一"}`,
-		`{"start_chapter":11,"end_chapter":20,"plot":"合并二"}`,
+		rangeDigestJSON(1, 10, "合并一"),
+		rangeDigestJSON(11, 20, "合并二"),
 	}}
 	out, err := reduceToFit(context.Background(), m, "range", ds, budget, 4096, callProfile{})
 	if err != nil {
@@ -193,10 +188,7 @@ func mustJSON(t *testing.T, v any) []byte {
 
 func TestSynthesizeDirectWithMock(t *testing.T) {
 	facts := factsN(3)
-	resp := `{"premise":"# 书\n前提","characters":[{"name":"甲"}],"world_rules":[],
-		"planning_tier":"short","story_status":"open","status_reason":"仍有张力",
-		"compass":{"ending_direction":"走向终局"},
-		"structure":[{"title":"卷一","theme":"主题","arcs":[{"title":"弧一","goal":"目标","start_chapter":1,"end_chapter":3}]}]}`
+	resp := synthesisFixtureJSON(3, storyOpen)
 	m := &mockModel{responses: []string{resp}}
 	s, err := Synthesize(context.Background(), m, "sys", "range-sys", &Workspace{dir: t.TempDir()}, facts, 0, 4096, callProfile{})
 	if err != nil {

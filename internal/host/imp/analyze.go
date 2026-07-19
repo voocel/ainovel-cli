@@ -15,7 +15,7 @@ import (
 )
 
 // analysisSchemaVersion 是逐章事实 schema 版本，纳入 InputDigest。
-const analysisSchemaVersion = 1
+const analysisSchemaVersion = 2
 
 // validHookTypes / validStrands 与 commit_chapter schema 保持一致。
 var (
@@ -296,7 +296,7 @@ func AnalyzeNext(ctx context.Context, m callModel, systemPrompt string, w *Works
 
 	for {
 		payload := buildAnalyzePayload(normalized, seg, ledger, start, end)
-		res, err := callStructured[AnalysisBatchResult](ctx, m, systemPrompt, payload, budget.MaxOutputTokens, prof, func(r *AnalysisBatchResult) error {
+		res, err := callStructured[AnalysisBatchResult](ctx, m, analysisContract, systemPrompt, payload, budget.MaxOutputTokens, prof, func(r *AnalysisBatchResult) error {
 			return validateBatch(r, seg, start, end)
 		})
 		if err != nil {

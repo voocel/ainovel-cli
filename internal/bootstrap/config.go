@@ -74,6 +74,11 @@ type ProviderConfig struct {
 type ModelConfig struct {
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
+	// JSONSchema 是原生结构化输出（response_format json_schema）的三态声明：
+	// 未配置=按 provider adapter 的模型级能力判断；true=用户声明该 endpoint/模型
+	// 支持（请求被拒绝时原样暴露，不静默降级）；false=强制走 prompt contract。
+	// 自定义代理与聚合网关的能力以用户声明为准，程序不探测。
+	JSONSchema *bool `json:"json_schema,omitempty"`
 }
 
 func (m *ModelConfig) UnmarshalJSON(data []byte) error {
@@ -81,6 +86,7 @@ func (m *ModelConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &legacy); err == nil {
 		m.Name = legacy
 		m.ContextWindow = 0
+		m.JSONSchema = nil
 		return nil
 	}
 	type modelConfigAlias ModelConfig
@@ -101,6 +107,17 @@ func (pc ProviderConfig) ModelConfig(name string) (ModelConfig, bool) {
 		}
 	}
 	return ModelConfig{}, false
+}
+
+// ModelJSONSchema 返回模型的 json_schema 三态声明；未列入 models 或未配置时
+// 返回 nil（按 adapter 能力判断）。
+func (c Config) ModelJSONSchema(provider, model string) *bool {
+	if pc, ok := c.Providers[provider]; ok {
+		if mc, ok := pc.ModelConfig(model); ok {
+			return mc.JSONSchema
+		}
+	}
+	return nil
 }
 
 // defaultStreamIdleTimeout：长输出 + 长 ctx 场景下，reasoning-aware provider

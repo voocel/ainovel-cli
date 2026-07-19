@@ -38,14 +38,12 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seg := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"},{"unit_id":"L3","kind":"chapter","title":"第二章"}]}`
-	ana := `{"chapters":[
-		{"chapter":1,"title":"第一章","summary":"摘要一","core_event":"核心一","key_events":["事件一"],"characters":["甲"],"hook_type":"mystery","dominant_strand":"quest"},
-		{"chapter":2,"title":"第二章","summary":"摘要二","core_event":"核心二","key_events":["事件二"],"characters":["甲"],"hook_type":"crisis","dominant_strand":"quest"}
-	]}`
-	syn := `{"premise":"# 测试书\n前提","characters":[{"name":"甲","role":"protagonist","description":"d","arc":"a","traits":["坚韧"]}],
-		"world_rules":[],"structure":[{"title":"卷一","theme":"主题","arcs":[{"title":"弧一","goal":"目标","start_chapter":1,"end_chapter":2}]}],
-		"compass":{"ending_direction":"终局"},"planning_tier":"short","story_status":"closed","status_reason":"已完结"}`
+	seg := boundariesJSON(
+		boundaryFixture("L1", "", kindChapter, "第一章"),
+		boundaryFixture("L3", "", kindChapter, "第二章"),
+	)
+	ana := `{"chapters":[` + factsJSON(1, "第一章") + `,` + factsJSON(2, "第二章") + `]}`
+	syn := synthesisFixtureJSON(2, storyClosed)
 	m := &mockModel{responses: []string{seg, ana, syn}}
 
 	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true, ContinueAfter: true})
@@ -100,14 +98,12 @@ func TestRunSetsCompletionHold(t *testing.T) {
 	if err := os.WriteFile(src, []byte("第一章\n正文一\n第二章\n正文二\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	seg := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"},{"unit_id":"L3","kind":"chapter","title":"第二章"}]}`
-	ana := `{"chapters":[
-		{"chapter":1,"title":"第一章","summary":"摘要一","core_event":"核心一","key_events":["事件一"],"characters":["甲"],"hook_type":"mystery","dominant_strand":"quest"},
-		{"chapter":2,"title":"第二章","summary":"摘要二","core_event":"核心二","key_events":["事件二"],"characters":["甲"],"hook_type":"crisis","dominant_strand":"quest"}
-	]}`
-	syn := `{"premise":"# 测试书\n前提","characters":[{"name":"甲","role":"protagonist","description":"d","arc":"a","traits":["坚韧"]}],
-		"world_rules":[],"structure":[{"title":"卷一","theme":"主题","arcs":[{"title":"弧一","goal":"目标","start_chapter":1,"end_chapter":2}]}],
-		"compass":{"ending_direction":"终局"},"planning_tier":"short","story_status":"closed","status_reason":"已完结"}`
+	seg := boundariesJSON(
+		boundaryFixture("L1", "", kindChapter, "第一章"),
+		boundaryFixture("L3", "", kindChapter, "第二章"),
+	)
+	ana := `{"chapters":[` + factsJSON(1, "第一章") + `,` + factsJSON(2, "第二章") + `]}`
+	syn := synthesisFixtureJSON(2, storyClosed)
 	m := &mockModel{responses: []string{seg, ana, syn}}
 
 	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true}) // 无 --continue
@@ -246,9 +242,9 @@ func TestBudgetsFromDepsPerTier(t *testing.T) {
 	}
 }
 
-// TestRunSavesFailureOnSemanticError 守护 §14.2 第三落点的统一兜底：
-// 任何语义函数（此处 segment）多次输出仍非法时，原始响应与元数据必须落 failures/。
-func TestRunSavesFailureOnSemanticError(t *testing.T) {
+// TestRunSavesFailureOnContractViolation 守护 §14.2：原生 Schema 契约违约
+// 必须立即暴露，并把原始响应与元数据落 failures/。
+func TestRunSavesFailureOnContractViolation(t *testing.T) {
 	dir := t.TempDir()
 	st := store.NewStore(dir)
 	if err := st.Init(); err != nil {
@@ -258,25 +254,19 @@ func TestRunSavesFailureOnSemanticError(t *testing.T) {
 	if err := os.WriteFile(src, []byte("第一章\n正文\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &mockModel{responses: []string{"这不是 JSON"}}
+	m := &nativeImportModel{mockModel: &mockModel{responses: []string{"这不是 JSON"}}}
 	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var failed, warned bool
+	var failed bool
 	for ev := range ch {
 		if ev.Stage == StageError {
 			failed = true
 		}
-		if ev.Level == "warn" {
-			warned = true // 校验重问必须以 warn 事件回显（不带 Key，各自成行保留历史）
-		}
 	}
 	if !failed {
 		t.Fatal("非法输出应以 StageError 结束")
-	}
-	if !warned {
-		t.Fatal("语义重试应发出带 Key 的 warn 事件")
 	}
 	ws := OpenWorkspace(dir)
 	if !ws.has("failures/last-response.txt") {
@@ -315,7 +305,7 @@ func TestRunGuidanceResegments(t *testing.T) {
 		return awaiting
 	}
 	// 首次交互导入：模型把全书切成 1 章，停在确认。
-	one := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"}]}`
+	one := boundariesJSON(boundaryFixture("L1", "", kindChapter, "第一章"))
 	ch, err := Run(context.Background(), testDeps(st, &mockModel{responses: []string{one}}), Options{SourcePath: src})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -324,7 +314,10 @@ func TestRunGuidanceResegments(t *testing.T) {
 		t.Fatal("首次导入应停在切分确认")
 	}
 	// 带指导恢复：旧切分失配 → 重识别为 2 章，再次停在确认。
-	two := `{"boundaries":[{"unit_id":"L1","kind":"chapter","title":"第一章"},{"unit_id":"L3","kind":"chapter","title":"第二章"}]}`
+	two := boundariesJSON(
+		boundaryFixture("L1", "", kindChapter, "第一章"),
+		boundaryFixture("L3", "", kindChapter, "第二章"),
+	)
 	guidance := "第二章也是独立章节"
 	ch2, err := Run(context.Background(), testDeps(st, &mockModel{responses: []string{two}}), Options{Guidance: guidance})
 	if err != nil {
@@ -383,9 +376,8 @@ func TestProfileForKeyPolicy(t *testing.T) {
 	}
 }
 
-// TestCallProfileOptions 验证 thinking 仅在非 Auto 时发送，且绝不发 response_format——
-// response_format 支持是模型级事实，按 provider 级能力表发送会对不支持的模型直接 HTTP 400
-// （openrouter × tencent/hy3 实测），结构化输出统一靠 prompt 契约 + extract/validate 兜底。
+// TestCallProfileOptions 验证 callProfile 只负责输出预算与 thinking；response_format
+// 由 callStructured 根据模型事实和 Contract 选择，不能在 Profile 中重复组装。
 func TestCallProfileOptions(t *testing.T) {
 	if got := (callProfile{}).callOptions(100); len(got) != 1 {
 		t.Fatalf("零值只应带 maxTokens，得 %d 个 option", len(got))

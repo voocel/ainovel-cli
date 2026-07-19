@@ -1567,15 +1567,20 @@ func (h *Host) importCaller(fn string) imp.Caller {
 	if _, _, explicit := h.models.CurrentSelection(role); !explicit {
 		role = "architect"
 	}
-	model := newUsageTrackedModel(h.models.ForRole(role), role, h.usage.Record)
+	model := h.models.ForRoleWithFailover(role, func(ev bootstrap.FailoverEvent) {
+		slog.Warn("导入 provider 切换", "module", "import", "role", ev.Role,
+			"reason", ev.Reason,
+			"from", fmt.Sprintf("%s/%s", ev.FromProvider, ev.FromModel),
+			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel),
+			"err", ev.Err)
+	})
+	model = newUsageTrackedModel(model, role, h.usage.Record)
 	return imp.Caller{Model: model, Runtime: h.importModelRuntime(role, model)}
 }
 
 // importModelRuntime 探测所选档位角色模型的调用能力，供 imp 双预算 / thinking 自适应使用（RFC §13/§21）。
 // 探测失败的字段留零值，imp 侧回退保守默认，保证无能力信息也能正确运行。
-// 不探测结构化输出能力：litellm 能力表是 provider 级，response_format 支持是模型级事实，
-// 按 provider 级发送对不支持的模型是硬 400（见 imp/call.go callProfile 注释）。
-// TODO(json-schema)：与全仓其它调用点统一改造 JSON Schema 模式时，在此按模型级核验能力。
+// 结构化输出由 imp 的 llmcontract 在每次请求前现读模型事实，不在 Runtime 重复缓存。
 func (h *Host) importModelRuntime(role string, model agentcore.ChatModel) imp.ModelRuntime {
 	var rt imp.ModelRuntime
 	provider, name, _ := h.models.CurrentSelection(role)

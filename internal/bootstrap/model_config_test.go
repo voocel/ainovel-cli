@@ -40,6 +40,94 @@ func TestModelConfigAcceptsLegacyAndObjectEntries(t *testing.T) {
 	}
 }
 
+// json_schema 三态：未配置=nil（按 adapter 能力）、true/false=显式声明；
+// legacy 字符串条目读入为 nil；写回再读取不得改变三态。
+func TestModelConfigJSONSchemaTriState(t *testing.T) {
+	var cfg Config
+	input := `{"providers":{"custom":{"models":[
+    {"name":"a","json_schema":true},
+    {"name":"b","json_schema":false},
+    {"name":"c"},
+    "legacy"
+  ]}}}`
+	if err := json.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertTriState := func(models []ModelConfig, stage string) {
+		t.Helper()
+		if models[0].JSONSchema == nil || !*models[0].JSONSchema {
+			t.Fatalf("%s: a 应为 true, got %v", stage, models[0].JSONSchema)
+		}
+		if models[1].JSONSchema == nil || *models[1].JSONSchema {
+			t.Fatalf("%s: b 应为 false, got %v", stage, models[1].JSONSchema)
+		}
+		if models[2].JSONSchema != nil || models[3].JSONSchema != nil {
+			t.Fatalf("%s: c/legacy 应为 nil, got %v %v", stage, models[2].JSONSchema, models[3].JSONSchema)
+		}
+	}
+	assertTriState(cfg.Providers["custom"].Models, "decode")
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var again Config
+	if err := json.Unmarshal(data, &again); err != nil {
+		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+	assertTriState(again.Providers["custom"].Models, "round-trip")
+
+	if v := cfg.ModelJSONSchema("custom", "a"); v == nil || !*v {
+		t.Fatalf("ModelJSONSchema(custom,a) = %v", v)
+	}
+	if v := cfg.ModelJSONSchema("custom", "missing"); v != nil {
+		t.Fatalf("未列入模型应为 nil, got %v", v)
+	}
+	if v := cfg.ModelJSONSchema("nope", "a"); v != nil {
+		t.Fatalf("未知 provider 应为 nil, got %v", v)
+	}
+}
+
+// SwappableModel 的 json_schema 覆盖值必须随热切换原子更新：
+// 切到声明不同的模型后，下一次 JSONSchemaOverride 现读即得新事实。
+func TestSwappableModelJSONSchemaOverrideFollowsSwap(t *testing.T) {
+	tr, fa := true, false
+	cfg := Config{
+		Provider: "proxy", ModelName: "a",
+		Providers: map[string]ProviderConfig{"proxy": {
+			Type: "openai", APIKey: "k", BaseURL: "https://example.com/v1",
+			Models: []ModelConfig{{Name: "a", JSONSchema: &tr}, {Name: "b", JSONSchema: &fa}, {Name: "c"}},
+		}},
+	}
+	ms, err := NewModelSet(cfg)
+	if err != nil {
+		t.Fatalf("new model set: %v", err)
+	}
+	if v := ms.Default.JSONSchemaOverride(); v == nil || !*v {
+		t.Fatalf("初始应为 true, got %v", v)
+	}
+	facts := ms.Default.StructuredOutputFacts()
+	if facts.Info.Name != "a" || facts.Info.Provider != "openai" || facts.JSONSchemaOverride == nil || !*facts.JSONSchemaOverride {
+		t.Fatalf("初始结构化事实快照不一致: %+v", facts)
+	}
+	if err := ms.Swap("default", "proxy", "b"); err != nil {
+		t.Fatalf("swap b: %v", err)
+	}
+	if v := ms.Default.JSONSchemaOverride(); v == nil || *v {
+		t.Fatalf("切到 b 后应为 false, got %v", v)
+	}
+	facts = ms.Default.StructuredOutputFacts()
+	if facts.Info.Name != "b" || facts.JSONSchemaOverride == nil || *facts.JSONSchemaOverride {
+		t.Fatalf("切换后结构化事实快照不一致: %+v", facts)
+	}
+	if err := ms.Swap("default", "proxy", "c"); err != nil {
+		t.Fatalf("swap c: %v", err)
+	}
+	if v := ms.Default.JSONSchemaOverride(); v != nil {
+		t.Fatalf("切到未声明的 c 后应为 nil, got %v", v)
+	}
+}
+
 func TestResolveContextWindowIsProviderAware(t *testing.T) {
 	cfg := Config{
 		ContextWindow: 300000,

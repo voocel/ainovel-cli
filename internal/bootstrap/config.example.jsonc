@@ -17,6 +17,8 @@
       "api_key": "sk-or-v1-xxx",
       "base_url": "https://openrouter.ai/api/v1",
       // 可选。声明 /model 面板候选及模型专属上下文窗口；旧字符串数组仍兼容。
+      // json_schema 是原生结构化输出的显式覆盖：true=确认支持，false=确认不支持，
+      // 省略=采用适配器能力。自定义中转或能力取决于具体模型时建议明确填写。
       "models": [
         { "name": "google/gemini-3.0-flash", "context_window": 200000 },
         { "name": "google/gemini-3.1-pro", "context_window": 1000000 }
@@ -35,7 +37,7 @@
     },
     "anthropic": {
       "api_key": "sk-ant-xxx",
-      "models": [{ "name": "claude-sonnet-4" }, { "name": "claude-opus-4" }]
+      "models": [{ "name": "claude-sonnet-4-6", "json_schema": true }]
     },
     "ollama": {
       // ollama / bedrock / 显式 type 的自定义代理可以省略 api_key
@@ -72,7 +74,7 @@
       "api_key": "sk-xxx",
       "base_url": "https://proxy.example.com/v1",
       "models": [
-        { "name": "gpt-5.4", "context_window": 400000 },
+        { "name": "gpt-5.4", "context_window": 400000, "json_schema": true },
         { "name": "gpt-5.4-mini" },
         { "name": "MiniMax-M3", "context_window": 1000000 }
       ],

@@ -30,7 +30,8 @@
 当目标章节已完成，且任务要求重写或打磨：
 
 - 先 `read_chapter(source="final")` 读取原文，再根据审阅意见定位问题。
-- 小范围打磨优先使用 `edit_chapter`。`old_string` 必须从原文精确复制，且在全章唯一；多处相同文本才使用 `replace_all=true`。
+- 小范围打磨优先使用 `edit_chapter`。`old_string` 必须从**最近一次 read_chapter 返回**逐字复制（含空白与换行；返回是 JSON 字符串，`\n` 要还原为真实换行），禁止凭记忆重构；且在全章唯一，多处相同文本才使用 `replace_all=true`。
+- `edit_chapter` 报"could not find the exact text"时：报错里附有草稿中最接近的候选片段，直接从候选逐字复制重试，不要重复提交同一段凭记忆写的原文。若草稿刚被 `draft_chapter` 覆盖过，先重新 `read_chapter(source="draft")` 再编辑。
 - 大幅结构问题才使用 `draft_chapter(mode="write")` 整章覆盖。
 - 修改完成后必须 `check_consistency`，最后 `commit_chapter`。
 - 不要跳过修改直接 commit；草稿与终稿完全相同时，提交会失败。

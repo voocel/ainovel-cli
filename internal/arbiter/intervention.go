@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -129,6 +131,26 @@ type InterventionDecision struct {
 	Reason   string         `json:"reason"`
 }
 
+var interventionContract = llmcontract.Contract{
+	Name:        "arbiter_intervention",
+	Description: "用户干预裁定：回答、规则、暂停、重开与派单",
+	Schema: schema.Object(
+		schema.Property("answer", llmcontract.Nullable(schema.String("回显给用户的文字；无则为 null"))).Required(),
+		schema.Property("rules", llmcontract.Nullable(schema.String("要落盘的长效写作规则原文；无则为 null"))).Required(),
+		schema.Property("hold", llmcontract.Nullable(schema.Object(
+			schema.Property("cancel", schema.Bool("是否取消既有一次性暂停")).Required(),
+			schema.Property("after", llmcontract.Nullable(schema.Enum("暂停触发点；取消时为 null", string(domain.AdvanceHoldAtBoundary), string(domain.AdvanceHoldAfterRewritesDrained)))).Required(),
+			schema.Property("reason", llmcontract.Nullable(schema.String("用户诉求摘要；取消时可为 null"))).Required(),
+		))).Required(),
+		schema.Property("reopen", llmcontract.Nullable(schema.Object(
+			schema.Property("chapters", schema.Array("需要重开的章节号", schema.Int("章节号"))).Required(),
+			schema.Property("reason", llmcontract.Nullable(schema.String("重开理由"))).Required(),
+		))).Required(),
+		schema.Property("dispatch", dispatchSchema("派单目标；无需派单时为 null")).Required(),
+		schema.Property("reason", schema.String("一句话裁定理由")).Required(),
+	),
+}
+
 // ValidateAgainst 按事实做机械校验(场景内合法性;类型已排除跨场景动作)。
 func (d *InterventionDecision) ValidateAgainst(f InterventionFacts) error {
 	if strings.TrimSpace(d.Reason) == "" {
@@ -198,11 +220,14 @@ func validateDispatchAgainst(dispatch *DispatchOp, phase string) error {
 // DecideIntervention 干预分诊。失败语义:返回 error → 调用方显式回显
 // 真实失败原因,且不产生任何写入(宁可不动,不可误动)。
 func DecideIntervention(ctx context.Context, model agentcore.ChatModel, systemPrompt string, facts InterventionFacts, text string) (InterventionDecision, error) {
-	payload := marshalPayload(struct {
+	payload, err := marshalPayload(struct {
 		Intervention string            `json:"intervention"`
 		Facts        InterventionFacts `json:"facts"`
 	}{Intervention: text, Facts: facts})
-	return decide(ctx, model, systemPrompt, payload, func(d *InterventionDecision) error {
+	if err != nil {
+		return InterventionDecision{}, err
+	}
+	return decide(ctx, model, interventionContract, systemPrompt, payload, func(d *InterventionDecision) error {
 		return d.ValidateAgainst(facts)
 	})
 }

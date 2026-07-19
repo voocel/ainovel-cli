@@ -3,7 +3,6 @@ package imp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,7 +303,7 @@ func TestChunkValidatorOwnedDiscipline(t *testing.T) {
 func TestSegmentClearsChunksOnResolveFailure(t *testing.T) {
 	norm, units := segFixture()
 	// 模型把全书标成 front_matter：无章节，Go 无法确定性修复，终局失败。
-	m := &mockModel{responses: []string{`{"boundaries":[{"unit_id":"L1","kind":"front_matter","title":"前言"}]}`}}
+	m := &mockModel{responses: []string{boundariesJSON(boundaryFixture("L1", "", kindFrontMatter, "前言"))}}
 	w := &Workspace{dir: t.TempDir()}
 	_, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, w, "id-1")
 	if err == nil {
@@ -369,12 +368,12 @@ func TestResolveSegmentationSingleLineChapters(t *testing.T) {
 
 func TestSegmentWithMockModel(t *testing.T) {
 	norm, units := segFixture()
-	resp := `{"boundaries":[
-		{"unit_id":"L1","kind":"front_matter","title":"前言"},
-		{"unit_id":"L3","kind":"chapter","title":"第一章 风起"},
-		{"unit_id":"L5","kind":"group","title":"卷二"},
-		{"unit_id":"L6","kind":"chapter","title":"第二章 云涌"}
-	]}`
+	resp := boundariesJSON(
+		boundaryFixture("L1", "", kindFrontMatter, "前言"),
+		boundaryFixture("L3", "", kindChapter, "第一章 风起"),
+		boundaryFixture("L5", "", kindGroup, "卷二"),
+		boundaryFixture("L6", "", kindChapter, "第二章 云涌"),
+	)
 	m := &mockModel{responses: []string{resp}}
 	seg, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, nil, "")
 	if err != nil {
@@ -436,11 +435,11 @@ func TestSegmentClipsContextBoundaries(t *testing.T) {
 	// 这里测的是坐标纪律）；第一块额外夹带一个下一块首单元（上下文区）的边界。
 	responses := make([]string, len(chunks))
 	for ci, owned := range chunks {
-		bs := fmt.Sprintf(`{"unit_id":%q,"kind":"chapter"}`, units[owned[0]].ID)
+		boundaries := []map[string]any{boundaryFixture(units[owned[0]].ID, "", kindChapter, "")}
 		if ci == 0 {
-			bs += fmt.Sprintf(`,{"unit_id":%q,"kind":"chapter"}`, units[chunks[1][0]].ID)
+			boundaries = append(boundaries, boundaryFixture(units[chunks[1][0]].ID, "", kindChapter, ""))
 		}
-		responses[ci] = `{"boundaries":[` + bs + `]}`
+		responses[ci] = boundariesJSON(boundaries...)
 	}
 	// 裁剪说明走普通进度回显（例行坐标纪律，非警示——warn 色会让用户误以为出错）。
 	var clipNotes int
@@ -468,7 +467,7 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 	chunks := planChunks(units, planningBudget(40, "sys", "")) // 与 Segment 内部规划一致
 	responses := make([]string, len(chunks))
 	for ci, owned := range chunks {
-		responses[ci] = fmt.Sprintf(`{"boundaries":[{"unit_id":%q,"kind":"chapter"}]}`, units[owned[0]].ID)
+		responses[ci] = boundariesJSON(boundaryFixture(units[owned[0]].ID, "", kindChapter, ""))
 	}
 	w := &Workspace{dir: t.TempDir()}
 	m1 := &mockModel{responses: responses}
@@ -504,8 +503,8 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 // 超出可见输出（stop=length），必须对半缩块重试而非整体失败——与 analyze 缩批同哲学。
 func TestSegmentShrinksChunkOnTruncation(t *testing.T) {
 	norm, units := segFixture() // 7 个 unit，单块 [0,7)，mid=3
-	left := `{"boundaries":[{"unit_id":"L1","kind":"chapter"}]}`
-	right := `{"boundaries":[{"unit_id":"L6","kind":"chapter","title":"第二章 云涌"}]}`
+	left := boundariesJSON(boundaryFixture("L1", "", kindChapter, ""))
+	right := boundariesJSON(boundaryFixture("L6", "", kindChapter, "第二章 云涌"))
 	m := &mockModel{
 		responses: []string{`{"boundaries":[]}`, left, right},
 		stops:     []agentcore.StopReason{agentcore.StopReasonLength}, // 首调截断，两个半块正常
@@ -549,7 +548,7 @@ func TestBuildProjectionContextByteCap(t *testing.T) {
 
 func TestCallStructuredTruncation(t *testing.T) {
 	m := &mockModel{responses: []string{`{"boundaries":[]}`}, stop: agentcore.StopReasonLength}
-	_, err := callStructured[boundaryBatch](context.Background(), m, "s", "p", 16, callProfile{}, nil)
+	_, err := callStructured[boundaryBatch](context.Background(), m, segmentContract, "s", "p", 16, callProfile{}, nil)
 	var trunc *errTruncated
 	if err == nil || !asTruncated(err, &trunc) {
 		t.Fatalf("长度截断应返回 *errTruncated，得 %v", err)

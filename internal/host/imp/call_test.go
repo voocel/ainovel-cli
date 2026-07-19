@@ -49,7 +49,7 @@ func TestCallStructuredNotifiesRetries(t *testing.T) {
 			reasks++
 		}
 	}}
-	if _, err := callStructured[boundaryBatch](context.Background(), m, "sys", "p", 100, prof, nil); err != nil {
+	if _, err := callStructured[boundaryBatch](context.Background(), m, segmentContract, "sys", "p", 100, prof, nil); err != nil {
 		t.Fatalf("最终应成功：%v", err)
 	}
 	if retries != 2 || reasks != 1 {
@@ -85,7 +85,7 @@ func TestCallStructuredCancelIsNotSemanticFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	m := &mockModel{responses: []string{"垃圾输出"}}
-	_, err := callStructured[boundaryBatch](ctx, m, "sys", "p", 100, callProfile{}, nil)
+	_, err := callStructured[boundaryBatch](ctx, m, segmentContract, "sys", "p", 100, callProfile{}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("应返回 context.Canceled，得 %v", err)
 	}
@@ -95,16 +95,28 @@ func TestCallStructuredCancelIsNotSemanticFailure(t *testing.T) {
 	}
 }
 
-// TestCallStructuredCarriesRawOnSemanticFailure 守护 §14.2：输出层多次仍非法时，
-// 错误必须携带最后一次原始响应，供 runner 统一落 failures/ 失败工件。
+// TestCallStructuredCarriesRawOnSemanticFailure 守护 §14.2：输出层契约违约时，
+// 错误必须携带原始响应，供 runner 统一落 failures/ 失败工件。
 func TestCallStructuredCarriesRawOnSemanticFailure(t *testing.T) {
-	m := &mockModel{responses: []string{"垃圾输出 not json"}}
-	_, err := callStructured[boundaryBatch](context.Background(), m, "sys", "payload", 100, callProfile{}, nil)
+	m := &nativeImportModel{mockModel: &mockModel{responses: []string{"垃圾输出 not json"}}}
+	_, err := callStructured[boundaryBatch](context.Background(), m, segmentContract, "sys", "payload", 100, callProfile{}, nil)
 	var se *errSemantic
 	if !errors.As(err, &se) {
 		t.Fatalf("应返回 errSemantic，得 %T：%v", err, err)
 	}
-	if se.Raw != "垃圾输出 not json" {
+	if se.Raw != "垃圾输出 not json" || !strings.Contains(se.Error(), "契约违约") {
 		t.Fatalf("Raw 应携带最后一次原始响应，得 %q", se.Raw)
+	}
+}
+
+func TestCallStructuredCarriesRawOnProtocolFailure(t *testing.T) {
+	m := &nativeImportModel{mockModel: &mockModel{
+		responses: []string{"upstream malformed output"},
+		stops:     []agentcore.StopReason{agentcore.StopReasonError},
+	}}
+	_, err := callStructured[boundaryBatch](context.Background(), m, segmentContract, "sys", "payload", 100, callProfile{}, nil)
+	var se *errSemantic
+	if !errors.As(err, &se) || se.Raw != "upstream malformed output" || !strings.Contains(se.Error(), "stop_reason=error") {
+		t.Fatalf("协议错误应携带原始响应，得 %T：%v", err, err)
 	}
 }

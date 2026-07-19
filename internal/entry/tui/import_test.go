@@ -14,25 +14,25 @@ import (
 )
 
 // TestImportHistoryCoalescesRetryLines 守护重试行原地更新：同 Key 连续事件只占一行
-// （"第 N/7 次"在一行跳动），被普通进度行隔断后另起一行，保持时间序。
+// （"第 N 次"在一行跳动），被普通进度行隔断后另起一行，保持时间序。
 func TestImportHistoryCoalescesRetryLines(t *testing.T) {
 	s := newImportState(1, "book.txt", 100, 40, nil)
 	base := len(s.history)
 	retry := func(msg string) imp.Event {
 		return imp.Event{Time: time.Now(), Stage: imp.StageSegmenting, Message: msg, Level: "warn", Key: "retry:segmenting"}
 	}
-	s.appendEvent(retry("1s 后重试（第 1/7 次）"), 80)
-	s.appendEvent(retry("2s 后重试（第 2/7 次）"), 80)
-	s.appendEvent(retry("4s 后重试（第 3/7 次）"), 80)
+	s.appendEvent(retry("1s 后重试（第 1 次）"), 80)
+	s.appendEvent(retry("2s 后重试（第 2 次）"), 80)
+	s.appendEvent(retry("4s 后重试（第 3 次）"), 80)
 	if got := len(s.history) - base; got != 1 {
 		t.Fatalf("同 Key 连续重试应合并为 1 行，得 %d", got)
 	}
-	if last := s.history[len(s.history)-1]; last.message != "4s 后重试（第 3/7 次）" {
+	if last := s.history[len(s.history)-1]; last.message != "4s 后重试（第 3 次）" {
 		t.Fatalf("合并行应更新为最新消息，得 %q", last.message)
 	}
 	// 普通进度行隔断后，新重试另起一行。
 	s.appendEvent(imp.Event{Time: time.Now(), Stage: imp.StageAnalyzing, Message: "分析第 1 章起的连续批次..."}, 80)
-	s.appendEvent(retry("1s 后重试（第 1/7 次）"), 80)
+	s.appendEvent(retry("1s 后重试（第 1 次）"), 80)
 	if got := len(s.history) - base; got != 3 {
 		t.Fatalf("隔断后重试应另起一行，共 3 行，得 %d", got)
 	}

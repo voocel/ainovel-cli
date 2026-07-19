@@ -18,21 +18,20 @@ novel_context 注入
 Architect / Writer / Editor / commit 检查共用
 ```
 
-## 实现状态（2026-06-28，已落地 + 经 review 修缺）
+## 实现状态（2026-07-19，已落地 + 经 review 修缺）
 
 本设计已实现，24 包 `go build` / `go vet` / `go test` 全绿。一轮 code review 后修掉 4 个缺口（均已修复）：①启动 prompt 规则只接在死方法 `Host.Start` 上、真实入口走 `StartPrepared` 而漏建快照——已把原始 prompt 经 `Plan.RawPrompt` 透传到 quick/cocreate 两条入口，统一调 `Host.PrepareUserRules`；②快照落盘失败被吞——`PrepareUserRules` 改为落盘失败即返 error 中止开书（resume 路径保持 best-effort，避免给老书引入新失败模式）；③rules 文件读取错误静默跳过——`raw.go` 对非"不存在"错误（权限等）打日志；④README 仍教旧 YAML/front matter 且链向已删文件——已重写。
 
-落地与本文档基本一致，两处实现选择与字面表述不同，记录于此：
+落地与本文档基本一致，结构化输出升级后的实现选择如下：
 
-1. **归一化不是"provider schema 约束的调用"，而是"prompt 内 JSON 指令 + Go 侧校验"。**
-   原因：litellm 的结构化输出依赖各 provider（OpenAI/Gemini 支持 JSONSchema，Anthropic 不支持），
-   为跨 provider 一致，归一化用 system prompt 约定 JSON 形状 + Go 解析/类型校验/值域 sanitize 兜底，
-   不向模型下发 JSONSchema。下文出现的"schema 约束"均指此口径（Go 侧 schema 校验，非 provider 端约束）。
+1. **归一化只有一份 `Contract.Schema`，不维护两套提示词。**
+   模型声明支持时下发原生 JSON Schema；不支持或能力未知时，统一契约层把同一份 Schema 注入提示词。
+   两种模式都会在 Go 侧复核 Schema，随后执行值域和跨字段业务校验。
 2. **单个字段值非法时降级到"该字段缺失"，而非降级整个来源。**
    如某字段是空占位或类型非法，sanitize 把该字段丢弃（视为未声明）、保留该来源其余合法字段；
    只有"整条归一化失败"（网络/模型/非法 JSON/解析失败）才把整个来源降级为 raw preferences、
-   置 `status=degraded`。这样一个坏字段不会连累同来源的其它有效规则。技术错误进日志，
-   有限重试 1 次后降级（`normalizeMaxAttempts=2`）。
+   置 `status=degraded`。这样一个坏字段不会连累同来源的其它有效规则。可由模型修复的输出错误会携带
+   精确原因继续自愈，生命周期由 `context` 控制；明确的终止错误进入日志并按来源降级。
 
 代码落点：`internal/rules`（纯数据 + 确定性合并：snapshot.go / raw.go / types.go）、`internal/userrules`
 （LLM 归一化 + 编排 + 落盘：normalize.go / service.go）、`internal/store/user_rules.go`（快照存储）、
@@ -187,7 +186,7 @@ LLM 侧职责：
 归一化是增强路径，不是主创作的前置条件。模型理解失败，绝不能阻断写书。
 
 - **按来源降级**：某个来源归一化失败（网络 / 模型 / 非法 JSON / schema 校验失败），该来源降级为 raw preferences、不产 `structured`；其它成功来源照常贡献 `structured`。
-- **有限重试**：失败可重试有限次（如 1 次），仍失败即降级，不做无界重试。
+- **上下文控制自愈**：可重试请求错误、提示词模式的格式/Schema 错误和业务校验错误持续自愈，直到成功或 `context` 结束；不设固定次数。原生契约违约、拒答、截断、错误终止和不可重试请求错误立即暴露并按来源降级。
 - **技术错误进日志**：JSON / schema / 网络等技术错误写入日志，不进 `working_memory.user_rules`，不作为创作输入。
 - **快照标记**：任一来源降级时，快照 `status=degraded`。
 - **能落盘就继续**：只要 `meta/user_rules.json` 能写入，主创作必须继续。

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 const maxSourceRunes = 60000
@@ -92,22 +93,14 @@ func AnalyzeSource(ctx context.Context, llm LLMChat, systemPrompt string, source
 	if strings.TrimSpace(systemPrompt) == "" {
 		return nil, fmt.Errorf("source prompt is required")
 	}
-	resp, err := llm.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg(systemPrompt),
-		agentcore.UserMsg(buildSourceUserPrompt(source)),
-	}, nil)
+	report, err := generateStructured(ctx, llm, sourceReportContract, systemPrompt, buildSourceUserPrompt(source), func(report *domain.SimulationSourceReport) error {
+		if strings.TrimSpace(report.Summary) == "" {
+			return fmt.Errorf("summary is required")
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("llm analyze %s: %w", source.RelativePath, err)
-	}
-	if resp == nil {
-		return nil, fmt.Errorf("llm analyze %s: nil response", source.RelativePath)
-	}
-	var report domain.SimulationSourceReport
-	if err := parseJSONPayload(resp.Message.TextContent(), &report); err != nil {
 		return nil, fmt.Errorf("parse source report %s: %w", source.RelativePath, err)
-	}
-	if strings.TrimSpace(report.Summary) == "" {
-		return nil, fmt.Errorf("source report %s: summary is required", source.RelativePath)
 	}
 	now := time.Now().Format(time.RFC3339)
 	report.RelativePath = source.RelativePath
@@ -121,21 +114,37 @@ func MergeSynthesis(ctx context.Context, llm LLMChat, systemPrompt string, exist
 	if strings.TrimSpace(systemPrompt) == "" {
 		return nil, fmt.Errorf("merge prompt is required")
 	}
-	resp, err := llm.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg(systemPrompt),
-		agentcore.UserMsg(buildMergeUserPrompt(existing, reports)),
-	}, nil)
+	synthesis, err := generateStructured[domain.SimulationSynthesis](ctx, llm, synthesisContract, systemPrompt, buildMergeUserPrompt(existing, reports), nil)
 	if err != nil {
-		return nil, fmt.Errorf("llm merge profile: %w", err)
-	}
-	if resp == nil {
-		return nil, fmt.Errorf("llm merge profile: nil response")
-	}
-	var synthesis domain.SimulationSynthesis
-	if err := parseJSONPayload(resp.Message.TextContent(), &synthesis); err != nil {
 		return nil, fmt.Errorf("parse synthesis: %w", err)
 	}
 	return &synthesis, nil
+}
+
+func generateStructured[T any](ctx context.Context, model LLMChat, contract llmcontract.Contract, systemPrompt, payload string, validate func(*T) error) (T, error) {
+	out, err := llmcontract.Execute(ctx, model, llmcontract.Request[T]{
+		Contract:     contract,
+		SystemPrompt: systemPrompt,
+		Payload:      payload,
+		Validate:     validate,
+		Agent:        "simulation",
+		Hooks: llmcontract.Hooks{
+			Resolved: func(res llmcontract.Resolution) {
+				slog.Debug("仿写画像结构化协议选择", "contract", contract.Name,
+					"structured_mode", res.Mode, "capability_source", res.Source,
+					"provider", res.Provider, "model", res.Model,
+					"schema_fingerprint", contract.Fingerprint())
+			},
+			Correction: func(ev llmcontract.Correction) {
+				slog.Warn("仿写画像输出自愈", "contract", contract.Name, "attempt", ev.Attempt,
+					"layer", ev.Layer, "structured_mode", ev.Mode, "err", ev.Err)
+			},
+		},
+	})
+	if err != nil {
+		return out, fmt.Errorf("structured generation: %w", err)
+	}
+	return out, nil
 }
 
 func pendingSources(existing *domain.SimulationProfile, sources []scannedSource) []scannedSource {
@@ -258,7 +267,7 @@ func buildSourceUserPrompt(source scannedSource) string {
 		"content":       compactSourceContent(source.content),
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
-	return "Analyze this simulation corpus source and return only the requested JSON object.\n\n" + string(data)
+	return string(data)
 }
 
 func buildMergeUserPrompt(existing *domain.SimulationProfile, reports []domain.SimulationSourceReport) string {
@@ -267,7 +276,7 @@ func buildMergeUserPrompt(existing *domain.SimulationProfile, reports []domain.S
 		"source_reports":   reports,
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
-	return "Merge these reports into a reusable writing simulation profile. Return only the requested JSON object.\n\n" + string(data)
+	return string(data)
 }
 
 func compactSourceContent(s string) string {

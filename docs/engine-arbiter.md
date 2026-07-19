@@ -97,11 +97,11 @@ type FailureDecision struct {
 
 ```go
 func CollectInterventionFacts(st *store.Store) InterventionFacts        // IO 边界,同 flow.LoadState 纪律
-func DecideIntervention(ctx, model, facts, text) (InterventionDecision, error) // 除一次 LLM 调用外无 IO,可离线重放
+func DecideIntervention(ctx, model, facts, text) (InterventionDecision, error) // 除统一执行器管理的模型请求外无 IO,可离线重放
 // 其余场景同形一对;Collect/Decide 形状统一,不建通用 Question/Decision 框架
 ```
 
-- **失败路径**:JSON 解析或校验失败带错误重问(最多 3 次);仍失败或模型调用失败——干预显式回显真实错误且不产生写入,启动显式报错,failure/deadlock 按确定性兜底(终止并告警)
+- **失败路径**:统一结构化执行器按模型能力选择原生 JSON Schema 或提示词契约；提示词模式的格式/Schema 错误与两种模式的业务校验错误会携带精确原因交给模型修正，生命周期仅由 `context` 控制。原生契约违约、拒答、截断、错误终止及不可重试请求错误立即显式返回；干预不产生写入，启动显式报错，failure/deadlock 保守暂停
 - **干预记忆**:decisions.jsonl 兼任干预历史,`CollectInterventionFacts` 纳入最近 N 条裁定摘要
 - **模型**:Arbiter 统一使用 Default，不暴露独立 role；只在出现明确的能力或成本需求时再扩展配置契约
 

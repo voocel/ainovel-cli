@@ -65,6 +65,20 @@ func TestInterventionPromptsKeepScopeContract(t *testing.T) {
 	}
 }
 
+func TestStructuredArbiterPromptsContainOnlySemantics(t *testing.T) {
+	prompts := loadPrompts()
+	for name, prompt := range map[string]string{
+		"plan_start": prompts.ArbiterPlanStart,
+		"failure":    prompts.ArbiterFailure,
+	} {
+		for _, duplicate := range []string{"```json", "不要 Markdown", "输出一个 JSON 对象"} {
+			if strings.Contains(prompt, duplicate) {
+				t.Fatalf("%s 提示词仍重复维护输出格式 %q", name, duplicate)
+			}
+		}
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // FailureFacts 是 worker_failure / deadlock 两个场景共用的事实包:
@@ -52,10 +54,26 @@ func (d *FailureDecision) ValidateAgainst(f FailureFacts) error {
 	}
 }
 
+// failureContract 紧邻 FailureDecision:action 封闭枚举,dispatch 可空对象
+// (仅 reroute 时非 null);跨字段组合仍由 ValidateAgainst 按事实校验。
+var failureContract = llmcontract.Contract{
+	Name:        "arbiter_failure",
+	Description: "失败/僵局裁定:给出出路",
+	Schema: schema.Object(
+		schema.Property("action", schema.Enum("出路", "retry", "reroute", "abort")).Required(),
+		schema.Property("dispatch", dispatchSchema("派单目标(仅 reroute 时给出,否则为 null)")).Required(),
+		schema.Property("reason", schema.String("裁定理由")).Required(),
+	),
+}
+
 // DecideFailure 失败/僵局咨询。失败语义:返回 error → Engine 按最保守路径处理
 // (暂停 + notify),绝不无限咨询。
 func DecideFailure(ctx context.Context, model agentcore.ChatModel, systemPrompt string, facts FailureFacts) (FailureDecision, error) {
-	return decide(ctx, model, systemPrompt, marshalPayload(facts), func(d *FailureDecision) error {
+	payload, err := marshalPayload(facts)
+	if err != nil {
+		return FailureDecision{}, err
+	}
+	return decide(ctx, model, failureContract, systemPrompt, payload, func(d *FailureDecision) error {
 		return d.ValidateAgainst(facts)
 	})
 }

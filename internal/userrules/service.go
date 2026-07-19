@@ -2,6 +2,7 @@ package userrules
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/voocel/agentcore"
@@ -26,15 +27,26 @@ func NewService(st *store.Store, model agentcore.ChatModel, opts rules.LoadOptio
 	return &Service{store: st, norm: NewNormalizer(model), rulesOpts: opts}
 }
 
+// normalizeOrDegrade 归一化一个来源；失败时记录真实错误并降级为 raw preferences
+// （快照 Status=degraded、原文保留）——降级是可见事实，错误原因进日志。
+func (s *Service) normalizeOrDegrade(ctx context.Context, source, text string) rules.Candidate {
+	cand, err := s.norm.Normalize(ctx, source, text)
+	if err != nil {
+		slog.Warn("规则归一化失败，降级为原文偏好", "module", "rules", "source", source, "err", err)
+		return degraded(source, text)
+	}
+	return cand
+}
+
 // Build 从静态来源（system_defaults + rules 文件 + 启动 prompt）归一化生成快照并落盘。
 // 开书/刷新时调用。startupPrompt 可空。
 func (s *Service) Build(ctx context.Context, startupPrompt string) (*rules.Snapshot, error) {
 	cands := []rules.Candidate{rules.SystemDefaults()}
 	for _, rs := range rules.RawFileSources(s.rulesOpts) {
-		cands = append(cands, s.norm.Normalize(ctx, rs.Label, rs.Text))
+		cands = append(cands, s.normalizeOrDegrade(ctx, rs.Label, rs.Text))
 	}
 	if strings.TrimSpace(startupPrompt) != "" {
-		cands = append(cands, s.norm.Normalize(ctx, "startup_prompt", startupPrompt))
+		cands = append(cands, s.normalizeOrDegrade(ctx, "startup_prompt", startupPrompt))
 	}
 	snap := rules.BuildSnapshot(cands)
 	if err := s.store.UserRules.Save(&snap); err != nil {
@@ -64,7 +76,7 @@ func (s *Service) AddRuntimeRule(ctx context.Context, text string) (*rules.Snaps
 	if err != nil {
 		return nil, rules.Candidate{}, err
 	}
-	cand := s.norm.Normalize(ctx, "runtime_update", text)
+	cand := s.normalizeOrDegrade(ctx, "runtime_update", text)
 	merged := rules.OverlaySnapshot(*cur, cand)
 	if err := s.store.UserRules.Save(&merged); err != nil {
 		return nil, cand, err

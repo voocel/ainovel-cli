@@ -19,9 +19,9 @@ const (
 // synthesisSchemaVersion 纳入 RangeDigest / synthesis InputDigest，升级综合契约时递增以失效已落盘工件。
 // synthesizePromptVersion 纳入 synthesis InputDigest，改综合 prompt 时递增，否则旧 synthesis 仍被误判有效。
 const (
-	synthesisSchemaVersion  = 1
-	synthesizePromptVersion = "synthesize-v1"
-	rangePromptVersion      = "range-v1" // 纳入 rangeInputDigest，改 Range prompt 时递增，否则旧区间摘要仍被误判有效
+	synthesisSchemaVersion  = 2
+	synthesizePromptVersion = "synthesize-v2"
+	rangePromptVersion      = "range-v2" // 纳入 rangeInputDigest，改 Range prompt 时递增，否则旧区间摘要仍被误判有效
 )
 
 // ImportedArcRange / ImportedVolumeRange：综合只返回卷弧范围，不重复输出所有章节（RFC §10.3）。
@@ -148,15 +148,8 @@ func Synthesize(ctx context.Context, m callModel, bookPrompt, rangePrompt string
 			continue
 		}
 		prof.step(ri+1, len(ranges), "区间摘要 %d/%d（第 %d-%d 章）...", ri+1, len(ranges), startCh, endCh)
-		rd, err := callStructured[RangeDigest](ctx, m, rangePrompt, buildRangePayload(rangeFacts), maxTokens, prof, func(d *RangeDigest) error {
-			if strings.TrimSpace(d.Plot) == "" {
-				return fmt.Errorf("range digest plot 为空")
-			}
-			// 区间边界必须与请求一致，否则归并时会把错位区间当作本区间摘要（RFC §10.2）。
-			if d.StartChapter != startCh || d.EndChapter != endCh {
-				return fmt.Errorf("range digest 章范围 %d-%d 与请求 %d-%d 不符", d.StartChapter, d.EndChapter, startCh, endCh)
-			}
-			return nil
+		rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildRangePayload(rangeFacts), maxTokens, prof, func(d *RangeDigest) error {
+			return validateRangeDigest(d, startCh, endCh, "range digest")
 		})
 		if err != nil {
 			return nil, fmt.Errorf("range %d-%d 综合：%w", startCh, endCh, err)
@@ -199,14 +192,8 @@ func reduceToFit(ctx context.Context, m callModel, rangePrompt string, digests [
 			startCh, endCh := g[0].StartChapter, g[len(g)-1].EndChapter
 			prof.step(gi+1, len(groups), "归并区间摘要（第 %d 轮 %d/%d，第 %d-%d 章）...",
 				round, gi+1, len(groups), startCh, endCh)
-			rd, err := callStructured[RangeDigest](ctx, m, rangePrompt, buildDigestReducePayload(g), maxTokens, prof, func(d *RangeDigest) error {
-				if strings.TrimSpace(d.Plot) == "" {
-					return fmt.Errorf("合并区间 plot 为空")
-				}
-				if d.StartChapter != startCh || d.EndChapter != endCh {
-					return fmt.Errorf("合并区间范围 %d-%d 与请求 %d-%d 不符", d.StartChapter, d.EndChapter, startCh, endCh)
-				}
-				return nil
+			rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildDigestReducePayload(g), maxTokens, prof, func(d *RangeDigest) error {
+				return validateRangeDigest(d, startCh, endCh, "合并区间")
 			})
 			if err != nil {
 				return nil, fmt.Errorf("合并区间 %d-%d：%w", startCh, endCh, err)
@@ -216,6 +203,16 @@ func reduceToFit(ctx context.Context, m callModel, rangePrompt string, digests [
 		digests = merged
 	}
 	return digests, nil
+}
+
+func validateRangeDigest(d *RangeDigest, startChapter, endChapter int, label string) error {
+	if strings.TrimSpace(d.Plot) == "" {
+		return fmt.Errorf("%s plot 为空", label)
+	}
+	if d.StartChapter != startChapter || d.EndChapter != endChapter {
+		return fmt.Errorf("%s 章范围 %d-%d 与请求 %d-%d 不符", label, d.StartChapter, d.EndChapter, startChapter, endChapter)
+	}
+	return nil
 }
 
 // groupDigestsByBudget 把连续区间摘要按字节预算分成连续分组；单个摘要即便超预算也单独成组。
@@ -257,7 +254,7 @@ func rangeInputDigest(facts []ImportedChapterFacts) string {
 
 func synthesizeBook(ctx context.Context, m callModel, systemPrompt, payload string, n, maxTokens int, prof callProfile) (*BookSynthesis, error) {
 	prof.step(0, 0, "生成全书综合（premise/characters/大纲结构）...")
-	s, err := callStructured[BookSynthesis](ctx, m, systemPrompt, buildBookPayload(payload, n), maxTokens, prof, func(s *BookSynthesis) error {
+	s, err := callStructured[BookSynthesis](ctx, m, synthesisContract, systemPrompt, buildBookPayload(payload, n), maxTokens, prof, func(s *BookSynthesis) error {
 		return validateSynthesis(s, n)
 	})
 	if err != nil {

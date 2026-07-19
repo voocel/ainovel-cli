@@ -420,7 +420,7 @@ func TestEngine_WorkerFailureConsultsArbiterAndAborts(t *testing.T) {
 	}
 	// Arbiter 裁定 abort
 	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"abort","reason":"writer 反复空转,建议人工检查模型配置"}`)
+		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"writer 反复空转,建议人工检查模型配置"}`)
 	}}
 	e, _, done := newTestEngine(t, st, subagent.New(writer), arb)
 
@@ -479,7 +479,7 @@ func TestEngine_RetriesUnfinishedPlanStart(t *testing.T) {
 		if arbCalls.Add(1) == 1 {
 			return testTextMsg(`{"planner":"architect_long","task":"围绕凡人修仙规划三卷框架","reason":"长篇修仙题材"}`)
 		}
-		return testTextMsg(`{"action":"abort","reason":"规划师空转,停机"}`)
+		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"规划师空转,停机"}`)
 	}}
 	// 规划师成功返回但不落任何盘 → Route 始终返回同一补齐指令 → 僵局。
 	architect := subagent.Config{
@@ -544,7 +544,9 @@ func TestEngine_PlanStartRetryFailurePauses(t *testing.T) {
 		t.Fatalf("start prompt: %v", err)
 	}
 
+	var e *engine
 	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
+		e.abort() // 模拟宿主取消持续失败的调用，失败路径由 context 明确结束。
 		return testTextMsg("这不是 JSON")
 	}}
 	e, events, done := newTestEngine(t, st, subagent.New(), arb)
@@ -607,7 +609,7 @@ func TestEngine_DeadlockConsultsArbiter(t *testing.T) {
 		Model: lazy, SystemPrompt: "test", MaxTurns: 5,
 	}
 	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"abort","reason":"规划师反复无产出"}`)
+		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"规划师反复无产出"}`)
 	}}
 	e, _, done := newTestEngine(t, st, subagent.New(architect), arb)
 
@@ -662,7 +664,7 @@ func TestEngine_IntermediateCheckpointsDoNotMaskDeadlock(t *testing.T) {
 	// 即使 Arbiter 对 worker_failure / deadlock 一直要求 retry，现有第 5 次
 	// 硬熔断也必须在派发前截停，不得被 edit checkpoint 重置。
 	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"retry","reason":"继续重试"}`)
+		return testTextMsg(`{"action":"retry","dispatch":null,"reason":"继续重试"}`)
 	}}
 	e, _, done := newTestEngine(t, st, subagent.New(writer), arb)
 

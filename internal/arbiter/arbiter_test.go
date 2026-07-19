@@ -2,14 +2,18 @@ package arbiter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -18,19 +22,26 @@ type scriptedModel struct {
 	outputs        []string
 	idx            int64
 	lastCfg        agentcore.CallConfig
+	lastMsgs       []agentcore.Message
 	rejectThinking bool
+	cancel         context.CancelFunc
+	cancelAt       int
 }
 
 func (m *scriptedModel) take() string {
 	i := int(atomic.AddInt64(&m.idx, 1) - 1)
+	if m.cancel != nil && m.cancelAt > 0 && i+1 >= m.cancelAt {
+		m.cancel()
+	}
 	if i >= len(m.outputs) {
 		return m.outputs[len(m.outputs)-1]
 	}
 	return m.outputs[i]
 }
 
-func (m *scriptedModel) Generate(_ context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+func (m *scriptedModel) Generate(_ context.Context, messages []agentcore.Message, _ []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
 	m.lastCfg = agentcore.ResolveCallConfig(opts)
+	m.lastMsgs = messages
 	if m.rejectThinking && m.lastCfg.ThinkingLevel != agentcore.ThinkingAuto {
 		return nil, errors.New("thinking is only supported for reasoning chat models")
 	}
@@ -52,6 +63,22 @@ func TestDecidePlanStartDoesNotSendThinkingToChatModel(t *testing.T) {
 	}
 	if m.lastCfg.MaxTokens != decideMaxTokens {
 		t.Fatalf("max_tokens = %d, want %d", m.lastCfg.MaxTokens, decideMaxTokens)
+	}
+}
+
+func TestDecidePromptContractAppendsSchema(t *testing.T) {
+	m := &scriptedModel{outputs: []string{
+		`{"planner":"architect_short","task":"规划短篇","reason":"篇幅较短"}`,
+	}}
+	const semanticPrompt = "只根据需求判断规划方式。"
+	if _, err := DecidePlanStart(t.Context(), m, semanticPrompt, "写一部短篇", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := m.lastMsgs[0].TextContent()
+	for _, want := range []string{semanticPrompt, "<output-json-schema>", `"planner"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt contract 缺少 %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -114,18 +141,19 @@ func TestDecidePlanStart_ValidAndFeedbackRetry(t *testing.T) {
 	}
 }
 
-func TestDecide_FailsAfterMaxAttempts(t *testing.T) {
-	m := &scriptedModel{outputs: []string{"完全不是 JSON"}}
-	if _, err := DecidePlanStart(context.Background(), m, "sys", "需求", ""); err == nil {
-		t.Fatal("连续非法输出应返回错误（由调用方降级）")
+func TestDecide_InvalidOutputContinuesUntilContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &scriptedModel{outputs: []string{"完全不是 JSON"}, cancel: cancel, cancelAt: 4}
+	if _, err := DecidePlanStart(ctx, m, "sys", "需求", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("应由 context 结束自愈循环，得 %v", err)
 	}
-	if got := atomic.LoadInt64(&m.idx); got != decideMaxAttempts {
-		t.Fatalf("应尝试 %d 次, got %d", decideMaxAttempts, got)
+	if got := atomic.LoadInt64(&m.idx); got != 4 {
+		t.Fatalf("context 取消前应持续调用，got %d", got)
 	}
 }
 
 func TestDecide_RetryableModelErrorReportsSharedProgress(t *testing.T) {
-	m := &failingThenValidModel{failures: 2}
+	m := &failingThenValidModel{failures: 8}
 	var progress []agentcore.ProgressPayload
 	ctx := agentcore.WithToolProgress(context.Background(), func(p agentcore.ProgressPayload) {
 		progress = append(progress, p)
@@ -134,10 +162,10 @@ func TestDecide_RetryableModelErrorReportsSharedProgress(t *testing.T) {
 	if _, err := DecidePlanStart(ctx, m, "sys", "需求", ""); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
-	if got := atomic.LoadInt64(&m.calls); got != 3 {
-		t.Fatalf("model calls = %d, want 3", got)
+	if got := atomic.LoadInt64(&m.calls); got != 9 {
+		t.Fatalf("model calls = %d, want 9", got)
 	}
-	if len(progress) != 2 || progress[1].Kind != agentcore.ProgressRetry || progress[1].Agent != "arbiter" || progress[1].Attempt != 2 || progress[1].MaxRetries != modelMaxRetries {
+	if len(progress) != 8 || progress[7].Kind != agentcore.ProgressRetry || progress[7].Agent != "arbiter" || progress[7].Attempt != 8 || progress[7].MaxRetries != 0 {
 		t.Fatalf("progress = %+v", progress)
 	}
 }
@@ -294,8 +322,147 @@ func TestExtractJSON(t *testing.T) {
 		`{"nested":{"b":2},"c":3} 尾巴`:    `{"nested":{"b":2},"c":3}`,
 	}
 	for in, want := range cases {
-		if got := extractJSON(in); got != want {
+		if got := llmcontract.ExtractJSONObject(in); got != want {
 			t.Errorf("extractJSON(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// nativeModel 声明支持原生 JSON Schema 的模型:decide 应走 native 分支。
+type nativeModel struct {
+	*scriptedModel
+	stop agentcore.StopReason
+}
+
+func (m *nativeModel) Capabilities() llm.Capabilities {
+	return llm.Capabilities{
+		Provider:   "openai",
+		Model:      "gpt-test",
+		Structured: llm.StructuredCapabilities{JSONSchema: llm.SupportYes, Strict: llm.SupportYes},
+	}
+}
+
+func (m *nativeModel) Generate(ctx context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	resp, err := m.scriptedModel.Generate(ctx, msgs, tools, opts...)
+	if resp != nil && m.stop != "" {
+		resp.Message.StopReason = m.stop
+	}
+	return resp, err
+}
+
+// 契约测试(RFC §11.1):根为 object、全属性(含嵌套)required、dispatch 为可空对象。
+func TestContractSchemasAreStrictReady(t *testing.T) {
+	for _, c := range []llmcontract.Contract{planStartContract, failureContract, interventionContract} {
+		if c.Schema["type"] != "object" {
+			t.Fatalf("%s: 根必须是 object", c.Name)
+		}
+		if err := llmcontract.ValidateStrictReady(c.Schema); err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		if len(c.Fingerprint()) != 12 {
+			t.Fatalf("%s: fingerprint 异常: %q", c.Name, c.Fingerprint())
+		}
+	}
+	dispatch := failureContract.Schema["properties"].(map[string]any)["dispatch"].(map[string]any)
+	types, ok := dispatch["type"].([]string)
+	if !ok || !slices.Contains(types, "null") || !slices.Contains(types, "object") {
+		t.Fatalf("dispatch 应为可空对象: %v", dispatch["type"])
+	}
+	var d FailureDecision
+	if err := json.Unmarshal([]byte(`{"action":"retry","dispatch":null,"reason":"瞬时错误"}`), &d); err != nil {
+		t.Fatalf("含 dispatch:null 的样本应可解码: %v", err)
+	}
+	if err := d.ValidateAgainst(FailureFacts{Phase: "writing"}); err != nil {
+		t.Fatalf("样本应过校验: %v", err)
+	}
+}
+
+func TestDecideNativeSendsSchemaAndDecodesFullOutput(t *testing.T) {
+	m := &nativeModel{scriptedModel: &scriptedModel{outputs: []string{
+		`{"planner":"architect_short","task":"规划短篇","reason":"篇幅较短"}`,
+	}}}
+	const semanticPrompt = "只根据需求判断规划方式。"
+	d, err := DecidePlanStart(t.Context(), m, semanticPrompt, "写一部短篇", "")
+	if err != nil || d.Planner != "architect_short" {
+		t.Fatalf("native 裁定失败: %+v %v", d, err)
+	}
+	rf := m.lastCfg.ResponseFormat
+	if rf == nil || rf.Type != agentcore.ResponseFormatJSONSchema || rf.JSONSchema == nil {
+		t.Fatalf("native 模式应发送 response_format: %+v", rf)
+	}
+	if rf.JSONSchema.Name != "arbiter_plan_start" || rf.JSONSchema.Strict == nil || !*rf.JSONSchema.Strict {
+		t.Fatalf("schema 参数不符: %+v", rf.JSONSchema)
+	}
+	if got := m.lastMsgs[0].TextContent(); got != semanticPrompt {
+		t.Fatalf("native 模式不应向提示词重复注入 schema:\n%s", got)
+	}
+}
+
+// native 模式下解码失败=provider 契约违约:立即报错,不走 extractJSON 兜底、不重问。
+func TestDecideNativeFencedOutputIsContractViolation(t *testing.T) {
+	m := &nativeModel{scriptedModel: &scriptedModel{outputs: []string{
+		"```json\n{\"planner\":\"architect_short\",\"task\":\"x\",\"reason\":\"y\"}\n```",
+	}}}
+	_, err := DecidePlanStart(t.Context(), m, "sys", "写一部短篇", "")
+	if err == nil || !strings.Contains(err.Error(), "契约违约") {
+		t.Fatalf("期望契约违约错误, got %v", err)
+	}
+	if m.idx != 1 {
+		t.Fatalf("契约违约不应重问, 调用了 %d 次", m.idx)
+	}
+}
+
+// native 模式业务校验失败仍反馈重问,且重问请求保留 schema。
+func TestDecideNativeValidateFailureFeedbackKeepsSchema(t *testing.T) {
+	m := &nativeModel{scriptedModel: &scriptedModel{outputs: []string{
+		`{"action":"reroute","dispatch":null,"reason":"需要换路"}`,
+		`{"action":"retry","dispatch":null,"reason":"瞬时错误可重试"}`,
+	}}}
+	d, err := DecideFailure(t.Context(), m, "sys", FailureFacts{Kind: "worker_failure", Phase: "writing"})
+	if err != nil || d.Action != "retry" {
+		t.Fatalf("反馈重问后应成功: %+v %v", d, err)
+	}
+	if m.idx != 2 {
+		t.Fatalf("应恰好两次调用, got %d", m.idx)
+	}
+	if m.lastCfg.ResponseFormat == nil {
+		t.Fatal("重问请求丢失了 schema")
+	}
+}
+
+// native 模式先分类终止原因:截断/拒答/空响应是独立错误事实,不进重问循环。
+func TestDecideNativeStopReasonClassification(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		stop    agentcore.StopReason
+		wantErr string
+	}{
+		{"length 截断", `{"planner":`, agentcore.StopReasonLength, "截断"},
+		{"safety 拒答", `无法协助`, agentcore.StopReasonSafety, "拒答"},
+		{"空响应", ``, agentcore.StopReasonStop, "空内容"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &nativeModel{scriptedModel: &scriptedModel{outputs: []string{tc.output}}, stop: tc.stop}
+			_, err := DecidePlanStart(t.Context(), m, "sys", "写一部短篇", "")
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("期望 %q 错误, got %v", tc.wantErr, err)
+			}
+			if m.idx != 1 {
+				t.Fatalf("终止原因不应重问, 调用了 %d 次", m.idx)
+			}
+		})
+	}
+}
+
+// marshalPayload 失败必须暴露:静默伪造 {} 会让模型基于假事实误判。
+func TestMarshalPayloadErrors(t *testing.T) {
+	if _, err := marshalPayload(func() {}); err == nil {
+		t.Fatal("不可序列化载荷应报错")
+	}
+	s, err := marshalPayload(map[string]int{"a": 1})
+	if err != nil || !strings.Contains(s, `"a"`) {
+		t.Fatalf("正常载荷: %q %v", s, err)
 	}
 }

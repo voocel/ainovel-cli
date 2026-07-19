@@ -122,6 +122,35 @@ func TestConfigureModelsPersistsAndHotApplies(t *testing.T) {
 	}
 }
 
+// TUI 草稿保存不得丢失 json_schema 三态（prepareProviderDraftLocked 整结构体
+// 往返的回归锁）。
+func TestConfigureModelsPreservesJSONSchemaTriState(t *testing.T) {
+	h, path := newModelConfigTestHost(t)
+	tr := true
+	err := h.ConfigureModels(ModelConfigurationDraft{
+		Provider: "proxy", Type: "openai", BaseURL: "https://example.com/v1",
+		Models: []bootstrap.ModelConfig{
+			{Name: "old", ContextWindow: 128000, JSONSchema: &tr},
+			{Name: "writer-model"},
+		},
+		APIKeyAction: APIKeyKeep,
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	saved, err := bootstrap.LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("load saved: %v", err)
+	}
+	models := saved.Providers["proxy"].Models
+	if len(models) != 2 || models[0].JSONSchema == nil || !*models[0].JSONSchema {
+		t.Fatalf("json_schema 丢失: %#v", models)
+	}
+	if models[1].JSONSchema != nil {
+		t.Fatalf("未配置模型不应臆造三态: %#v", models[1])
+	}
+}
+
 func TestConfigureModelsRenamesModelAndReferencesAtomically(t *testing.T) {
 	h, path := newModelConfigTestHost(t)
 	err := h.ConfigureModels(ModelConfigurationDraft{

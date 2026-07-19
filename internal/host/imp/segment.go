@@ -350,7 +350,7 @@ func Segment(ctx context.Context, m callModel, systemPrompt string, normalized [
 		}
 		v := chunkValidator{projIDs: projIDs, ownedIDs: ownedIDs, unitByID: unitByID,
 			normalized: normalized, coverStart: owned[0] == 0}
-		batch, err := callStructured[boundaryBatch](ctx, m, systemPrompt, payload, maxTokens, prof, func(b *boundaryBatch) error {
+		batch, err := callStructured[boundaryBatch](ctx, m, segmentContract, systemPrompt, payload, maxTokens, prof, func(b *boundaryBatch) error {
 			return v.validate(b.Boundaries)
 		})
 		if err != nil {

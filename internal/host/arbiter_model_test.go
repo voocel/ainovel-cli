@@ -50,3 +50,37 @@ func TestUsageTrackedModelPreservesOptionalCapabilities(t *testing.T) {
 		t.Fatal("wrapper must not invent capabilities for an unknown model")
 	}
 }
+
+type overrideCapableTestModel struct {
+	*capableTrackedTestModel
+	override *bool
+}
+
+func (m *overrideCapableTestModel) JSONSchemaOverride() *bool { return m.override }
+
+// usage 包装器必须透传 config json_schema 覆盖值；inner 未携带时返回 nil
+// （"未配置"），不伪造能力。
+func TestUsageTrackedModelForwardsJSONSchemaOverride(t *testing.T) {
+	tr := true
+	inner := &overrideCapableTestModel{
+		capableTrackedTestModel: &capableTrackedTestModel{plainTrackedTestModel: &plainTrackedTestModel{}},
+		override:                &tr,
+	}
+	wrapped := newUsageTrackedModel(inner, "arbiter", func(string, string, agentcore.AgentMessage) {})
+	o, ok := wrapped.(interface{ JSONSchemaOverride() *bool })
+	if !ok {
+		t.Fatal("usage wrapper dropped JSONSchemaOverride")
+	}
+	if v := o.JSONSchemaOverride(); v == nil || !*v {
+		t.Fatalf("override 未透传: %v", v)
+	}
+
+	capsOnly := newUsageTrackedModel(&capableTrackedTestModel{plainTrackedTestModel: &plainTrackedTestModel{}}, "arbiter", func(string, string, agentcore.AgentMessage) {})
+	o, ok = capsOnly.(interface{ JSONSchemaOverride() *bool })
+	if !ok {
+		t.Fatal("capability wrapper should expose JSONSchemaOverride")
+	}
+	if v := o.JSONSchemaOverride(); v != nil {
+		t.Fatalf("inner 无覆盖时应为 nil: %v", v)
+	}
+}

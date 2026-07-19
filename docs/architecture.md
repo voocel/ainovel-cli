@@ -304,7 +304,7 @@ for {
 
 ### 7.2 Arbiter（`internal/arbiter/`）
 
-四个场景，每场景一对 `Collect*Facts`（IO 边界）/ `Decide*`（除一次 LLM 调用外无 IO，可离线重放）+ 专属 Decision 类型（场景不匹配的动作在类型上不可表达）：
+四个场景，每场景一对 `Collect*Facts`（IO 边界）/ `Decide*`（除统一执行器管理的模型请求外无 IO，可离线重放）+ 专属 Decision 类型（场景不匹配的动作在类型上不可表达）：
 
 | 场景 | 触发 | 决策类型 |
 |---|---|---|
@@ -313,7 +313,7 @@ for {
 | `worker_failure` | Worker 报错且确定性分类无出路 | retry / reroute / abort |
 | `deadlock` | 同指令反复无进展 | retry / reroute / abort |
 
-失败路径：解析或校验失败带反馈重问（最多 3 次）→ 仍失败或模型调用失败时，干预显式回显真实错误且不产生写入，启动显式报错，failure/deadlock 保守暂停。**Arbiter 输出与一切 LLM 输出同样不可信**——`Validate` 按事实做机械校验（phase 约束、reopen 仅限完本、章节越界）是最后一道门。用量经 `usageTrackedModel` 进预算与 usage 系统。
+失败路径：统一结构化执行器按能力选择原生 JSON Schema 或提示词契约；提示词模式的格式/Schema 错误与两种模式的业务校验错误会把精确原因反馈给模型继续修正，直至成功或 `context` 结束，不设置次数上限。原生契约违约、拒答、截断、错误终止及不可重试请求错误立即显式返回；干预不产生写入，启动显式报错，failure/deadlock 保守暂停。**Arbiter 输出与一切 LLM 输出同样不可信**——JSON Schema 校验后，`Validate` 继续按事实做机械校验（phase 约束、reopen 仅限完本、章节越界）。用量经 `usageTrackedModel` 进预算与 usage 系统。
 
 ### 7.3 Host 外壳（`internal/host/host.go`）
 

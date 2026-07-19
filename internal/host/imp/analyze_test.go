@@ -80,9 +80,12 @@ func TestPlanBatchInputBudgetCaps(t *testing.T) {
 }
 
 func factsJSON(chapter int, title string) string {
-	f := ImportedChapterFacts{
-		Chapter: chapter, Title: title, Summary: "摘要", CoreEvent: "核心事件",
-		KeyEvents: []string{"事件"}, HookType: "mystery", DominantStrand: "quest",
+	f := map[string]any{
+		"chapter": chapter, "title": title, "summary": "摘要", "core_event": "核心事件",
+		"key_events": []string{"事件"}, "hook": nil, "scenes": []string{}, "characters": []string{},
+		"character_evidence": []any{}, "world_evidence": []any{}, "timeline_events": []any{},
+		"foreshadow_updates": []any{}, "relationship_changes": []any{}, "state_changes": []any{},
+		"hook_type": "mystery", "dominant_strand": "quest",
 	}
 	data, _ := json.Marshal(f)
 	return string(data)

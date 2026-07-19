@@ -5,6 +5,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // usageTrackedModel 给模型调用接上用量追踪:token/成本必须进入预算与 usage 系统,
@@ -36,6 +37,27 @@ type capabilityUsageTrackedModel struct {
 
 func (m *capabilityUsageTrackedModel) Capabilities() llm.Capabilities {
 	return m.capabilities.Capabilities()
+}
+
+// JSONSchemaOverride 透传底层模型的 config json_schema 三态声明；inner 未携带
+// 时返回 nil（"未配置"），不伪造能力。
+func (m *capabilityUsageTrackedModel) JSONSchemaOverride() *bool {
+	if o, ok := m.usageTrackedModel.inner.(interface{ JSONSchemaOverride() *bool }); ok {
+		return o.JSONSchemaOverride()
+	}
+	return nil
+}
+
+func (m *capabilityUsageTrackedModel) StructuredOutputFacts() llmcontract.ModelFacts {
+	if provider, ok := m.usageTrackedModel.inner.(interface {
+		StructuredOutputFacts() llmcontract.ModelFacts
+	}); ok {
+		return provider.StructuredOutputFacts()
+	}
+	return llmcontract.ModelFacts{
+		Capabilities:       m.Capabilities(),
+		JSONSchemaOverride: m.JSONSchemaOverride(),
+	}
 }
 
 func (m *usageTrackedModel) Generate(ctx context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
