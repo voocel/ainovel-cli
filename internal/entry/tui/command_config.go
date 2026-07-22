@@ -171,8 +171,9 @@ func (s *modelConfigState) applyProviderChoice(choice configProviderChoice) {
 		return
 	}
 	s.provider = choice.preset.Name
-	s.providerType = "" // 内置 provider 协议由名称隐含
+	s.providerType = choice.preset.Type // 为空表示内置 provider 协议由名称隐含
 	s.baseURL = choice.preset.BaseURL
+	s.models = append([]bootstrap.ModelConfig(nil), choice.preset.Models...)
 	s.apiKeyOptional = choice.preset.APIKeyOptional
 	s.step = configStepHub
 }
