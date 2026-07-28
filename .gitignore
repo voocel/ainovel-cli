@@ -34,11 +34,26 @@ go.work.sum
 .idea/
 .vscode/
 .cache
+.playwright-cli/
 
-# GoReleaser artifacts
-dist/
+# GoReleaser artifacts（锚定到仓库根，避免误伤 cmd/ainovel-desktop/frontend/dist 的 embed 占位）
+/dist/
 release-notes.md
 /ainovel-cli
+
+# 桌面前端：依赖与 wails 生成物不入库；dist 只保留 .gitkeep 占位（embed 目标必须存在）
+cmd/ainovel-desktop/frontend/node_modules/
+cmd/ainovel-desktop/frontend/wailsjs/
+cmd/ainovel-desktop/frontend/dist/*
+!cmd/ainovel-desktop/frontend/dist/.gitkeep
+# wails 用它判断依赖是否需要重装，属本地构建缓存
+cmd/ainovel-desktop/frontend/package.json.md5
+
+# 桌面构建产物（build/windows 下的图标与 manifest 是配置，要入库）
+cmd/ainovel-desktop/build/bin/
+
+# 本地打包输出目录（可执行文件 + 随包拷贝的文档副本，均为产物）
+/bin/
 
 tasks
 refer/

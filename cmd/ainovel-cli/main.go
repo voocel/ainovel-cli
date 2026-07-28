@@ -13,6 +13,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/entry/tui"
 	"github.com/voocel/ainovel-cli/internal/eval"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	buildversion "github.com/voocel/ainovel-cli/internal/version"
 )
 
@@ -99,6 +100,7 @@ func stdinIsTerminal() bool {
 
 func runWithConfig(cfg bootstrap.Config, opts cliOptions, args []string) {
 	rules.EnsureHomeRulesDir()
+	skills.EnsureHomeSkillsDir()
 
 	if len(args) > 0 {
 		die("error: 不再支持命令行直接传入小说需求，请启动后在 TUI 输入框中输入")

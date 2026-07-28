@@ -271,6 +271,14 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "skill",
+			Group:       "writing",
+			Usage:       "/skill [名称] [章节范围] | /skill reload",
+			Description: "查看或执行专项技能（如去 AI 味、收紧节奏）",
+			AutoExecute: true,
+			Run:         runSkillCommand,
+		},
+		{
 			Name:        "export",
 			Group:       "writing",
 			Usage:       "/export [path] [from=N] [to=M] [--overwrite]",

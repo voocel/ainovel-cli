@@ -19,6 +19,7 @@
 - **用户实时干预** — 写作过程中随时在输入框注入修改意见（无需暂停），系统自动评估影响范围并重写受影响章节
 - **可选逐章验收** — 默认仍全自动；需要精细控制时用 `/review on`，每次 `/next` 只放行一个新章节，返工和崩溃恢复不会误消耗许可
 - **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
+- **Windows 桌面端** — 提供书库、创作工作台、章节阅读、导入、封面生成、EPUB 导出和模型设置
 - **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
 
 ## 架构
@@ -212,6 +213,19 @@ ainovel-cli
 ```
 
 > Windows 或手动安装：前往 [Releases](https://github.com/voocel/ainovel-cli/releases/latest) 下载对应平台的包。
+
+### Windows 桌面端
+
+桌面端基于 Wails v2。源码构建需要 Go、Node.js、GCC、WebView2 Runtime，以及已加入
+`PATH` 的 `wails` 命令。在 Windows 的 Git Bash 中运行：
+
+```bash
+bash scripts/build-desktop.sh
+```
+
+产物位于 `cmd/ainovel-desktop/build/bin/ainovel-desktop.exe`。生图服务在桌面端的
+「小说封面」面板单独配置；支持官方 OpenAI Images 兼容接口，JarlessAPI 地址会自动
+切换为异步任务轮询，API Key 只保存在本机 `~/.ainovel/imagegen.json`。
 
 ### Docker
 

@@ -14,6 +14,7 @@ import (
 	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -200,6 +201,16 @@ func TestInterventionDecision_ValidateAgainst(t *testing.T) {
 	writing := InterventionFacts{Phase: string(domain.PhaseWriting), CompletedChapters: 10}
 	complete := InterventionFacts{Phase: string(domain.PhaseComplete), CompletedChapters: 10}
 
+	// 带技能名单的事实包：技能校验只认 facts 里的名单，不查磁盘。
+	skillCatalog := []SkillInfo{
+		{Name: "anti-ai-tone", Description: "清 AI 味", Agent: "editor", Scope: "chapters"},
+		{Name: "voice-drift", Description: "调整后续笔法", Agent: "writer", Scope: "forward"},
+	}
+	withSkills := writing
+	withSkills.AvailableSkills = skillCatalog
+	completeWithSkills := complete
+	completeWithSkills.AvailableSkills = skillCatalog
+
 	cases := []struct {
 		name    string
 		d       InterventionDecision
@@ -225,6 +236,55 @@ func TestInterventionDecision_ValidateAgainst(t *testing.T) {
 		{"一次性暂停缺摘要", InterventionDecision{Hold: &AdvanceHoldOp{After: domain.AdvanceHoldAtBoundary}, Reason: "r"}, writing, true},
 		{"取消一次性暂停", InterventionDecision{Hold: &AdvanceHoldOp{Cancel: true}, Answer: "继续", Reason: "r"}, writing, false},
 		{"完本期设置一次性暂停", InterventionDecision{Hold: &AdvanceHoldOp{After: domain.AdvanceHoldAtBoundary, Reason: "停"}, Reason: "r"}, complete, true},
+
+		// ── 专项技能 ──
+		{"技能挂在匹配的派单上", InterventionDecision{
+			Skill:    &SkillOp{Name: "anti-ai-tone", Chapters: []int{3, 4}},
+			Dispatch: &DispatchOp{Agent: "editor", Task: "清理第 3-4 章 AI 味"},
+			Reason:   "命中去 AI 味技能",
+		}, withSkills, false},
+		// 技能单独出现合法：Engine 会按技能声明的 agent 补派单。
+		{"技能单独出现", InterventionDecision{
+			Skill:  &SkillOp{Name: "anti-ai-tone"},
+			Reason: "命中技能，执行者由技能声明",
+		}, withSkills, false},
+		{"未知技能名", InterventionDecision{
+			Skill:  &SkillOp{Name: "no-such-skill"},
+			Reason: "r",
+		}, withSkills, true},
+		{"名单为空时不得填技能", InterventionDecision{
+			Skill:  &SkillOp{Name: "anti-ai-tone"},
+			Reason: "r",
+		}, writing, true},
+		{"技能与派单执行者冲突", InterventionDecision{
+			Skill:    &SkillOp{Name: "anti-ai-tone"},
+			Dispatch: &DispatchOp{Agent: "architect_long", Task: "扩大纲"},
+			Reason:   "r",
+		}, withSkills, true},
+		{"技能章节越界", InterventionDecision{
+			Skill:    &SkillOp{Name: "anti-ai-tone", Chapters: []int{99}},
+			Dispatch: &DispatchOp{Agent: "editor", Task: "x"},
+			Reason:   "r",
+		}, withSkills, true},
+		{"技能章节为零", InterventionDecision{
+			Skill:    &SkillOp{Name: "anti-ai-tone", Chapters: []int{0}},
+			Dispatch: &DispatchOp{Agent: "editor", Task: "x"},
+			Reason:   "r",
+		}, withSkills, true},
+		{"forward 技能不接受章节", InterventionDecision{
+			Skill:    &SkillOp{Name: "voice-drift", Chapters: []int{3}},
+			Dispatch: &DispatchOp{Agent: "writer", Task: "x"},
+			Reason:   "r",
+		}, withSkills, true},
+		{"完本期挂技能须同时 reopen", InterventionDecision{
+			Skill:  &SkillOp{Name: "anti-ai-tone", Chapters: []int{3}},
+			Reason: "r",
+		}, completeWithSkills, true},
+		{"完本期技能配 reopen", InterventionDecision{
+			Skill:  &SkillOp{Name: "anti-ai-tone", Chapters: []int{3}},
+			Reopen: &ReopenOp{Chapters: []int{3}},
+			Reason: "重开后清 AI 味",
+		}, completeWithSkills, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,9 +337,18 @@ func TestCollectInterventionFacts(t *testing.T) {
 		t.Fatalf("append decision: %v", err)
 	}
 
-	f, err := CollectInterventionFacts(st)
+	f, err := CollectInterventionFacts(st, skills.Load(skills.LoadOptions{}))
 	if err != nil {
 		t.Fatalf("CollectInterventionFacts: %v", err)
+	}
+	// 技能名单必须进事实包：它是 Arbiter 判断"有没有对应处理方法"的唯一依据。
+	if len(f.AvailableSkills) == 0 {
+		t.Fatal("内置技能应进入事实包 available_skills")
+	}
+	for _, sk := range f.AvailableSkills {
+		if sk.Name == "" || sk.Description == "" || sk.Agent == "" || sk.Scope == "" {
+			t.Fatalf("技能事实项字段不全: %+v", sk)
+		}
 	}
 	if f.NovelName != "测试书" {
 		t.Fatalf("facts 应含书名, got %+v", f)
@@ -305,7 +374,7 @@ func TestCollectInterventionFacts(t *testing.T) {
 	if err := st.Progress.ReopenContinue(); err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	f, err = CollectInterventionFacts(st)
+	f, err = CollectInterventionFacts(st, skills.Load(skills.LoadOptions{}))
 	if err != nil {
 		t.Fatalf("CollectInterventionFacts after reopen: %v", err)
 	}
@@ -352,7 +421,13 @@ func (m *nativeModel) Generate(ctx context.Context, msgs []agentcore.Message, to
 
 // 契约测试(RFC §11.1):根为 object、全属性(含嵌套)required、dispatch 为可空对象。
 func TestContractSchemasAreStrictReady(t *testing.T) {
-	for _, c := range []llmcontract.Contract{planStartContract, failureContract, interventionContract} {
+	// 干预契约随技能名单动态构造，两种形态（有/无技能）都必须 strict-ready。
+	interventionWithSkills := interventionContract([]SkillInfo{
+		{Name: "anti-ai-tone", Description: "清 AI 味", Agent: "editor", Scope: "chapters"},
+	})
+	for _, c := range []llmcontract.Contract{
+		planStartContract, failureContract, interventionContract(nil), interventionWithSkills,
+	} {
 		if c.Schema["type"] != "object" {
 			t.Fatalf("%s: 根必须是 object", c.Name)
 		}
@@ -373,6 +448,56 @@ func TestContractSchemasAreStrictReady(t *testing.T) {
 		t.Fatalf("含 dispatch:null 的样本应可解码: %v", err)
 	}
 	if err := d.ValidateAgainst(FailureFacts{Phase: "writing"}); err != nil {
+		t.Fatalf("样本应过校验: %v", err)
+	}
+}
+
+// 干预契约的 skill 位随名单动态生成。两条硬约束：
+// 名单为空时**完全不生成** skill 属性（空 enum 会被 provider 的 strict 校验直接打回）；
+// 同一名单必须产出同一 fingerprint（否则每次启动都在换契约，缓存与审计全部失真）。
+func TestInterventionContractSkillProperty(t *testing.T) {
+	empty := interventionContract(nil).Schema["properties"].(map[string]any)
+	if _, ok := empty["skill"]; ok {
+		t.Fatal("技能名单为空时不应生成 skill 属性")
+	}
+
+	available := []SkillInfo{
+		{Name: "anti-ai-tone", Description: "清 AI 味", Agent: "editor", Scope: "chapters"},
+		{Name: "tighten-pacing", Description: "收紧节奏", Agent: "editor", Scope: "chapters"},
+	}
+	c := interventionContract(available)
+	skill, ok := c.Schema["properties"].(map[string]any)["skill"].(map[string]any)
+	if !ok {
+		t.Fatal("有技能时应生成 skill 属性")
+	}
+	types, ok := skill["type"].([]string)
+	if !ok || !slices.Contains(types, "null") || !slices.Contains(types, "object") {
+		t.Fatalf("skill 应为可空对象: %v", skill["type"])
+	}
+	name := skill["properties"].(map[string]any)["name"].(map[string]any)
+	enum, ok := name["enum"].([]string)
+	if !ok || !slices.Contains(enum, "anti-ai-tone") || !slices.Contains(enum, "tighten-pacing") {
+		t.Fatalf("skill.name 的 enum 应是当前技能名单: %v", name["enum"])
+	}
+
+	// 指纹稳定性：同名单两次构造必须一致，不同名单必须不同。
+	if a, b := interventionContract(available).Fingerprint(), interventionContract(available).Fingerprint(); a != b {
+		t.Fatalf("同一技能名单的 fingerprint 应稳定: %s vs %s", a, b)
+	}
+	if same := interventionContract(available[:1]).Fingerprint(); same == c.Fingerprint() {
+		t.Fatal("名单变化后 fingerprint 应随之变化")
+	}
+
+	// skill:null 的样本必须可解码并过校验——模型多数时候不挂技能。
+	var d InterventionDecision
+	raw := `{"answer":"好的","rules":"","hold":null,"reopen":null,"skill":null,"dispatch":null,"reason":"查询"}`
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatalf("含 skill:null 的样本应可解码: %v", err)
+	}
+	if d.Skill != nil {
+		t.Fatal("skill:null 应解码为 nil")
+	}
+	if err := d.ValidateAgainst(InterventionFacts{Phase: "writing", AvailableSkills: available}); err != nil {
 		t.Fatalf("样本应过校验: %v", err)
 	}
 }

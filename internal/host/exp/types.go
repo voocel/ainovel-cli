@@ -38,6 +38,45 @@ type Options struct {
 
 	// Overwrite 文件存在时是否覆盖；默认拒绝。
 	Overwrite bool
+
+	// Cover 是可选的封面图，仅 EPUB 生效（TXT 无处安放）。
+	// 由调用方读取并传入——exp 不认识书目录里的封面约定，保持只读 store 的边界。
+	Cover *CoverImage
+}
+
+// CoverImage 是嵌入 EPUB 的封面图。
+type CoverImage struct {
+	// Data 是图片原始字节。
+	Data []byte
+	// MediaType 是准确的 MIME（image/png / image/jpeg / image/webp）；
+	// 写进 manifest，错了阅读器会拒绝渲染。
+	MediaType string
+}
+
+func (c *CoverImage) valid() bool {
+	if c == nil || len(c.Data) == 0 {
+		return false
+	}
+	switch c.MediaType {
+	case "image/png", "image/jpeg", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+// fileName 按 media-type 推导容器内的文件名。
+func (c *CoverImage) fileName() string {
+	switch c.MediaType {
+	case "image/jpeg":
+		return "cover.jpg"
+	case "image/webp":
+		return "cover.webp"
+	case "image/png":
+		return "cover.png"
+	default:
+		return ""
+	}
 }
 
 // Deps 是 Run 所需依赖。仅 store；导出无需 LLM、prompt、bundle。

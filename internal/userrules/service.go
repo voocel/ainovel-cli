@@ -3,6 +3,7 @@ package userrules
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/voocel/agentcore"
@@ -56,13 +57,20 @@ func (s *Service) Build(ctx context.Context, startupPrompt string) (*rules.Snaps
 }
 
 // GetOrBuild 返回当前快照；缺失时按 system_defaults + rules 文件初始化。
-// 运行时读取路径统一走这里。
+// 已有快照会补入新版 system_defaults 中新增的规则，同时保留用户设置的同名阈值。
 func (s *Service) GetOrBuild(ctx context.Context) (*rules.Snapshot, error) {
 	cur, err := s.store.UserRules.Load()
 	if err != nil {
 		return nil, err
 	}
 	if cur != nil {
+		merged := rules.MergeSystemDefaults(cur.Structured)
+		if !reflect.DeepEqual(cur.Structured, merged) {
+			cur.Structured = merged
+			if err := s.store.UserRules.Save(cur); err != nil {
+				return nil, err
+			}
+		}
 		return cur, nil
 	}
 	return s.Build(ctx, "")

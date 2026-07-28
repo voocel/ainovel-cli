@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "ainovel-desktop",
+  "outputfilename": "ainovel-desktop",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "ainovel"
+  },
+  "info": {
+    "companyName": "ainovel",
+    "productName": "ainovel",
+    "productVersion": "0.1.0",
+    "copyright": "MIT License",
+    "comments": "全自动 AI 长篇小说创作引擎"
+  }
+}

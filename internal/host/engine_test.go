@@ -25,6 +25,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/arbiter"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/flow"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -232,7 +233,7 @@ func waitEngineDone(t *testing.T, done chan struct{}) {
 
 func mustInterventionFacts(t *testing.T, st *storepkg.Store) arbiter.InterventionFacts {
 	t.Helper()
-	facts, err := arbiter.CollectInterventionFacts(st)
+	facts, err := arbiter.CollectInterventionFacts(st, skills.Load(skills.LoadOptions{}))
 	if err != nil {
 		t.Fatalf("CollectInterventionFacts: %v", err)
 	}
@@ -702,6 +703,153 @@ func TestEngine_IntermediateCheckpointsDoNotMaskDeadlock(t *testing.T) {
 	}
 	if !hasWorkerFailure || !hasDeadlock {
 		t.Fatalf("应先记录 worker_failure 再记录 deadlock: %+v", recs)
+	}
+}
+
+// skillTestEngine 造一本写满 5 章的书 + 一份内置技能目录，供技能任务包组装测试用。
+func skillTestEngine(t *testing.T) (*engine, *[]Event, *storepkg.Store) {
+	t.Helper()
+	st := storepkg.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := st.Progress.Init("技能试书", 10); err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+	if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("phase: %v", err)
+	}
+	for ch := 1; ch <= 5; ch++ {
+		if err := st.Progress.StartChapter(ch); err != nil {
+			t.Fatalf("start ch%d: %v", ch, err)
+		}
+		if err := st.Progress.MarkChapterComplete(ch, 1200, "crisis", "quest"); err != nil {
+			t.Fatalf("complete ch%d: %v", ch, err)
+		}
+	}
+	e, events, _ := newTestEngine(t, st, subagent.NewRunner(), nil)
+	e.skills = skills.Load(skills.LoadOptions{})
+	return e, events, st
+}
+
+// 技能任务包的段落顺序是硬约束：原 task → 技能正文 → 用户原文授权段。
+// 授权段必须在最末——它是下游 Worker（editor.md 的「用户干预的授权边界」一节）
+// 读取授权的固定锚点，技能正文插在它之后会让 Worker 把技能指令当成用户原话。
+func TestEngine_SkillTaskKeepsAuthoritySectionLast(t *testing.T) {
+	e, events, st := skillTestEngine(t)
+	sk, ok := e.skills.Get("anti-ai-tone")
+	if !ok {
+		t.Fatal("测试前提不成立：内置层应含 anti-ai-tone")
+	}
+
+	const baseTask = "复核第 3-4 章并按判据入队返工"
+	const original = "第 3、4 章 AI 味太重，清一下"
+	op := controlOp{
+		skill:    &arbiter.SkillOp{Name: "anti-ai-tone", Chapters: []int{3, 4}},
+		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: baseTask},
+		text:     original,
+		facts:    mustInterventionFacts(t, st),
+	}
+	task := interventionDispatchTask(e.applySkillToTask(op), op.text)
+
+	for _, want := range []string{baseTask, "## 专项技能：anti-ai-tone", "作用范围：第 3-4 章", original} {
+		if !strings.Contains(task, want) {
+			t.Fatalf("任务包缺少 %q:\n%s", want, task)
+		}
+	}
+	// 技能正文必须逐字进任务——它就是 Worker 的执行判据。
+	if !strings.Contains(task, strings.TrimSpace(sk.Body)) {
+		t.Fatalf("技能正文未进入任务包:\n%s", task)
+	}
+	authorityAt := strings.Index(task, "修改授权的唯一来源")
+	if authorityAt < 0 {
+		t.Fatalf("缺少授权段:\n%s", task)
+	}
+	if skillAt := strings.Index(task, "## 专项技能"); skillAt > authorityAt {
+		t.Fatalf("技能段落必须在授权段之前（skill=%d authority=%d）:\n%s", skillAt, authorityAt, task)
+	}
+	if bodyAt := strings.Index(task, strings.TrimSpace(sk.Body)); bodyAt > authorityAt {
+		t.Fatal("技能正文必须在授权段之前，否则会被 Worker 当成用户原话")
+	}
+	// 挂载必须留痕：用户要能在事件流里看到本次改稿挂了哪份技能、作用在哪。
+	var mounted bool
+	for _, ev := range *events {
+		if strings.Contains(ev.Summary, "已挂载专项技能 anti-ai-tone") && strings.Contains(ev.Summary, "第 3-4 章") {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatalf("缺少技能挂载事件: %+v", *events)
+	}
+}
+
+// 未指定章节时范围由引擎确定性回溯最近 3 章推导，不猜测扩大——
+// 范围过宽等于未经授权的返工。
+func TestEngine_SkillWithoutChaptersUsesRecentWindow(t *testing.T) {
+	e, _, st := skillTestEngine(t)
+	op := controlOp{
+		skill:    &arbiter.SkillOp{Name: "anti-ai-tone"},
+		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: "复核最近章节"},
+		facts:    mustInterventionFacts(t, st),
+	}
+	task := e.applySkillToTask(op)
+	// 已完成 5 章 + 窗口 3 → 第 3-5 章。
+	if !strings.Contains(task, "作用范围：第 3-5 章") {
+		t.Fatalf("默认范围应是最近 %d 章:\n%s", skillRecentChapters, task)
+	}
+	if strings.Contains(task, "第 1-5 章") {
+		t.Fatal("默认范围不得扩到全书")
+	}
+}
+
+// 技能单独出现（Arbiter 只填 skill 不填 dispatch）时，引擎按技能声明的执行者补派单。
+func TestEngine_SkillOnlyOpExpandsToDeclaredAgent(t *testing.T) {
+	e, _, st := skillTestEngine(t)
+	op := controlOp{
+		skill: &arbiter.SkillOp{Name: "anti-ai-tone", Chapters: []int{5}},
+		text:  "第 5 章清一下 AI 味",
+		facts: mustInterventionFacts(t, st),
+	}
+	if err := e.expandSkillOnlyOp(&op); err != nil {
+		t.Fatalf("补派单失败: %v", err)
+	}
+	if op.dispatch == nil {
+		t.Fatal("技能单独出现时应补出派单")
+	}
+	sk, _ := e.skills.Get("anti-ai-tone")
+	if op.dispatch.Agent != sk.Agent {
+		t.Fatalf("补出的执行者应取技能声明 %q，实际 %q", sk.Agent, op.dispatch.Agent)
+	}
+	if !strings.Contains(op.dispatch.Task, sk.Name) {
+		t.Fatalf("补出的任务应点名技能: %q", op.dispatch.Task)
+	}
+	// 已有派单时不覆盖 Arbiter 的裁定。
+	existing := controlOp{
+		skill:    &arbiter.SkillOp{Name: "anti-ai-tone"},
+		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: "原任务"},
+	}
+	if err := e.expandSkillOnlyOp(&existing); err != nil {
+		t.Fatal(err)
+	}
+	if existing.dispatch.Task != "原任务" {
+		t.Fatalf("已有派单不应被覆盖: %q", existing.dispatch.Task)
+	}
+	// 技能不存在必须报错而不是静默派一个没有判据的任务。
+	missing := controlOp{skill: &arbiter.SkillOp{Name: "ghost-skill"}}
+	if err := e.expandSkillOnlyOp(&missing); err == nil {
+		t.Fatal("不存在的技能应报错")
+	}
+}
+
+// 无技能时任务包必须原样通过——技能是可选修饰，不能污染普通派单。
+func TestEngine_NoSkillLeavesTaskUntouched(t *testing.T) {
+	e, _, st := skillTestEngine(t)
+	op := controlOp{
+		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: "普通复核任务"},
+		facts:    mustInterventionFacts(t, st),
+	}
+	if got := e.applySkillToTask(op); got != "普通复核任务" {
+		t.Fatalf("无技能时任务不应被改写: %q", got)
 	}
 }
 

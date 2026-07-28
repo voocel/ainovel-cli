@@ -150,6 +150,15 @@ func OverlaySnapshot(base Snapshot, cand Candidate) Snapshot {
 	return out
 }
 
+// MergeSystemDefaults 把当前代码内置基线补进已有快照的结构化规则。
+// 已有快照保持高优先级：用户调整过的同名疲劳词阈值不会被新版默认值覆盖。
+func MergeSystemDefaults(current Structured) Structured {
+	return BuildSnapshot([]Candidate{
+		SystemDefaults(),
+		{Structured: current},
+	}).Structured
+}
+
 // mergeFatigueWords 按词叠加疲劳词阈值，src 覆盖 dst 中的同词阈值（就近优先）。
 // 让用户只需新增少量疲劳词，而不必重列内置基线。
 func mergeFatigueWords(dst, src map[string]int) map[string]int {
@@ -187,6 +196,7 @@ func SystemDefaults() Candidate {
 				"不禁": 1, "竟然": 1, "仿佛": 2, "此外": 1, "然而": 2,
 				"一丝": 2, "一抹": 2, "一缕": 2, "宛如": 1, "不由得": 1,
 				"像一": 3, "沉默了": 2, "没有说话": 2, "几息": 3, "一息": 3, "数息": 2,
+				"——": 2,
 			},
 		},
 	}

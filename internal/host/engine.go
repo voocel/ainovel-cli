@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/errs"
 	"github.com/voocel/ainovel-cli/internal/flow"
 	"github.com/voocel/ainovel-cli/internal/notify"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -31,8 +34,9 @@ type engine struct {
 
 	arbiterModel    agentcore.ChatModel
 	failurePrompt   string
-	planStartPrompt string // 启动裁定系统提示词:裁定从未完成时引擎据 StartPrompt 现场补裁
-	style           string // 风格名,补裁时传给 DecidePlanStart
+	planStartPrompt string         // 启动裁定系统提示词:裁定从未完成时引擎据 StartPrompt 现场补裁
+	style           string         // 风格名,补裁时传给 DecidePlanStart
+	skills          skills.Catalog // 专项技能目录(只读):事实包名单与执行期取正文共用同一份
 	// reconsult 把过期干预送回 host 的完整裁定路径(持久化/审计/全量动作应用),
 	// 异步执行——engine 只丢弃过期派单,不自行做残缺的重新裁定。
 	reconsult func(text string)
@@ -77,6 +81,7 @@ type controlOp struct {
 	hold     *arbiter.AdvanceHoldOp
 	reopen   *arbiter.ReopenOp
 	dispatch *arbiter.DispatchOp
+	skill    *arbiter.SkillOp // 专项技能:修饰 dispatch 的任务包(正文+范围),不改任何持久状态
 	text     string
 	facts    arbiter.InterventionFacts
 }
@@ -619,10 +624,16 @@ func (e *engine) applyControlOp(ctx context.Context, op controlOp) error {
 			firstErr = err
 		}
 	}
+	// 技能单独出现(裁定只挂技能未派单)时按技能声明的执行者补出派单。必须在
+	// 对账之前完成:补出的派单同样要受事实对账约束,否则技能会带着过期事实执行。
+	if err := e.expandSkillOnlyOp(&op); err != nil {
+		e.emitEvent(Event{Time: time.Now(), Category: "ERROR", Summary: err.Error(), Level: "error"})
+		return err
+	}
 	if op.dispatch != nil {
 		// Expect 必须在 hold 等配对动作落盘前核对。否则派单过期后旧 hold
 		// 会残留，并与按新事实重新裁定出的 hold 冲突，最终只暂停却漏做修改。
-		fresh, err := arbiter.CollectInterventionFacts(e.store)
+		fresh, err := arbiter.CollectInterventionFacts(e.store, e.skills)
 		if err != nil {
 			return fmt.Errorf("刷新干预事实: %w", err)
 		}
@@ -679,11 +690,123 @@ func (e *engine) applyControlOp(ctx context.Context, op controlOp) error {
 		// 已知窗口(best-effort 边界,见 engine-arbiter.md 澄清③):派单自此存于内存,
 		// worker 启动前被硬杀(kill -9,defer 不执行)会丢失本次派单意图——
 		// 正常退出/Abort 由 run 的 defer 回存 PendingSteer 兜底。
-		e.next = &flow.Instruction{Agent: op.dispatch.Agent, Task: interventionDispatchTask(op.dispatch.Task, op.text), Reason: "用户干预裁定"}
+		task := e.applySkillToTask(op)
+		e.next = &flow.Instruction{Agent: op.dispatch.Agent, Task: interventionDispatchTask(task, op.text), Reason: "用户干预裁定"}
 		e.deferGateForNext = op.hold != nil && !op.hold.Cancel
 		e.mu.Unlock()
 	}
 	return firstErr
+}
+
+// expandSkillOnlyOp 把"只挂技能、没派单"的裁定补成一个派单(执行者取技能声明)。
+// 技能名已由 ValidateAgainst 核对过存在性,这里再查一次是防御 catalog 与裁定期
+// 不一致的极端情况(热改技能目录);查不到就显式失败,不静默丢掉用户诉求。
+func (e *engine) expandSkillOnlyOp(op *controlOp) error {
+	if op.skill == nil || op.dispatch != nil {
+		return nil
+	}
+	sk, ok := e.skills.Get(op.skill.Name)
+	if !ok {
+		return fmt.Errorf("技能 %q 不存在，未执行任何动作", op.skill.Name)
+	}
+	op.dispatch = &arbiter.DispatchOp{Agent: sk.Agent, Task: skillOnlyTask(sk)}
+	return nil
+}
+
+// skillOnlyTask 是技能自带派单时的任务骨架。刻意极简:真正的执行标准在技能正文里,
+// 这里只声明"本次任务由该技能定义",避免再复述一遍造成两份口径。
+func skillOnlyTask(sk skills.Skill) string {
+	return fmt.Sprintf("执行专项技能「%s」：%s", sk.Name, sk.Description)
+}
+
+// applySkillToTask 把技能正文与作用范围拼进派单任务。
+//
+// 段落顺序有意义:原 task(做什么) → 技能正文(怎么做) → 用户原文授权段(能改什么)。
+// 授权段由 interventionDispatchTask 追加在最末,是下游 Worker 读取授权的固定锚点
+// (editor.md / writer 提示词都按"任务含用户原始干预"来识别),技能段绝不能插在它之后。
+func (e *engine) applySkillToTask(op controlOp) string {
+	if op.skill == nil || op.dispatch == nil {
+		if op.dispatch == nil {
+			return ""
+		}
+		return op.dispatch.Task
+	}
+	sk, ok := e.skills.Get(op.skill.Name)
+	if !ok {
+		// 到这里技能必然存在(expandSkillOnlyOp 与 ValidateAgainst 双重核对过)。
+		// 万一不存在,降级为无技能派单并留痕,而不是让用户的修改诉求整条丢失。
+		slog.Warn("技能在执行期消失，本次按无技能派单", "module", "engine", "skill", op.skill.Name)
+		return op.dispatch.Task
+	}
+	chapters := e.resolveSkillChapters(sk, op.skill.Chapters)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(op.dispatch.Task))
+	fmt.Fprintf(&b, "\n\n## 专项技能：%s（%s）\n", sk.Name, sk.Description)
+	if scope := describeSkillScope(sk, chapters); scope != "" {
+		fmt.Fprintf(&b, "作用范围：%s\n", scope)
+	}
+	b.WriteString("\n")
+	b.WriteString(strings.TrimSpace(sk.Body))
+	e.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
+		Summary: fmt.Sprintf("已挂载专项技能 %s（%s）", sk.Name, describeSkillScope(sk, chapters))})
+	return b.String()
+}
+
+// skillRecentChapters 是 scope=chapters 技能未指定章节时的默认回溯窗口。
+// 取 3 与 editor.md「全局审阅至少读最近 3-5 章」的既有口径对齐——技能是定向处理,
+// 默认范围宁可窄:范围不足用户可以再指定,范围过宽等于未经授权的返工。
+const skillRecentChapters = 3
+
+// resolveSkillChapters 推导技能的目标章节。显式指定优先(已由 ValidateAgainst 校验
+// 越界);未指定且 scope=chapters 时确定性回溯最近若干已完成章,不猜测扩大。
+func (e *engine) resolveSkillChapters(sk skills.Skill, explicit []int) []int {
+	if len(explicit) > 0 {
+		return explicit
+	}
+	if sk.Scope != skills.ScopeChapters {
+		return nil
+	}
+	progress, err := e.store.Progress.Load()
+	if err != nil || progress == nil {
+		return nil
+	}
+	completed := append([]int(nil), progress.CompletedChapters...)
+	if len(completed) == 0 {
+		return nil
+	}
+	sort.Ints(completed)
+	if len(completed) > skillRecentChapters {
+		completed = completed[len(completed)-skillRecentChapters:]
+	}
+	return completed
+}
+
+// describeSkillScope 把作用范围渲染成给 Worker 与用户看的中文说明。
+func describeSkillScope(sk skills.Skill, chapters []int) string {
+	switch sk.Scope {
+	case skills.ScopeChapters:
+		if len(chapters) == 0 {
+			return "尚无已完成章节"
+		}
+		if len(chapters) == 1 {
+			return fmt.Sprintf("第 %d 章", chapters[0])
+		}
+		// 连续区间渲染成范围,离散列表逐个列出——两种都常见(最近 N 章 vs 用户点名)。
+		if chapters[len(chapters)-1]-chapters[0] == len(chapters)-1 {
+			return fmt.Sprintf("第 %d-%d 章", chapters[0], chapters[len(chapters)-1])
+		}
+		parts := make([]string, 0, len(chapters))
+		for _, ch := range chapters {
+			parts = append(parts, strconv.Itoa(ch))
+		}
+		return "第 " + strings.Join(parts, "、") + " 章"
+	case skills.ScopeForward:
+		return "后续写作"
+	case skills.ScopeFoundation:
+		return "设定层"
+	default:
+		return ""
+	}
 }
 
 // interventionDispatchTask 保留用户原始干预，避免 Arbiter 在转述任务时无意扩大

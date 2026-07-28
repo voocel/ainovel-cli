@@ -62,6 +62,37 @@ func TestService_GetOrBuildInitializesMissingSnapshot(t *testing.T) {
 	}
 }
 
+func TestService_GetOrBuildMergesNewDefaultsIntoExistingSnapshot(t *testing.T) {
+	svc, st := newDegradedService(t)
+	existing := rules.Snapshot{
+		Version: rules.SnapshotVersion,
+		Status:  rules.StatusReady,
+		Structured: rules.Structured{
+			Genre:        "都市",
+			FatigueWords: map[string]int{"不禁": 5},
+		},
+		Sources: []string{"system_defaults", "runtime_update"},
+	}
+	if err := st.UserRules.Save(&existing); err != nil {
+		t.Fatalf("保存旧快照失败：%v", err)
+	}
+
+	merged, err := svc.GetOrBuild(t.Context())
+	if err != nil {
+		t.Fatalf("GetOrBuild 迁移旧快照失败：%v", err)
+	}
+	if merged.Structured.FatigueWords["——"] != 2 {
+		t.Fatalf("应补入双破折号阈值，得到 %+v", merged.Structured.FatigueWords)
+	}
+	if merged.Structured.FatigueWords["不禁"] != 5 {
+		t.Fatalf("不应覆盖用户已有阈值，得到 %d", merged.Structured.FatigueWords["不禁"])
+	}
+	persisted, err := st.UserRules.Load()
+	if err != nil || persisted == nil || persisted.Structured.FatigueWords["——"] != 2 {
+		t.Fatalf("合并结果应持久化：err=%v snap=%+v", err, persisted)
+	}
+}
+
 func TestService_AddRuntimeRule_PersistsAndReturnsCandidate(t *testing.T) {
 	svc, st := newDegradedService(t)
 

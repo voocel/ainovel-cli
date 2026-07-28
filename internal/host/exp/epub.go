@@ -19,7 +19,8 @@ import (
 //	OEBPS/content.opf           （metadata + manifest + spine）
 //	OEBPS/nav.xhtml             （EPUB 3 navigation）
 //	OEBPS/style.css             （极简排版）
-//	OEBPS/cover.xhtml           （书名，可选）
+//	OEBPS/cover.xhtml           （书名 + 可选封面图）
+//	OEBPS/cover.<ext>           （封面图，cover 非空时）
 //	OEBPS/chapterNNN.xhtml      （每章一文件）
 func renderEPUB(
 	novelName string,
@@ -27,6 +28,7 @@ func renderEPUB(
 	titleIdx chapterTitleIndex,
 	locations map[int]chapterLocation,
 	bodies map[int]string,
+	cover *CoverImage,
 ) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -50,9 +52,18 @@ func renderEPUB(
 		return nil, err
 	}
 
-	hasCover := strings.TrimSpace(novelName) != ""
+	// 有封面图时即使书名为空也要出封面页（图本身就是封面）。
+	if cover != nil && !cover.valid() {
+		return nil, fmt.Errorf("封面图无效：缺少数据或 media-type")
+	}
+	hasCover := strings.TrimSpace(novelName) != "" || cover != nil
 	if hasCover {
-		if err := zipDeflate(zw, "OEBPS/cover.xhtml", renderCoverXHTML(novelName)); err != nil {
+		if cover != nil {
+			if err := zipStore(zw, "OEBPS/"+cover.fileName(), cover.Data); err != nil {
+				return nil, err
+			}
+		}
+		if err := zipDeflate(zw, "OEBPS/cover.xhtml", renderCoverXHTML(novelName, cover)); err != nil {
 			return nil, err
 		}
 	}
@@ -71,7 +82,7 @@ func renderEPUB(
 		return nil, err
 	}
 
-	if err := zipDeflate(zw, "OEBPS/content.opf", renderOPF(novelName, hasCover, chapters)); err != nil {
+	if err := zipDeflate(zw, "OEBPS/content.opf", renderOPF(novelName, hasCover, chapters, cover)); err != nil {
 		return nil, err
 	}
 
@@ -88,6 +99,17 @@ func zipDeflate(zw *zip.Writer, name, content string) error {
 		return fmt.Errorf("create %s: %w", name, err)
 	}
 	_, err = w.Write([]byte(content))
+	return err
+}
+
+// zipStore 写入二进制条目且不压缩。PNG/JPEG/WebP 本身已是压缩格式，
+// 再 deflate 一遍几乎不省体积却明显拖慢打包。
+func zipStore(zw *zip.Writer, name string, data []byte) error {
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+	if err != nil {
+		return fmt.Errorf("create %s: %w", name, err)
+	}
+	_, err = w.Write(data)
 	return err
 }
 
@@ -112,6 +134,9 @@ const containerXML = `<?xml version="1.0" encoding="utf-8"?>
 
 const styleCSS = `body { font-family: serif; line-height: 1.7; margin: 1em; }
 h1.book-title { font-size: 2em; text-align: center; margin: 4em 0 1em; }
+/* 封面页去掉页边距，图等比铺满可视区域。 */
+.cover-image { margin: 0; padding: 0; text-align: center; }
+.cover-image img { max-width: 100%; max-height: 100%; }
 .volume-divider { font-size: 1.6em; text-align: center; margin: 4em 0 1em; font-weight: bold; }
 h1.chapter-title { font-size: 1.4em; text-align: center; margin: 2em 0 1.5em; }
 p { text-indent: 2em; margin: 0.5em 0; }
@@ -169,7 +194,7 @@ func splitParagraphs(body string) []string {
 
 // 封面 ────────────────────────────────────────────────
 
-func renderCoverXHTML(novelName string) string {
+func renderCoverXHTML(novelName string, cover *CoverImage) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -180,7 +205,14 @@ func renderCoverXHTML(novelName string) string {
 </head>
 <body>
 `)
-	if name := strings.TrimSpace(novelName); name != "" {
+	if cover != nil {
+		// 有封面图时只放图：图上通常已含书名，再叠一行标题会重复。
+		// svg viewBox 是 EPUB 封面的通行写法——阅读器据此等比缩放铺满屏幕。
+		fmt.Fprintf(&b, `  <div class="cover-image">
+    <img src="%s" alt="%s"/>
+  </div>
+`, html.EscapeString(cover.fileName()), html.EscapeString(strings.TrimSpace(novelName)))
+	} else if name := strings.TrimSpace(novelName); name != "" {
 		fmt.Fprintf(&b, "  <h1 class=\"book-title\">%s</h1>\n", html.EscapeString(name))
 	}
 	b.WriteString("</body>\n</html>\n")
@@ -229,7 +261,7 @@ func renderNavXHTML(hasCover bool, chapters []int, titleIdx chapterTitleIndex) s
 
 // content.opf ────────────────────────────────────────────────
 
-func renderOPF(novelName string, hasCover bool, chapters []int) string {
+func renderOPF(novelName string, hasCover bool, chapters []int, cover *CoverImage) string {
 	bookID := bookIdentifier(novelName)
 	modified := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
@@ -247,14 +279,26 @@ func renderOPF(novelName string, hasCover bool, chapters []int) string {
     <dc:language>zh-CN</dc:language>
     <dc:creator>ainovel-cli</dc:creator>
     <meta property="dcterms:modified">%s</meta>
-  </metadata>
+`, html.EscapeString(bookID), html.EscapeString(title), modified)
+
+	// cover-image 这条 meta 是阅读器识别封面缩略图的关键（EPUB2 遗留约定，
+	// 但 Apple Books / 微信读书 / Calibre 都仍依赖它来显示书架封面）。
+	if cover != nil {
+		b.WriteString(`    <meta name="cover" content="cover-image"/>` + "\n")
+	}
+	b.WriteString(`  </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="css" href="style.css" media-type="text/css"/>
-`, html.EscapeString(bookID), html.EscapeString(title), modified)
+`)
 
 	if hasCover {
 		b.WriteString(`    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>` + "\n")
+	}
+	if cover != nil {
+		// properties="cover-image" 是 EPUB 3 的标准封面声明。
+		fmt.Fprintf(&b, `    <item id="cover-image" href="%s" media-type="%s" properties="cover-image"/>`+"\n",
+			html.EscapeString(cover.fileName()), html.EscapeString(cover.MediaType))
 	}
 	for _, ch := range chapters {
 		fmt.Fprintf(&b, `    <item id="%s" href="%s" media-type="application/xhtml+xml"/>`+"\n",

@@ -26,6 +26,7 @@ import (
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	"github.com/voocel/ainovel-cli/internal/notify"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/userrules"
@@ -43,13 +44,20 @@ type Host struct {
 	askUser         *tools.AskUserTool
 	writerRestore   *ctxpack.WriterRestorePack
 	userRules       *userrules.Service
-	observer        *observer
-	usage           *UsageTracker
-	usageCancel     context.CancelFunc  // 停掉 autoSaveLoop 并触发最后一次 flush
-	budget          *BudgetSentinel     // 预算政策；未启用为 nil（方法 nil 安全）
-	gate            *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
-	notifier        *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
-	configPath      string              // 配置写盘目标：/config、/model 就近写当前生效的那份（项目级存在则写它，否则全局）
+	// skills 是专项技能目录,干预裁定与执行期共用同一份。
+	//
+	// 启动加载一次,之后只能经 ReloadSkills 显式替换(且仅在引擎停机时)——每次干预
+	// 重扫目录会让"裁定时看到的名单"与"执行时取到的正文"在用户中途改文件时不一致。
+	// 由 skillsMu 保护:ReloadSkills 与干预裁定可能来自不同 goroutine。
+	skillsMu    sync.RWMutex
+	skills      skills.Catalog
+	observer    *observer
+	usage       *UsageTracker
+	usageCancel context.CancelFunc  // 停掉 autoSaveLoop 并触发最后一次 flush
+	budget      *BudgetSentinel     // 预算政策；未启用为 nil（方法 nil 安全）
+	gate        *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
+	notifier    *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
+	configPath  string              // 配置写盘目标：/config、/model 就近写当前生效的那份（项目级存在则写它，否则全局）
 
 	events   chan Event
 	streamCh chan string
@@ -153,6 +161,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		askUser:         askUser,
 		writerRestore:   restore,
 		userRules:       userrules.NewService(store, models.Default, rules.DefaultOptions()),
+		skills:          skills.Load(skills.DefaultOptions()),
 		usage:           usage,
 		usageCancel:     usageCancel,
 		configPath:      bootstrap.EffectiveConfigPath(),
@@ -223,6 +232,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		failurePrompt:   bundle.Prompts.ArbiterFailure,
 		planStartPrompt: bundle.Prompts.ArbiterPlanStart,
 		style:           cfg.Style,
+		skills:          h.skills,
 		// 同步重询:阻塞引擎循环一次裁定(数秒),换取"干预先于后续创作生效"。
 		reconsult: h.handleIntervention,
 		observer:  h.observer,
@@ -552,7 +562,7 @@ func (h *Host) doIntervention(text string, restart bool) error {
 		return nil
 	}
 
-	facts, err := arbiter.CollectInterventionFacts(h.store)
+	facts, err := arbiter.CollectInterventionFacts(h.store, h.skillCatalog())
 	if err != nil {
 		wrapped := fmt.Errorf("收集干预事实失败，未调用 Arbiter: %w", err)
 		h.emitEvent(Event{Time: time.Now(), Category: "ERROR", Agent: "arbiter",
@@ -616,8 +626,9 @@ func (h *Host) doIntervention(text string, restart bool) error {
 		}
 	}
 
-	if decision.Hold != nil || decision.Reopen != nil || decision.Dispatch != nil {
-		op := controlOp{hold: decision.Hold, reopen: decision.Reopen, dispatch: decision.Dispatch, text: text, facts: facts}
+	if decision.Hold != nil || decision.Reopen != nil || decision.Dispatch != nil || decision.Skill != nil {
+		op := controlOp{hold: decision.Hold, reopen: decision.Reopen, dispatch: decision.Dispatch,
+			skill: decision.Skill, text: text, facts: facts}
 		if !h.engine.enqueue(op) {
 			// 引擎未运行:立即执行;持久化失败 → 保留 PendingSteer,恢复时重放整条干预。
 			if err := h.engine.applyControlOp(context.Background(), op); err != nil {
@@ -625,8 +636,9 @@ func (h *Host) doIntervention(text string, restart bool) error {
 					Summary: "干预动作执行失败,已保留;恢复/继续时将自动重试"})
 				return err
 			}
-			// reopen/dispatch 表达了继续创作的意图,拉起引擎。
-			if decision.Reopen != nil || decision.Dispatch != nil {
+			// reopen/dispatch 表达了继续创作的意图,拉起引擎。skill 同理——
+			// 它在 applyControlOp 里已被补成派单(expandSkillOnlyOp),不拉起就没人执行。
+			if decision.Reopen != nil || decision.Dispatch != nil || decision.Skill != nil {
 				restart = true
 			}
 		}
@@ -1137,7 +1149,6 @@ func (h *Host) Snapshot() UISnapshot {
 	snap.StatusLabel = deriveStatusLabel(snap)
 
 	// 恢复标签
-	// 恢复标签
 	if label, err := resumeLabel(h.store); err == nil && label != "" {
 		snap.RecoveryLabel = label
 	}
@@ -1443,6 +1454,54 @@ func (h *Host) StageCoCreateStream(ctx context.Context, history []CoCreateMessag
 	return coCreateStream(ctx, h.models, h.store.Sessions, stageSystemPrompt(h.store), history, onProgress)
 }
 
+// ── 一次性文本生成 ──
+
+// GenerateText 用本书已配置的模型跑一次单轮文本生成，返回纯文本。
+//
+// 为什么开这个口：桌面层有若干"借模型改写一段文字"的辅助功能（当前是封面提示词
+// 润色），它们不属于创作循环——不进 Engine、不写 checkpoint、不记 usage，只是
+// 借用户已经配好的模型档位跑一发。没有这个方法，调用方要么拿不到 h.models
+// （私有），要么被迫塞进共创那套四段式 XML 协议里，两者都更糟。
+//
+// 刻意保持最小：无工具、无流式、无重试、无会话日志。失败就是失败，调用方自己
+// 决定退回确定性方案（封面提示词那边就退回本地拼装的草稿）。
+// role 走 ModelSet.ForRole，未配置该档位时它自己退回 Default。
+func (h *Host) GenerateText(ctx context.Context, role, systemPrompt, userPrompt string, maxTokens int) (string, error) {
+	userPrompt = strings.TrimSpace(userPrompt)
+	if userPrompt == "" {
+		return "", fmt.Errorf("prompt is required")
+	}
+	if h.models == nil {
+		return "", fmt.Errorf("模型未初始化")
+	}
+	model := h.models.ForRole(role)
+	if model == nil {
+		return "", fmt.Errorf("没有可用的文本模型，请先在设置里配置模型")
+	}
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+
+	var msgs []agentcore.Message
+	if sys := strings.TrimSpace(systemPrompt); sys != "" {
+		msgs = append(msgs, agentcore.SystemMsg(sys))
+	}
+	msgs = append(msgs, agentcore.UserMsg(userPrompt))
+
+	resp, err := model.Generate(ctx, msgs, nil, agentcore.WithMaxTokens(maxTokens))
+	if err != nil {
+		return "", err
+	}
+	if resp == nil {
+		return "", fmt.Errorf("模型未返回内容")
+	}
+	out := strings.TrimSpace(resp.Message.TextContent())
+	if out == "" {
+		return "", fmt.Errorf("模型返回了空内容")
+	}
+	return out, nil
+}
+
 // stagePlanPrefix 把共创产出的"后续方向 brief"包装成一条阶段规划干预，交 Arbiter 裁定。
 // 只贴 [阶段规划] 事实标记 + 中性陈述，不写死"怎么落地"——具体路由（compass / architect /
 // user_rules）交给 arbiter-intervention.md 的「阶段规划」判据，避免与 prompt 形成第二真相源、
@@ -1618,8 +1677,24 @@ func (h *Host) importModelRuntime(role string, model agentcore.ChatModel) imp.Mo
 	return rt
 }
 
-// Simulate 读取 simulate 目录并生成或增量更新仿写画像。
+// Simulate 读取启动目录下的 simulate/ 并生成或增量更新仿写画像。
+// 语料目录绑定当前工作目录（终端版“一次启动一本书”的语义）。
+// 需要显式指定语料目录时用 SimulateFrom——桌面版多书场景下 cwd 不代表书目录。
 func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working dir: %w", err)
+	}
+	return h.SimulateFrom(ctx, filepath.Join(wd, "simulate"))
+}
+
+// SimulateFrom 与 Simulate 相同，但由调用方指定语料目录。
+// 桌面版按“每本书一个目录”传入 <书目录>/simulate，避免读到错误的书的语料。
+func (h *Host) SimulateFrom(ctx context.Context, sourceDir string) (<-chan sim.Event, error) {
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return nil, fmt.Errorf("仿写语料目录不能为空")
+	}
 	if err := h.acquireExclusive("生成仿写画像"); err != nil {
 		return nil, err
 	}
@@ -1628,11 +1703,6 @@ func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
 	h.exclusiveCancel = cancel
 	h.mu.Unlock()
 
-	wd, err := os.Getwd()
-	if err != nil {
-		h.releaseExclusive()
-		return nil, fmt.Errorf("get working dir: %w", err)
-	}
 	deps := sim.Deps{
 		Store: h.store,
 		LLM:   h.models.ForRole("architect"),
@@ -1641,7 +1711,7 @@ func (h *Host) Simulate(ctx context.Context) (<-chan sim.Event, error) {
 			Merge:  h.bundle.Prompts.SimulationMerge,
 		},
 	}
-	ch, err := sim.Run(ctx, deps, sim.Options{SourceDir: filepath.Join(wd, "simulate")})
+	ch, err := sim.Run(ctx, deps, sim.Options{SourceDir: sourceDir})
 	if err != nil {
 		h.releaseExclusive()
 		return nil, err

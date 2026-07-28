@@ -18,6 +18,7 @@ func TestRenderEPUB_StructuralInvariants(t *testing.T) {
 			1: "# 第 1 章 雨夜归人\n\n他望着窗外。\n\n第二段。",
 			2: "她推开门。",
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -132,6 +133,7 @@ func TestRenderEPUB_HTMLEscape(t *testing.T) {
 		chapterTitleIndex{1: "C \"D\""},
 		nil,
 		map[int]string{1: "正文 < & > 内容。"},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -168,6 +170,7 @@ func TestRenderEPUB_LayeredVolume(t *testing.T) {
 		chapterTitleIndex{1: "A", 2: "B"},
 		locs,
 		map[int]string{1: "正文一。", 2: "正文二。"},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -201,6 +204,7 @@ func TestRenderEPUB_NoCoverWhenNoTitle(t *testing.T) {
 		chapterTitleIndex{1: "唯一一章"},
 		nil,
 		map[int]string{1: "正文。"},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("renderEPUB: %v", err)
@@ -269,4 +273,109 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// pngBytes 是一个最小合法 PNG 头（只需能被 media-type 与字节写入路径接受）。
+var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01, 0x02}
+
+func TestRenderEPUB_WithCoverImage(t *testing.T) {
+	data, err := renderEPUB(
+		"光斑",
+		[]int{1},
+		chapterTitleIndex{1: "雨夜归人"},
+		nil,
+		map[int]string{1: "他望着窗外。"},
+		&CoverImage{Data: pngBytes, MediaType: "image/png"},
+	)
+	if err != nil {
+		t.Fatalf("renderEPUB: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("not a valid zip: %v", err)
+	}
+
+	files := map[string]*zip.File{}
+	for _, f := range zr.File {
+		files[f.Name] = f
+	}
+
+	// 图片本体必须在容器里，且按 Store 存（不重复压缩已压缩格式）。
+	img, ok := files["OEBPS/cover.png"]
+	if !ok {
+		t.Fatal("cover image missing from container")
+	}
+	if img.Method != zip.Store {
+		t.Errorf("cover image should be stored uncompressed, got method %d", img.Method)
+	}
+	rc, err := img.Open()
+	if err != nil {
+		t.Fatalf("open cover: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	rc.Close()
+	if !bytes.Equal(got, pngBytes) {
+		t.Error("cover image bytes were altered")
+	}
+
+	opf := readZipText(t, files, "OEBPS/content.opf")
+	// EPUB 3 标准声明 + EPUB2 遗留 meta：两者都要，阅读器书架缩略图依赖后者。
+	if !strings.Contains(opf, `properties="cover-image"`) {
+		t.Error("opf missing EPUB3 cover-image property")
+	}
+	if !strings.Contains(opf, `<meta name="cover" content="cover-image"/>`) {
+		t.Error("opf missing legacy cover meta")
+	}
+	if !strings.Contains(opf, `media-type="image/png"`) {
+		t.Error("opf missing correct media-type for cover")
+	}
+
+	cover := readZipText(t, files, "OEBPS/cover.xhtml")
+	if !strings.Contains(cover, `<img src="cover.png"`) {
+		t.Error("cover.xhtml does not reference the image")
+	}
+}
+
+func TestRenderEPUB_RejectsInvalidCover(t *testing.T) {
+	_, err := renderEPUB(
+		"光斑",
+		[]int{1},
+		chapterTitleIndex{1: "x"},
+		nil,
+		map[int]string{1: "body"},
+		&CoverImage{Data: nil, MediaType: "image/png"},
+	)
+	if err == nil {
+		t.Fatal("expected error for cover with no data")
+	}
+
+	_, err = renderEPUB(
+		"光斑",
+		[]int{1},
+		chapterTitleIndex{1: "x"},
+		nil,
+		map[int]string{1: "body"},
+		&CoverImage{Data: []byte("not-an-image"), MediaType: "text/html"},
+	)
+	if err == nil {
+		t.Fatal("不支持的 media-type 不得伪装成 cover.png 写进 EPUB")
+	}
+}
+
+func readZipText(t *testing.T, files map[string]*zip.File, name string) string {
+	t.Helper()
+	f, ok := files[name]
+	if !ok {
+		t.Fatalf("%s missing", name)
+	}
+	rc, err := f.Open()
+	if err != nil {
+		t.Fatalf("open %s: %v", name, err)
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(b)
 }

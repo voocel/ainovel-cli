@@ -3,6 +3,7 @@ package assets
 import (
 	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -23,6 +24,16 @@ var stylesFS embed.FS
 
 //go:embed voice.md
 var voiceFS embed.FS
+
+//go:embed skills/*.md
+var skillsFS embed.FS
+
+// SkillsFS 暴露内置专项技能文件给 internal/skills 解析。
+//
+// 分工刻意如此：assets 持有字节（go:embed 不能引用父目录，资产必须住在这里），
+// skills 包持有语义（frontmatter 解析、三层覆盖、Catalog）。本包不解析 skill——
+// 它对 Skill 的结构一无所知，只负责把文件嵌进二进制。
+func SkillsFS() fs.FS { return skillsFS }
 
 // Prompts 表示嵌入的提示词集合。
 type Prompts struct {

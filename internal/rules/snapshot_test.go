@@ -91,7 +91,26 @@ func TestSystemDefaults_MatchesLegacyDefaultMD(t *testing.T) {
 	if len(d.ForbiddenPhrases) != 4 {
 		t.Fatalf("默认禁语应为 4 条，得到 %d", len(d.ForbiddenPhrases))
 	}
-	if len(d.FatigueWords) != 16 {
-		t.Fatalf("默认疲劳词应为 16 条，得到 %d", len(d.FatigueWords))
+	if len(d.FatigueWords) != 17 {
+		t.Fatalf("默认疲劳词应为 17 条，得到 %d", len(d.FatigueWords))
+	}
+	if got := d.FatigueWords["——"]; got != 2 {
+		t.Fatalf("双破折号默认单章阈值应为 2，得到 %d", got)
+	}
+}
+
+func TestMergeSystemDefaults_AddsNewDefaultsWithoutOverwritingCurrent(t *testing.T) {
+	got := MergeSystemDefaults(Structured{
+		Genre:        "都市",
+		FatigueWords: map[string]int{"不禁": 5},
+	})
+	if got.Genre != "都市" {
+		t.Fatalf("应保留当前题材，得到 %q", got.Genre)
+	}
+	if got.FatigueWords["不禁"] != 5 {
+		t.Fatalf("当前快照同名阈值应优先，得到 %d", got.FatigueWords["不禁"])
+	}
+	if got.FatigueWords["——"] != 2 {
+		t.Fatalf("应补入新版双破折号阈值，得到 %d", got.FatigueWords["——"])
 	}
 }
