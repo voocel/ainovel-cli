@@ -46,6 +46,8 @@ type CoverTitleLayout struct {
 	Theme string `json:"theme"`
 	// Font: hei / song / kai
 	Font string `json:"font"`
+	// Style: auto / gold / modern / romance / thriller / scifi / literary
+	Style string `json:"style"`
 }
 
 const (
@@ -64,9 +66,10 @@ func defaultCoverTitleLayout(novelName string) CoverTitleLayout {
 		Enabled:  true,
 		Title:    strings.TrimSpace(novelName),
 		Position: "top",
-		Scale:    1,
+		Scale:    1.15,
 		Theme:    "light",
 		Font:     "hei",
+		Style:    "auto",
 	}
 }
 
@@ -96,11 +99,26 @@ func (l CoverTitleLayout) normalize() CoverTitleLayout {
 	default:
 		out.Font = "hei"
 	}
+	switch strings.ToLower(strings.TrimSpace(l.Style)) {
+	case "gold", "modern", "romance", "thriller", "scifi", "literary":
+		out.Style = strings.ToLower(strings.TrimSpace(l.Style))
+	default:
+		out.Style = "auto"
+	}
 	if out.Scale <= 0 {
 		out.Scale = 1
 	}
 	out.Scale = min(max(out.Scale, 0.5), 2)
 	return out
+}
+
+// applyCoverTitleStyle 只替换自动样式。用户手动选择过视觉样式后，重新生图也会保留。
+func applyCoverTitleStyle(layout CoverTitleLayout, genre string) CoverTitleLayout {
+	layout = layout.normalize()
+	if layout.Style == "auto" {
+		layout.Style = titleStyleForCoverGenre(genre)
+	}
+	return layout
 }
 
 // hasText 判断这份排版是否真的会画出东西（关掉或没填字都不画）。
@@ -300,34 +318,98 @@ func renderCoverWithTitle(base image.Image, layout CoverTitleLayout, maxDim int)
 	}
 	blockTop = min(max(blockTop, 0), max(h-blockH, 0))
 
-	fg, shadow := coverTextColors(layout.Theme)
+	paint := coverTitlePaintFor(layout)
 	drawCoverScrim(dst, layout, blockTop, blockH, titleSize)
 
-	// 阴影单独描一遍：AI 出的画面明暗不可控，纯色字压在亮部会糊掉，
-	// 一层偏移的半透明描边能保证任何底图上都读得清。
-	offset := max(int(titleSize*0.035), 1)
+	// 标题先画成透明蒙版，再统一施加外发光、描边和纵向渐变。
+	// 这样复杂底图上仍然清楚，也比纯色系统黑体更接近网文平台的成品标题。
+	titleMask := image.NewAlpha(dst.Bounds())
 	baseline := blockTop + titleMetrics.Ascent.Ceil()
 	for _, line := range lines {
-		drawCentered(dst, titleFace, line, w, baseline+offset, offset, shadow)
-		drawCentered(dst, titleFace, line, w, baseline, 0, fg)
+		drawCenteredMask(titleMask, titleFace, line, w, baseline)
 		baseline += titleLineH
 	}
+	titleRect := image.Rect(0, max(blockTop-int(titleSize*0.3), 0), w,
+		min(blockTop+len(lines)*titleLineH+int(titleSize*0.25), h))
+	drawStyledTextMask(dst, titleMask, titleRect, paint, titleSize)
 
 	if authorFace != nil {
 		ruleY := blockTop + len(lines)*titleLineH + authorGap/2
-		drawCoverRule(dst, w, ruleY, titleSize, fg)
+		drawCoverAuthorOrnament(dst, w, ruleY, titleSize, paint.Bottom)
 		ab := blockTop + len(lines)*titleLineH + authorGap + authorFace.Metrics().Ascent.Ceil()
-		drawCentered(dst, authorFace, layout.Author, w, ab+offset, offset, shadow)
-		drawCentered(dst, authorFace, layout.Author, w, ab, 0, fg)
+		authorMask := image.NewAlpha(dst.Bounds())
+		drawCenteredMask(authorMask, authorFace, layout.Author, w, ab)
+		authorRect := image.Rect(0, max(ab-authorFace.Metrics().Ascent.Ceil()-4, 0), w,
+			min(ab+authorFace.Metrics().Descent.Ceil()+4, h))
+		drawStyledTextMask(dst, authorMask, authorRect, paint.withSubtleGlow(), titleSize*0.34)
 	}
 	return dst, nil
 }
 
-func coverTextColors(theme string) (fg, shadow color.Color) {
-	if theme == "dark" {
-		return color.NRGBA{R: 0x1c, G: 0x18, B: 0x14, A: 0xff}, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x8c}
+type coverTitlePaint struct {
+	Top, Bottom color.NRGBA
+	Stroke      color.NRGBA
+	Glow        color.NRGBA
+	StrokeRatio float64
+	GlowRatio   float64
+	ScrimPeak   float64
+}
+
+func (p coverTitlePaint) withSubtleGlow() coverTitlePaint {
+	p.Glow.A /= 2
+	p.GlowRatio *= 0.7
+	p.StrokeRatio *= 0.7
+	return p
+}
+
+func coverTitlePaintFor(layout CoverTitleLayout) coverTitlePaint {
+	style := layout.Style
+	if style == "auto" {
+		style = "modern"
 	}
-	return color.NRGBA{R: 0xff, G: 0xfd, B: 0xf8, A: 0xff}, color.NRGBA{A: 0x9e}
+	p := coverTitlePaint{StrokeRatio: 0.032, GlowRatio: 0.065, ScrimPeak: 0.28}
+	switch style {
+	case "gold":
+		p.Top = color.NRGBA{R: 0xff, G: 0xf3, B: 0xa8, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0xd3, G: 0x83, B: 0x16, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x4a, G: 0x25, B: 0x08, A: 0xf2}
+		p.Glow = color.NRGBA{R: 0xff, G: 0xc4, B: 0x44, A: 0x78}
+	case "romance":
+		p.Top = color.NRGBA{R: 0xff, G: 0xfc, B: 0xf4, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0xff, G: 0xa9, B: 0xc6, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x6f, G: 0x2d, B: 0x49, A: 0xea}
+		p.Glow = color.NRGBA{R: 0xff, G: 0x9f, B: 0xc5, A: 0x70}
+		p.ScrimPeak = 0.22
+	case "thriller":
+		p.Top = color.NRGBA{R: 0xff, G: 0xff, B: 0xfb, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0xb9, G: 0xc2, B: 0xc8, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x11, G: 0x18, B: 0x1c, A: 0xf5}
+		p.Glow = color.NRGBA{R: 0xe8, G: 0x32, B: 0x35, A: 0x72}
+	case "scifi":
+		p.Top = color.NRGBA{R: 0xed, G: 0xff, B: 0xff, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0x47, G: 0xd8, B: 0xff, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x05, G: 0x2d, B: 0x42, A: 0xf0}
+		p.Glow = color.NRGBA{R: 0x35, G: 0xdf, B: 0xff, A: 0x80}
+	case "literary":
+		p.Top = color.NRGBA{R: 0xff, G: 0xf8, B: 0xe8, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0xd8, G: 0xc4, B: 0x98, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x3c, G: 0x35, B: 0x2b, A: 0xd8}
+		p.Glow = color.NRGBA{R: 0xff, G: 0xed, B: 0xbd, A: 0x48}
+		p.StrokeRatio = 0.022
+		p.ScrimPeak = 0.2
+	default:
+		p.Top = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0xdd, G: 0xe7, B: 0xee, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0x16, G: 0x20, B: 0x28, A: 0xf0}
+		p.Glow = color.NRGBA{R: 0x91, G: 0xc5, B: 0xe8, A: 0x58}
+	}
+	if layout.Theme == "dark" {
+		p.Top = color.NRGBA{R: 0x39, G: 0x30, B: 0x29, A: 0xff}
+		p.Bottom = color.NRGBA{R: 0x11, G: 0x18, B: 0x20, A: 0xff}
+		p.Stroke = color.NRGBA{R: 0xff, G: 0xf8, B: 0xe8, A: 0xe8}
+		p.Glow = color.NRGBA{R: 0xff, G: 0xf4, B: 0xd1, A: 0x68}
+	}
+	return p
 }
 
 // drawCoverScrim 在文字区域压一层渐变，让文字从画面里"浮"出来。
@@ -341,11 +423,11 @@ func drawCoverScrim(dst *image.RGBA, layout CoverTitleLayout, blockTop, blockH i
 		return
 	}
 
-	var peak float64 = 0.52
+	peak := coverTitlePaintFor(layout).ScrimPeak
 	scrim := color.NRGBA{}
 	if layout.Theme == "dark" {
 		scrim = color.NRGBA{R: 0xff, G: 0xff, B: 0xff}
-		peak = 0.58
+		peak = min(peak+0.04, 0.34)
 	}
 
 	band := float64(bandBottom - bandTop)
@@ -371,32 +453,95 @@ func drawCoverScrim(dst *image.RGBA, layout CoverTitleLayout, blockTop, blockH i
 	}
 }
 
-// drawCoverRule 画标题与作者之间的细分隔线（有作者名时才画）。
-func drawCoverRule(dst *image.RGBA, w, y int, titleSize float64, fg color.Color) {
-	length := int(titleSize * 2.2)
-	thick := max(int(titleSize*0.03), 1)
-	if length <= 0 || y < 0 || y+thick > dst.Bounds().Dy() {
-		return
-	}
-	r, g, b, _ := fg.RGBA()
-	line := color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: 0x9e}
-	rect := image.Rect((w-length)/2, y, (w+length)/2, y+thick)
-	draw.Draw(dst, rect, image.NewUniform(line), image.Point{}, draw.Over)
-}
-
-func drawCentered(dst *image.RGBA, face font.Face, text string, w, baseline, dx int, col color.Color) {
+func drawCenteredMask(mask *image.Alpha, face font.Face, text string, w, baseline int) {
 	if text == "" {
 		return
 	}
 	adv := font.MeasureString(face, text)
 	x := (fixed.I(w) - adv) / 2
 	d := &font.Drawer{
-		Dst:  dst,
-		Src:  image.NewUniform(col),
+		Dst:  mask,
+		Src:  image.White,
 		Face: face,
-		Dot:  fixed.Point26_6{X: x + fixed.I(dx), Y: fixed.I(baseline)},
+		Dot:  fixed.Point26_6{X: x, Y: fixed.I(baseline)},
 	}
 	d.DrawString(text)
+}
+
+func drawStyledTextMask(dst *image.RGBA, mask *image.Alpha, bounds image.Rectangle, paint coverTitlePaint, size float64) {
+	bounds = bounds.Intersect(dst.Bounds())
+	if bounds.Empty() {
+		return
+	}
+	glowRadius := max(int(size*paint.GlowRatio), 1)
+	strokeRadius := max(int(size*paint.StrokeRatio), 1)
+	for _, offset := range radialOffsets(glowRadius) {
+		drawShiftedMask(dst, mask, bounds, offset.X, offset.Y, paint.Glow)
+	}
+	for _, offset := range radialOffsets(strokeRadius) {
+		drawShiftedMask(dst, mask, bounds, offset.X, offset.Y, paint.Stroke)
+	}
+	drawGradientMask(dst, mask, bounds, paint.Top, paint.Bottom)
+}
+
+func radialOffsets(radius int) []image.Point {
+	if radius <= 0 {
+		return nil
+	}
+	diagonal := max(int(float64(radius)*0.72), 1)
+	return []image.Point{
+		{X: -radius}, {X: radius}, {Y: -radius}, {Y: radius},
+		{X: -diagonal, Y: -diagonal}, {X: diagonal, Y: -diagonal},
+		{X: -diagonal, Y: diagonal}, {X: diagonal, Y: diagonal},
+	}
+}
+
+func drawShiftedMask(dst *image.RGBA, mask *image.Alpha, bounds image.Rectangle, dx, dy int, col color.Color) {
+	r := bounds.Add(image.Pt(dx, dy)).Intersect(dst.Bounds())
+	if r.Empty() {
+		return
+	}
+	draw.DrawMask(dst, r, image.NewUniform(col), image.Point{}, mask, r.Min.Sub(image.Pt(dx, dy)), draw.Over)
+}
+
+func drawGradientMask(dst *image.RGBA, mask *image.Alpha, bounds image.Rectangle, top, bottom color.NRGBA) {
+	gradient := image.NewNRGBA(bounds)
+	denom := max(bounds.Dy()-1, 1)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		t := float64(y-bounds.Min.Y) / float64(denom)
+		row := image.Rect(bounds.Min.X, y, bounds.Max.X, y+1)
+		draw.Draw(gradient, row, image.NewUniform(blendNRGBA(top, bottom, t)), image.Point{}, draw.Src)
+	}
+	draw.DrawMask(dst, bounds, gradient, bounds.Min, mask, bounds.Min, draw.Over)
+}
+
+func blendNRGBA(a, b color.NRGBA, t float64) color.NRGBA {
+	t = min(max(t, 0), 1)
+	mix := func(x, y uint8) uint8 { return uint8(float64(x)*(1-t) + float64(y)*t) }
+	return color.NRGBA{R: mix(a.R, b.R), G: mix(a.G, b.G), B: mix(a.B, b.B), A: mix(a.A, b.A)}
+}
+
+// drawCoverAuthorOrnament 画作者名上方的双线与菱形装饰。
+func drawCoverAuthorOrnament(dst *image.RGBA, w, y int, titleSize float64, fg color.Color) {
+	length := int(titleSize * 2.5)
+	thick := max(int(titleSize*0.03), 1)
+	if length <= 0 || y < 0 || y+thick > dst.Bounds().Dy() {
+		return
+	}
+	r, g, b, _ := fg.RGBA()
+	line := color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: 0x9e}
+	center := w / 2
+	gap := max(int(titleSize*0.24), 4)
+	left := image.Rect(center-length/2, y, center-gap, y+thick)
+	right := image.Rect(center+gap, y, center+length/2, y+thick)
+	draw.Draw(dst, left, image.NewUniform(line), image.Point{}, draw.Over)
+	draw.Draw(dst, right, image.NewUniform(line), image.Point{}, draw.Over)
+	radius := max(int(titleSize*0.08), 2)
+	for dy := -radius; dy <= radius; dy++ {
+		half := radius - absInt(dy)
+		r := image.Rect(center-half, y+thick/2+dy, center+half+1, y+thick/2+dy+1)
+		draw.Draw(dst, r, image.NewUniform(line), image.Point{}, draw.Over)
+	}
 }
 
 // wrapCoverText 按可用宽度折行。中文逐字折，英文优先在空格处折。
@@ -448,6 +593,13 @@ func lastSpace(runes []rune) int {
 }
 
 func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func absInt(v int) int {
 	if v < 0 {
 		return -v
 	}

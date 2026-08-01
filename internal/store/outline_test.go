@@ -14,7 +14,7 @@ func setupLayered(t *testing.T, volumes []domain.VolumeOutline) *Store {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Outline.SaveLayeredOutline(volumes); err != nil {
@@ -24,6 +24,23 @@ func setupLayered(t *testing.T, volumes []domain.VolumeOutline) *Store {
 		t.Fatalf("SetLayered: %v", err)
 	}
 	return s
+}
+
+func TestSaveLayeredOutlineRejectsShortStory(t *testing.T) {
+	st := NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init("short", 3, domain.GenreShortStory); err != nil {
+		t.Fatal(err)
+	}
+	err := st.Outline.SaveLayeredOutline([]domain.VolumeOutline{{Index: 1, Title: "不应写入"}})
+	if err == nil {
+		t.Fatal("OutlineStore 必须拒绝短篇分层大纲")
+	}
+	if _, statErr := os.Stat(filepath.Join(st.Dir(), "layered_outline.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("拒绝后不应留下分层工件，stat=%v", statErr)
+	}
 }
 
 func TestCheckArcBoundaryNeedsNewVolume(t *testing.T) {

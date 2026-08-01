@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import * as api from "./bindings/wails";
+import { Overlay } from "./components/Overlay";
 import { WelcomeScreen } from "./screens/WelcomeScreen";
 import { RunningScreen } from "./screens/RunningScreen";
 import { SetupScreen } from "./screens/SetupScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import type { SettingsTab } from "./screens/SettingsScreen";
 import { LibraryScreen } from "./screens/LibraryScreen";
 
 // 屏幕模型：
@@ -17,7 +19,13 @@ type Screen = "loading" | "setup" | "library" | "welcome" | "running";
 export function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("providers");
   const [booted, setBooted] = useState(false);
+
+  const openSettings = (tab: SettingsTab = "providers") => {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  };
 
   // 启动：需要引导 → setup；否则进书库。
   // 不自动打开上次的书——书库是显式入口，用户自己选，避免误在错误的书上继续。
@@ -47,21 +55,21 @@ export function App() {
       <LibraryScreen
         // 有任何持久进度（包括已完结）都进工作台；空书进起书页。
         onOpened={(hasProgress) => setScreen(hasProgress ? "running" : "welcome")}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={openSettings}
       />
     );
   } else if (screen === "welcome") {
     content = (
       <WelcomeScreen
         onStarted={() => setScreen("running")}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettings()}
         onBackToLibrary={() => setScreen("library")}
       />
     );
   } else {
     content = (
       <RunningScreen
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={openSettings}
         onBackToLibrary={() => setScreen("library")}
       />
     );
@@ -71,9 +79,17 @@ export function App() {
     <>
       {content}
       {settingsOpen && (
-        <div className="settings-overlay">
-          <SettingsScreen onClose={() => setSettingsOpen(false)} />
-        </div>
+        <Overlay
+          layer="settings"
+          onClose={() => setSettingsOpen(false)}
+          backdrop={false}
+          className="settings-overlay"
+        >
+          <SettingsScreen
+            initialTab={settingsTab}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </Overlay>
       )}
     </>
   );

@@ -14,7 +14,10 @@ import (
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
-const maxSourceRunes = 60000
+const (
+	maxSourceRunes           = 60000
+	defaultHeartbeatInterval = 15 * time.Second
+)
 
 func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 	if deps.Store == nil || deps.LLM == nil {
@@ -29,6 +32,9 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		defer close(events)
 		emit := func(stage Stage, current, total int, msg string, err error) {
 			ev := Event{Time: time.Now(), Stage: stage, Current: current, Total: total, Message: msg, Err: err}
+			if stage == StageAnalyze {
+				ev.Key = fmt.Sprintf("analyze-%d", current)
+			}
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -58,13 +64,25 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		}
 
 		reports := make([]domain.SimulationSourceReport, 0, len(pending))
+		heartbeatInterval := opts.HeartbeatInterval
+		if heartbeatInterval <= 0 {
+			heartbeatInterval = defaultHeartbeatInterval
+		}
 		for i, source := range pending {
 			if err := ctx.Err(); err != nil {
 				emit(StageError, i, len(pending), "用户取消画像分析", err)
 				return
 			}
 			emit(StageAnalyze, i+1, len(pending), fmt.Sprintf("分析仿写语料 %d/%d：%s", i+1, len(pending), source.RelativePath), nil)
-			report, err := AnalyzeSource(ctx, deps.LLM, deps.Prompts.Source, source)
+			report, err := analyzeSourceWithHeartbeat(
+				ctx, deps.LLM, deps.Prompts.Source, source, heartbeatInterval,
+				func(elapsed time.Duration) {
+					emit(StageAnalyze, i+1, len(pending), fmt.Sprintf(
+						"模型正在分析 %d/%d：%s（已等待 %s）",
+						i+1, len(pending), source.RelativePath, elapsed.Round(time.Second),
+					), nil)
+				},
+			)
 			if err != nil {
 				emit(StageError, i+1, len(pending), "语料分析失败", err)
 				return
@@ -87,6 +105,41 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		emit(StageDone, len(pending), len(pending), fmt.Sprintf("仿写画像已更新：新增/变更 %d 篇，累计 %d 篇", len(pending), len(profile.Corpus.Sources)), nil)
 	}()
 	return events, nil
+}
+
+func analyzeSourceWithHeartbeat(
+	ctx context.Context,
+	llm LLMChat,
+	systemPrompt string,
+	source scannedSource,
+	interval time.Duration,
+	onHeartbeat func(time.Duration),
+) (*domain.SimulationSourceReport, error) {
+	if interval <= 0 || onHeartbeat == nil {
+		return AnalyzeSource(ctx, llm, systemPrompt, source)
+	}
+	started := time.Now()
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				onHeartbeat(time.Since(started))
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	report, err := AnalyzeSource(ctx, llm, systemPrompt, source)
+	close(stop)
+	<-stopped
+	return report, err
 }
 
 func AnalyzeSource(ctx context.Context, llm LLMChat, systemPrompt string, source scannedSource) (*domain.SimulationSourceReport, error) {

@@ -314,14 +314,14 @@ func (e *engine) planStartFallback(ctx context.Context) (*flow.Instruction, erro
 	if meta.StartPrompt == "" {
 		return nil, nil
 	}
-	return e.retryPlanStart(ctx, meta.StartPrompt), nil
+	return e.retryPlanStart(ctx, meta.StartPrompt, progress.Genre), nil
 }
 
 // retryPlanStart 补裁启动决策并固化(裁定先落事实再执行,与 StartPrepared 同构)。
-func (e *engine) retryPlanStart(ctx context.Context, prompt string) *flow.Instruction {
+func (e *engine) retryPlanStart(ctx context.Context, prompt string, genre domain.Genre) *flow.Instruction {
 	start := time.Now()
 	decision, derr := runObservedDecision(e.observer, "启动补裁", func() (arbiter.PlanStartDecision, error) {
-		return arbiter.DecidePlanStart(ctx, e.arbiterModel, e.planStartPrompt, prompt, e.style)
+		return arbiter.DecidePlanStartForGenre(ctx, e.arbiterModel, e.planStartPrompt, prompt, e.style, genre)
 	})
 	rec := storepkg.DecisionRecord{Kind: "plan_start", Decider: "arbiter", Input: prompt,
 		Reason: decision.Reason, DurationMs: time.Since(start).Milliseconds()}

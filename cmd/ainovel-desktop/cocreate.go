@@ -143,8 +143,8 @@ func (a *App) CancelCoCreateTurn() {
 }
 
 // StartFromCoCreate 用共创产出的创作指令起新书（等价于快速模式，但 prompt 来自共创草稿）。
-func (a *App) StartFromCoCreate(draft string, reviewFirst bool) error {
-	return a.StartQuick(draft, reviewFirst)
+func (a *App) StartFromCoCreate(draft string, reviewFirst bool, genre string) error {
+	return a.StartQuick(draft, reviewFirst, genre)
 }
 
 // ── 阶段共创的生命周期（已在创作中） ──

@@ -69,7 +69,7 @@ func TestSaveFoundationPremiseSetsNovelName(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.Progress.Init("novel", 0); err != nil {
+	if err := store.Progress.Init("novel", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("Init progress: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestSaveFoundationOutlineClearsLayeredStateWhenDowngrading(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.Progress.Init("test", 0); err != nil {
+	if err := store.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -246,7 +246,7 @@ func TestSaveFoundationExpandArcCalibratesTarget(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 5); err != nil {
+	if err := s.Progress.Init("test", 5, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{
@@ -296,7 +296,7 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func TestSaveFoundationAppendVolumeRejectsAfterComplete(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Progress.MarkComplete(); err != nil {
@@ -501,7 +501,7 @@ func completeBookSetup(t *testing.T) *store.Store {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 2); err != nil {
+	if err := s.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
@@ -637,7 +637,7 @@ func TestSaveFoundationCompleteBookRejectsBeforeWriting(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 0); err != nil {
+	if err := s.Progress.Init("test", 0, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	_ = s.Progress.UpdatePhase(domain.PhasePremise)

@@ -108,7 +108,7 @@ func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool
 		return nil, false, nil
 	}
 
-	profile := domain.NewContextProfile(progress.TotalChapters)
+	profile := domain.NewContextProfile(progress.TotalChapters, progress.Genre)
 	if !progress.Layered {
 		profile.Layered = false
 	}
@@ -186,7 +186,7 @@ func loadWriterRestoreState(s *store.Store) (*writerStoreSummaryState, error) {
 		return nil, nil
 	}
 
-	profile := domain.NewContextProfile(progress.TotalChapters)
+	profile := domain.NewContextProfile(progress.TotalChapters, progress.Genre)
 	if !progress.Layered {
 		profile.Layered = false
 	}

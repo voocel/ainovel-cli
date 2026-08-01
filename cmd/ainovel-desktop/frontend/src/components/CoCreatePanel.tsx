@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as api from "../bindings/wails";
-import type { CoCreateMsg } from "../bindings/wails";
+import type { CoCreateMsg, StoryGenre } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // 界面上展示的一轮对话。assistant 轮同时保留 raw（回传给模型）与 message（给用户看）。
 type Turn = { role: "user" | "assistant"; text: string; raw?: string };
@@ -14,11 +15,14 @@ type Turn = { role: "user" | "assistant"; text: string; raw?: string };
 // 自己上一轮的 <draft>，会每轮重新归纳而非累积更新。
 export function CoCreatePanel({
   mode,
+  genre = "novel",
   reviewFirst = true,
   onDone,
   onCancel,
 }: {
   mode: "new" | "stage";
+  // 仅 mode="new" 有意义：本次新书的篇幅类型。
+  genre?: StoryGenre;
   // 仅 mode="new" 有意义：起书时的写作节奏（true=分段创作/逐章验收）。
   reviewFirst?: boolean;
   onDone: () => void;
@@ -97,7 +101,7 @@ export function CoCreatePanel({
     setErr(null);
     try {
       if (mode === "stage") await api.ResumeFromCoCreate(draft);
-      else await api.StartFromCoCreate(draft, reviewFirst);
+      else await api.StartFromCoCreate(draft, reviewFirst, genre);
       onDone();
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
@@ -120,10 +124,21 @@ export function CoCreatePanel({
   const firstTurn = turns.length === 0;
 
   return (
-    <div className="cocreate">
+    // 整屏级浮层（backdrop=false）：共创需要完整的对话+草稿双栏空间。
+    // 用 Overlay 而不是直接替换屏幕，是为了让 AskUser（blocking 层）仍能压在它上面——
+    // 共创期间引擎若提问，用户必须看得见，否则引擎会一直阻塞着等。
+    <Overlay
+      layer="settings"
+      onClose={busy ? undefined : cancel}
+      backdrop={false}
+      className="cocreate"
+      labelledBy="cocreate-title"
+    >
       <header className="topbar">
         <div className="topbar-left">
-          <strong>{mode === "stage" ? "阶段共创 · 规划后续方向" : "共创 · 一起想清楚要写什么"}</strong>
+          <strong id="cocreate-title">
+            {mode === "stage" ? "阶段共创 · 规划后续方向" : "共创 · 一起想清楚要写什么"}
+          </strong>
           {ready && <span className="badge status-complete">已就绪</span>}
         </div>
         <div className="inline-actions">
@@ -208,6 +223,6 @@ export function CoCreatePanel({
           </div>
         </section>
       </div>
-    </div>
+    </Overlay>
   );
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/prosecheck"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -100,6 +101,20 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		if violations := t.store.World.LoadRuleViolations(a.Chapter); len(violations) > 0 {
 			result["rule_violations"] = violations
 		}
+		// AI 痕迹候选动态读取终稿后计算，不新增持久化状态。已完成章节返回
+		// prose_findings；写新章时返回上一章的候选，帮助 Writer 避免延续同类模式。
+		if text, err := t.store.Drafts.LoadChapterText(a.Chapter); err == nil && text != "" {
+			result["prose_findings"] = prosecheck.Check(text)
+		} else {
+			warn("prose_findings", err)
+			if a.Chapter > 1 {
+				if previous, previousErr := t.store.Drafts.LoadChapterText(a.Chapter - 1); previousErr == nil && previous != "" {
+					result["previous_prose_findings"] = prosecheck.Check(previous)
+				} else {
+					warn("previous_prose_findings", previousErr)
+				}
+			}
+		}
 		// 数据语义标注（治复读交代）：episodic 是已写入正文的备忘，不是待写素材。
 		// 只挂容器内，不进顶层镜像。
 		if epi, ok := result["episodic_memory"].(map[string]any); ok && len(epi) > 0 {
@@ -115,8 +130,10 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 	// 由 buildUserRules 按需新建只装 user_rules 的容器。快照缺失时退到内置默认，
 	// 始终输出稳定结构，避免 LLM 看到 user_rules=null 走异常分支。
 	if a.Chapter > 0 {
+		t.buildGenre(result, "working_memory", warn)
 		t.buildSimulationProfile(result, "working_memory", warn)
 	} else {
+		t.buildGenre(result, "planning_memory", warn)
 		t.buildSimulationProfile(result, "planning_memory", warn)
 	}
 
@@ -225,6 +242,12 @@ func buildLoadingSummary(result map[string]any, chapter int) string {
 	if n := sliceLen(result["related_chapters"]); n > 0 {
 		items = append(items, fmt.Sprintf("相关章:%d", n))
 	}
+	if n := sliceLen(result["prose_findings"]); n > 0 {
+		items = append(items, fmt.Sprintf("AI味候选:%d", n))
+	}
+	if n := sliceLen(result["previous_prose_findings"]); n > 0 {
+		items = append(items, fmt.Sprintf("前章AI味候选:%d", n))
+	}
 	if selected, ok := result["selected_memory"].(map[string]any); ok && len(selected) > 0 {
 		if n := sliceLen(selected["story_threads"]); n > 0 {
 			items = append(items, fmt.Sprintf("线索召回:%d", n))
@@ -286,6 +309,8 @@ func sliceLen(v any) int {
 	case []domain.RelatedChapter:
 		return len(s)
 	case []domain.RecallItem:
+		return len(s)
+	case []prosecheck.Finding:
 		return len(s)
 	default:
 		return 0

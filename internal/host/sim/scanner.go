@@ -24,17 +24,17 @@ type scannedSource struct {
 func scanSources(root string) ([]scannedSource, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return nil, fmt.Errorf("source dir is required")
+		return nil, fmt.Errorf("仿写语料目录不能为空")
 	}
 	info, err := os.Stat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("simulate directory not found: %s", root)
+			return nil, fmt.Errorf("仿写语料目录不存在：%s", root)
 		}
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("simulate path is not a directory: %s", root)
+		return nil, fmt.Errorf("仿写语料路径不是目录：%s", root)
 	}
 
 	var out []scannedSource

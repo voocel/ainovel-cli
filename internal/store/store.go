@@ -117,6 +117,10 @@ func (s *Store) CheckConsistency() []string {
 // 损坏或无权限读取的工件误判成“尚未创建”，否则调用方可能覆盖真实数据。
 func (s *Store) FoundationMissing() ([]string, error) {
 	var missing []string
+	progress, err := s.Progress.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load progress: %w", err)
+	}
 	premise, err := s.Outline.LoadPremise()
 	if err != nil {
 		return nil, fmt.Errorf("load premise: %w", err)
@@ -145,11 +149,14 @@ func (s *Store) FoundationMissing() ([]string, error) {
 	if len(rules) == 0 {
 		missing = append(missing, "world_rules")
 	}
-	layered, err := s.Outline.LoadLayeredOutline()
-	if err != nil {
-		return nil, fmt.Errorf("load layered outline: %w", err)
-	}
-	if len(layered) > 0 {
+	if progress != nil && progress.Layered {
+		layered, err := s.Outline.LoadLayeredOutline()
+		if err != nil {
+			return nil, fmt.Errorf("load layered outline: %w", err)
+		}
+		if len(layered) == 0 {
+			missing = append(missing, "layered_outline")
+		}
 		compass, err := s.Outline.LoadCompass()
 		if err != nil {
 			return nil, fmt.Errorf("load compass: %w", err)
@@ -162,10 +169,6 @@ func (s *Store) FoundationMissing() ([]string, error) {
 	// PhaseWriting/Complete 代表旧书或已审查的新书，保持历史项目兼容；审查本身
 	// 是一个动作而非文件缺失，因此只在其它工件齐全时追加。
 	if len(missing) == 0 {
-		progress, err := s.Progress.Load()
-		if err != nil {
-			return nil, fmt.Errorf("load progress: %w", err)
-		}
 		if progress == nil || (progress.Phase != domain.PhaseWriting && progress.Phase != domain.PhaseComplete) {
 			missing = append(missing, "foundation_audit")
 		}
@@ -178,11 +181,11 @@ func (s *Store) FoundationMissing() ([]string, error) {
 // 而不是会话中尚未保存或已经过期的内容。
 func (s *Store) FoundationFingerprint() (string, error) {
 	files := []string{"premise.md", "outline.json", "characters.json", "world_rules.json"}
-	layered, err := s.Outline.LoadLayeredOutline()
+	progress, err := s.Progress.Load()
 	if err != nil {
-		return "", fmt.Errorf("load layered outline: %w", err)
+		return "", fmt.Errorf("load progress: %w", err)
 	}
-	if len(layered) > 0 {
+	if progress != nil && progress.Layered {
 		files = append(files, "layered_outline.json", "meta/compass.json")
 	}
 

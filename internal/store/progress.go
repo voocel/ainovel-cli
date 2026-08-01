@@ -45,9 +45,14 @@ func (s *ProgressStore) saveUnlocked(p *domain.Progress) error {
 }
 
 // Init 创建初始进度。
-func (s *ProgressStore) Init(novelName string, totalChapters int) error {
+func (s *ProgressStore) Init(novelName string, totalChapters int, genre domain.Genre) error {
+	parsedGenre, err := domain.ParseGenre(string(genre))
+	if err != nil {
+		return fmt.Errorf("init progress genre: %w", err)
+	}
 	return s.Save(&domain.Progress{
 		NovelName:     novelName,
+		Genre:         parsedGenre,
 		Phase:         domain.PhaseInit,
 		TotalChapters: totalChapters,
 	})
@@ -315,7 +320,28 @@ func (s *ProgressStore) SetLayered(layered bool) error {
 		if p == nil {
 			return nil
 		}
+		if layered && p.Genre == domain.GenreShortStory {
+			return fmt.Errorf("短篇小说不支持分层大纲: %w", errs.ErrToolPrecondition)
+		}
 		p.Layered = layered
+		return s.saveUnlocked(p)
+	})
+}
+
+// NormalizeGenreInvariants 持久化修复历史或损坏数据中的类型不变量。
+// 短篇永远不进入卷/弧模式；调用方应在读取路由事实前执行一次。
+func (s *ProgressStore) NormalizeGenreInvariants() error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil || p == nil {
+			return err
+		}
+		if p.Genre != domain.GenreShortStory || (!p.Layered && p.CurrentVolume == 0 && p.CurrentArc == 0) {
+			return nil
+		}
+		p.Layered = false
+		p.CurrentVolume = 0
+		p.CurrentArc = 0
 		return s.saveUnlocked(p)
 	})
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,170 @@ func TestCoverStore_ActiveConcurrent(t *testing.T) {
 		go func() { defer wg.Done(); _ = c.active() }()
 	}
 	wg.Wait()
+}
+
+func TestCoverPlatformDefaultsAndLegacyMapping(t *testing.T) {
+	for _, input := range []string{"", "unknown", " TOMATO "} {
+		if got := normalizeCoverPlatform(input); got != "tomato" {
+			t.Errorf("normalizeCoverPlatform(%q) = %q, want tomato", input, got)
+		}
+	}
+	if got := normalizeCoverPlatform("cinematic"); got != "qidian" {
+		t.Errorf("旧电影海报风格应迁移为起点平台，实际 %q", got)
+	}
+}
+
+func TestBuildCoverGenerationPromptAppliesTomatoRules(t *testing.T) {
+	got := buildCoverGenerationPrompt("a lone swordswoman in a storm", "tomato", "xianxia", "dynamic")
+	for _, want := range []string{
+		"a lone swordswoman in a storm",
+		"small app thumbnail",
+		"60 to 72 percent",
+		"180-pixel thumbnail width",
+		"Portrait 3:4",
+		"upper 26 to 30 percent",
+		"near-black empty block",
+		"commercial illustration",
+		"No text",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("番茄封面提示词缺少 %q：%s", want, got)
+		}
+	}
+}
+
+func TestCoverGenreInferenceAndComposition(t *testing.T) {
+	if got := inferCoverGenre("地铁隧道里的倒计时与失踪案"); got != "suspense" {
+		t.Fatalf("悬疑题材识别为 %q", got)
+	}
+	if got := resolveCoverComposition("auto", "modern_romance"); got != "duo" {
+		t.Fatalf("现言自动构图 = %q, want duo", got)
+	}
+	if got := resolveCoverComposition("scene", "xianxia"); got != "scene" {
+		t.Fatalf("用户指定构图被改写为 %q", got)
+	}
+}
+
+func TestTomatoPlatformArtifactIsExactUploadSize(t *testing.T) {
+	dir := t.TempDir()
+	data := bigPNG(t, 900, 1200)
+	if err := writeCoverPlatformArtifact(dir, data, "image/png", "tomato"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, tomatoCoverArtifactName)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := img.Bounds().Size(); got.X != 600 || got.Y != 800 {
+		t.Fatalf("番茄平台封面尺寸 = %dx%d, want 600x800", got.X, got.Y)
+	}
+}
+
+func TestCoverTitleStyleDefaultsFromGenre(t *testing.T) {
+	layout := applyCoverTitleStyle(defaultCoverTitleLayout("测试书名"), "xianxia")
+	if layout.Style != "gold" {
+		t.Fatalf("仙侠默认标题样式 = %q, want gold", layout.Style)
+	}
+	layout.Style = "scifi"
+	if got := applyCoverTitleStyle(layout, "modern_romance").Style; got != "scifi" {
+		t.Fatalf("手动标题样式被题材覆盖为 %q", got)
+	}
+}
+
+func TestMergeImageGenConfigKeyActions(t *testing.T) {
+	base := imageGenConfig{
+		BaseURL: "https://old.example/v1",
+		APIKey:  "old-key",
+		Model:   "old-model",
+		Size:    "1024x1024",
+	}
+	draft := ImageGenDraft{
+		BaseURL: "https://api.openai.com/v1/",
+		Model:   " gpt-image-2 ",
+		Size:    "1024x1536",
+	}
+
+	kept, err := mergeImageGenConfig(base, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.APIKey != "old-key" || kept.Model != "gpt-image-2" || kept.Size != "1024x1536" {
+		t.Fatalf("保留 Key 后配置不正确：%+v", kept)
+	}
+
+	draft.APIKeyAction = "replace"
+	draft.APIKey = " new-key "
+	replaced, err := mergeImageGenConfig(base, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.APIKey != "new-key" {
+		t.Fatalf("更换 Key 得到 %q", replaced.APIKey)
+	}
+
+	draft.APIKeyAction = "clear"
+	draft.APIKey = ""
+	cleared, err := mergeImageGenConfig(base, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.APIKey != "" {
+		t.Fatalf("清除 Key 后仍为 %q", cleared.APIKey)
+	}
+}
+
+func TestMergeImageGenConfigRejectsInvalidDraft(t *testing.T) {
+	valid := ImageGenDraft{
+		BaseURL: "https://api.openai.com/v1",
+		Model:   "gpt-image-2",
+		Size:    "1024x1536",
+	}
+	tests := []struct {
+		name  string
+		patch func(*ImageGenDraft)
+	}{
+		{name: "empty URL", patch: func(d *ImageGenDraft) { d.BaseURL = "" }},
+		{name: "relative URL", patch: func(d *ImageGenDraft) { d.BaseURL = "api.example.com/v1" }},
+		{name: "unsupported scheme", patch: func(d *ImageGenDraft) { d.BaseURL = "ftp://api.example.com" }},
+		{name: "empty model", patch: func(d *ImageGenDraft) { d.Model = " " }},
+		{name: "invalid size", patch: func(d *ImageGenDraft) { d.Size = "512x512" }},
+		{name: "empty replacement key", patch: func(d *ImageGenDraft) { d.APIKeyAction = "replace" }},
+		{name: "unknown key action", patch: func(d *ImageGenDraft) { d.APIKeyAction = "rotate" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			draft := valid
+			tt.patch(&draft)
+			if _, err := mergeImageGenConfig(imageGenConfig{APIKey: "old"}, draft); err == nil {
+				t.Fatal("非法配置应返回错误")
+			}
+		})
+	}
+}
+
+func TestReadCoverLegacyMetadataDefaultsToTomato(t *testing.T) {
+	dir := t.TempDir()
+	metaDir := filepath.Join(dir, "meta")
+	if err := os.MkdirAll(metaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"prompt":"legacy","model":"old-model"}`)
+	if err := os.WriteFile(filepath.Join(metaDir, "cover.json"), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readCover(dir, "旧书")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Preset != "tomato" {
+		t.Fatalf("旧封面风格 = %q, want tomato", got.Preset)
+	}
 }
 
 // TestOpenBook_SameDirIsNoop 快路径：同一本书不该重建 Host。

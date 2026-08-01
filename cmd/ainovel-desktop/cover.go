@@ -9,6 +9,7 @@ import (
 	"image"
 	_ "image/jpeg" // 导入的封面可能是 JPEG/WebP，解码器要注册进 image.Decode
 	_ "image/png"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,12 @@ import (
 //     生图本身走独立 HTTP 客户端（见 imagegen.go）
 
 const (
-	coverBaseName = "cover"
+	coverBaseName           = "cover"
+	defaultCoverStylePreset = "tomato"
+	defaultCoverGenre       = "auto"
+	defaultCoverComposition = "auto"
+	defaultImageGenModel    = "gpt-image-2"
+	defaultImageGenSize     = "1024x1536"
 	// coverSourceBaseName 是"未叠字的原图"，放在 meta/ 下：writeCoverComposite 会清掉书目录里
 	// 其他扩展名的 cover.*，原图必须躲开那次清理，否则改一次排版就得重新花钱生图。
 	coverSourceBaseName = "cover.base"
@@ -98,6 +104,12 @@ func (a *App) GetImageGenSettings() (ImageGenSettings, error) {
 		BaseURL: cfg.BaseURL, Model: cfg.Model, Size: cfg.Size,
 		HasAPIKey: cfg.APIKey != "", Path: imageGenSettingsPath(),
 	}
+	if out.Model == "" {
+		out.Model = defaultImageGenModel
+	}
+	if out.Size == "" {
+		out.Size = defaultImageGenSize
+	}
 	if cfg.APIKey != "" {
 		out.APIKeyHint = maskKey(cfg.APIKey)
 	}
@@ -119,26 +131,55 @@ func (a *App) SaveImageGenSettings(draft ImageGenDraft) error {
 	if err != nil {
 		return err
 	}
+	cur, err = mergeImageGenConfig(cur, draft)
+	if err != nil {
+		return err
+	}
+	return saveImageGenConfig(cur)
+}
+
+func mergeImageGenConfig(cur imageGenConfig, draft ImageGenDraft) (imageGenConfig, error) {
 	cur.BaseURL = normalizeImageGenBaseURL(draft.BaseURL)
+	if cur.BaseURL == "" {
+		return imageGenConfig{}, fmt.Errorf("请填写生图服务的 Base URL")
+	}
+	parsed, err := url.ParseRequestURI(cur.BaseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return imageGenConfig{}, fmt.Errorf("生图服务 Base URL 无效，请填写完整的 http:// 或 https:// 地址")
+	}
 	cur.Model = strings.TrimSpace(draft.Model)
+	if cur.Model == "" {
+		return imageGenConfig{}, fmt.Errorf("请填写生图模型名称")
+	}
 	cur.Size = strings.TrimSpace(draft.Size)
+	if cur.Size == "" {
+		cur.Size = defaultImageGenSize
+	}
+	switch cur.Size {
+	case "768x1024", "1024x1536", "1024x1024", "1536x1024":
+	default:
+		return imageGenConfig{}, fmt.Errorf("不支持的生图尺寸 %q", cur.Size)
+	}
 	switch strings.TrimSpace(draft.APIKeyAction) {
 	case "", "keep":
 	case "replace":
 		cur.APIKey = strings.TrimSpace(draft.APIKey)
+		if cur.APIKey == "" {
+			return imageGenConfig{}, fmt.Errorf("更换 API Key 时不能提交空值")
+		}
 	case "clear":
 		cur.APIKey = ""
 	default:
-		return fmt.Errorf("未知的 API Key 操作: %q", draft.APIKeyAction)
+		return imageGenConfig{}, fmt.Errorf("未知的 API Key 操作: %q", draft.APIKeyAction)
 	}
-	return saveImageGenConfig(cur)
+	return cur, nil
 }
 
 func loadImageGenConfig() (imageGenConfig, error) {
 	data, err := os.ReadFile(imageGenSettingsPath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return imageGenConfig{}, nil
+			return imageGenConfig{Model: defaultImageGenModel, Size: defaultImageGenSize}, nil
 		}
 		return imageGenConfig{}, fmt.Errorf("读取生图配置失败: %w", err)
 	}
@@ -147,6 +188,12 @@ func loadImageGenConfig() (imageGenConfig, error) {
 		return imageGenConfig{}, fmt.Errorf("生图配置格式错误: %w", err)
 	}
 	cfg.BaseURL = normalizeImageGenBaseURL(cfg.BaseURL)
+	if cfg.Model == "" {
+		cfg.Model = defaultImageGenModel
+	}
+	if cfg.Size == "" {
+		cfg.Size = defaultImageGenSize
+	}
 	return cfg, nil
 }
 
@@ -190,6 +237,14 @@ type CoverInfo struct {
 	// HasBase 表示存在未叠字的原图，也即"可以只改排版、不重新生图"。
 	HasBase bool             `json:"hasBase"`
 	Layout  CoverTitleLayout `json:"layout"`
+	// Preset 保留给上一版前端，值与 Platform 相同。
+	Preset              string `json:"preset"`
+	Platform            string `json:"platform"`
+	Genre               string `json:"genre"`
+	ResolvedGenre       string `json:"resolvedGenre"`
+	Composition         string `json:"composition"`
+	PlatformPath        string `json:"platformPath"`
+	HasPlatformArtifact bool   `json:"hasPlatformArtifact"`
 }
 
 // coverMeta 记录生成封面时用的提示词，便于用户回看与微调后重生成。
@@ -200,6 +255,47 @@ type coverMeta struct {
 	UpdatedAt time.Time         `json:"updatedAt"`
 	File      string            `json:"file"`
 	Layout    *CoverTitleLayout `json:"layout,omitempty"`
+	// Preset 是旧字段。新版本用 Platform，读取时仍兼容。
+	Preset        string `json:"preset,omitempty"`
+	Platform      string `json:"platform,omitempty"`
+	Genre         string `json:"genre,omitempty"`
+	ResolvedGenre string `json:"resolvedGenre,omitempty"`
+	Composition   string `json:"composition,omitempty"`
+}
+
+type coverSpec struct {
+	Prompt        string
+	Model         string
+	Platform      string
+	Genre         string
+	ResolvedGenre string
+	Composition   string
+}
+
+func (s coverSpec) normalize() coverSpec {
+	s.Platform = normalizeCoverPlatform(s.Platform)
+	s.Genre = normalizeCoverGenre(s.Genre)
+	s.ResolvedGenre = normalizeCoverGenre(s.ResolvedGenre)
+	if s.ResolvedGenre == "auto" {
+		if s.Genre == "auto" {
+			s.ResolvedGenre = inferCoverGenre(s.Prompt)
+		} else {
+			s.ResolvedGenre = s.Genre
+		}
+	}
+	s.Composition = normalizeCoverComposition(s.Composition)
+	return s
+}
+
+func coverSpecFromMeta(meta coverMeta) coverSpec {
+	platform := meta.Platform
+	if strings.TrimSpace(platform) == "" {
+		platform = meta.Preset
+	}
+	return (coverSpec{
+		Prompt: meta.Prompt, Model: meta.Model, Platform: platform,
+		Genre: meta.Genre, ResolvedGenre: meta.ResolvedGenre, Composition: meta.Composition,
+	}).normalize()
 }
 
 func coverMetaPath(bookDir string) string {
@@ -244,12 +340,28 @@ func (a *App) GetCover() (CoverInfo, error) {
 }
 
 func readCover(bookDir, novelName string) (CoverInfo, error) {
-	out := CoverInfo{Layout: defaultCoverTitleLayout(novelName)}
+	out := CoverInfo{
+		Layout: defaultCoverTitleLayout(novelName), Preset: defaultCoverStylePreset,
+		Platform: defaultCoverStylePreset, Genre: defaultCoverGenre,
+		ResolvedGenre: "urban", Composition: defaultCoverComposition,
+	}
 	basePath, _ := findCoverSourceFile(bookDir)
 	out.HasBase = basePath != ""
 
 	meta := readCoverMeta(bookDir)
-	out.Prompt = meta.Prompt
+	spec := coverSpecFromMeta(meta)
+	out.Prompt = spec.Prompt
+	out.Preset = spec.Platform
+	out.Platform = spec.Platform
+	out.Genre = spec.Genre
+	out.ResolvedGenre = spec.ResolvedGenre
+	out.Composition = spec.Composition
+	if platformPath := coverPlatformArtifactPath(bookDir, spec.Platform); platformPath != "" {
+		if info, err := os.Stat(platformPath); err == nil && info.Size() > 0 {
+			out.PlatformPath = platformPath
+			out.HasPlatformArtifact = true
+		}
+	}
 	if !meta.UpdatedAt.IsZero() {
 		out.UpdatedAt = meta.UpdatedAt.Format(rfc3339)
 	}
@@ -277,56 +389,57 @@ func readCover(bookDir, novelName string) (CoverInfo, error) {
 	return out, nil
 }
 
-// styleArtDirection 把本书的题材映射成画面基调，用于确定性草稿。
-// 保留这条确定性路径的理由：它即时、免费、不会失败，是"文本模型润色"
-// （OptimizeCoverPrompt）的下限与兜底——模型没配好或调用失败时，用户手里
-// 仍然有一份能直接出图的提示词。
-var styleArtDirection = map[string]string{
-	"fantasy":  "epic oriental fantasy illustration, misty mountains and floating palaces, ink-wash influence, dramatic rim light, jade and gold palette",
-	"suspense": "dark cinematic mystery cover, rain-slick city night, deep shadows with a single cold light source, muted teal and charcoal palette, unsettling atmosphere",
-	"romance":  "warm romantic illustration, soft bokeh and golden hour light, delicate florals, tender pastel palette, gentle intimate mood",
-	"default":  "cinematic literary book cover illustration, atmospheric lighting, rich depth of field, restrained elegant palette",
-}
-
-// coverPromptHardRules 是两条不能由模型改写的硬约束，拼在任何提示词末尾。
-//
-// "画面内不要文字"必须保留：文字由本地排版叠上去（见 covertext.go），生图模型
-// 一旦自己写字，中文几乎必糊，还会和叠上去的书名撞在一起。
-const coverPromptHardRules = "Vertical book cover composition, subject placed lower-center, " +
-	"clean empty space at the top for the title. " +
-	"No text, no letters, no words, no watermark, no signature. " +
-	"Highly detailed, professional publishing quality."
-
 // SuggestCoverPrompt 根据本书设定拼一段英文绘画提示词草稿。
 // 生图模型对英文理解更准，所以画面描述用英文；人名等专有信息原样带入。
-func (a *App) SuggestCoverPrompt() (string, error) {
-	_, draft, err := a.coverPromptDraft()
-	return draft, err
+func (a *App) SuggestCoverPrompt(platform, genre, composition string) (string, error) {
+	ctx, err := a.coverPromptDraft(platform, genre, composition)
+	return ctx.Draft, err
+}
+
+type coverPromptContext struct {
+	Facts         string
+	Draft         string
+	ResolvedGenre string
 }
 
 // coverPromptDraft 同时返回给模型看的设定摘要与确定性草稿，两个入口共用一次数据读取。
-func (a *App) coverPromptDraft() (facts string, draft string, err error) {
+func (a *App) coverPromptDraft(platform, genre, composition string) (coverPromptContext, error) {
 	h, err := a.reqHost()
 	if err != nil {
-		return "", "", err
+		return coverPromptContext{}, err
 	}
 	found, err := a.GetFoundation()
 	if err != nil {
-		return "", "", err
+		return coverPromptContext{}, err
 	}
 	snap := h.Snapshot()
 
 	if len(found.Characters) == 0 && found.Premise == "" {
-		return "", "", fmt.Errorf("本书还没有设定，无法生成封面提示词草稿；请先完成规划")
+		return coverPromptContext{}, fmt.Errorf("本书还没有设定，无法生成封面提示词草稿；请先完成规划")
 	}
 
-	art := styleArtDirection[strings.TrimSpace(snap.Style)]
-	if art == "" {
-		art = styleArtDirection["default"]
+	genre = normalizeCoverGenre(genre)
+	if genre == "auto" {
+		var inferText strings.Builder
+		inferText.WriteString(snap.NovelName)
+		inferText.WriteString("\n")
+		inferText.WriteString(found.Premise)
+		for i, entry := range found.Outline {
+			if i >= 3 {
+				break
+			}
+			inferText.WriteString("\n")
+			inferText.WriteString(entry.Title)
+			inferText.WriteString(" ")
+			inferText.WriteString(entry.CoreEvent)
+		}
+		genre = inferCoverGenre(inferText.String())
 	}
+	platform = normalizeCoverPlatform(platform)
+	resolvedComposition := resolveCoverComposition(composition, genre)
 
 	var parts []string
-	parts = append(parts, "Book cover illustration for a Chinese web novel.")
+	parts = append(parts, "Commercial digital-painting cover for a Chinese web novel.")
 
 	// 主角外形是画面主体最有用的一句；取第一位核心角色的描述。
 	if len(found.Characters) > 0 {
@@ -345,7 +458,14 @@ func (a *App) coverPromptDraft() (facts string, draft string, err error) {
 			}
 		}
 	}
-	parts = append(parts, art, coverPromptHardRules)
+	if premise := truncateRunes(found.Premise, 220); premise != "" {
+		parts = append(parts, "Story hook: "+premise)
+	}
+	parts = append(parts,
+		coverPlatformDefinitions[platform].Direction,
+		coverGenreDefinitions[genre].Direction,
+		coverCompositionDefinitions[resolvedComposition].Direction,
+	)
 
 	// 给模型的这份是中文原始设定，不是上面那段英文草稿：让它自己从设定里提炼画面，
 	// 比让它去改写一段已经被压扁的英文更容易出好结果。
@@ -353,9 +473,7 @@ func (a *App) coverPromptDraft() (facts string, draft string, err error) {
 	if name := strings.TrimSpace(snap.NovelName); name != "" {
 		facts_ = append(facts_, "书名："+name)
 	}
-	if style := strings.TrimSpace(snap.Style); style != "" {
-		facts_ = append(facts_, "题材："+style)
-	}
+	facts_ = append(facts_, "封面题材："+genre)
 	if p := truncateRunes(found.Premise, 400); p != "" {
 		facts_ = append(facts_, "故事前提："+p)
 	}
@@ -379,7 +497,36 @@ func (a *App) coverPromptDraft() (facts string, draft string, err error) {
 		}
 	}
 
-	return strings.Join(facts_, "\n"), strings.Join(parts, " "), nil
+	return coverPromptContext{
+		Facts: strings.Join(facts_, "\n"), Draft: strings.Join(parts, " "), ResolvedGenre: genre,
+	}, nil
+}
+
+func (a *App) resolveCoverGenre(requested, fallbackText string) string {
+	requested = normalizeCoverGenre(requested)
+	if requested != "auto" {
+		return requested
+	}
+	var text strings.Builder
+	text.WriteString(fallbackText)
+	if h, err := a.reqHost(); err == nil {
+		text.WriteString("\n")
+		text.WriteString(h.Snapshot().NovelName)
+	}
+	if found, err := a.GetFoundation(); err == nil {
+		text.WriteString("\n")
+		text.WriteString(found.Premise)
+		for i, entry := range found.Outline {
+			if i >= 3 {
+				break
+			}
+			text.WriteString("\n")
+			text.WriteString(entry.Title)
+			text.WriteString(" ")
+			text.WriteString(entry.CoreEvent)
+		}
+	}
+	return inferCoverGenre(text.String())
 }
 
 // coverPromptSystem 是润色提示词用的系统提示。
@@ -392,9 +539,10 @@ const coverPromptSystem = `你是资深书籍封面美术指导，负责把中�
 1. 只输出提示词正文，一段连续的英文，不要标题、不要编号、不要解释、不要引号包裹。
 2. 描述具体可画的东西：主体人物的外形与姿态、环境、光线、色调、材质、镜头感。避免"史诗""震撼"这类无法落到画面的空词。
 3. 画面里绝对不能出现任何文字、字母、标题、水印、签名——书名会在后期用排版叠上去。
-4. 竖版封面构图，主体偏下，顶部留出干净的留白给标题。
+4. 竖版封面构图，标题安全区仍要保留有颜色、有光线、有纹理的氛围，禁止纯黑或纯色空块。
 5. 控制在 120 个英文单词以内。
-6. 不要臆造设定里没有的关键人物或情节。`
+6. 不要臆造设定里没有的关键人物或情节。
+7. 明确使用商业数字插画，不要照片感或电影剧照感。`
 
 // OptimizeCoverPrompt 用本书已配置的文本模型把设定润色成一段绘画提示词。
 //
@@ -404,19 +552,19 @@ const coverPromptSystem = `你是资深书籍封面美术指导，负责把中�
 //
 // current 非空时表示用户手上已有一版（可能是草稿，也可能是他自己改的），
 // 一并交给模型作为参考，避免润色把他刚写的方向抹掉。
-func (a *App) OptimizeCoverPrompt(current string) (string, error) {
+func (a *App) OptimizeCoverPrompt(current, platform, genre, composition string) (string, error) {
 	h, err := a.reqHost()
 	if err != nil {
 		return "", err
 	}
-	facts, _, err := a.coverPromptDraft()
+	promptCtx, err := a.coverPromptDraft(platform, genre, composition)
 	if err != nil {
 		return "", err
 	}
 
 	var req strings.Builder
 	req.WriteString("本书设定如下：\n")
-	req.WriteString(facts)
+	req.WriteString(promptCtx.Facts)
 	if cur := truncateRunes(current, 1200); cur != "" {
 		req.WriteString("\n\n用户当前使用的提示词（请在此基础上改进，保留他明确表达的方向）：\n")
 		req.WriteString(cur)
@@ -428,7 +576,8 @@ func (a *App) OptimizeCoverPrompt(current string) (string, error) {
 	ctx, jobID := a.jobs.begin("coverprompt")
 	defer a.jobs.end("coverprompt", jobID)
 
-	out, err := h.GenerateText(ctx, "thinking", coverPromptSystem, req.String(), 900)
+	out, err := h.GenerateText(ctx, "thinking",
+		coverPromptSystemFor(platform, promptCtx.ResolvedGenre, composition), req.String(), 900)
 	if err != nil {
 		return "", fmt.Errorf("润色封面提示词失败: %w", err)
 	}
@@ -436,10 +585,6 @@ func (a *App) OptimizeCoverPrompt(current string) (string, error) {
 	if out == "" {
 		// 模型只回了寒暄/空串时不要把空提示词塞回界面。
 		return "", fmt.Errorf("模型没有返回可用的提示词，请重试或直接使用草稿")
-	}
-	// 硬约束由本地补齐，不依赖模型记得写：它经常在压字数时先砍掉这两句。
-	if !strings.Contains(strings.ToLower(out), "no text") {
-		out += " " + coverPromptHardRules
 	}
 	return out, nil
 }
@@ -471,7 +616,7 @@ func sanitizeCoverPrompt(s string) string {
 
 // GenerateCover 调生图服务生成封面并存入书目录，返回新的封面信息。
 // 生图很慢（实测 1-9 分钟，取决于服务商与下行带宽），前端显示进度条并可取消。
-func (a *App) GenerateCover(prompt string) (CoverInfo, error) {
+func (a *App) GenerateCover(prompt, platform, genre, composition string) (CoverInfo, error) {
 	h, err := a.reqHost()
 	if err != nil {
 		return CoverInfo{}, err
@@ -532,7 +677,13 @@ func (a *App) GenerateCover(prompt string) (CoverInfo, error) {
 		}
 	}()
 
-	data, mime, err := generateImage(ctx, cfg, prompt)
+	platform = normalizeCoverPlatform(platform)
+	genre = normalizeCoverGenre(genre)
+	resolvedGenre := a.resolveCoverGenre(genre, novelName+"\n"+prompt)
+	composition = normalizeCoverComposition(composition)
+	generationPrompt := buildCoverGenerationPrompt(prompt, platform, resolvedGenre, composition)
+	cfg.Size = imageGenSizeForPlatform(cfg.Size, platform)
+	data, mime, err := generateImage(ctx, cfg, generationPrompt)
 	close(stopTick)
 	// 无论成败都要通知前端收尾，否则书库页会一直以为还在生图而拦着切书。
 	a.emit("cover:done", map[string]any{"bookDir": bookDir})
@@ -547,7 +698,13 @@ func (a *App) GenerateCover(prompt string) (CoverInfo, error) {
 		l := defaultCoverTitleLayout(novelName)
 		layout = &l
 	}
-	if err := commitCover(bookDir, data, mime, prompt, cfg.Model, layout.normalize()); err != nil {
+	styledLayout := applyCoverTitleStyle(*layout, resolvedGenre)
+	layout = &styledLayout
+	spec := (coverSpec{
+		Prompt: prompt, Model: cfg.Model, Platform: platform, Genre: genre,
+		ResolvedGenre: resolvedGenre, Composition: composition,
+	}).normalize()
+	if err := commitCover(bookDir, data, mime, spec, layout.normalize()); err != nil {
 		return CoverInfo{}, err
 	}
 	return readCover(bookDir, novelName)
@@ -606,7 +763,7 @@ func (a *App) ApplyCoverTitle(layout CoverTitleLayout) (CoverInfo, error) {
 	}
 
 	meta := readCoverMeta(bookDir)
-	if err := writeCoverComposite(bookDir, data, "image/png", meta.Prompt, meta.Model, &layout); err != nil {
+	if err := writeCoverComposite(bookDir, data, "image/png", coverSpecFromMeta(meta), &layout); err != nil {
 		return CoverInfo{}, err
 	}
 	return readCover(bookDir, h.Snapshot().NovelName)
@@ -666,13 +823,18 @@ func (a *App) ImportCoverFile() (CoverInfo, error) {
 
 	// 导入的图同样走叠字：用户自己找的图往上面排书名的需求和 AI 图一样。
 	// 沿用上次排版，没有则用默认。
-	layout := readCoverMeta(h.Dir()).Layout
+	meta := readCoverMeta(h.Dir())
+	spec := coverSpecFromMeta(meta)
+	layout := meta.Layout
 	if layout == nil {
 		l := defaultCoverTitleLayout(novelName)
 		layout = &l
 	}
 	note := "（本地导入：" + filepath.Base(path) + "）"
-	if err := commitCover(h.Dir(), data, mime, note, "", layout.normalize()); err != nil {
+	spec.Prompt = note
+	spec.Model = ""
+	layout = ptrCoverTitleLayout(applyCoverTitleStyle(*layout, spec.ResolvedGenre))
+	if err := commitCover(h.Dir(), data, mime, spec, layout.normalize()); err != nil {
 		return CoverInfo{}, err
 	}
 	return readCover(h.Dir(), novelName)
@@ -695,6 +857,9 @@ func (a *App) RemoveCover() error {
 	for _, ext := range coverImageExts {
 		_ = os.Remove(filepath.Join(h.Dir(), "meta", coverSourceBaseName+"."+ext))
 	}
+	for _, name := range coverPlatformArtifactNames {
+		_ = os.Remove(filepath.Join(h.Dir(), name))
+	}
 	if err := os.Remove(coverMetaPath(h.Dir())); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除封面元数据失败: %w", err)
 	}
@@ -705,7 +870,11 @@ func (a *App) RemoveCover() error {
 // 再按 layout 叠字生成成品 cover.png。
 //
 // 顺序有讲究：先写原图，叠字失败时用户至少还能在面板里重试排版，不用重新花钱生图。
-func commitCover(bookDir string, data []byte, mime, prompt, model string, layout CoverTitleLayout) error {
+
+func ptrCoverTitleLayout(layout CoverTitleLayout) *CoverTitleLayout { return &layout }
+
+func commitCover(bookDir string, data []byte, mime string, spec coverSpec, layout CoverTitleLayout) error {
+	_ = archiveCurrentCover(bookDir)
 	if err := writeCoverSource(bookDir, data, mime); err != nil {
 		return err
 	}
@@ -725,7 +894,7 @@ func commitCover(bookDir string, data []byte, mime, prompt, model string, layout
 		}
 		outMime = "image/png"
 	}
-	return writeCoverComposite(bookDir, out, outMime, prompt, model, &layout)
+	return writeCoverComposite(bookDir, out, outMime, spec, &layout)
 }
 
 // writeCoverSource 落盘未叠字的原图到 meta/ 下，并清掉其他扩展名的旧原图。
@@ -751,7 +920,8 @@ func writeCoverSource(bookDir string, data []byte, mime string) error {
 
 // writeCoverComposite 落盘成品封面与元数据。先完整提交新文件，再清理其他扩展名；
 // 写入失败时旧封面仍然保留，避免磁盘满或权限变化导致新旧两张都丢失。
-func writeCoverComposite(bookDir string, data []byte, mime, prompt, model string, layout *CoverTitleLayout) error {
+func writeCoverComposite(bookDir string, data []byte, mime string, spec coverSpec, layout *CoverTitleLayout) error {
+	spec = spec.normalize()
 	ext := imageExtForMime(mime)
 	if ext == "bin" {
 		return fmt.Errorf("生成结果不是可识别的图片格式")
@@ -768,12 +938,17 @@ func writeCoverComposite(bookDir string, data []byte, mime, prompt, model string
 		}
 		_ = os.Remove(filepath.Join(bookDir, coverBaseName+"."+old))
 	}
+	if err := writeCoverPlatformArtifact(bookDir, data, mime, spec.Platform); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(filepath.Join(bookDir, "meta"), 0o700); err != nil {
 		return err
 	}
 	meta, err := json.MarshalIndent(coverMeta{
-		Prompt: prompt, Model: model, UpdatedAt: time.Now(), File: file, Layout: layout,
+		Prompt: spec.Prompt, Model: spec.Model, UpdatedAt: time.Now(), File: file, Layout: layout,
+		Preset: spec.Platform, Platform: spec.Platform, Genre: spec.Genre,
+		ResolvedGenre: spec.ResolvedGenre, Composition: spec.Composition,
 	}, "", "  ")
 	if err != nil {
 		return err

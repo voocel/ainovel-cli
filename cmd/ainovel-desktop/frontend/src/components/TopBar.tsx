@@ -2,8 +2,13 @@ import { useEffect, useState } from "react";
 import * as api from "../bindings/wails";
 import type { UISnapshot, VersionInfo } from "../bindings/wails";
 import { formatCost, formatNumber, progressText, runtimeStateLabel } from "../lib/labels";
+import { Overlay } from "./Overlay";
 
 // TopBar 顶栏：书名 + 状态 + 进度 + 花费/预算 + 模型，右侧是书库/设置/关于入口。
+//
+// 收缩策略：窗口变窄时**先丢模型名、再丢字数**，书名和花费永远保留。
+// 之前所有右侧元素都 flex-shrink:0，被挤没的反而是最左边的书名——
+// 最该保留的信息最先消失。现在书名可省略号截断但不消失，次要指标按优先级隐藏。
 export function TopBar({
   snap,
   onOpenSettings,
@@ -62,28 +67,33 @@ export function TopBar({
         </div>
 
         <div className="topbar-right">
-          <span className="metric">{progressText(snap)}</span>
-          <span className="metric">{formatNumber(snap.TotalWordCount)} 字</span>
-          <span
-            className={`metric ${overBudget ? "danger" : nearBudget ? "warn" : ""}`}
-            title={budget > 0 ? `预算上限 ${formatCost(budget)}` : "未设预算上限"}
-          >
-            {formatCost(cost)}
-            {budget > 0 && <span className="subtle"> / {formatCost(budget)}</span>}
-          </span>
-          <span className="metric subtle" title={`上下文窗口 ${snap.ModelContextWindow}`}>
-            {snap.Provider}/{snap.ModelName}
-            {snap.ThinkingLevel && ` · ${snap.ThinkingLevel}`}
-          </span>
+          <div className="metrics">
+            <span className="metric">{progressText(snap)}</span>
+            <span className="metric drop-md">{formatNumber(snap.TotalWordCount)} 字</span>
+            <span
+              className={`metric ${overBudget ? "danger" : nearBudget ? "warn" : ""}`}
+              title={budget > 0 ? `预算上限 ${formatCost(budget)}` : "未设预算上限"}
+            >
+              {formatCost(cost)}
+              {budget > 0 && <span className="subtle"> / {formatCost(budget)}</span>}
+            </span>
+            <span
+              className="metric subtle drop-lg"
+              title={`上下文窗口 ${snap.ModelContextWindow}`}
+            >
+              {snap.Provider}/{snap.ModelName}
+              {snap.ThinkingLevel && ` · ${snap.ThinkingLevel}`}
+            </span>
+          </div>
           {nav}
         </div>
       </header>
 
       {showAbout && (
-        <div className="modal-overlay" onClick={() => setShowAbout(false)}>
-          <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
-            <h2>ainovel</h2>
-            <p className="subtle sm">全自动 AI 长篇小说创作引擎</p>
+        <Overlay layer="sheet" onClose={() => setShowAbout(false)} labelledBy="about-title">
+          <div className="modal narrow">
+            <h2 id="about-title">AINovel Studio</h2>
+            <p className="subtle sm">AI 小说创作工作台</p>
             <div className="field">
               <span className="field-label">版本</span>
               <span className="field-value">{about?.Version ?? "-"}</span>
@@ -102,7 +112,7 @@ export function TopBar({
               </button>
             </div>
           </div>
-        </div>
+        </Overlay>
       )}
     </>
   );

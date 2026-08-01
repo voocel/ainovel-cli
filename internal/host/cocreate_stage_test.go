@@ -196,7 +196,7 @@ func TestBuildStoryStateSummary_Populated(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Progress.Init("影之诗", 100); err != nil {
+	if err := st.Progress.Init("影之诗", 100, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := st.Progress.Load()

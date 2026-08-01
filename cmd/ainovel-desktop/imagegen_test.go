@@ -161,6 +161,28 @@ func TestGenerateImage_EndpointNotDoubled(t *testing.T) {
 	}
 }
 
+func TestGenerateImage_GPTImage2OmitsLegacyResponseFormat(t *testing.T) {
+	pngData := bigPNG(t, 16, 16)
+	var request map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("解析同步请求失败: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(imageResponse{
+			Data: []imageItem{{B64JSON: base64.StdEncoding.EncodeToString(pngData)}},
+		})
+	}))
+	defer srv.Close()
+
+	cfg := imageGenConfig{BaseURL: srv.URL + "/v1", Model: "gpt-image-2", Size: "1024x1536"}
+	if _, _, err := generateImage(context.Background(), cfg, "cover"); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := request["response_format"]; exists {
+		t.Fatalf("gpt-image-2 同步请求不应携带旧 response_format 字段: %+v", request)
+	}
+}
+
 func TestJarlessAPIRecognitionAndTaskEndpoint(t *testing.T) {
 	for _, base := range []string{
 		"https://jarlessapi.com",

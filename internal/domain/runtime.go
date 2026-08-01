@@ -27,6 +27,28 @@ const (
 	FlowSteering  FlowState = "steering"
 )
 
+// Genre 表示创作题材类型。
+type Genre string
+
+const (
+	GenreNovel      Genre = "novel"       // 长篇小说
+	GenreShortStory Genre = "short_story" // 短篇小说
+)
+
+// ParseGenre 把外部输入收敛为受支持的创作类型。空值兼容旧配置，按长篇处理。
+func ParseGenre(raw string) (Genre, error) {
+	genre := Genre(strings.TrimSpace(raw))
+	if genre == "" {
+		return GenreNovel, nil
+	}
+	switch genre {
+	case GenreNovel, GenreShortStory:
+		return genre, nil
+	default:
+		return "", fmt.Errorf("unsupported genre %q (expected %q or %q)", raw, GenreNovel, GenreShortStory)
+	}
+}
+
 // PlanningTier 表示作品规划的长度级别。
 type PlanningTier string
 
@@ -39,6 +61,7 @@ const (
 // Progress 进度追踪，持久化到 meta/progress.json。
 type Progress struct {
 	NovelName         string      `json:"novel_name"`
+	Genre             Genre       `json:"genre,omitempty"` // 题材类型（novel/short_story），默认 novel
 	Phase             Phase       `json:"phase"`
 	CurrentChapter    int         `json:"current_chapter"`
 	TotalChapters     int         `json:"total_chapters"`
@@ -140,8 +163,13 @@ type MemoryPolicy struct {
 	ReadOnlyThreshold   int    `json:"read_only_threshold,omitempty"`
 }
 
-// NewContextProfile 根据总章节数计算上下文策略。
-func NewContextProfile(totalChapters int) ContextProfile {
+// NewContextProfile 根据总章节数和题材计算上下文策略。
+func NewContextProfile(totalChapters int, genre Genre) ContextProfile {
+	// 短篇小说：简化策略，不启用分层
+	if genre == GenreShortStory {
+		return ContextProfile{SummaryWindow: 10, TimelineWindow: 10, Layered: false}
+	}
+	// 长篇小说：按章节数自适应
 	switch {
 	case totalChapters <= 15:
 		return ContextProfile{SummaryWindow: 10, TimelineWindow: 10}

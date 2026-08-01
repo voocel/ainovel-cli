@@ -18,21 +18,48 @@
   --accent: #c2683d;
   --accent-soft: #f5e6de;
   --accent-fg: #fff;
+  --accent-hover: #ae5c35;
+  --accent-line: rgba(194, 104, 61, 0.18);
+  /* 盖在封面图上的角标底色：半透明，压在图片上还要读得清。 */
+  --accent-veil: rgba(194, 104, 61, 0.85);
+  --error-veil: rgba(160, 58, 46, 0.82);
+  --on-veil: #fffdf8;
 
   --warn: #b7791f;
   --warn-soft: #fbf1de;
+  --warn-line: rgba(183, 121, 31, 0.25);
   --error: #c0392b;
   --error-soft: #fbe9e7;
+  --error-line: rgba(192, 57, 43, 0.2);
   --success: #4a7c59;
   --success-soft: #e8f0e9;
+  --success-line: rgba(74, 124, 89, 0.2);
+
+  /* 阴影/遮罩的基色（RGB 三元组，供 rgba() 拼装）。亮色下是暖墨色，
+     暗色下换成纯黑——深色底上用暖墨阴影是看不见的。 */
+  --shade-rgb: 43, 39, 36;
 
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 16px;
 
-  --shadow-sm: 0 1px 2px rgba(43, 39, 36, 0.05), 0 1px 3px rgba(43, 39, 36, 0.04);
-  --shadow: 0 2px 4px rgba(43, 39, 36, 0.05), 0 4px 12px rgba(43, 39, 36, 0.06);
-  --shadow-lg: 0 8px 24px rgba(43, 39, 36, 0.1), 0 2px 8px rgba(43, 39, 36, 0.06);
+  /* 字号阶梯。原先散落着 16 个各不相同的字号（12/12.5/13/13.5/14/14.5…），
+     多出来的半档没有任何语义，纯粹是每处各写各的攒出来的——结果是界面上
+     "差不多大"的文字有四五种，层级反而读不出来。收敛成这 9 档，
+     其中 8 档给 UI、1 档给正文。 */
+  --fs-micro: 10px; /* 徽标、角标、方向箭头 */
+  --fs-xs: 11px; /* 分节标签、时长、卷号 */
+  --fs-sm: 12px; /* 次要说明文字 */
+  --fs-base: 13px; /* UI 正文、按钮、列表项 */
+  --fs-md: 14px; /* 强调、小标题 */
+  --fs-lg: 15px; /* 书名、主输入框 */
+  --fs-xl: 19px; /* 弹窗标题 */
+  --fs-2xl: 24px; /* 页面主标题 */
+  --fs-prose: 16px; /* 小说正文（阅读器里由用户自行调节） */
+
+  --shadow-sm: 0 1px 2px rgba(var(--shade-rgb), 0.05), 0 1px 3px rgba(var(--shade-rgb), 0.04);
+  --shadow: 0 2px 4px rgba(var(--shade-rgb), 0.05), 0 4px 12px rgba(var(--shade-rgb), 0.06);
+  --shadow-lg: 0 8px 24px rgba(var(--shade-rgb), 0.1), 0 2px 8px rgba(var(--shade-rgb), 0.06);
 
   --ui-font: -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
   /* 正文用衬线体：中文优先思源宋/宋体，读起来像书而不像控制台。
@@ -45,6 +72,55 @@
   color-scheme: light;
   /* 数字统一用等宽西文样式，无论什么字体栈都不会变成全角/圈数字。 */
   font-variant-numeric: lining-nums tabular-nums;
+}
+
+/* ── 暗色主题 ──
+   跟随系统偏好，只改颜色令牌，不碰任何布局/字号——上面那套令牌存在的意义
+   就在这儿：整份样式表里没有一处写死的界面色，换主题只需重定义 :root。
+
+   不是把亮色调反，而是重配一套：暖白纸感在暗色下对应的是"夜里的纸"——
+   带一点暖褐的近黑底 + 米白字，而不是纯黑配纯白（长时间盯着会晕）。
+   赤陶强调色在深底上要提亮一档，否则会糊进背景里。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191715;
+    --bg-elev: #221f1c;
+    --bg-sunken: #141210;
+    --bg-hover: #2c2825;
+
+    --border: #332e29;
+    --border-strong: #46403a;
+
+    --fg: #e9e4dc;
+    --fg-dim: #a69d93;
+    --fg-faint: #7b736a;
+
+    --accent: #d9825a;
+    --accent-soft: #3a2820;
+    --accent-fg: #1a1512;
+    --accent-hover: #e8926a;
+    --accent-line: rgba(217, 130, 90, 0.24);
+    /* 角标压在封面图上，图片本身不随主题变，所以这两个保持原样。 */
+
+    --warn: #d9a441;
+    --warn-soft: #302713;
+    --warn-line: rgba(217, 164, 65, 0.28);
+    --error: #e58573;
+    --error-soft: #34211d;
+    --error-line: rgba(229, 133, 115, 0.28);
+    --success: #86b592;
+    --success-soft: #1e2b22;
+    --success-line: rgba(134, 181, 146, 0.26);
+
+    /* 暖墨色阴影在深底上完全看不见，换纯黑。 */
+    --shade-rgb: 0, 0, 0;
+    /* 同时把阴影加重：亮色下 0.05 的黑够用，深底上那点浓度等于没有。 */
+    --shadow-sm: 0 1px 2px rgba(var(--shade-rgb), 0.28), 0 1px 3px rgba(var(--shade-rgb), 0.2);
+    --shadow: 0 2px 4px rgba(var(--shade-rgb), 0.3), 0 4px 12px rgba(var(--shade-rgb), 0.32);
+    --shadow-lg: 0 8px 24px rgba(var(--shade-rgb), 0.46), 0 2px 8px rgba(var(--shade-rgb), 0.3);
+
+    color-scheme: dark;
+  }
 }
 
 * {
@@ -72,28 +148,32 @@ body,
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(43, 39, 36, 0.14);
+  background: rgba(var(--shade-rgb), 0.14);
   border-radius: 999px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(43, 39, 36, 0.24);
+  background: rgba(var(--shade-rgb), 0.24);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-h3 {
+/* 分节标签。这是个 11px 全大写的微型标签，不是标题——
+   原先它直接挂在 h3 元素选择器上，等于把一个语义标签征用成了样式类：
+   任何地方写 <h3> 想要个真正的小标题，都会莫名其妙变成灰色小字。
+   现在用 .section-label 显式表达，h3 交还给语义。 */
+.section-label {
   margin: 18px 0 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-faint);
 }
-h3:first-child {
+.section-label:first-child {
   margin-top: 4px;
 }
 
@@ -108,7 +188,15 @@ h3:first-child {
   color: var(--fg-dim);
 }
 .sm {
-  font-size: 12px;
+  font-size: var(--fs-sm);
+}
+
+/* 键盘焦点必须看得见。之前只有几个输入框和书卡有焦点样式，
+   Tab 走到按钮上完全没有反馈——用键盘的人是在盲操作。 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 button {
@@ -117,7 +205,7 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 7px 14px;
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
@@ -148,8 +236,8 @@ button.primary {
   border-color: var(--accent);
 }
 button.primary:hover:not(:disabled) {
-  background: #ae5c35;
-  border-color: #ae5c35;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 button.ghost {
   background: transparent;
@@ -165,17 +253,17 @@ button.ghost:hover:not(:disabled) {
 }
 button.sm {
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .error-banner {
   margin-top: 12px;
   padding: 11px 14px;
   background: var(--error-soft);
-  border: 1px solid rgba(192, 57, 43, 0.2);
+  border: 1px solid var(--error-line);
   border-radius: var(--radius-sm);
   color: var(--error);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.6;
   white-space: pre-wrap;
 }
@@ -186,17 +274,31 @@ button.sm {
   justify-content: space-between;
   gap: 12px;
 }
+/* 浮在工作台底部的那条错误：不能是透明背景的纸片，底下压着正文。 */
+.workbench-alerts .error-banner.inline {
+  margin: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  box-shadow: 0 -4px 16px rgba(var(--shade-rgb), 0.08);
+}
 
 /* ── Welcome ── */
+/* 起书卡片高度可观（作品类型 + 起书前准备 + 输入 + 节奏 + 页脚），窗口一矮就会
+   超出视口。用 margin:auto 而不是 align-items:center 居中：有余量时照样居中，
+   不够时从顶部开始并可滚动，不会把卡片上下两头一起裁掉。 */
 .welcome {
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow-y: auto;
   padding: 24px;
 }
 .welcome-card {
   width: min(720px, 100%);
+  margin: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -205,9 +307,24 @@ button.sm {
 }
 .welcome-card h1 {
   margin: 0 0 8px;
-  font-size: 24px;
+  font-size: var(--fs-2xl);
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+.story-type-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  margin-top: 18px;
+}
+.story-type-choice .segmented {
+  flex: 0 0 auto;
+}
+.story-type-hint {
+  min-width: 0;
+  margin: 0;
+  line-height: 1.5;
 }
 .prompt-input {
   width: 100%;
@@ -217,7 +334,7 @@ button.sm {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--fg);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   line-height: 1.75;
   resize: vertical;
   font-family: inherit;
@@ -237,7 +354,7 @@ button.sm {
 }
 .hint {
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 /* ── Workbench 布局 ── */
@@ -264,9 +381,11 @@ button.sm {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  /* 书名区可收缩但有下限：窄窗口下先压指标，不能把书名挤没。 */
+  flex: 1 1 auto;
 }
 .novel-name {
-  font-size: 15px;
+  font-size: var(--fs-lg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -275,8 +394,23 @@ button.sm {
   display: flex;
   align-items: center;
   gap: 14px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   flex-shrink: 0;
+}
+/* 指标成组：组内用竖线分隔，与右侧按钮区拉开关系。
+   之前四个指标只靠 gap 排在按钮旁边，读起来是一串没有结构的碎信息。 */
+.metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.metric {
+  white-space: nowrap;
+}
+.metrics .metric + .metric {
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
 }
 .metric.warn {
   color: var(--warn);
@@ -287,7 +421,7 @@ button.sm {
 
 /* 状态徽标用"浅底+同色深字"，比实心色块温和，也不会在暖白底上过分跳。 */
 .badge {
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   padding: 3px 9px;
@@ -309,13 +443,38 @@ button.sm {
   color: var(--accent);
 }
 
-/* 三栏：左活动流、中正文、右信息。中间正文是主体，给它最大权重和纯白纸面。 */
+/* 三栏：左目录、中正文、右信息。中间正文是主体，给它最大权重和纯白纸面。 */
 .workbench-body {
   flex: 1;
   display: grid;
   grid-template-columns: minmax(260px, 0.85fr) minmax(420px, 1.7fr) minmax(280px, 0.9fr);
   min-height: 0;
   background: var(--bg);
+  /* 底部浮条的定位上下文。 */
+  position: relative;
+}
+/* 有浮条时给滚动区末尾留出空间，免得最后一行内容被压在横幅底下。
+   88px ≈ 一条验收横幅的高度；两条同时出现时横幅自己会往上叠，不需要精确匹配。 */
+.workbench-body.has-alerts .pane-scroll,
+.workbench-body.has-alerts .side-scroll {
+  padding-bottom: 88px;
+}
+/* 验收横幅与错误条：浮在内容之上，不占布局流。
+   原先它们插在顶栏和三栏之间——逐章验收下每章出现一次、放行后消失，
+   等于每章把整个工作台上下顶两回，正在读的那行字会跳走。 */
+.workbench-alerts {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  pointer-events: none;
+}
+.workbench-alerts > * {
+  pointer-events: auto;
 }
 
 .pane {
@@ -330,7 +489,7 @@ button.sm {
   align-items: center;
   gap: 8px;
   padding: 12px 18px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--fg-faint);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -348,7 +507,7 @@ button.sm {
   gap: 7px;
   align-items: baseline;
   padding: 3px 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.5;
 }
 .event-icon {
@@ -357,7 +516,7 @@ button.sm {
 }
 .event-agent {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   flex-shrink: 0;
 }
 .event-summary {
@@ -368,7 +527,7 @@ button.sm {
 .event-dur,
 .event-retry {
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   flex-shrink: 0;
 }
 .event-retry {
@@ -409,10 +568,29 @@ button.sm {
   background: var(--success);
   animation: pulse 1.4s ease-in-out infinite;
 }
+/* 分段控件标签里的小圆点：提示"另一个视图正在产出内容"。 */
+.live-dot.inline {
+  display: inline-block;
+  margin-left: 5px;
+  vertical-align: middle;
+}
 
-/* ── 实时正文：纸面卡片 + 衬线体 + 限制行宽，读起来像书 ── */
-.prose-pane .pane-scroll {
+/* ── 主区正文：纸面卡片 + 衬线体 + 限制行宽，读起来像书 ── */
+.main-pane .pane-scroll {
   padding: 4px 0 28px;
+}
+/* pane-title 里的分段控件要贴着左边，抵消 pane-title 给文字标题留的上内边距。 */
+.main-pane .pane-title {
+  padding: 8px 18px 8px;
+  justify-content: flex-start;
+}
+.pane-title-action {
+  margin-left: auto;
+}
+.pane-empty {
+  padding: 40px 24px;
+  text-align: center;
+  line-height: 1.9;
 }
 .prose-round {
   /* 每一轮流式输出是一张纸。max-width 把单行控制在约 40 个汉字，
@@ -428,7 +606,7 @@ button.sm {
 .prose-text {
   white-space: pre-wrap;
   font-family: var(--prose-font);
-  font-size: 16px;
+  font-size: var(--fs-prose);
   line-height: 2;
   letter-spacing: 0.01em;
   color: var(--fg);
@@ -440,13 +618,188 @@ button.sm {
 .prose-thinking {
   white-space: pre-wrap;
   line-height: 1.7;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--fg-faint);
   background: var(--bg-sunken);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   margin: 10px 0;
   font-family: var(--ui-font);
+}
+
+/* 终稿章节：与流式卡片同一张"纸"，但用真正的段落排版。 */
+.chapter-view p {
+  margin: 0 0 1em;
+  font-family: var(--prose-font);
+  font-size: var(--fs-prose);
+  line-height: 2;
+  letter-spacing: 0.01em;
+  text-indent: 2em;
+}
+.chapter-view p:last-of-type {
+  margin-bottom: 0;
+}
+.chapter-foot {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  text-align: right;
+}
+
+/* ── 左栏章节目录 ──
+   这里原先是引擎事件流（DISPATCH/TOOL/DECISION）。事件流讲的是"引擎在干什么"，
+   排查时有用但属偶发需求；一整列常驻空间应该给"这本书写到哪了"。 */
+.chapter-nav {
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+}
+.chapter-nav .pane-title {
+  justify-content: space-between;
+}
+.chapter-nav .pane-scroll {
+  padding: 2px 10px 20px;
+}
+.nav-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  text-align: left;
+  color: var(--fg-dim);
+}
+.nav-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: none;
+}
+/* 未写到的章节不可点，但要看得见——它是大纲承诺的内容，不是缺失。
+   所以不用全局 :disabled 的 45% 透明度（那会糊成一片），只降一档颜色。 */
+.nav-item:disabled {
+  opacity: 1;
+  color: var(--fg-faint);
+  cursor: default;
+}
+.nav-item.done {
+  color: var(--fg);
+}
+.nav-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+/* current = 正在主区展示的那章，用底色标出"你在读这里"，
+   与 active（引擎正在写）是两件事，可以同时成立。 */
+.nav-item.current {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nav-marker {
+  flex-shrink: 0;
+  font-size: var(--fs-micro);
+}
+.nav-item.done .nav-marker {
+  color: var(--success);
+}
+.nav-item.active .nav-marker {
+  color: var(--accent);
+}
+.nav-num {
+  flex-shrink: 0;
+  min-width: 1.6em;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+.nav-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-words {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+}
+.nav-group + .nav-group {
+  margin-top: 10px;
+}
+.nav-group-title {
+  padding: 8px 8px 4px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+}
+.nav-foot {
+  padding: 14px 8px 0;
+  line-height: 1.7;
+}
+
+/* ── 底部活动条：事件流降级形态 ──
+   常态一行摘要，点开成抽屉。 */
+.activity-strip {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.activity-strip.open {
+  /* 展开高度取视口比例而非固定 px：小屏上固定 240px 会吃掉半个工作台。 */
+  max-height: 34vh;
+}
+.activity-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 18px;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+.activity-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 18px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  text-align: left;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+.activity-summary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: none;
+}
+.activity-caret {
+  flex-shrink: 0;
+  font-size: var(--fs-micro);
+  color: var(--fg-faint);
+}
+.activity-summary .event-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-meta {
+  flex-shrink: 0;
+  display: flex;
+  gap: 10px;
+}
+.activity-errors {
+  color: var(--error);
 }
 
 /* ── 右侧面板 ── */
@@ -472,7 +825,7 @@ button.sm {
   box-shadow: none;
   color: var(--fg-dim);
   padding: 6px 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .tab:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -496,7 +849,7 @@ button.sm {
   justify-content: space-between;
   gap: 10px;
   padding: 3px 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .field-label {
   color: var(--fg-dim);
@@ -517,7 +870,7 @@ button.sm {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--fg-dim);
 }
@@ -537,7 +890,7 @@ button.sm {
   align-items: center;
   gap: 7px;
   padding: 4px 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .agent-dot {
   width: 6px;
@@ -552,13 +905,13 @@ button.sm {
 .agent-detail {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ctx-pill {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--bg-elev);
@@ -572,58 +925,6 @@ button.sm {
   color: var(--error);
 }
 
-.outline-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.outline-item {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 4px 0;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.outline-marker {
-  flex-shrink: 0;
-  font-size: 11px;
-}
-.outline-item.done .outline-marker {
-  color: var(--success);
-}
-.outline-item.active .outline-marker,
-.outline-item.active .outline-num,
-.outline-item.active .outline-title {
-  color: var(--accent);
-  font-weight: 500;
-}
-.outline-item.pending .outline-title,
-.outline-item.pending .outline-num {
-  color: var(--fg-dim);
-}
-.outline-num {
-  min-width: 20px;
-  text-align: right;
-  color: var(--fg-faint);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.outline-title {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-.outline-tag {
-  font-size: 10px;
-  color: var(--accent);
-  flex-shrink: 0;
-}
-.outline-foot {
-  margin-top: 12px;
-  line-height: 1.7;
-}
-
 .plain-list {
   list-style: none;
   margin: 0;
@@ -631,11 +932,11 @@ button.sm {
 }
 .plain-list li {
   padding: 3px 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .premise {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.75;
   color: var(--fg-dim);
 }
@@ -664,7 +965,7 @@ button.sm {
   justify-content: space-between;
   gap: 10px;
   padding: 4px 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .model-name {
   overflow: hidden;
@@ -678,16 +979,26 @@ button.sm {
   background: var(--bg-elev);
   padding: 12px 18px;
   flex-shrink: 0;
-  box-shadow: 0 -2px 8px rgba(43, 39, 36, 0.04);
+  box-shadow: 0 -2px 8px rgba(var(--shade-rgb), 0.04);
 }
 .cmd-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
+/* 第二排按钮必须能换行：窗口最小宽 980px，一排放不下就该折行，
+   而不是溢出被窗口边缘裁掉——被裁掉的按钮用户根本不知道存在。 */
 .cmd-row.secondary {
   margin-top: 8px;
-  gap: 14px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 把"引擎推进控制"和"打开面板"两组动作在视觉上分开。 */
+.cmd-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 2px;
 }
 .command-input {
   flex: 1;
@@ -696,7 +1007,7 @@ button.sm {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-family: inherit;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -710,13 +1021,94 @@ button.sm {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
   cursor: pointer;
 }
-.gate-banner {
-  font-size: 12px;
+
+/* 意图漂移提示：用户在输入期间引擎状态变了，提交前拦下来确认。
+   放在输入框上方而不是弹窗——这是个轻量确认，不该打断整个界面。 */
+.drift-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius-sm);
   color: var(--warn);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* ── 下拉菜单：低频动作的收纳处 ── */
+.more-menu {
+  position: relative;
+  display: inline-flex;
+}
+.more-menu .caret {
+  font-size: var(--fs-micro);
+  color: var(--fg-faint);
+}
+.more-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 156px;
+  padding: 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 10;
+}
+.more-list button {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  border-radius: 6px;
+  padding: 8px 11px;
+}
+.more-list button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* ── 分段控件：互斥视图切换 ── */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+}
+.segmented button {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  border-radius: 6px;
+}
+.segmented button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--fg);
+}
+.segmented button.active {
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
 }
 
 /* ── 表单通用 ── */
@@ -728,7 +1120,7 @@ button.sm {
 .form-label {
   display: block;
   margin: 16px 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
 }
 .text-input {
@@ -738,7 +1130,7 @@ button.sm {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-family: inherit;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -755,7 +1147,7 @@ button.sm {
 }
 .preset {
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .preset.active {
   border-color: var(--accent);
@@ -775,18 +1167,16 @@ button.sm {
   margin-top: 12px;
   padding: 11px 14px;
   background: var(--success-soft);
-  border: 1px solid rgba(74, 124, 89, 0.2);
+  border: 1px solid var(--success-line);
   border-radius: var(--radius-sm);
   color: var(--success);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.6;
 }
 
-/* ── 设置页 ── */
+/* ── 设置页 ──
+   层级与定位由 .overlay-root 负责，这里只管内部布局。 */
 .settings-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
   background: var(--bg);
 }
 .settings {
@@ -832,7 +1222,7 @@ button.sm {
   background: transparent;
   border-radius: 6px;
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: var(--fs-base);
   color: var(--fg);
 }
 .list-row:hover:not(:disabled) {
@@ -845,11 +1235,11 @@ button.sm {
 }
 .list-row.add {
   color: var(--fg-dim);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .list-divider {
   margin: 12px 10px 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--fg-faint);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -863,7 +1253,7 @@ button.sm {
   flex: 1;
 }
 .tag {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 1px 7px;
   border-radius: 999px;
   background: var(--bg-elev);
@@ -883,6 +1273,45 @@ button.sm {
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
+.imagegen-settings {
+  max-width: 860px;
+}
+.settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.settings-heading .section-label {
+  margin: 0 0 4px;
+}
+.settings-heading p {
+  margin: 0;
+}
+.status-dot {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.status-dot.ready {
+  border-color: var(--success-line);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.key-control {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
 
 /* ── 表格 ── */
 .model-table,
@@ -894,7 +1323,7 @@ button.sm {
 .model-table th,
 .role-table th {
   text-align: left;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--fg-faint);
   padding: 6px 8px;
@@ -925,7 +1354,7 @@ button.sm {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-family: inherit;
   line-height: 1.4;
 }
@@ -937,7 +1366,7 @@ button.sm {
   text-align: right;
 }
 .role-name {
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .select {
   width: 100%;
@@ -946,7 +1375,7 @@ button.sm {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-family: inherit;
 }
 .select:focus {
@@ -976,14 +1405,14 @@ button.sm {
 }
 .cocreate-intro {
   padding: 20px 4px;
-  font-size: 13.5px;
+  font-size: var(--fs-base);
   line-height: 1.7;
 }
 .chat-msg {
   margin-bottom: 16px;
 }
 .chat-role {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--fg-faint);
   margin-bottom: 4px;
   text-transform: uppercase;
@@ -992,7 +1421,7 @@ button.sm {
 .chat-text {
   white-space: pre-wrap;
   line-height: 1.75;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 .chat-msg.user .chat-text {
   background: var(--accent-soft);
@@ -1004,7 +1433,7 @@ button.sm {
 }
 .chat-thinking {
   white-space: pre-wrap;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--fg-faint);
   background: var(--bg-sunken);
   border-radius: var(--radius-sm);
@@ -1021,7 +1450,7 @@ button.sm {
   padding: 8px 14px 0;
 }
 .chip {
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   padding: 5px 11px;
   border-radius: 999px;
   color: var(--fg-dim);
@@ -1039,7 +1468,7 @@ button.sm {
 .prompt-input.compact {
   margin-top: 0;
   padding: 9px 11px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 .draft-pane {
   background: var(--bg-sunken);
@@ -1048,23 +1477,41 @@ button.sm {
   margin: 0;
   white-space: pre-wrap;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.8;
   color: var(--fg);
 }
 
-/* ── 模态弹窗 ── */
-.modal-overlay {
+/* ── 浮层容器 ──
+   所有浮层共用 .overlay-root（层级由 Overlay 组件按语义注入 z-index）。
+   has-backdrop 才画半透明遮罩并居中内容；整屏级浮层（设置/阅读器/共创）不画。 */
+.overlay-root {
   position: fixed;
   inset: 0;
-  background: rgba(43, 39, 36, 0.28);
+}
+.overlay-root.has-backdrop {
+  background: rgba(var(--shade-rgb), 0.28);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 100;
 }
+/* 整屏级浮层直接铺满，内部自己排版。 */
+.overlay-root:not(.has-backdrop) > [role="dialog"] {
+  height: 100%;
+  background: var(--bg);
+}
+/* 浮层容器本身不该有焦点框——focus 是我们程序性给的，不是用户点出来的。 */
+.overlay-root > [role="dialog"]:focus {
+  outline: none;
+}
+/* 阻塞式浮层的遮罩更重一档：它压在所有东西之上，要让"底下的界面现在动不了"
+   这件事一眼可见，而不是看起来像又叠了一层普通面板。 */
+.layer-blocking.has-backdrop {
+  background: rgba(var(--shade-rgb), 0.42);
+}
+
 .modal {
   width: min(680px, 100%);
   max-height: 90vh;
@@ -1076,7 +1523,7 @@ button.sm {
 }
 .modal h2 {
   margin: 0 0 6px;
-  font-size: 19px;
+  font-size: var(--fs-xl);
   font-weight: 600;
 }
 .modal-actions {
@@ -1097,7 +1544,7 @@ button.sm {
   margin-bottom: 6px;
 }
 .ask-text {
-  font-size: 14.5px;
+  font-size: var(--fs-md);
   line-height: 1.6;
   margin-bottom: 10px;
 }
@@ -1123,7 +1570,7 @@ button.sm {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .ask-option-label {
-  font-size: 13.5px;
+  font-size: var(--fs-base);
 }
 .ask-option-desc {
   line-height: 1.5;
@@ -1149,7 +1596,7 @@ button.link:hover:not(:disabled) {
   background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
   word-break: break-all;
 }
@@ -1166,7 +1613,7 @@ button.link:hover:not(:disabled) {
   gap: 6px;
   padding: 4px 10px 4px 6px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--fg-faint);
   background: var(--bg-sunken);
 }
@@ -1207,7 +1654,7 @@ button.link:hover:not(:disabled) {
   background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
 }
 .log-line {
@@ -1242,7 +1689,7 @@ button.link:hover:not(:disabled) {
 }
 .empty-note {
   padding: 32px 4px;
-  font-size: 13.5px;
+  font-size: var(--fs-base);
   line-height: 1.8;
   max-width: 560px;
 }
@@ -1294,8 +1741,8 @@ button.link:hover:not(:disabled) {
   background: var(--bg-sunken);
   /* 三层：贴合的暗边 + 抬起的柔影 + 顶部一道浅高光，合起来才有"厚度"。 */
   box-shadow:
-    0 1px 2px rgba(43, 39, 36, 0.16),
-    0 8px 18px -6px rgba(43, 39, 36, 0.32),
+    0 1px 2px rgba(var(--shade-rgb), 0.16),
+    0 8px 18px -6px rgba(var(--shade-rgb), 0.32),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
   transition:
     transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1),
@@ -1314,10 +1761,10 @@ button.link:hover:not(:disabled) {
   width: 11px;
   background: linear-gradient(
     to right,
-    rgba(43, 39, 36, 0.42) 0%,
-    rgba(43, 39, 36, 0.16) 34%,
+    rgba(var(--shade-rgb), 0.42) 0%,
+    rgba(var(--shade-rgb), 0.16) 34%,
     rgba(255, 255, 255, 0.3) 62%,
-    rgba(43, 39, 36, 0.1) 100%
+    rgba(var(--shade-rgb), 0.1) 100%
   );
   pointer-events: none;
 }
@@ -1330,7 +1777,7 @@ button.link:hover:not(:disabled) {
     rgba(255, 255, 255, 0.14) 0%,
     rgba(255, 255, 255, 0) 32%,
     rgba(255, 255, 255, 0) 78%,
-    rgba(43, 39, 36, 0.08) 100%
+    rgba(var(--shade-rgb), 0.08) 100%
   );
   pointer-events: none;
 }
@@ -1342,7 +1789,7 @@ button.link:hover:not(:disabled) {
   bottom: 2px;
   height: 10px;
   border-radius: 50%;
-  background: radial-gradient(50% 50% at 50% 50%, rgba(43, 39, 36, 0.3), rgba(43, 39, 36, 0));
+  background: radial-gradient(50% 50% at 50% 50%, rgba(var(--shade-rgb), 0.3), rgba(var(--shade-rgb), 0));
   transition: opacity 0.22s ease, transform 0.22s ease;
   pointer-events: none;
 }
@@ -1350,8 +1797,8 @@ button.link:hover:not(:disabled) {
 .book-3d:focus-visible .book-face {
   transform: translateY(-5px) rotate(-0.5deg);
   box-shadow:
-    0 1px 2px rgba(43, 39, 36, 0.18),
-    0 16px 26px -8px rgba(43, 39, 36, 0.38),
+    0 1px 2px rgba(var(--shade-rgb), 0.18),
+    0 16px 26px -8px rgba(var(--shade-rgb), 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.26);
 }
 .book-3d:hover .book-shadow,
@@ -1381,7 +1828,7 @@ button.link:hover:not(:disabled) {
   writing-mode: vertical-rl;
   max-height: 74%;
   font-family: var(--prose-font);
-  font-size: 17px;
+  font-size: var(--fs-lg);
   letter-spacing: 0.22em;
   color: #4a3f33;
   overflow: hidden;
@@ -1399,14 +1846,14 @@ button.link:hover:not(:disabled) {
   right: 0;
   bottom: 0;
   padding: 5px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-align: center;
-  color: #fffdf8;
-  background: rgba(43, 39, 36, 0.72);
+  color: var(--on-veil);
+  background: rgba(var(--shade-rgb), 0.72);
   animation: pulse 1.8s ease-in-out infinite;
 }
 .book-badge.danger {
-  background: rgba(160, 58, 46, 0.82);
+  background: var(--error-veil);
   animation: none;
 }
 
@@ -1428,7 +1875,7 @@ button.link:hover:not(:disabled) {
   min-width: 0;
 }
 .book-title {
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 500;
   line-height: 1.4;
   /* 书名允许两行：书架上的标题截断成一行很容易看不出是哪本书。 */
@@ -1438,7 +1885,7 @@ button.link:hover:not(:disabled) {
   overflow: hidden;
 }
 .book-meta {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
   line-height: 1.5;
 }
@@ -1465,7 +1912,7 @@ button.link:hover:not(:disabled) {
   opacity: 1;
 }
 .shelf-actions .link {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 0;
 }
 
@@ -1473,7 +1920,7 @@ button.link:hover:not(:disabled) {
   width: min(400px, 100%);
 }
 
-/* ── 验收横幅：引擎停下等你时的主界面提示 ── */
+/* ── 验收横幅：引擎停下等你时的主界面提示（浮在内容底部，见 .workbench-alerts） ── */
 .gate-strip {
   display: flex;
   align-items: center;
@@ -1481,7 +1928,8 @@ button.link:hover:not(:disabled) {
   gap: 20px;
   padding: 14px 18px;
   background: var(--accent-soft);
-  border-bottom: 1px solid rgba(194, 104, 61, 0.18);
+  border-top: 1px solid var(--accent-line);
+  box-shadow: 0 -4px 16px rgba(var(--shade-rgb), 0.08);
   flex-shrink: 0;
 }
 .gate-text {
@@ -1491,10 +1939,10 @@ button.link:hover:not(:disabled) {
   min-width: 0;
 }
 .gate-text strong {
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 .gate-text .subtle {
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 /* ── 起书页的节奏选择 ── */
@@ -1521,15 +1969,49 @@ button.link:hover:not(:disabled) {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .pace-title {
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 500;
 }
 .pace-option.active .pace-title {
   color: var(--accent);
 }
 .pace-desc {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
+  color: var(--fg-dim);
+  white-space: normal;
+}
+
+/* ── 起书前的准备：扫榜 / 拆文 / 仿写 ──
+   与 .pace-option 同一张卡片语言，但没有 active 态——这三个是「点开去做一件事」，
+   不是互斥单选，选中感会误导成「本次创作启用了它」。 */
+.prep-choice {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.prep-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+.prep-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.prep-title {
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+.prep-desc {
+  font-size: var(--fs-sm);
+  line-height: 1.55;
   color: var(--fg-dim);
   white-space: normal;
 }
@@ -1565,19 +2047,19 @@ button.link:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 .found-num {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--fg-faint);
 }
 .found-prose {
   font-family: var(--prose-font);
-  font-size: 14.5px;
+  font-size: var(--fs-md);
   line-height: 1.85;
   color: var(--fg);
   white-space: pre-wrap;
 }
 .found-hook {
   margin-top: 5px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
   line-height: 1.6;
 }
@@ -1608,7 +2090,7 @@ button.link:hover:not(:disabled) {
 }
 .chip.static {
   cursor: default;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 3px 9px;
   background: var(--bg-sunken);
 }
@@ -1642,7 +2124,7 @@ button.link:hover:not(:disabled) {
   object-fit: cover;
 }
 .cover-empty {
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .cover-side {
   min-width: 0;
@@ -1660,7 +2142,72 @@ button.link:hover:not(:disabled) {
   background: var(--bg-sunken);
   padding: 1px 5px;
   border-radius: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
+}
+.cover-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.cover-style-option {
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.cover-style-option strong {
+  color: var(--fg);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+.cover-style-option span {
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.cover-style-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.cover-style-option.active strong,
+.cover-style-option.active span {
+  color: var(--accent);
+}
+.cover-design-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.cover-design-controls .form-label {
+  display: block;
+}
+.cover-design-controls select {
+  width: 100%;
+}
+.cover-composition-options,
+.cover-title-style-options {
+  flex-wrap: wrap;
+}
+.cover-resolved-genre {
+  margin: 6px 0 0;
+}
+.cover-artifact-ready {
+  margin-top: 10px;
+}
+.cover-prompt-actions,
+.cover-title-actions {
+  margin-top: 8px;
+}
+.cover-prompt-actions {
+  flex-wrap: wrap;
+}
+.cover-prompt-actions .primary {
+  margin-left: auto;
 }
 
 /* 预览角标：提醒当前看到的是未落盘的排版，"已应用"和"只是预览"必须分得清。 */
@@ -1673,10 +2220,10 @@ button.link:hover:not(:disabled) {
   right: 0;
   bottom: 0;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-align: center;
-  color: #fffdf8;
-  background: rgba(194, 104, 61, 0.85);
+  color: var(--on-veil);
+  background: var(--accent-veil);
 }
 
 /* ── 封面叠字 ── */
@@ -1709,7 +2256,7 @@ button.link:hover:not(:disabled) {
 .form-label.inline {
   margin: 0;
   flex: 0 0 34px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .preset-grid.tight {
   display: flex;
@@ -1718,7 +2265,7 @@ button.link:hover:not(:disabled) {
 }
 .preset-grid.tight .preset {
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .cover-slider {
   flex: 1;
@@ -1739,7 +2286,7 @@ button.link:hover:not(:disabled) {
 /* 必填标记 */
 .req {
   color: var(--error);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 500;
 }
 
@@ -1755,16 +2302,11 @@ button.link:hover:not(:disabled) {
 /* ── 章节阅读器 ──
    与其它浮层不同，阅读器是全屏的：读书时不该看到底下的活动流和面板在动。
    底色比主界面更暖一档（接近纸），正文区是居中定宽的"页面"。 */
-.reader-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: var(--bg);
-}
 .reader {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--bg);
 }
 .reader-top {
   display: flex;
@@ -1806,7 +2348,7 @@ button.link:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--fg-dim);
 }
 .reader-prefs input[type="range"] {
@@ -1831,7 +2373,7 @@ button.link:hover:not(:disabled) {
 }
 .toc-group-title {
   padding: 10px 10px 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -1846,7 +2388,7 @@ button.link:hover:not(:disabled) {
   background: transparent;
   color: var(--fg-dim);
   font-family: var(--ui-font);
-  font-size: 13px;
+  font-size: var(--fs-base);
   text-align: left;
   cursor: pointer;
 }
@@ -1877,7 +2419,7 @@ button.link:hover:not(:disabled) {
 }
 .toc-words {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 /* 正文区：滚动容器居中，页面本身定宽 */
@@ -1924,7 +2466,7 @@ button.link:hover:not(:disabled) {
   padding-top: 1.5em;
   border-top: 1px solid var(--border);
   font-family: var(--ui-font);
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 
 /* 生图进度：等待可能长达数分钟，用进度条把"还在跑"表达清楚 */
@@ -1942,4 +2484,26 @@ button.link:hover:not(:disabled) {
   background: var(--accent);
   border-radius: 2px;
   transition: width 0.9s linear;
+}
+
+/* ── 窄窗口降级 ──
+   窗口最小宽 980px，而三栏 minmax 下限合计 960px——只剩 20px 余量，
+   任何一栏内容稍长就会溢出。这里按断点逐级卸载次要信息，
+   优先保住"正文 + 当前状态"这条主线。 */
+
+/* < 1180px：顶栏丢模型名（侧栏「用量」tab 里有完整的按模型明细）。 */
+@media (max-width: 1180px) {
+  .drop-lg {
+    display: none;
+  }
+}
+
+/* < 1040px：顶栏再丢字数（进度文案里已含章节数），右侧面板收窄。 */
+@media (max-width: 1040px) {
+  .drop-md {
+    display: none;
+  }
+  .workbench-body {
+    grid-template-columns: minmax(220px, 0.8fr) minmax(380px, 1.8fr) minmax(240px, 0.8fr);
+  }
 }

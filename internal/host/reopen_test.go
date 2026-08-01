@@ -15,7 +15,7 @@ func TestHostReopen(t *testing.T) {
 	st := storepkg.NewStore(t.TempDir())
 	h := &Host{store: st, events: make(chan Event, 8)}
 
-	if err := st.Progress.Init("书", 2); err != nil {
+	if err := st.Progress.Init("书", 2, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Reopen(""); err == nil {

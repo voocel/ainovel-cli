@@ -130,7 +130,7 @@ func TestChapterTitlesUsesCommittedTitleOnlyForCompletedChapters(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Progress.Init("test", 2); err != nil {
+	if err := st.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Outline.SaveOutline([]domain.OutlineEntry{

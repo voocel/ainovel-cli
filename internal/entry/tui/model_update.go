@@ -11,6 +11,8 @@ import (
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
+	"github.com/voocel/ainovel-cli/internal/host/rip"
+	"github.com/voocel/ainovel-cli/internal/host/scan"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
@@ -80,6 +82,10 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleReportKey)
 	case m.importer != nil:
 		return m.handleBlockingModalKey(msg, m.handleImportKey)
+	case m.ripper != nil:
+		return m.handleBlockingModalKey(msg, m.handleRipKey)
+	case m.ranks != nil:
+		return m.handleBlockingModalKey(msg, m.handleScanKey)
 	case m.simulator != nil:
 		return m.handleBlockingModalKey(msg, m.handleSimulationKey)
 	default:
@@ -541,6 +547,48 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		boxW, _ := reportModalSize(m.width, m.height)
 		m.importer.refresh(paddedModalContentWidth(boxW))
 		return m, nil, true
+	case ripEventMsg:
+		if m.ripper == nil || msg.reqID != m.ripper.reqID {
+			return m, nil, true
+		}
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.ripper.appendEvent(msg.ev, paddedModalContentWidth(boxW))
+		if msg.ev.Stage == rip.StageError || msg.ev.Stage == rip.StageDone {
+			// 终态：停在面板等用户看完产物路径与降级提示，Esc 关闭。
+			return m, nil, true
+		}
+		return m, listenRipEvent(msg.reqID, msg.ch), true
+	case ripClosedMsg:
+		// 通道关闭且未终态 → 管线在停靠点停下（等 --form / y 放行）。标记面板可关闭，
+		// 否则 Esc 只会取消已结束的 ctx，面板永远关不掉。
+		if m.ripper == nil || msg.reqID != m.ripper.reqID || m.ripper.done {
+			return m, nil, true
+		}
+		m.ripper.paused = true
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.ripper.refresh(paddedModalContentWidth(boxW))
+		return m, nil, true
+	case scanEventMsg:
+		if m.ranks == nil || msg.reqID != m.ranks.reqID {
+			return m, nil, true
+		}
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.ranks.appendEvent(msg.ev, paddedModalContentWidth(boxW))
+		if msg.ev.Stage == scan.StageError || msg.ev.Stage == scan.StageDone {
+			// 终态：停在面板等用户看完产物路径与稀疏提示，Esc 关闭。
+			return m, nil, true
+		}
+		return m, listenScanEvent(msg.reqID, msg.ch), true
+	case scanClosedMsg:
+		// 扫榜没有停靠点：通道关闭而未终态只可能是异常退出。标记 done 让面板可关，
+		// 否则 Esc 只会取消已结束的 ctx，面板永远关不掉。
+		if m.ranks == nil || msg.reqID != m.ranks.reqID || m.ranks.done {
+			return m, nil, true
+		}
+		m.ranks.done = true
+		boxW, _ := reportModalSize(m.width, m.height)
+		m.ranks.refresh(paddedModalContentWidth(boxW))
+		return m, nil, true
 	case simEventMsg:
 		if m.simulator == nil || msg.reqID != m.simulator.reqID {
 			return m, nil, true
@@ -643,6 +691,17 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			// 顺便把 dirty 一并清掉，flush tick 紧跟着不必重复刷。
 			m.refreshStreamViewport()
 			m.streamDirty = false
+		}
+		if s := m.ripper; s != nil && !s.done && !s.paused {
+			// 与导入同理：尾随星标与重试倒计时都在 viewport 内容里，按 tick 重算。
+			s.frame = m.cursorIdx
+			boxW, _ := reportModalSize(m.width, m.height)
+			s.refresh(paddedModalContentWidth(boxW))
+		}
+		if s := m.ranks; s != nil && !s.done {
+			s.frame = m.cursorIdx
+			boxW, _ := reportModalSize(m.width, m.height)
+			s.refresh(paddedModalContentWidth(boxW))
 		}
 		if s := m.importer; s != nil && !s.done && !s.paused {
 			// 导入运行中：尾随星标与重试倒计时都在 viewport 内容里，按 tick 重算。

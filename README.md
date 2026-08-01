@@ -223,9 +223,10 @@ ainovel-cli
 bash scripts/build-desktop.sh
 ```
 
-产物位于 `cmd/ainovel-desktop/build/bin/ainovel-desktop.exe`。生图服务在桌面端的
-「小说封面」面板单独配置；支持官方 OpenAI Images 兼容接口，JarlessAPI 地址会自动
-切换为异步任务轮询，API Key 只保存在本机 `~/.ainovel/imagegen.json`。
+产物位于 `cmd/ainovel-desktop/build/bin/ainovel-desktop.exe`。生图服务统一在桌面端的
+「设置 > 图片生成」中配置 Base URL、模型、API Key 和图片尺寸；支持官方 OpenAI
+Images 兼容接口，JarlessAPI 地址会自动切换为异步任务轮询。封面制作默认使用适配
+移动端缩略图的「番茄网文」风格，API Key 只保存在本机 `~/.ainovel/imagegen.json`。
 
 ### Docker
 

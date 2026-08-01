@@ -68,6 +68,18 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 			return nil, fmt.Errorf("invalid scale %q, expected short/mid/long: %w", a.Scale, errs.ErrToolArgs)
 		}
 	}
+	progress, err := t.store.Progress.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load progress genre: %w: %w", errs.ErrStoreRead, err)
+	}
+	if progress != nil && progress.Genre == domain.GenreShortStory {
+		if a.Type == "layered_outline" || a.Type == "expand_arc" || a.Type == "append_volume" {
+			return nil, fmt.Errorf("短篇小说不支持 %s，请保存扁平 outline: %w", a.Type, errs.ErrToolPrecondition)
+		}
+		if a.Scale != "" && domain.PlanningTier(a.Scale) != domain.PlanningTierShort {
+			return nil, fmt.Errorf("短篇小说的 scale 必须是 short，收到 %q: %w", a.Scale, errs.ErrToolPrecondition)
+		}
+	}
 
 	result := map[string]any{"saved": true, "type": a.Type, "scale": a.Scale}
 

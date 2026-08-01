@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../bindings/wails";
 import type { BookContents, ChapterMeta, ChapterText } from "../bindings/wails";
 import { formatNumber } from "../lib/labels";
+import { paragraphs } from "../lib/prose";
+import { Overlay } from "./Overlay";
 
 // ReaderPanel 章节阅读器：读已完成的终稿。
 //
@@ -36,15 +38,6 @@ function loadPrefs(): Prefs {
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
-}
-
-// 正文按空行分段。引擎落盘的是 Markdown，但章节正文实际只有段落，
-// 所以不引入 Markdown 渲染器（也避免把小说里的 # * _ 当标记吃掉）。
-function paragraphs(text: string): string[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((p) => p.replace(/\n/g, "").trim())
-    .filter((p) => p.length > 0);
 }
 
 export function ReaderPanel({ onClose }: { onClose: () => void }) {
@@ -116,13 +109,9 @@ export function ReaderPanel({ onClose }: { onClose: () => void }) {
     [bookName, chapterLoading, open],
   );
 
-  // 键盘操作是"成熟阅读器"的基本要求：左右翻章，Esc 退出，空格/PgDn 翻屏由浏览器负责。
+  // 左右方向键翻章。Esc 退出由 Overlay 统一处理，这里不再重复注册。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
       // 输入框里按方向键不该翻章。
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
@@ -131,7 +120,7 @@ export function ReaderPanel({ onClose }: { onClose: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chapter, go, onClose]);
+  }, [chapter, go]);
 
   // 目录按卷分组（仅长篇分层模式）。
   const grouped = useMemo(() => {
@@ -162,148 +151,152 @@ export function ReaderPanel({ onClose }: { onClose: () => void }) {
   );
 
   return (
-    <div className="reader-overlay">
-      <div className="reader">
-        <header className="reader-top">
-          <button
-            className="ghost sm"
-            onClick={() => setTocOpen((v) => !v)}
-            title={tocOpen ? "收起目录" : "展开目录"}
-          >
-            目录
+    <Overlay
+      layer="reader"
+      onClose={onClose}
+      backdrop={false}
+      labelledBy="reader-title"
+      className="reader"
+    >
+      <header className="reader-top">
+        <button
+          className="ghost sm"
+          onClick={() => setTocOpen((v) => !v)}
+          title={tocOpen ? "收起目录" : "展开目录"}
+        >
+          目录
+        </button>
+        <div className="reader-heading">
+          <strong id="reader-title">{bookName || "阅读"}</strong>
+          {list.length > 0 && (
+            <span className="subtle sm">
+              {list.length} 章 · {formatNumber(contents?.totalWords ?? 0)} 字
+            </span>
+          )}
+        </div>
+        <div className="reader-top-right">
+          <button className="ghost sm" onClick={() => setPrefsOpen((v) => !v)} title="排版设置">
+            Aa
           </button>
-          <div className="reader-heading">
-            <strong>{bookName || "阅读"}</strong>
-            {list.length > 0 && (
-              <span className="subtle sm">
-                {list.length} 章 · {formatNumber(contents?.totalWords ?? 0)} 字
-              </span>
-            )}
-          </div>
-          <div className="reader-top-right">
-            <button className="ghost sm" onClick={() => setPrefsOpen((v) => !v)} title="排版设置">
-              Aa
-            </button>
-            <button className="ghost sm" onClick={onClose}>
-              关闭
-            </button>
-          </div>
-        </header>
+          <button className="ghost sm" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+      </header>
 
-        {prefsOpen && (
-          <div className="reader-prefs">
-            <label>
-              字号 <span className="subtle sm">{prefs.fontSize}px</span>
-              <input
-                type="range"
-                min={14}
-                max={26}
-                step={1}
-                value={prefs.fontSize}
-                onChange={(e) => setPrefs({ ...prefs, fontSize: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              行距 <span className="subtle sm">{prefs.lineHeight.toFixed(1)}</span>
-              <input
-                type="range"
-                min={1.5}
-                max={2.6}
-                step={0.1}
-                value={prefs.lineHeight}
-                onChange={(e) => setPrefs({ ...prefs, lineHeight: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              版面宽度 <span className="subtle sm">{prefs.width}rem</span>
-              <input
-                type="range"
-                min={28}
-                max={52}
-                step={1}
-                value={prefs.width}
-                onChange={(e) => setPrefs({ ...prefs, width: Number(e.target.value) })}
-              />
-            </label>
-            <button className="ghost sm" onClick={() => setPrefs(DEFAULT_PREFS)}>
-              恢复默认
-            </button>
-          </div>
+      {prefsOpen && (
+        <div className="reader-prefs">
+          <label>
+            字号 <span className="subtle sm">{prefs.fontSize}px</span>
+            <input
+              type="range"
+              min={14}
+              max={26}
+              step={1}
+              value={prefs.fontSize}
+              onChange={(e) => setPrefs({ ...prefs, fontSize: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            行距 <span className="subtle sm">{prefs.lineHeight.toFixed(1)}</span>
+            <input
+              type="range"
+              min={1.5}
+              max={2.6}
+              step={0.1}
+              value={prefs.lineHeight}
+              onChange={(e) => setPrefs({ ...prefs, lineHeight: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            版面宽度 <span className="subtle sm">{prefs.width}rem</span>
+            <input
+              type="range"
+              min={28}
+              max={52}
+              step={1}
+              value={prefs.width}
+              onChange={(e) => setPrefs({ ...prefs, width: Number(e.target.value) })}
+            />
+          </label>
+          <button className="ghost sm" onClick={() => setPrefs(DEFAULT_PREFS)}>
+            恢复默认
+          </button>
+        </div>
+      )}
+
+      <div className="reader-body">
+        {tocOpen && (
+          <nav className="reader-toc">
+            {loading && <div className="subtle sm">读取目录…</div>}
+            {!loading && list.length === 0 && (
+              <div className="subtle sm">还没有已完成的章节。</div>
+            )}
+            {grouped
+              ? grouped.map(([vol, g]) => (
+                  <div className="toc-group" key={vol}>
+                    <div className="toc-group-title subtle">
+                      第 {vol} 卷{g.title ? ` · ${g.title}` : ""}
+                    </div>
+                    {g.items.map(tocItem)}
+                  </div>
+                ))
+              : list.map(tocItem)}
+          </nav>
         )}
 
-        <div className="reader-body">
-          {tocOpen && (
-            <nav className="reader-toc">
-              {loading && <div className="subtle sm">读取目录…</div>}
-              {!loading && list.length === 0 && (
-                <div className="subtle sm">还没有已完成的章节。</div>
-              )}
-              {grouped
-                ? grouped.map(([vol, g]) => (
-                    <div className="toc-group" key={vol}>
-                      <div className="toc-group-title subtle">
-                        第 {vol} 卷{g.title ? ` · ${g.title}` : ""}
-                      </div>
-                      {g.items.map(tocItem)}
-                    </div>
-                  ))
-                : list.map(tocItem)}
-            </nav>
+        <main className="reader-main" ref={scrollRef}>
+          {err && <div className="error-banner">{err}</div>}
+
+          {!err && list.length === 0 && !loading && (
+            <div className="reader-empty subtle">
+              这本书还没有已完成的章节。
+              <br />
+              写完一章后就能在这里读到终稿。
+            </div>
           )}
 
-          <main className="reader-main" ref={scrollRef}>
-            {err && <div className="error-banner">{err}</div>}
+          {chapter && (
+            <article
+              className="reader-page"
+              style={{
+                maxWidth: `${prefs.width}rem`,
+                fontSize: `${prefs.fontSize}px`,
+                lineHeight: prefs.lineHeight,
+              }}
+            >
+              <h1 className="reader-chapter-title">
+                <span className="subtle sm">第 {chapter.chapter} 章</span>
+                {chapter.title && <span>{chapter.title}</span>}
+              </h1>
+              {paras.map((p, i) => (
+                <p key={i}>{p}</p>
+              ))}
 
-            {!err && list.length === 0 && !loading && (
-              <div className="reader-empty subtle">
-                这本书还没有已完成的章节。
-                <br />
-                写完一章后就能在这里读到终稿。
+              <div className="reader-nav">
+                <button
+                  className="ghost"
+                  disabled={!chapter.prevChapter || chapterLoading}
+                  onClick={() => go(chapter.prevChapter)}
+                >
+                  ← 上一章
+                </button>
+                <span className="subtle sm">
+                  {formatNumber(chapter.words)} 字
+                  {chapterLoading && " · 载入中…"}
+                </span>
+                <button
+                  className="ghost"
+                  disabled={!chapter.nextChapter || chapterLoading}
+                  onClick={() => go(chapter.nextChapter)}
+                >
+                  下一章 →
+                </button>
               </div>
-            )}
-
-            {chapter && (
-              <article
-                className="reader-page"
-                style={{
-                  maxWidth: `${prefs.width}rem`,
-                  fontSize: `${prefs.fontSize}px`,
-                  lineHeight: prefs.lineHeight,
-                }}
-              >
-                <h1 className="reader-chapter-title">
-                  <span className="subtle sm">第 {chapter.chapter} 章</span>
-                  {chapter.title && <span>{chapter.title}</span>}
-                </h1>
-                {paras.map((p, i) => (
-                  <p key={i}>{p}</p>
-                ))}
-
-                <div className="reader-nav">
-                  <button
-                    className="ghost"
-                    disabled={!chapter.prevChapter || chapterLoading}
-                    onClick={() => go(chapter.prevChapter)}
-                  >
-                    ← 上一章
-                  </button>
-                  <span className="subtle sm">
-                    {formatNumber(chapter.words)} 字
-                    {chapterLoading && " · 载入中…"}
-                  </span>
-                  <button
-                    className="ghost"
-                    disabled={!chapter.nextChapter || chapterLoading}
-                    onClick={() => go(chapter.nextChapter)}
-                  >
-                    下一章 →
-                  </button>
-                </div>
-              </article>
-            )}
-          </main>
-        </div>
+            </article>
+          )}
+        </main>
       </div>
-    </div>
+    </Overlay>
   );
 }

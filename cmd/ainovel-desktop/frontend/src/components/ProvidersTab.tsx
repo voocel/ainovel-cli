@@ -195,7 +195,7 @@ export function ProvidersTab() {
 
         {draft && (
           <>
-            <h3>{draft.isNew ? "新增服务商" : `编辑 ${draft.provider}`}</h3>
+            <h3 className="section-label">{draft.isNew ? "新增服务商" : `编辑 ${draft.provider}`}</h3>
 
             {draft.isNew && (
               <>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../bindings/wails";
 import type { FoundationView } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // FoundationPanel 设定审阅：规划完成后、开始写正文前，完整展示前提 / 大纲 / 人物 /
 // 世界观，让用户确认或提修改意见。
@@ -59,9 +60,9 @@ export function FoundationPanel({
 
   if (!data) {
     return (
-      <div className="modal-overlay">
+      <Overlay layer="sheet" onClose={onClose} labelledBy="found-title">
         <div className="modal wide">
-          <h2>设定</h2>
+          <h2 id="found-title">设定</h2>
           {err ? <div className="error-banner">{err}</div> : <p className="subtle">读取中…</p>}
           <div className="modal-actions">
             <button className="ghost" onClick={onClose}>
@@ -69,7 +70,7 @@ export function FoundationPanel({
             </button>
           </div>
         </div>
-      </div>
+      </Overlay>
     );
   }
 
@@ -78,9 +79,9 @@ export function FoundationPanel({
   const rules = data.worldRules ?? [];
 
   return (
-    <div className="modal-overlay">
+    <Overlay layer="sheet" onClose={busy ? undefined : onClose} labelledBy="found-title">
       <div className="modal wide foundation">
-        <h2>{data.awaitingReview ? "规划已就绪，请审阅设定" : "本书设定"}</h2>
+        <h2 id="found-title">{data.awaitingReview ? "规划已就绪，请审阅设定" : "本书设定"}</h2>
         <p className="subtle sm">
           {data.awaitingReview
             ? `确认无误后放行第 ${data.nextChapter} 章开始写作；需要调整就在下面提出修改意见。`
@@ -89,14 +90,14 @@ export function FoundationPanel({
 
         {data.premise && (
           <section className="found-block">
-            <h3>前提</h3>
+            <h3 className="section-label">前提</h3>
             <div className="found-prose">{data.premise}</div>
           </section>
         )}
 
         {data.compass && (
           <section className="found-block">
-            <h3>终局方向</h3>
+            <h3 className="section-label">终局方向</h3>
             <div className="found-prose">
               {data.compass.endingDirection}
               {data.compass.estimatedScale && (
@@ -218,6 +219,6 @@ export function FoundationPanel({
           )}
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 }

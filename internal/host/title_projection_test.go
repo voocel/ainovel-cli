@@ -12,7 +12,7 @@ func TestFillDetailsUsesCommittedTitleOnlyForCompletedChapters(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Progress.Init("test", 2); err != nil {
+	if err := s.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{

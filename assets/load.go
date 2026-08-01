@@ -48,6 +48,20 @@ type Prompts struct {
 	SimulationSource string
 	SimulationMerge  string
 
+	// 拆文（对标小说只读拆解）各阶段提示词。
+	RipBound     string // 章节边界识别
+	RipPreview   string // 黄金三章深读
+	RipSummary   string // 逐章拆解
+	RipAggregate string // 剧情单元 / 节奏 / 情绪聚合
+	RipProfile   string // 角色 / 设定 / 关系
+	RipReport    string // 拆文报告
+	RipStyle     string // 文风裁定
+
+	// 扫榜（榜单趋势与选题决策）各阶段提示词。
+	ScanParse   string // 半结构化榜单文本 → 结构化条目
+	ScanAnalyze string // 题材分布 / 趋势 / 新元素
+	ScanTopic   string // 选题决策
+
 	// Arbiter 裁定提示词(LLM-as-function,无 simulation guidance 包装)。
 	ArbiterPlanStart    string
 	ArbiterIntervention string
@@ -195,6 +209,18 @@ func loadPrompts() Prompts {
 		ImportRange:      mustRead(promptsFS, "prompts/import-range.md"),
 		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
 		SimulationMerge:  mustRead(promptsFS, "prompts/simulation-merge.md"),
+
+		RipBound:     mustRead(promptsFS, "prompts/rip-bound.md"),
+		RipPreview:   mustRead(promptsFS, "prompts/rip-preview.md"),
+		RipSummary:   mustRead(promptsFS, "prompts/rip-summary.md"),
+		RipAggregate: mustRead(promptsFS, "prompts/rip-aggregate.md"),
+		RipProfile:   mustRead(promptsFS, "prompts/rip-profile.md"),
+		RipReport:    mustRead(promptsFS, "prompts/rip-report.md"),
+		RipStyle:     mustRead(promptsFS, "prompts/rip-style.md"),
+
+		ScanParse:   mustRead(promptsFS, "prompts/scan-parse.md"),
+		ScanAnalyze: mustRead(promptsFS, "prompts/scan-analyze.md"),
+		ScanTopic:   mustRead(promptsFS, "prompts/scan-topic.md"),
 
 		ArbiterPlanStart:    mustRead(promptsFS, "prompts/arbiter-plan-start.md"),
 		ArbiterIntervention: mustRead(promptsFS, "prompts/arbiter-intervention.md"),

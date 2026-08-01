@@ -25,7 +25,7 @@ func TestReviseOutlineReplacesFlatTailIdempotently(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Progress.Init("test", 4); err != nil {
+	if err := s.Progress.Init("test", 4, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
@@ -84,7 +84,7 @@ func TestReviseOutlineProtectsCompletedChapter(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Progress.Init("test", 2); err != nil {
+	if err := s.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "一"}, {Chapter: 2, Title: "二"}}); err != nil {
@@ -126,7 +126,7 @@ func TestReviseOutlinePreservesOtherLayeredArcs(t *testing.T) {
 			}},
 		},
 	}}
-	if err := s.Progress.Init("test", 5); err != nil {
+	if err := s.Progress.Init("test", 5, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Progress.SetLayered(true); err != nil {

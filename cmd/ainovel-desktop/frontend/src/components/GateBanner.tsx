@@ -1,5 +1,20 @@
 import type { UISnapshot } from "../bindings/wails";
 
+// gateWaiting：引擎是否正停在验收点等用户放行。
+// 仅在逐章验收、引擎已停、且处于写作期且无在途许可时才成立。
+//
+// 导出是因为调用方需要**先知道横幅会不会出现**才能决定要不要给它留位置——
+// 让调用方自己抄一遍这个条件，早晚会和这里分叉。
+export function gateWaiting(snap: UISnapshot | null): boolean {
+  return (
+    !!snap &&
+    snap.AdvanceMode === "review" &&
+    !snap.IsRunning &&
+    snap.Phase === "writing" &&
+    snap.AdvancePermitChapter === 0
+  );
+}
+
 // GateBanner 是"引擎正等你"的显式提示条。
 //
 // 引擎在逐章验收模式下会停在章节边界（规划完成后是第一次停），但停下这件事
@@ -16,13 +31,7 @@ export function GateBanner({
   onAdvance: () => void;
   busy: boolean;
 }) {
-  // 仅在逐章验收、引擎已停、且处于写作期且无在途许可时才是"等你放行"。
-  const waiting =
-    snap.AdvanceMode === "review" &&
-    !snap.IsRunning &&
-    snap.Phase === "writing" &&
-    snap.AdvancePermitChapter === 0;
-  if (!waiting) return null;
+  if (!gateWaiting(snap)) return null;
 
   // 尚无完成章节 = 这是规划后的第一次停顿，重点引导去审阅设定。
   const firstStop = snap.CompletedCount === 0;

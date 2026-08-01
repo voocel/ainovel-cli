@@ -215,7 +215,7 @@ func TestContextToolChapterModeIncludesWorkingAndReferenceFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveWorldRules: %v", err)
 	}
-	if err := s.Progress.Init("test", 2); err != nil {
+	if err := s.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Summaries.SaveSummary(domain.ChapterSummary{
@@ -304,7 +304,7 @@ func TestContextToolArchitectModeIncludesPlanningAndFoundation(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 6); err != nil {
+	if err := s.Progress.Init("test", 6, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Progress.SetLayered(true); err != nil {
@@ -489,7 +489,7 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.Progress.Init("test", 8); err != nil {
+	if err := s.Progress.Init("test", 8, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
@@ -590,7 +590,7 @@ func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.Progress.Init("test", 60); err != nil {
+	if err := s.Progress.Init("test", 60, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	// 6 条满足召回阈值；前两条账龄 ≥30（久挂），后四条账龄 <30（近期）。
@@ -652,7 +652,7 @@ func TestContextToolSelectedMemoryIncludesGlobalReviewLessons(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.Progress.Init("test", 6); err != nil {
+	if err := s.Progress.Init("test", 6, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveReview(domain.ReviewEntry{
@@ -702,7 +702,7 @@ func TestContextToolKeepsFullForeshadowWhenRecallNotTriggered(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.Progress.Init("test", 4); err != nil {
+	if err := s.Progress.Init("test", 4, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
@@ -746,7 +746,7 @@ func TestContextToolFallsBackToFullForeshadowWhenSelectionIsTooSparse(t *testing
 	}); err != nil {
 		t.Fatalf("SaveOutline: %v", err)
 	}
-	if err := s.Progress.Init("test", 8); err != nil {
+	if err := s.Progress.Init("test", 8, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
@@ -799,7 +799,7 @@ func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 3); err != nil {
+	if err := s.Progress.Init("test", 3, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(2, 3000, "", ""); err != nil {
@@ -859,7 +859,7 @@ func TestContextToolOmitsRewriteBriefForNormalChapter(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 3); err != nil {
+	if err := s.Progress.Init("test", 3, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 
@@ -887,7 +887,7 @@ func TestContextToolLoadsArcReviewAffectingEarlierChapter(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Progress.Init("arc brief", 4); err != nil {
+	if err := s.Progress.Init("arc brief", 4, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	for chapter := 1; chapter <= 4; chapter++ {
@@ -930,7 +930,7 @@ func TestContextToolDoesNotInjectUserDirectives(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 3); err != nil {
+	if err := s.Progress.Init("test", 3, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 

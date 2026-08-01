@@ -24,6 +24,32 @@ func TestLoadStateReturnsProgressReadError(t *testing.T) {
 	}
 }
 
+func TestLoadStatePersistsShortStoryLayeredRepair(t *testing.T) {
+	st := storepkg.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init("short", 3, domain.GenreShortStory); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := st.Progress.Load()
+	p.Layered, p.CurrentVolume, p.CurrentArc = true, 1, 1
+	if err := st.Progress.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadState(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Progress.Layered || state.PlanningTier != domain.PlanningTierShort {
+		t.Fatalf("路由事实没有收敛到短篇模式: %+v", state)
+	}
+	p, _ = st.Progress.Load()
+	if p.Layered || p.CurrentVolume != 0 || p.CurrentArc != 0 {
+		t.Fatalf("修正只停留在内存，未写回 progress.json: %+v", p)
+	}
+}
+
 // helper：构造一个处于 Writing 阶段、分层模式的 Progress。
 func writingProgress(completed []int, flow domain.FlowState) *domain.Progress {
 	return &domain.Progress{

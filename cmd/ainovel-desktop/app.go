@@ -320,10 +320,14 @@ func (a *App) emit(name string, data ...any) {
 // reviewFirst=true 时先把推进模式切到逐章验收，于是引擎会在规划完设定、
 // 正要写第 1 章之前停下（gate.Allow 拦截，见 internal/host/advance_gate.go），
 // 让用户先审阅前提/大纲/人物/世界观。这是桌面版的默认路径。
-func (a *App) StartQuick(rawRequirement string, reviewFirst bool) error {
+func (a *App) StartQuick(rawRequirement string, reviewFirst bool, genre string) error {
 	h, err := a.reqHost()
 	if err != nil {
 		return err
+	}
+	storyGenre, err := domain.ParseGenre(genre)
+	if err != nil {
+		return fmt.Errorf("无效的作品类型: %w", err)
 	}
 	plan, err := startup.PrepareQuick(startup.Request{
 		Mode:       startup.ModeQuick,
@@ -343,7 +347,7 @@ func (a *App) StartQuick(rawRequirement string, reviewFirst bool) error {
 	if err := h.PrepareUserRules(plan.RawPrompt); err != nil {
 		return err
 	}
-	return h.StartPrepared(plan.RawPrompt)
+	return h.StartPreparedWithGenre(plan.RawPrompt, storyGenre)
 }
 
 // Continue 停机后用输入恢复创作（干预裁定 + 拉起引擎）。

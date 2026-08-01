@@ -49,7 +49,7 @@ func TestContextToolInjectsCompactSimulationProfile(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Progress.Init("test", 1); err != nil {
+	if err := st.Progress.Init("test", 1, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,6 +73,44 @@ func TestContextToolInjectsCompactSimulationProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCompactSimulationProfile(t, chapter, "working_memory")
+}
+
+func TestContextToolInjectsGenreWithoutSimulationProfile(t *testing.T) {
+	st := store.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init("short", 5, domain.GenreShortStory); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewContextTool(st, References{}, "default")
+	for name, args := range map[string]json.RawMessage{
+		"architect": json.RawMessage(`{}`),
+		"writer":    json.RawMessage(`{"chapter":1}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := tool.Execute(context.Background(), args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			sectionKey := "planning_memory"
+			if name == "writer" {
+				sectionKey = "working_memory"
+			}
+			section, ok := payload[sectionKey].(map[string]any)
+			if !ok || section["genre"] != string(domain.GenreShortStory) {
+				t.Fatalf("%s.genre = %#v", sectionKey, section["genre"])
+			}
+			if _, ok := payload["simulation_profile"]; ok {
+				t.Fatal("测试前提不成立：未配置仿写画像时不应注入 simulation_profile")
+			}
+		})
+	}
 }
 
 func assertCompactSimulationProfile(t *testing.T, payload map[string]any, section string) {

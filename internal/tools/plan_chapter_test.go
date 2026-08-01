@@ -27,7 +27,7 @@ func TestPlanChapterRejectsUnexpandedLayeredChapter(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := st.Progress.Init("test", 5); err != nil {
+	if err := st.Progress.Init("test", 5, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := st.Outline.SaveLayeredOutline([]domain.VolumeOutline{{
@@ -69,7 +69,7 @@ func TestPlanChapterAllowsExpandedLayeredChapter(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := st.Progress.Init("test", 2); err != nil {
+	if err := st.Progress.Init("test", 2, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := st.Outline.SaveLayeredOutline([]domain.VolumeOutline{{

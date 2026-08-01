@@ -74,6 +74,9 @@ func (s *OutlineStore) GetChapterOutline(chapter int) (*domain.OutlineEntry, err
 // SaveLayeredOutline 保存分层大纲（长篇模式，原子写入）。
 func (s *OutlineStore) SaveLayeredOutline(volumes []domain.VolumeOutline) error {
 	return s.io.WithWriteLock(func() error {
+		if err := s.rejectLayeredForShortUnlocked(); err != nil {
+			return err
+		}
 		if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
 			return err
 		}
@@ -334,6 +337,9 @@ func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.
 // saveLayeredViewsUnlocked 以分层大纲为唯一来源，统一重建其 Markdown 与扁平派生视图。
 // 调用方必须持有 OutlineStore 的写锁。
 func (s *OutlineStore) saveLayeredViewsUnlocked(volumes []domain.VolumeOutline) error {
+	if err := s.rejectLayeredForShortUnlocked(); err != nil {
+		return err
+	}
 	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
 		return err
 	}
@@ -342,6 +348,20 @@ func (s *OutlineStore) saveLayeredViewsUnlocked(volumes []domain.VolumeOutline) 
 	}
 	if err := s.saveOutlineUnlocked(domain.FlattenOutline(volumes)); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *OutlineStore) rejectLayeredForShortUnlocked() error {
+	var p domain.Progress
+	if err := s.io.ReadJSONUnlocked("meta/progress.json", &p); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("load progress before layered outline: %w", err)
+	}
+	if p.Genre == domain.GenreShortStory {
+		return fmt.Errorf("短篇小说不支持分层大纲: %w", errs.ErrToolPrecondition)
 	}
 	return nil
 }

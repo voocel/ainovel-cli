@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../bindings/wails";
 import type { ImportOptions, JobDone, JobEvent } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // 阶段顺序用于步骤条展示。等待类阶段不占独立节点，作为所处节点的“暂停”状态。
 const STAGES: { key: string; label: string }[] = [
@@ -131,9 +132,9 @@ export function ImportPanel({
   const started = lines.length > 0 || running;
 
   return (
-    <div className="modal-overlay">
+    <Overlay layer="sheet" onClose={running ? undefined : onClose} labelledBy="import-title">
       <div className="modal wide">
-        <h2>导入已有小说</h2>
+        <h2 id="import-title">导入已有小说</h2>
         <p className="subtle sm">
           把一本已有的小说语义编译进项目：识别章节 → 逐章提取事实 → 归纳设定 → 逐章落盘，
           之后可以接着往下写。只能导入到空书。
@@ -283,6 +284,6 @@ export function ImportPanel({
           </p>
         )}
       </div>
-    </div>
+    </Overlay>
   );
 }

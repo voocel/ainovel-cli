@@ -10,10 +10,10 @@
     "name": "ainovel"
   },
   "info": {
-    "companyName": "ainovel",
-    "productName": "ainovel",
+    "companyName": "AINovel",
+    "productName": "AINovel Studio",
     "productVersion": "0.1.0",
     "copyright": "MIT License",
-    "comments": "全自动 AI 长篇小说创作引擎"
+    "comments": "AI 小说创作工作台"
   }
 }

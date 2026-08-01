@@ -1,5 +1,11 @@
 # Project Constraints
 
+## Project-Only Inspection
+
+- Keep all file discovery, source searches, and repository inspection inside the current project root (`E:\inkos-work\ainovel-cli`). Do not inspect sibling repositories, user directories, global configuration directories, or other paths outside this project unless the user explicitly authorizes that specific scope.
+- Do not enumerate, open, or invoke unrelated skills. Read a skill only when the user explicitly requests it or when it is directly required to complete the current task.
+- Prefer the current repository's code, documentation, scripts, and tests as the source of truth. Do not search external workspaces for alternative implementations.
+
 ## Desktop Packaging
 
 - After modifying source code, finish the task by packaging the desktop application. A frontend-only build does not satisfy this requirement.

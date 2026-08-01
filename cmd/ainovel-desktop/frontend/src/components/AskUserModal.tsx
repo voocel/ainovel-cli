@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as api from "../bindings/wails";
 import type { AskQuestion } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // 每题的作答状态：选中的 label 集合 + 自由补充。
 type Answer = { selected: string[]; note: string };
@@ -71,9 +72,12 @@ export function AskUserModal({
   });
 
   return (
-    <div className="modal-overlay">
+    // blocking 层：引擎此刻停在等待里，这个弹窗必须压过设置页和阅读器。
+    // 不给 onClose——Esc / 点空白都不能关，只能走「提交」或「跳过」，
+    // 否则引擎会一直等一个永远不来的回答。
+    <Overlay layer="blocking" labelledBy="ask-title">
       <div className="modal">
-        <h2>创作引擎需要你确认</h2>
+        <h2 id="ask-title">创作引擎需要你确认</h2>
         <p className="subtle sm">创作已暂停等待你的回答。也可以跳过，让引擎自行判断。</p>
 
         {questions.map((q) => (
@@ -120,6 +124,6 @@ export function AskUserModal({
           </button>
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 }

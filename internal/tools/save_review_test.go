@@ -19,7 +19,7 @@ func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
@@ -78,7 +78,7 @@ func TestSaveReviewRejectsMissingDimensions(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
@@ -108,7 +108,7 @@ func TestSaveReviewRejectsDimensionWithoutComment(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
@@ -146,7 +146,7 @@ func TestSaveReviewRejectsIssueOutsideChapterScope(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 80); err != nil {
+	if err := s.Progress.Init("test", 80, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	for ch := 1; ch <= 58; ch++ {
@@ -208,7 +208,7 @@ func TestSaveReviewKeepsModelDefinedDimension(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
@@ -318,7 +318,7 @@ func TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	for _, ch := range []int{8, 9} {
@@ -379,7 +379,7 @@ func TestSaveReviewKeepsOutcomeWhenReviewArtifactWriteFails(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 3); err != nil {
+	if err := s.Progress.Init("test", 3, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
@@ -428,7 +428,7 @@ func setupArcReviewStore(t *testing.T) *store.Store {
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Progress.Init("arc", 4); err != nil {
+	if err := s.Progress.Init("arc", 4, domain.GenreNovel); err != nil {
 		t.Fatal(err)
 	}
 	volumes := []domain.VolumeOutline{{

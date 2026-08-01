@@ -2,7 +2,6 @@ import { useState } from "react";
 import type { UISnapshot } from "../bindings/wails";
 import {
   cacheHitRate,
-  chapterState,
   flowLabel,
   formatCost,
   formatTokens,
@@ -12,10 +11,13 @@ import {
   runtimeStateLabel,
 } from "../lib/labels";
 
-type Tab = "status" | "outline" | "cast" | "usage";
+type Tab = "status" | "cast" | "usage";
 
-// SidePanel 右侧信息面板，分四个 tab：状态 / 大纲 / 角色 / 用量。
-// 相比终端版把所有内容挤在一列，这里分页承载，每页信息更完整。
+// SidePanel 右侧信息面板，分三个 tab：状态 / 角色 / 用量。
+//
+// 原先还有一个「大纲」tab——但左栏现在就是可点的章节目录，同一份大纲在屏幕上
+// 出现两次，其中一份还是不能点的降级版。删掉，只把它独有的分层规划信息
+// （下一卷、终局罗盘）并进状态页。
 export function SidePanel({ snap }: { snap: UISnapshot | null }) {
   const [tab, setTab] = useState<Tab>("status");
   if (!snap) return <aside className="side-panel" />;
@@ -26,7 +28,6 @@ export function SidePanel({ snap }: { snap: UISnapshot | null }) {
         {(
           [
             ["status", "状态"],
-            ["outline", "大纲"],
             ["cast", "角色"],
             ["usage", "用量"],
           ] as [Tab, string][]
@@ -42,7 +43,6 @@ export function SidePanel({ snap }: { snap: UISnapshot | null }) {
       </nav>
       <div className="side-scroll">
         {tab === "status" && <StatusTab snap={snap} />}
-        {tab === "outline" && <OutlineTab snap={snap} />}
         {tab === "cast" && <CastTab snap={snap} />}
         {tab === "usage" && <UsageTab snap={snap} />}
       </div>
@@ -70,7 +70,7 @@ function StatusTab({ snap }: { snap: UISnapshot }) {
     <>
       {snap.RecoveryLabel && <div className="note">{snap.RecoveryLabel}</div>}
 
-      <h3>概览</h3>
+      <h3 className="section-label">概览</h3>
       <Field label="运行态" value={runtimeStateLabel(snap.RuntimeState)} />
       <Field label="阶段" value={phaseLabel(snap.Phase)} />
       <Field label="流程" value={flowLabel(snap.Flow)} />
@@ -90,9 +90,26 @@ function StatusTab({ snap }: { snap: UISnapshot }) {
       )}
       {head && <div className="note accent">{head}</div>}
 
+      {/* 分层动态规划的走向信息。原先挂在「大纲」tab 底部，那个 tab 已被左栏目录取代，
+          但这几条是目录里没有的——它们讲的是"还没规划的部分往哪走"。 */}
+      {snap.Layered && (snap.NextVolumeTitle || snap.CompassDirection) && (
+        <>
+          <h3 className="section-label">后续走向</h3>
+          {snap.NextVolumeTitle && <Field label="下一卷" value={snap.NextVolumeTitle} />}
+          {snap.CompassDirection && (
+            <Field
+              label="终局"
+              value={
+                snap.CompassDirection + (snap.CompassScale ? `（${snap.CompassScale}）` : "")
+              }
+            />
+          )}
+        </>
+      )}
+
       {agents.length > 0 && (
         <>
-          <h3>运行角色</h3>
+          <h3 className="section-label">运行角色</h3>
           {agents.map((a) => (
             <div className="agent-row" key={a.Name}>
               <span className="agent-dot" />
@@ -115,7 +132,7 @@ function StatusTab({ snap }: { snap: UISnapshot }) {
 
       {rewrites.length > 0 && (
         <>
-          <h3>返工</h3>
+          <h3 className="section-label">返工</h3>
           <Field label="队列" value={rewrites.join(", ")} highlight />
           {snap.RewriteReason && <div className="note">{snap.RewriteReason}</div>}
         </>
@@ -123,65 +140,22 @@ function StatusTab({ snap }: { snap: UISnapshot }) {
 
       {snap.PendingSteer && (
         <>
-          <h3>待处理干预</h3>
+          <h3 className="section-label">待处理干预</h3>
           <div className="note accent">{snap.PendingSteer}</div>
         </>
       )}
 
       {snap.HasAdvanceHold && (
         <>
-          <h3>验收停靠</h3>
+          <h3 className="section-label">验收停靠</h3>
           <div className="note accent">{snap.AdvanceHoldReason}</div>
         </>
       )}
 
-      {(snap.LastCommitSummary || snap.LastReviewSummary) && <h3>最近</h3>}
+      {(snap.LastCommitSummary || snap.LastReviewSummary) && <h3 className="section-label">最近</h3>}
       {snap.LastCommitSummary && <Field label="提交" value={snap.LastCommitSummary} />}
       {snap.LastReviewSummary && <Field label="审阅" value={snap.LastReviewSummary} />}
       {snap.LastCheckpointName && <Field label="检查点" value={snap.LastCheckpointName} />}
-    </>
-  );
-}
-
-function OutlineTab({ snap }: { snap: UISnapshot }) {
-  const outline = snap.Outline ?? [];
-  if (outline.length === 0) return <div className="subtle">大纲尚未生成…</div>;
-
-  return (
-    <>
-      <h3>
-        大纲
-        {snap.Layered && <span className="subtle sm"> · 动态规划</span>}
-      </h3>
-      <ol className="outline-list">
-        {outline.map((e) => {
-          const st = chapterState(snap, e.Chapter);
-          return (
-            <li className={`outline-item ${st}`} key={e.Chapter}>
-              <span className="outline-marker">
-                {st === "done" ? "●" : st === "active" ? "▸" : "○"}
-              </span>
-              <span className="outline-num">{e.Chapter}</span>
-              <span className="outline-title" title={e.CoreEvent}>
-                {e.Title}
-              </span>
-              {st === "active" && <span className="outline-tag">进行中</span>}
-            </li>
-          );
-        })}
-      </ol>
-      {snap.Layered && (
-        <div className="subtle sm outline-foot">
-          {snap.NextVolumeTitle && <div>下一卷：{snap.NextVolumeTitle}</div>}
-          <div>后续章节随创作推进自动生成</div>
-          {snap.CompassDirection && (
-            <div>
-              终局：{snap.CompassDirection}
-              {snap.CompassScale && `（${snap.CompassScale}）`}
-            </div>
-          )}
-        </div>
-      )}
     </>
   );
 }
@@ -195,7 +169,7 @@ function CastTab({ snap }: { snap: UISnapshot }) {
     <>
       {chars.length > 0 && (
         <>
-          <h3>主要角色</h3>
+          <h3 className="section-label">主要角色</h3>
           <ul className="plain-list">
             {chars.map((c) => (
               <li key={c}>{c}</li>
@@ -205,7 +179,7 @@ function CastTab({ snap }: { snap: UISnapshot }) {
       )}
       {snap.SupportingCount > 0 && (
         <>
-          <h3>配角生态</h3>
+          <h3 className="section-label">配角生态</h3>
           <Field label="已出场" value={`${snap.SupportingCount} 位`} />
           <ul className="plain-list">
             {recent.map((n) => (
@@ -216,7 +190,7 @@ function CastTab({ snap }: { snap: UISnapshot }) {
       )}
       {snap.Premise && (
         <>
-          <h3>前提</h3>
+          <h3 className="section-label">前提</h3>
           <p className="premise">{snap.Premise}</p>
         </>
       )}
@@ -232,7 +206,7 @@ function UsageTab({ snap }: { snap: UISnapshot }) {
 
   return (
     <>
-      <h3>累计用量</h3>
+      <h3 className="section-label">累计用量</h3>
       <Field label="输入" value={formatTokens(snap.TotalInputTokens)} />
       <Field label="输出" value={formatTokens(snap.TotalOutputTokens)} />
       <Field label="花费" value={formatCost(snap.TotalCostUSD)} highlight />
@@ -242,7 +216,7 @@ function UsageTab({ snap }: { snap: UISnapshot }) {
 
       {budget > 0 && (
         <>
-          <h3>预算</h3>
+          <h3 className="section-label">预算</h3>
           <div className="budget-bar">
             <div
               className={`budget-fill ${pct >= 1 ? "danger" : pct >= 0.8 ? "warn" : ""}`}
@@ -255,7 +229,7 @@ function UsageTab({ snap }: { snap: UISnapshot }) {
         </>
       )}
 
-      <h3>缓存</h3>
+      <h3 className="section-label">缓存</h3>
       {hit === null ? (
         <div className="subtle sm">当前模型不支持 prompt cache</div>
       ) : (
@@ -272,7 +246,7 @@ function UsageTab({ snap }: { snap: UISnapshot }) {
 
       {perModel.length > 0 && (
         <>
-          <h3>按模型</h3>
+          <h3 className="section-label">按模型</h3>
           {perModel.map((m) => (
             <div className="model-row" key={m.Model}>
               <span className="model-name">{m.Model}</span>

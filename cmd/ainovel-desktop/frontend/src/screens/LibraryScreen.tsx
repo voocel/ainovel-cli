@@ -4,6 +4,7 @@ import type { LibraryBook } from "../bindings/wails";
 import { formatNumber, phaseLabel } from "../lib/labels";
 import { CoverPanel } from "../components/CoverPanel";
 import { ReaderPanel } from "../components/ReaderPanel";
+import type { SettingsTab } from "./SettingsScreen";
 
 // samePath 判断两个书目录是否是同一本书。
 //
@@ -23,7 +24,7 @@ export function LibraryScreen({
   onOpenSettings,
 }: {
   onOpened: (hasProgress: boolean) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: SettingsTab) => void;
 }) {
   const [books, setBooks] = useState<LibraryBook[]>([]);
   const [booksDir, setBooksDir] = useState("");
@@ -184,7 +185,7 @@ export function LibraryScreen({
           <strong>我的书库</strong>
           <span className="subtle sm">{books.length} 本</span>
         </div>
-        <button className="ghost sm" onClick={onOpenSettings}>
+        <button className="ghost sm" onClick={() => onOpenSettings()}>
           设置
         </button>
       </header>
@@ -194,7 +195,7 @@ export function LibraryScreen({
 
         {creating ? (
           <div className="create-card">
-            <h3>新建一本书</h3>
+            <h3 className="section-label">新建一本书</h3>
             <label className="form-label">书名（用于目录名，可留空）</label>
             <input
               className="text-input"
@@ -354,6 +355,10 @@ export function LibraryScreen({
         <CoverPanel
           onClose={() => setCoverFor(null)}
           onChanged={() => void load()}
+          onOpenImageSettings={() => {
+            setCoverFor(null);
+            onOpenSettings("imagegen");
+          }}
         />
       )}
 

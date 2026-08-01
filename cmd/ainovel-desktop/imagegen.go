@@ -54,9 +54,8 @@ type imageRequest struct {
 	Quality      string `json:"quality,omitempty"`
 	Stream       *bool  `json:"stream,omitempty"`
 	Sub2APIAsync bool   `json:"sub2api_async,omitempty"`
-	// ResponseFormat 取 "b64_json" 时直接拿到图片字节，省一次下载往返，
-	// 也避开了某些网关图片 URL 短期失效的问题。gpt-image-1 只返 b64，
-	// 故请求里不强制指定，两种响应都解析。
+	// ResponseFormat 只给明确需要 URL 的异步适配器使用。gpt-image-2 会自行返回
+	// b64_json，官方接口会拒绝旧 DALL-E 的 response_format 参数。
 	ResponseFormat string `json:"response_format,omitempty"`
 }
 
@@ -116,7 +115,7 @@ func generateImage(ctx context.Context, cfg imageGenConfig, prompt string) ([]by
 		size = "1024x1536" // 竖版更接近书籍封面比例
 	}
 
-	requestBody := imageRequest{Model: model, Prompt: prompt, N: 1, Size: size, ResponseFormat: "b64_json"}
+	requestBody := imageRequest{Model: model, Prompt: prompt, N: 1, Size: size}
 	if async {
 		stream := false
 		requestBody.ResponseFormat = "url"

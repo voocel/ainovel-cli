@@ -9,7 +9,7 @@ type GoApp = {
   OpenBook(dir: string): Promise<BookOpenResult>;
   NeedsSetup(): Promise<boolean>;
   ResumeBook(): Promise<void>;
-  StartQuick(raw: string, reviewFirst: boolean): Promise<void>;
+  StartQuick(raw: string, reviewFirst: boolean, genre: StoryGenre): Promise<void>;
   Continue(text: string): Promise<void>;
   Steer(text: string): Promise<void>;
   Abort(): Promise<boolean>;
@@ -37,7 +37,7 @@ type GoApp = {
   CoCreate(history: CoCreateMsg[]): Promise<CoCreateTurn>;
   StageCoCreate(history: CoCreateMsg[]): Promise<CoCreateTurn>;
   CancelCoCreateTurn(): Promise<void>;
-  StartFromCoCreate(draft: string, reviewFirst: boolean): Promise<void>;
+  StartFromCoCreate(draft: string, reviewFirst: boolean, genre: StoryGenre): Promise<void>;
   PauseForCoCreate(): Promise<boolean>;
   ResumeFromCoCreate(draft: string): Promise<void>;
   CancelCoCreate(): Promise<void>;
@@ -48,10 +48,24 @@ type GoApp = {
   StartSimulate(): Promise<void>;
   ImportSimulationProfile(path: string): Promise<void>;
   SimulateSourceDir(): Promise<string>;
+  AddSimulationSources(): Promise<string[]>;
+  OpenSimulationSourceDir(): Promise<string>;
   CancelSimulate(): Promise<void>;
   Export(opts: ExportOptions): Promise<ExportResult>;
+  // 拆文（对标小说只读拆解）
+  StartDeconstruct(opts: DeconstructOptions): Promise<void>;
+  CancelDeconstruct(): Promise<void>;
+  DeconstructResumeHint(libraryDir: string, bookName: string): Promise<string>;
+  DeconstructLibraryPath(libraryDir: string, bookName: string): Promise<string>;
+  // 扫榜（榜单趋势与选题决策）
+  StartRankScan(opts: RankScanOptions): Promise<void>;
+  CancelRankScan(): Promise<void>;
+  RankScanResumeHint(libraryDir: string, platform: string, rankName: string, scanDate: string): Promise<string>;
+  RankScanLibraryPath(libraryDir: string, platform: string, rankName: string, scanDate: string): Promise<string>;
   // 原生对话框
   PickImportFile(): Promise<string>;
+  PickNovelFile(): Promise<string>;
+  PickRankFile(): Promise<string>;
   PickProfileFile(): Promise<string>;
   PickExportPath(defaultName: string): Promise<string>;
   PickDirectory(title: string): Promise<string>;
@@ -70,9 +84,9 @@ type GoApp = {
   GetImageGenSettings(): Promise<ImageGenSettings>;
   SaveImageGenSettings(draft: ImageGenDraft): Promise<void>;
   GetCover(): Promise<CoverInfo>;
-  SuggestCoverPrompt(): Promise<string>;
-  OptimizeCoverPrompt(current: string): Promise<string>;
-  GenerateCover(prompt: string): Promise<CoverInfo>;
+  SuggestCoverPrompt(platform: string, genre: string, composition: string): Promise<string>;
+  OptimizeCoverPrompt(current: string, platform: string, genre: string, composition: string): Promise<string>;
+  GenerateCover(prompt: string, platform: string, genre: string, composition: string): Promise<CoverInfo>;
   CancelCover(): Promise<void>;
   CoverJobDir(): Promise<string>;
   ImportCoverFile(): Promise<CoverInfo>;
@@ -109,8 +123,8 @@ function app(): GoApp {
 export const OpenBook = (dir: string) => app().OpenBook(dir);
 export const NeedsSetup = () => app().NeedsSetup();
 export const ResumeBook = () => app().ResumeBook();
-export const StartQuick = (raw: string, reviewFirst: boolean) =>
-  app().StartQuick(raw, reviewFirst);
+export const StartQuick = (raw: string, reviewFirst: boolean, genre: StoryGenre) =>
+  app().StartQuick(raw, reviewFirst, genre);
 export const Continue = (text: string) => app().Continue(text);
 export const Steer = (text: string) => app().Steer(text);
 export const Abort = () => app().Abort();
@@ -143,8 +157,8 @@ export const SetRoleThinking = (role: string, level: string) =>
 export const CoCreate = (history: CoCreateMsg[]) => app().CoCreate(history);
 export const StageCoCreate = (history: CoCreateMsg[]) => app().StageCoCreate(history);
 export const CancelCoCreateTurn = () => app().CancelCoCreateTurn();
-export const StartFromCoCreate = (draft: string, reviewFirst: boolean) =>
-  app().StartFromCoCreate(draft, reviewFirst);
+export const StartFromCoCreate = (draft: string, reviewFirst: boolean, genre: StoryGenre) =>
+  app().StartFromCoCreate(draft, reviewFirst, genre);
 export const PauseForCoCreate = () => app().PauseForCoCreate();
 export const ResumeFromCoCreate = (draft: string) => app().ResumeFromCoCreate(draft);
 export const CancelCoCreate = () => app().CancelCoCreate();
@@ -156,11 +170,31 @@ export const ImportResumeHint = () => app().ImportResumeHint();
 export const StartSimulate = () => app().StartSimulate();
 export const ImportSimulationProfile = (path: string) => app().ImportSimulationProfile(path);
 export const SimulateSourceDir = () => app().SimulateSourceDir();
+export const AddSimulationSources = () => app().AddSimulationSources();
+export const OpenSimulationSourceDir = () => app().OpenSimulationSourceDir();
 export const CancelSimulate = () => app().CancelSimulate();
 export const Export = (opts: ExportOptions) => app().Export(opts);
 
+// ── 拆文 ──
+export const StartDeconstruct = (opts: DeconstructOptions) => app().StartDeconstruct(opts);
+export const CancelDeconstruct = () => app().CancelDeconstruct();
+export const DeconstructResumeHint = (libraryDir: string, bookName: string) =>
+  app().DeconstructResumeHint(libraryDir, bookName);
+export const DeconstructLibraryPath = (libraryDir: string, bookName: string) =>
+  app().DeconstructLibraryPath(libraryDir, bookName);
+
+// ── 扫榜 ──
+export const StartRankScan = (opts: RankScanOptions) => app().StartRankScan(opts);
+export const CancelRankScan = () => app().CancelRankScan();
+export const RankScanResumeHint = (libraryDir: string, platform: string, rankName: string, scanDate: string) =>
+  app().RankScanResumeHint(libraryDir, platform, rankName, scanDate);
+export const RankScanLibraryPath = (libraryDir: string, platform: string, rankName: string, scanDate: string) =>
+  app().RankScanLibraryPath(libraryDir, platform, rankName, scanDate);
+
 // ── 原生对话框 ──
 export const PickImportFile = () => app().PickImportFile();
+export const PickNovelFile = () => app().PickNovelFile();
+export const PickRankFile = () => app().PickRankFile();
 export const PickProfileFile = () => app().PickProfileFile();
 export const PickExportPath = (defaultName: string) => app().PickExportPath(defaultName);
 export const PickDirectory = (title: string) => app().PickDirectory(title);
@@ -182,9 +216,20 @@ export const ReadChapter = (chapter: number) => app().ReadChapter(chapter);
 export const GetImageGenSettings = () => app().GetImageGenSettings();
 export const SaveImageGenSettings = (draft: ImageGenDraft) => app().SaveImageGenSettings(draft);
 export const GetCover = () => app().GetCover();
-export const SuggestCoverPrompt = () => app().SuggestCoverPrompt();
-export const OptimizeCoverPrompt = (current: string) => app().OptimizeCoverPrompt(current);
-export const GenerateCover = (prompt: string) => app().GenerateCover(prompt);
+export const SuggestCoverPrompt = (platform: string, genre: string, composition: string) =>
+  app().SuggestCoverPrompt(platform, genre, composition);
+export const OptimizeCoverPrompt = (
+  current: string,
+  platform: string,
+  genre: string,
+  composition: string,
+) => app().OptimizeCoverPrompt(current, platform, genre, composition);
+export const GenerateCover = (
+  prompt: string,
+  platform: string,
+  genre: string,
+  composition: string,
+) => app().GenerateCover(prompt, platform, genre, composition);
 export const CancelCover = () => app().CancelCover();
 export const CoverJobDir = () => app().CoverJobDir();
 export const ImportCoverFile = () => app().ImportCoverFile();
@@ -320,6 +365,8 @@ export interface CoCreateMsg {
   content: string;
 }
 
+export type StoryGenre = "novel" | "short_story";
+
 export interface CoCreateTurn {
   message: string;
   prompt: string;
@@ -357,6 +404,40 @@ export interface JobDone {
   stage: string;
   continued?: boolean;
   error: string;
+}
+
+export interface DeconstructOptions {
+  sourcePath: string;
+  libraryDir: string;
+  bookName: string;
+  form: "" | "long" | "short";
+  acceptPreview: boolean;
+  autoConfirm: boolean;
+  guidance: string;
+  retryFailed: boolean;
+}
+
+// RipDone 的 degraded/failed 承载「有章节重试后仍失败，产物不完整但可用」。
+export interface RipDone extends JobDone {
+  degraded?: boolean;
+  failed?: number[];
+}
+
+export interface RankScanOptions {
+  pastedText: string;
+  filePath: string;
+  dirPath: string;
+  platform: string;
+  rankName: string;
+  libraryDir: string;
+  scanDate: string;
+}
+
+// ScanDone 的 sparse 承载「有效条目不足阈值，结论参考价值有限」。
+export interface ScanDone extends JobDone {
+  sparse?: boolean;
+  entries?: number;
+  dir?: string;
 }
 
 export interface ExportOptions {
@@ -475,6 +556,13 @@ export interface CoverInfo {
   // hasBase = 存在未叠字的原图，也即改排版不用重新生图。
   hasBase: boolean;
   layout: CoverTitleLayout;
+  preset: string;
+  platform: string;
+  genre: string;
+  resolvedGenre: string;
+  composition: string;
+  platformPath: string;
+  hasPlatformArtifact: boolean;
 }
 
 // CoverTitleLayout 是封面叠字的排版参数。书名由本地字体排上去，不交给生图模型
@@ -488,6 +576,7 @@ export interface CoverTitleLayout {
   scale: number;
   theme: "light" | "dark";
   font: "hei" | "song" | "kai";
+  style: "auto" | "gold" | "modern" | "romance" | "thriller" | "scifi" | "literary";
 }
 
 // cover:progress 生图心跳（每秒一次，发起时立即先发一次）。

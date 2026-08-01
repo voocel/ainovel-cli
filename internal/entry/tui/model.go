@@ -64,6 +64,10 @@ type Model struct {
 	version        string
 	importer       *importState
 	importSeq      int
+	ripper         *ripState
+	ripSeq         int
+	ranks          *scanState
+	scanSeq        int
 	simulator      *simulationState
 	simSeq         int
 	compItems      []commandPaletteItem
@@ -641,6 +645,14 @@ func (m Model) View() string {
 	if m.importer != nil {
 		// 导入不依赖 Engine 运行态，动画帧直接取 spinnerIdx（currentSpinnerFrame 在引擎停机时返回空）。
 		return renderImportModal(m.width, m.height, m.importer, m.spinnerIdx)
+	}
+	if m.ripper != nil {
+		// 拆文与导入同理：不依赖 Engine 运行态，动画帧直接取 spinnerIdx。
+		return renderRipModal(m.width, m.height, m.ripper, m.spinnerIdx)
+	}
+	if m.ranks != nil {
+		// 扫榜同上：不依赖 Engine 运行态。
+		return renderScanModal(m.width, m.height, m.ranks, m.spinnerIdx)
 	}
 	if m.simulator != nil {
 		return renderSimulationModal(m.width, m.height, m.simulator)

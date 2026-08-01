@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/host/scan"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
@@ -85,6 +86,101 @@ func TestJobRegistryOldCompletionDoesNotForgetReplacement(t *testing.T) {
 	r.abort("import")
 	if second.Err() == nil {
 		t.Fatal("替代作业仍应能被取消")
+	}
+}
+
+func TestPrepareRankScanOptionsAllowsSnapshotOnlyResume(t *testing.T) {
+	root := t.TempDir()
+	path, err := scan.LibraryPath(root, "qidian", "月票榜", "20260101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := scan.InitLibrary(path, "qidian", "月票榜", "20260101", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SaveSources([]scan.Source{{Platform: "qidian", RankName: "月票榜", Raw: "快照", Origin: "paste"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := prepareRankScanOptions(RankScanOptions{
+		Platform: "qidian", RankName: "月票榜", LibraryDir: root, ScanDate: "20260101",
+	})
+	if err != nil {
+		t.Fatalf("仅凭快照恢复不应被桌面入口拒绝: %v", err)
+	}
+	if got.PastedText != "" || got.FilePath != "" || got.DirPath != "" {
+		t.Fatalf("恢复不应伪造数据源: %+v", got)
+	}
+}
+
+func TestEnsureSimulationSourceDirCreatesDirectory(t *testing.T) {
+	bookDir := t.TempDir()
+	got, err := ensureSimulationSourceDir(bookDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(bookDir, "simulate")
+	if got != want {
+		t.Fatalf("语料目录 = %q, want %q", got, want)
+	}
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Fatalf("语料目录应已创建: info=%v err=%v", info, err)
+	}
+}
+
+func TestEnsureSimulationSourceDirRejectsEmptyBookPath(t *testing.T) {
+	if _, err := ensureSimulationSourceDir("  "); err == nil {
+		t.Fatal("空书目录不能回退到进程工作目录")
+	}
+}
+
+func TestImportSimulationSourcesCopiesAndUpdates(t *testing.T) {
+	sourceRoot := t.TempDir()
+	targetDir := filepath.Join(t.TempDir(), "simulate")
+	source := filepath.Join(sourceRoot, "参考小说.txt")
+	if err := os.WriteFile(source, []byte("第一版"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := importSimulationSources(targetDir, []string{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "参考小说.txt" {
+		t.Fatalf("导入结果不正确: %v", files)
+	}
+	target := filepath.Join(targetDir, "参考小说.txt")
+	if data, err := os.ReadFile(target); err != nil || string(data) != "第一版" {
+		t.Fatalf("首次导入内容不正确: data=%q err=%v", data, err)
+	}
+
+	if err := os.WriteFile(source, []byte("第二版"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := importSimulationSources(targetDir, []string{source}); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "第二版" {
+		t.Fatalf("更新导入内容不正确: data=%q err=%v", data, err)
+	}
+}
+
+func TestImportSimulationSourcesRejectsUnsupportedBatchBeforeCopy(t *testing.T) {
+	sourceRoot := t.TempDir()
+	targetDir := filepath.Join(t.TempDir(), "simulate")
+	valid := filepath.Join(sourceRoot, "参考.txt")
+	invalid := filepath.Join(sourceRoot, "图片.png")
+	if err := os.WriteFile(valid, []byte("text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalid, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := importSimulationSources(targetDir, []string{valid, invalid}); err == nil {
+		t.Fatal("混入不支持格式时应拒绝整批导入")
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "参考.txt")); !os.IsNotExist(err) {
+		t.Fatalf("校验失败前不应复制任何文件: %v", err)
 	}
 }
 
@@ -235,7 +331,8 @@ func TestWriteCoverFailurePreservesOldFormat(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "cover.png"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCoverComposite(dir, []byte("new-cover"), "image/png", "prompt", "model", nil); err == nil {
+	spec := coverSpec{Prompt: "prompt", Model: "model", Platform: "tomato"}
+	if err := writeCoverComposite(dir, []byte("new-cover"), "image/png", spec, nil); err == nil {
 		t.Fatal("新封面目标不可替换时应返回错误")
 	}
 	data, err := os.ReadFile(old)

@@ -178,6 +178,28 @@ func (t *ContextTool) buildSimulationProfile(result map[string]any, sectionKey s
 	result["simulation_profile"] = true
 }
 
+// buildGenre 独立注入题材，不能依赖可选的仿写画像是否存在。
+func (t *ContextTool) buildGenre(result map[string]any, sectionKey string, warn func(string, error)) {
+	progress, err := t.store.Progress.Load()
+	if err != nil {
+		warn("progress", err)
+		return
+	}
+	if progress == nil {
+		return
+	}
+	genre := progress.Genre
+	if genre == "" {
+		genre = domain.GenreNovel
+	}
+	section, ok := result[sectionKey].(map[string]any)
+	if !ok {
+		section = map[string]any{}
+		result[sectionKey] = section
+	}
+	section["genre"] = genre
+}
+
 func (t *ContextTool) buildBaseContext(result map[string]any, warn func(string, error)) {
 	if premise, err := t.store.Outline.LoadPremise(); err == nil && premise != "" {
 		result["premise"] = premise
@@ -207,7 +229,7 @@ func (t *ContextTool) buildBaseContext(result map[string]any, warn func(string, 
 func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContextEnvelope, warn func(string, error)) contextBuildState {
 	state := contextBuildState{
 		chapter: chapter,
-		profile: domain.NewContextProfile(0),
+		profile: domain.NewContextProfile(0, domain.GenreNovel), // 默认长篇，后续根据实际 progress 更新
 	}
 
 	progress, err := t.store.Progress.Load()
@@ -221,7 +243,11 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		envelope.Episodic["planning_tier"] = runMeta.PlanningTier
 	}
 	if progress != nil && progress.TotalChapters > 0 {
-		state.profile = domain.NewContextProfile(progress.TotalChapters)
+		genre := progress.Genre
+		if genre == "" {
+			genre = domain.GenreNovel // 兼容旧数据
+		}
+		state.profile = domain.NewContextProfile(progress.TotalChapters, genre)
 	}
 	if progress == nil || !progress.Layered {
 		state.profile.Layered = false

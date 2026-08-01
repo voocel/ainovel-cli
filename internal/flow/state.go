@@ -13,6 +13,9 @@ import (
 // 在不完整快照上继续派单。
 func LoadState(store *storepkg.Store) (State, error) {
 	var s State
+	if err := store.Progress.NormalizeGenreInvariants(); err != nil {
+		return s, fmt.Errorf("normalize genre invariants: %w", err)
+	}
 	missing, err := store.FoundationMissing()
 	if err != nil {
 		return s, fmt.Errorf("load foundation state: %w", err)
@@ -35,6 +38,9 @@ func LoadState(store *storepkg.Store) (State, error) {
 		return s, nil
 	}
 	s.Progress = progress
+	if progress.Genre == domain.GenreShortStory {
+		s.PlanningTier = domain.PlanningTierShort
+	}
 
 	if n := len(progress.CompletedChapters); n > 0 {
 		s.LastCompleted = progress.CompletedChapters[n-1]

@@ -15,7 +15,7 @@ func TestDraftChapterRejectsUnfinishedPendingRewrite(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 80); err != nil {
+	if err := s.Progress.Init("test", 80, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	for ch := 1; ch <= 58; ch++ {
@@ -55,7 +55,7 @@ func TestDraftChapterRejectsUnexpandedLayeredChapter(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 5); err != nil {
+	if err := s.Progress.Init("test", 5, domain.GenreNovel); err != nil {
 		t.Fatalf("Progress.Init: %v", err)
 	}
 	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{

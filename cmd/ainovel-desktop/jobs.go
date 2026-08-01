@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,8 +209,12 @@ func (a *App) StartSimulate() error {
 	if err != nil {
 		return err
 	}
+	sourceDir, err := ensureSimulationSourceDir(h.Dir())
+	if err != nil {
+		return err
+	}
 	ctx, jobID := a.jobs.begin("simulate")
-	ch, err := h.SimulateFrom(ctx, filepath.Join(h.Dir(), "simulate"))
+	ch, err := h.SimulateFrom(ctx, sourceDir)
 	if err != nil {
 		a.jobs.end("simulate", jobID)
 		return err
@@ -244,12 +249,151 @@ func (a *App) SimulateSourceDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(h.Dir(), "simulate"), nil
+	return ensureSimulationSourceDir(h.Dir())
+}
+
+// AddSimulationSources 选择参考文章并复制到当前书的 simulate 目录。
+// 返回目标文件名，前端据此确认本次实际加入了哪些语料；取消选择返回空数组。
+func (a *App) AddSimulationSources() ([]string, error) {
+	h, err := a.reqHost()
+	if err != nil {
+		return nil, err
+	}
+	sourceDir, err := ensureSimulationSourceDir(h.Dir())
+	if err != nil {
+		return nil, err
+	}
+	paths, err := wailsruntime.OpenMultipleFilesDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "选择仿写参考文章",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "参考文章 (*.txt;*.md;*.markdown)", Pattern: "*.txt;*.md;*.markdown"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return importSimulationSources(sourceDir, paths)
+}
+
+// OpenSimulationSourceDir 在系统文件管理器中打开当前书的仿写语料目录。
+func (a *App) OpenSimulationSourceDir() (string, error) {
+	h, err := a.reqHost()
+	if err != nil {
+		return "", err
+	}
+	sourceDir, err := ensureSimulationSourceDir(h.Dir())
+	if err != nil {
+		return "", err
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, "file://"+filepath.ToSlash(sourceDir))
+	return sourceDir, nil
 }
 
 // CancelSimulate 取消在途仿写作业。
 func (a *App) CancelSimulate() {
 	a.jobs.abort("simulate")
+}
+
+func ensureSimulationSourceDir(bookDir string) (string, error) {
+	bookDir = strings.TrimSpace(bookDir)
+	if bookDir == "" {
+		return "", fmt.Errorf("当前书目录为空，无法准备仿写语料")
+	}
+	sourceDir := filepath.Join(bookDir, "simulate")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		return "", fmt.Errorf("创建仿写语料目录失败 %s: %w", sourceDir, err)
+	}
+	return sourceDir, nil
+}
+
+func importSimulationSources(sourceDir string, paths []string) ([]string, error) {
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return nil, fmt.Errorf("仿写语料目录不能为空")
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		return nil, fmt.Errorf("创建仿写语料目录失败 %s: %w", sourceDir, err)
+	}
+	type sourceFile struct {
+		path string
+		name string
+	}
+	files := make([]sourceFile, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, raw := range paths {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("读取参考文章失败 %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("参考文章不是普通文件：%s", path)
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".txt" && ext != ".md" && ext != ".markdown" {
+			return nil, fmt.Errorf("不支持的参考文章格式 %q，仅支持 .txt、.md 和 .markdown", ext)
+		}
+		name := filepath.Base(path)
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("所选参考文章存在同名文件：%s", name)
+		}
+		seen[key] = struct{}{}
+		files = append(files, sourceFile{path: path, name: name})
+	}
+
+	imported := make([]string, 0, len(files))
+	for _, file := range files {
+		target := filepath.Join(sourceDir, file.name)
+		if targetInfo, err := os.Stat(target); err == nil {
+			sourceInfo, statErr := os.Stat(file.path)
+			if statErr == nil && os.SameFile(sourceInfo, targetInfo) {
+				imported = append(imported, file.name)
+				continue
+			}
+		}
+		if err := copySimulationSource(file.path, target); err != nil {
+			return nil, fmt.Errorf("导入参考文章 %s 失败: %w", file.name, err)
+		}
+		imported = append(imported, file.name)
+	}
+	return imported, nil
+}
+
+func copySimulationSource(source, target string) (retErr error) {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".simulation-source-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if retErr != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err = io.Copy(tmp, in); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpName, target); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) drainSim(ch <-chan sim.Event, jobID uint64) {
@@ -259,7 +403,7 @@ func (a *App) drainSim(ch <-chan sim.Event, jobID uint64) {
 		for ev := range ch {
 			last = jobEvent{
 				Stage: string(ev.Stage), Current: ev.Current, Total: ev.Total,
-				Message: ev.Message,
+				Message: ev.Message, Key: ev.Key,
 			}
 			if ev.Err != nil {
 				last.Error = ev.Err.Error()

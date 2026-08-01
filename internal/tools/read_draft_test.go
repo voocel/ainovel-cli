@@ -168,7 +168,7 @@ func TestDraftChapterWrite(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.Progress.Init("test", 10); err != nil {
+	if err := store.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
@@ -226,7 +226,7 @@ func TestDraftChapterAppend(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.Progress.Init("test", 10); err != nil {
+	if err := store.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
@@ -292,7 +292,7 @@ func TestPlanChapterMarksInProgress(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := store.Progress.Init("test", 10); err != nil {
+	if err := store.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	if err := store.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
@@ -329,7 +329,7 @@ func TestDraftChapterRejectsCompleted(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if err := s.Progress.Init("test", 10); err != nil {
+	if err := s.Progress.Init("test", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
 	_ = s.Drafts.SaveDraft(1, "第一章正文")

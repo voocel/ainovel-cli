@@ -61,7 +61,7 @@ export function ModelsTab() {
 
   return (
     <div className="settings-detail wide">
-      <h3>角色模型分配</h3>
+      <h3 className="section-label">角色模型分配</h3>
       <p className="subtle sm">
         为不同角色分配不同模型可以平衡质量与成本。未单独设置的角色继承「默认」。
       </p>

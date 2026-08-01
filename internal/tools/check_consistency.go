@@ -8,6 +8,7 @@ import (
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/voocel/ainovel-cli/internal/prosecheck"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -23,7 +24,7 @@ func NewCheckConsistencyTool(store *store.Store) *CheckConsistencyTool {
 
 func (t *CheckConsistencyTool) Name() string { return "check_consistency" }
 func (t *CheckConsistencyTool) Description() string {
-	return "加载已写草稿和对照数据（世界规则、伏笔、关系、别名、最近摘要），供你检查一致性。必须在 draft_chapter 之后调用"
+	return "加载已写草稿、章节级 AI 痕迹候选和对照数据（世界规则、伏笔、关系、别名、最近摘要），供你检查一致性与文风。必须在 draft_chapter 之后调用"
 }
 func (t *CheckConsistencyTool) Label() string { return "一致性检查" }
 
@@ -66,6 +67,7 @@ func (t *CheckConsistencyTool) Execute(_ context.Context, args json.RawMessage) 
 	}
 	result["content"] = content
 	result["word_count"] = wordCount
+	result["prose_findings"] = prosecheck.Check(content)
 
 	// 对照数据：保留全局性的一致性检查数据，避免重复加载 novel_context 已有的窗口数据
 	if rules, err := t.store.World.LoadWorldRules(); len(rules) > 0 {

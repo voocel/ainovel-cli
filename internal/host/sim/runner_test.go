@@ -18,9 +18,17 @@ import (
 type scriptedLLM struct {
 	responses []string
 	calls     atomic.Int32
+	delay     time.Duration
 }
 
-func (s *scriptedLLM) Generate(_ context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+func (s *scriptedLLM) Generate(ctx context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	if s.delay > 0 {
+		select {
+		case <-time.After(s.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	idx := int(s.calls.Add(1)) - 1
 	if idx >= len(s.responses) {
 		return nil, fmt.Errorf("scriptedLLM exhausted at call %d", idx+1)
@@ -32,6 +40,47 @@ func (s *scriptedLLM) Generate(_ context.Context, _ []agentcore.Message, _ []age
 			Timestamp: time.Now(),
 		},
 	}, nil
+}
+
+func TestRunnerEmitsHeartbeatDuringSlowAnalysis(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "simulate")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "slow.txt"), []byte("slow sample"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := store.NewStore(filepath.Join(dir, "book"))
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{
+		delay: 25 * time.Millisecond,
+		responses: []string{
+			validSourceReportJSON("slow tone"),
+			validSynthesisJSON("slow synthesis"),
+		},
+	}
+	events, err := Run(context.Background(), Deps{
+		Store: st, LLM: llm,
+		Prompts: Prompts{Source: "source prompt", Merge: "merge prompt"},
+	}, Options{SourceDir: sourceDir, HeartbeatInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heartbeat bool
+	for ev := range events {
+		if ev.Stage == StageAnalyze && ev.Key == "analyze-1" && strings.Contains(ev.Message, "已等待") {
+			heartbeat = true
+		}
+		if ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+	}
+	if !heartbeat {
+		t.Fatal("慢模型调用期间应持续发送分析心跳")
+	}
 }
 
 func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {

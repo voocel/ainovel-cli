@@ -15,6 +15,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
+	"github.com/voocel/ainovel-cli/internal/prosecheck"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -32,7 +33,8 @@ func NewCommitChapterTool(store *store.Store) *CommitChapterTool {
 // 由于嵌入字段会被 JSON marshaler 提升（promoted），序列化结果等同于扁平结构。
 type commitOutput struct {
 	domain.CommitResult
-	RuleViolations []rules.Violation `json:"rule_violations,omitempty"`
+	RuleViolations []rules.Violation    `json:"rule_violations,omitempty"`
+	ProseFindings  []prosecheck.Finding `json:"prose_findings"`
 }
 
 // commitArgs 是提交 Saga 的规范化结构化载荷。首次执行把它与正文快照一起写入
@@ -433,7 +435,9 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 
 	// 机械规则是输出的一部分，必须在 ProgressMarked 前固化，恢复时直接返回同一输出。
 	violations := t.checkRules(content)
-	output, err := json.Marshal(commitOutput{CommitResult: result, RuleViolations: violations})
+	output, err := json.Marshal(commitOutput{
+		CommitResult: result, RuleViolations: violations, ProseFindings: prosecheck.Check(content),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal commit output: %w", err)
 	}
@@ -675,6 +679,7 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 		"chapter": chapter, "rewritten": true, "mode": mode, "word_count": wordCount,
 		"remaining_queue": remaining, "queue_drained": drained, "next_chapter": nextChapter,
 		"flow": flow, "book_complete": bookComplete, "rule_violations": violations,
+		"prose_findings": prosecheck.Check(content),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("rewrite: marshal output: %w", err)
@@ -711,7 +716,7 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 // buildSkipResult 为"章节已完成的重复提交"构造与正常 commit 对齐的事实返回。
 // 协调者据此做后续决策（writer/editor/architect 派发），而不会因为拿到 prose 提示而幻觉。
 func (t *CommitChapterTool) buildSkipResult(chapter int, progress *domain.Progress) (json.RawMessage, error) {
-	_, wordCount, err := t.store.Drafts.LoadChapterContent(chapter)
+	content, wordCount, err := t.store.Drafts.LoadChapterContent(chapter)
 	if err != nil {
 		return nil, fmt.Errorf("load completed chapter: %w: %w", errs.ErrStoreRead, err)
 	}
@@ -750,7 +755,7 @@ func (t *CommitChapterTool) buildSkipResult(chapter int, progress *domain.Progre
 		result.Flow = string(progress.Flow)
 	}
 
-	return json.Marshal(result)
+	return json.Marshal(commitOutput{CommitResult: result, ProseFindings: prosecheck.Check(content)})
 }
 
 // loadCoreCharacterNameSet 加载 characters.json 中已有的角色名集合（含别名）。

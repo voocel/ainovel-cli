@@ -39,8 +39,21 @@ func TestLoadBuiltinSkills(t *testing.T) {
 			t.Fatalf("Get(%q) 取不回自己", sk.Name)
 		}
 	}
-	if _, ok := c.Get("anti-ai-tone"); !ok {
+	antiAI, ok := c.Get("anti-ai-tone")
+	if !ok {
 		t.Fatal("内置层应含 anti-ai-tone")
+	}
+	for _, required := range []string{
+		"check_consistency.prose_findings",
+		"Pass 1：去泛化和模板",
+		"Pass 2：去解释腔和书面腔",
+		"Pass 3：恢复自然叙事",
+		"电报体",
+		"返工完成后必须重新",
+	} {
+		if !strings.Contains(antiAI.Body, required) {
+			t.Errorf("去 AI 味技能缺少关键执行协议 %q", required)
+		}
 	}
 }
 

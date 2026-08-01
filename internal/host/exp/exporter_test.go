@@ -20,7 +20,7 @@ func newTestStore(t *testing.T, novelName string, completed []int) (*store.Store
 	if err := s.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	if err := s.Progress.Init(novelName, len(completed)); err != nil {
+	if err := s.Progress.Init(novelName, len(completed), domain.GenreNovel); err != nil {
 		t.Fatalf("init progress: %v", err)
 	}
 	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {

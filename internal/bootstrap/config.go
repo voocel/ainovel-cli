@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -185,8 +186,9 @@ type RoleConfig struct {
 
 // knownRoles 支持的可配置角色名。Arbiter 当前不开放角色级配置，
 // 统一使用顶层默认模型（host.arbiterModel 用 models.Default）。
-// import_* 是导入语义函数的模型档位旋钮（docs/import-pipeline.md §13.1）：
-// 未配置时落 architect，配置后可把机械性更强的函数指到更便宜档位。
+// import_* 是导入语义函数的模型档位旋钮（docs/import-pipeline.md §13.1），
+// rip_* 是拆文语义函数的同类旋钮，scan_* 是扫榜的：未配置时落 architect，
+// 配置后可把机械性更强的函数指到更便宜档位。
 var knownRoles = map[string]bool{
 	"architect":         true,
 	"writer":            true,
@@ -194,6 +196,23 @@ var knownRoles = map[string]bool{
 	"import_segment":    true,
 	"import_analyze":    true,
 	"import_synthesize": true,
+	"rip_bound":         true,
+	"rip_summary":       true,
+	"rip_aggregate":     true,
+	"rip_report":        true,
+	"scan_parse":        true,
+	"scan_analyze":      true,
+}
+
+// knownRoleList 返回排序后的合法角色名，供错误文案使用。
+// 从 knownRoles 派生而非硬编码字面量：漏改的清单会在用户拼错角色名时撒谎。
+func knownRoleList() string {
+	roles := make([]string, 0, len(knownRoles))
+	for role := range knownRoles {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	return strings.Join(roles, "/")
 }
 
 // Config 小说应用配置。
@@ -207,6 +226,9 @@ type Config struct {
 	// ReasoningEffort 顶层默认推理强度（off/low/medium/high/xhigh/max），空=不覆盖（沿用模型/provider 默认）。
 	// 角色未单独配置 reasoning_effort 时回落到此值。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+
+	// 题材类型：novel(长篇小说，默认) / short_story(短篇小说)
+	Genre string `json:"genre,omitempty"`
 
 	// Provider 凭证库
 	Providers map[string]ProviderConfig `json:"providers,omitempty"`
@@ -303,7 +325,7 @@ func (c *Config) ValidateBase() error {
 			return err
 		}
 		if !knownRoles[role] {
-			return fmt.Errorf("unknown role %q in roles config (valid: architect/writer/editor/import_segment/import_analyze/import_synthesize): %w", role, errs.ErrConfig)
+			return fmt.Errorf("unknown role %q in roles config (valid: %s): %w", role, knownRoleList(), errs.ErrConfig)
 		}
 		if rc.Provider == "" || rc.Model == "" {
 			return fmt.Errorf("role %q must have both provider and model: %w", role, errs.ErrConfig)

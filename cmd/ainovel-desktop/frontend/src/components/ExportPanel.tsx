@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as api from "../bindings/wails";
 import type { ExportResult } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // ExportPanel 导出面板。导出是只读操作，创作运行中也能随时拿"现阶段成品"。
 // 格式由输出路径后缀决定（.txt / .epub），与终端版一致。
@@ -57,9 +58,9 @@ export function ExportPanel({
   };
 
   return (
-    <div className="modal-overlay">
+    <Overlay layer="sheet" onClose={busy ? undefined : onClose} labelledBy="export-title">
       <div className="modal">
-        <h2>导出成品</h2>
+        <h2 id="export-title">导出成品</h2>
         <p className="subtle sm">
           合并已完成的章节导出。创作进行中也可以导出，拿到的是当前进度的成品。
         </p>
@@ -154,6 +155,6 @@ export function ExportPanel({
           </button>
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 }

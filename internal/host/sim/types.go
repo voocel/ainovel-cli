@@ -24,7 +24,8 @@ type Prompts struct {
 }
 
 type Options struct {
-	SourceDir string
+	SourceDir         string
+	HeartbeatInterval time.Duration
 }
 
 type Stage string
@@ -44,6 +45,7 @@ type Event struct {
 	Current int
 	Total   int
 	Message string
+	Key     string
 	Err     error
 }
 

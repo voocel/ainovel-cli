@@ -28,7 +28,7 @@ func main() {
 	app := NewApp(versionInfo())
 
 	err := wails.Run(&options.App{
-		Title:     "ainovel — AI 长篇小说创作",
+		Title:     "AINovel Studio · AI 小说创作",
 		Width:     1280,
 		Height:    860,
 		MinWidth:  980,

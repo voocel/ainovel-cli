@@ -271,6 +271,48 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "rip",
+			Group:       "analysis",
+			Usage:       "/rip <原文路径> [--book=<书名>] [--lib=<拆文库目录>] [--form=long|short] [--yes] [--guide=<切分指导>]",
+			Description: "拆解对标小说（无路径则从已有拆文库恢复；--guide 用自然语言调整切分）",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.ripSeq++
+				state, listenCmd, err := startRip(m.runtime, m.ripSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "拆解启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.ripper = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
+		{
+			Name:        "scan",
+			Group:       "analysis",
+			Usage:       "/scan <榜单文件> [--dir=<目录>] [--platform=<平台>] [--rank=<榜单名>] [--lib=<扫榜库目录>] [--date=YYYYMMDD]",
+			Description: "扫榜：把榜单文本整理成趋势报告与选题决策（数据由你提供，不联网抓取）",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.scanSeq++
+				state, listenCmd, err := startScan(m.runtime, m.scanSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "扫榜启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.ranks = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
+		{
 			Name:        "skill",
 			Group:       "writing",
 			Usage:       "/skill [名称] [章节范围] | /skill reload",

@@ -302,12 +302,24 @@ func logUserRulesSnapshot(snap *rules.Snapshot) {
 	}
 }
 
-// StartPrepared 用用户的**原始**创作要求开始创作:plan_start 裁定选规划师并扩充
-// 需求，裁定结果先固化为
-// 事实(PlanStartRecord)再启动 Engine——恢复永远依赖已落盘事实,不重做已有裁定。
-// 输入事实(StartPrompt)在裁定之前落盘:裁定失败时它是引擎补裁的依据,
-// 启动失败可从任何恢复入口(Resume/继续)自愈,不是死局。
+// StartPrepared 使用配置中的默认创作类型启动，供 CLI/TUI 等旧入口保持兼容。
 func (h *Host) StartPrepared(rawRequirement string) error {
+	genre, err := domain.ParseGenre(h.cfg.Genre)
+	if err != nil {
+		return fmt.Errorf("invalid configured genre: %w", err)
+	}
+	return h.StartPreparedWithGenre(rawRequirement, genre)
+}
+
+// StartPreparedWithGenre 用用户的原始创作要求和本书类型开始创作。plan_start
+// 裁定结果先固化为事实(PlanStartRecord)再启动 Engine，恢复只依赖已落盘事实。
+// Genre 在任何进度重置前校验，避免非法前端参数破坏已有 checkpoint。
+func (h *Host) StartPreparedWithGenre(rawRequirement string, genre domain.Genre) error {
+	parsedGenre, err := domain.ParseGenre(string(genre))
+	if err != nil {
+		return fmt.Errorf("invalid genre: %w", err)
+	}
+
 	h.mu.Lock()
 	if h.lifecycle == lifecycleRunning {
 		h.mu.Unlock()
@@ -332,7 +344,7 @@ func (h *Host) StartPrepared(rawRequirement string) error {
 	if err := h.store.Checkpoints.Reset(); err != nil {
 		return fmt.Errorf("reset checkpoints: %w", err)
 	}
-	if err := h.store.Progress.Init("", 0); err != nil {
+	if err := h.store.Progress.Init("", 0, parsedGenre); err != nil {
 		return fmt.Errorf("init progress: %w", err)
 	}
 	// 输入事实先于裁定落盘:裁定失败(模型故障等)后 StartPrompt 仍在,
@@ -344,8 +356,8 @@ func (h *Host) StartPrepared(rawRequirement string) error {
 	// 启动裁定:失败显式报错中止(启动期用户在场,报错优于猜测)。
 	start := time.Now()
 	decision, derr := runObservedDecision(h.observer, "启动裁定", func() (arbiter.PlanStartDecision, error) {
-		return arbiter.DecidePlanStart(h.runCtx, h.arbiterModel(),
-			h.bundle.Prompts.ArbiterPlanStart, rawRequirement, h.cfg.Style)
+		return arbiter.DecidePlanStartForGenre(h.runCtx, h.arbiterModel(),
+			h.bundle.Prompts.ArbiterPlanStart, rawRequirement, h.cfg.Style, parsedGenre)
 	})
 	rec := storepkg.DecisionRecord{Kind: "plan_start", Decider: "arbiter", Input: rawRequirement,
 		Reason: decision.Reason, DurationMs: time.Since(start).Milliseconds()}

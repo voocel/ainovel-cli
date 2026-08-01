@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../bindings/wails";
 import type { SkillCatalog } from "../bindings/wails";
+import { Overlay } from "./Overlay";
 
 // SkillPanel 专项技能中心：列出当前生效的技能（内置 / 全局 / 本书三层合并），
 // 让用户挑一个、划定范围、发起执行。
@@ -79,7 +80,7 @@ export function SkillPanel({
     setErr(null);
     try {
       await api.RunSkill(current.name, chapters);
-      setSent(current.name);
+      setSent(skillDisplayName(current.name));
       setRange("");
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
@@ -89,9 +90,9 @@ export function SkillPanel({
   };
 
   return (
-    <div className="modal-overlay">
+    <Overlay layer="sheet" onClose={busy ? undefined : onClose} labelledBy="skill-title">
       <div className="modal wide foundation">
-        <h2>专项技能</h2>
+        <h2 id="skill-title">专项技能</h2>
         <p className="subtle sm">
           技能是一份可复用的专项处理方法，挑一个就会挂到本次改稿任务上。选定后可划定章节范围；
           留空则按技能声明的范围处理。
@@ -139,10 +140,10 @@ export function SkillPanel({
                 onClick={() => setSelected(selected === sk.name ? "" : sk.name)}
               >
                 <div className="found-item-head">
-                  <strong>{sk.name}</strong>
+                  <strong>{skillDisplayName(sk.name)}</strong>
                   <span className="tag">{scopeLabel(sk.scope)}</span>
                   <span className="subtle sm">
-                    {sk.agent} · {sk.source}
+                    {sk.agent} · {sk.source} · {sk.name}
                   </span>
                 </div>
                 <div className="found-hook">{sk.description}</div>
@@ -185,12 +186,23 @@ export function SkillPanel({
             关闭
           </button>
           <button className="primary" onClick={run} disabled={busy || !current}>
-            {busy ? "提交中…" : current ? `执行 ${current.name}` : "请选择技能"}
+            {busy ? "提交中…" : current ? `执行 ${skillDisplayName(current.name)}` : "请选择技能"}
           </button>
         </div>
       </div>
-    </div>
+    </Overlay>
   );
+}
+
+function skillDisplayName(name: string): string {
+  switch (name) {
+    case "anti-ai-tone":
+      return "去 AI 味";
+    case "tighten-pacing":
+      return "收紧节奏";
+    default:
+      return name;
+  }
 }
 
 function scopeLabel(scope: string): string {

@@ -142,6 +142,30 @@ func TestDecidePlanStart_ValidAndFeedbackRetry(t *testing.T) {
 	}
 }
 
+func TestDecidePlanStartForGenreForcesShortPlanner(t *testing.T) {
+	m := &scriptedModel{outputs: []string{
+		`{"planner":"architect_long","task":"按长篇规划","reason":"需求原文未写短篇"}`,
+		`{"planner":"architect_short","task":"按短篇规划","reason":"genre 是 short_story"}`,
+	}}
+	d, err := DecidePlanStartForGenre(t.Context(), m, "sys", "写一个悬疑故事", "", domain.GenreShortStory)
+	if err != nil {
+		t.Fatalf("DecidePlanStartForGenre: %v", err)
+	}
+	if d.Planner != "architect_short" || atomic.LoadInt64(&m.idx) != 2 {
+		t.Fatalf("短篇类型应拒绝长篇裁定并反馈重问，得到 %+v calls=%d", d, m.idx)
+	}
+	var payloadFound bool
+	for _, msg := range m.lastMsgs {
+		if strings.Contains(msg.TextContent(), `"genre": "short_story"`) {
+			payloadFound = true
+			break
+		}
+	}
+	if !payloadFound {
+		t.Fatalf("启动裁定负载没有 genre=short_story: %+v", m.lastMsgs)
+	}
+}
+
 func TestDecide_InvalidOutputContinuesUntilContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &scriptedModel{outputs: []string{"完全不是 JSON"}, cancel: cancel, cancelAt: 4}
@@ -321,7 +345,7 @@ func TestCollectInterventionFacts(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if err := st.Progress.Init("测试书", 30); err != nil {
+	if err := st.Progress.Init("测试书", 30, domain.GenreNovel); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
 	if err := st.RunMeta.Init("default", "openrouter", "m"); err != nil {

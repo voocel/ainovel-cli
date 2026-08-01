@@ -26,7 +26,7 @@ func newAdvanceGateTest(t *testing.T, mode domain.ChapterAdvanceMode) (*storepkg
 	if err := st.RunMeta.SetAdvanceMode(mode); err != nil {
 		t.Fatalf("advance mode: %v", err)
 	}
-	if err := st.Progress.Init("闸门测试", 10); err != nil {
+	if err := st.Progress.Init("闸门测试", 10, domain.GenreNovel); err != nil {
 		t.Fatalf("progress init: %v", err)
 	}
 	if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {

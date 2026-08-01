@@ -7,6 +7,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
@@ -45,15 +46,35 @@ var planStartContract = llmcontract.Contract{
 type planStartPayload struct {
 	Requirement string `json:"requirement"`
 	Style       string `json:"style,omitempty"`
+	Genre       string `json:"genre,omitempty"`
 }
 
 // DecidePlanStart 启动裁定:根据用户需求选规划师;需求过短(<20 字)时在 task 里
 // 自主补充差异化方向、目标读者与核心消费点、至少一个非常规钩子。
 // 失败语义:返回 error → 调用方显式报错中止启动(启动期用户在场,报错优于猜测)。
 func DecidePlanStart(ctx context.Context, model agentcore.ChatModel, systemPrompt, requirement, style string) (PlanStartDecision, error) {
-	payload, err := marshalPayload(planStartPayload{Requirement: requirement, Style: style})
+	return DecidePlanStartForGenre(ctx, model, systemPrompt, requirement, style, "")
+}
+
+// DecidePlanStartForGenre 在普通启动裁定之外加入入口已经确认的作品类型。
+// short_story 是用户在桌面端的明确选择，不能再由模型仅凭需求原文猜成长篇。
+func DecidePlanStartForGenre(ctx context.Context, model agentcore.ChatModel, systemPrompt, requirement, style string, genre domain.Genre) (PlanStartDecision, error) {
+	if genre != "" {
+		if _, err := domain.ParseGenre(string(genre)); err != nil {
+			return PlanStartDecision{}, err
+		}
+	}
+	payload, err := marshalPayload(planStartPayload{Requirement: requirement, Style: style, Genre: string(genre)})
 	if err != nil {
 		return PlanStartDecision{}, err
 	}
-	return decide(ctx, model, planStartContract, systemPrompt, payload, (*PlanStartDecision).Validate)
+	return decide(ctx, model, planStartContract, systemPrompt, payload, func(d *PlanStartDecision) error {
+		if err := d.Validate(); err != nil {
+			return err
+		}
+		if genre == domain.GenreShortStory && d.Planner != "architect_short" {
+			return fmt.Errorf("genre=short_story 必须选择 architect_short，收到 %s", d.Planner)
+		}
+		return nil
+	})
 }
