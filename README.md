@@ -19,7 +19,7 @@
 - **用户实时干预** — 写作过程中随时在输入框注入修改意见（无需暂停），系统自动评估影响范围并重写受影响章节
 - **可选逐章验收** — 默认仍全自动；需要精细控制时用 `/review on`，每次 `/next` 只放行一个新章节，返工和崩溃恢复不会误消耗许可
 - **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
-- **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
+- **多 LLM 支持** — OpenRouter / Requesty / Anthropic / Gemini / OpenAI 等等随意切换
 
 ## 架构
 
