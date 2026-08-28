@@ -458,36 +458,36 @@ func (m *Model) inputHints() string {
 			Render("✂ Chế độ chọn sao chép: kéo thả để chọn văn bản · Ctrl+R thoát để khôi phục tương tác chuột")
 	}
 	if m.cocreate != nil {
-		scrollHint := " · Tab 滚动:对话"
+		scrollHint := " · Tab cuộn:Hội thoại"
 		if m.cocreate.focusPrompt {
-			scrollHint = " · Tab 滚动:创作指令"
+			scrollHint = " · Tab cuộn:Chỉ thị sáng tác"
 		}
 		switch {
 		case m.cocreate.awaiting:
-			return dimStyle.Render("等待 AI 回复 · Esc 退出共创" + scrollHint + suffix)
+			return dimStyle.Render("Đang chờ AI phản hồi · Esc thoát chế độ cộng tác" + scrollHint + suffix)
 		case m.cocreate.canStart():
-			startLabel := "Ctrl+S 开始创作"
+			startLabel := "Ctrl+S bắt đầu sáng tác"
 			if m.cocreate.stage {
-				startLabel = "Ctrl+S 应用并继续"
+				startLabel = "Ctrl+S áp dụng và tiếp tục"
 			}
-			return dimStyle.Render("Enter 发送 · " + startLabel + " · Esc 退出共创" + scrollHint + suffix)
+			return dimStyle.Render("Gửi bằng Enter · "+startLabel+" · Esc thoát chế độ cộng tác" + scrollHint + suffix)
 		default:
-			return dimStyle.Render("Enter 发送 · Esc 退出共创" + scrollHint + suffix)
+			return dimStyle.Render("Gửi bằng Enter · Esc thoát chế độ cộng tác" + scrollHint + suffix)
 		}
 	}
 	if m.mode == modeNew {
 		if m.startupMode == startupModeQuick {
-			return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 直接开始创作 · Esc 清空输入" + suffix)
+			return dimStyle.Render("Tab chuyển chế độ khởi động · Nhập / tìm lệnh · Enter bắt đầu sáng tác ngay · Esc xóa ô nhập" + suffix)
 		}
-		return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 开始共创对话 · Esc 清空输入" + suffix)
+		return dimStyle.Render("Chuyển chế độ khởi động bằng Tab · Nhập / tìm lệnh · Enter bắt đầu đối thoại cộng tác · Esc xóa ô nhập" + suffix)
 	}
 	switch m.snapshot.RuntimeState {
 	case "pausing":
-		return dimStyle.Render("正在暂停创作 · 请等待当前轮次结束" + suffix)
+		return dimStyle.Render("Đang tạm dừng sáng tác · Vui lòng đợi lượt hiện tại kết thúc" + suffix)
 	case "paused":
-		return dimStyle.Render("输入 / 搜索命令 · Enter 继续创作 · Esc 清空输入" + suffix)
+		return dimStyle.Render("Nhập / tìm lệnh · Enter tiếp tục sáng tác · Esc xóa ô nhập" + suffix)
 	}
-	return dimStyle.Render("输入 / 搜索命令 · 点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · Ctrl+L 清屏 · Esc 暂停 · Enter 发送" + suffix)
+	return dimStyle.Render("Nhập / tìm lệnh · Click/Tab chuyển panel · ↑↓ cuộn · End xuống đáy · Ctrl+L xóa màn hình · Esc tạm dừng · Enter gửi" + suffix)
 }
 
 func (m *Model) inputLimitHint() string {

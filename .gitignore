@@ -1,1 +1,74 @@
-Nothing should be ignored in this case, as only a Go source file was modified and no build artifacts, dependencies, or temporary files were detected.
+```
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+*.class
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+.env
+.env.local
+*.env.*
+
+# Build directories
+dist/
+build/
+target/
+.gradle/
+
+# Python specific
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+.Python
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Go specific
+*.o
+*.a
+*.so
+*.exe
+*.dll
+*.dylib
+*.test
+*.prof
+cover.out
+go.sum
+go.mod
+vendor/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+```
