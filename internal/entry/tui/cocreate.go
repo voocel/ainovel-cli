@@ -193,8 +193,8 @@ func (s *cocreateState) buildPrompt() (string, error) {
 }
 
 func renderStartupModeBar(width int, mode startupMode) string {
-	quick := renderStartupModePill(mode == startupModeQuick, "快速开始")
-	cocreate := renderStartupModePill(mode == startupModeCoCreate, "共创规划")
+	quick := renderStartupModePill(mode == startupModeQuick, "Bắt nhanh")
+	cocreate := renderStartupModePill(mode == startupModeCoCreate, "Cùng lập kế hoạch")
 	title := lipgloss.NewStyle().
 		Foreground(colorAccent).
 		Bold(true).
