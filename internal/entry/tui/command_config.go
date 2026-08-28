@@ -308,13 +308,13 @@ func (s *modelConfigState) beginInlineEdit(field string) tea.Cmd {
 
 	switch field {
 	case "key":
-		placeholder := "输入 API Key"
+		placeholder := "Nhập API Key"
 		if s.hasEffectiveAPIKey() {
-			placeholder = "输入新 Key，留空保留"
+			placeholder = "Nhập Key mới, để trống giữ nguyên"
 		}
 		return s.startTextInput("", placeholder, true)
 	case "baseurl":
-		return s.startTextInput(s.baseURL, "留空使用默认地址", false)
+		return s.startTextInput(s.baseURL, "Để trống dùng địa chỉ mặc định", false)
 	}
 	return nil
 }
@@ -498,14 +498,14 @@ func (s *modelConfigState) deleteModel(idx int) bool {
 		identity = model.Name
 	}
 	if identity == s.currentModel {
-		s.message = "该模型正在使用中，请先用 /model 切换后再删除"
+		s.message = "Mô hình này đang được sử dụng, vui lòng chuyển bằng /model trước khi xóa"
 		return false
 	}
 	for _, ref := range s.snapshot.ReferencesFor(s.provider, identity) {
 		if ref == "default" {
 			continue // 顶层引用已由 currentModel 拦截，避免重复提示
 		}
-		s.message = fmt.Sprintf("模型仍被 %s 引用，请先在 /model 切换后再删除", ref)
+		s.message = fmt.Sprintf("Mô hình vẫn được %s tham chiếu, vui lòng chuyển trong /model trước khi xóa", ref)
 		return false
 	}
 	s.models = append(s.models[:idx], s.models[idx+1:]...)
@@ -561,7 +561,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if state.testCancel != nil {
 				state.testCancel()
 			}
-			state.message = "正在取消连接测试..."
+			state.message = "Đang hủy kiểm tra kết nối..."
 			return m, nil
 		}
 		if state.editingField != "" && (state.step == configStepHub || state.step == configStepModels) {
@@ -663,7 +663,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 				state.testing = true
-				state.message = fmt.Sprintf("正在测试连接：%s/%s...", state.provider, model)
+				state.message = fmt.Sprintf("Đang kiểm tra kết nối: %s/%s...", state.provider, model)
 				ctx, cancel := context.WithCancel(context.Background())
 				state.testCancel = cancel
 				return m, testModelConnection(ctx, m.runtime, state.draft(), model)
@@ -679,7 +679,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 				state.saving = true
-				state.message = "正在校验并保存配置..."
+				state.message = "Đang xác thực và lưu cấu hình..."
 				return m, saveModelConfiguration(m.runtime, state.draft())
 			}
 			return m, cmd
@@ -780,7 +780,7 @@ func parseContextWindowInput(input string) (int, error) {
 	}
 	number, err := strconv.ParseFloat(value, 64)
 	if err != nil || number <= 0 {
-		return 0, fmt.Errorf("上下文窗口请输入正整数、128K、1M，或留空使用自动值")
+		return 0, fmt.Errorf("Cửa sổ ngữ cảnh vui lòng nhập số nguyên dương, 128K, 1M hoặc để trống dùng giá trị tự động")
 	}
 	result := number * multiplier
 	if result > float64(math.MaxInt) || math.Trunc(result) != result {
@@ -823,15 +823,15 @@ func renderModelConfigModal(width int, state *modelConfigState) string {
 			lines = appendWrappedConfigText(lines, advanced, contentW, lipgloss.NewStyle().Foreground(colorDim))
 		}
 		if state.editingField != "" {
-			hint = "输入 · Enter 确认 · Esc 取消"
+			hint = "Nhập · Enter xác nhận · Esc hủy"
 		} else {
-			hint = "↑↓ 选择 · Enter 编辑/进入 · Esc 返回"
+			hint = "↑↓ chọn · Enter sửa/nhập · Esc quay lại"
 			fields := state.hubFields()
 			if state.apiKeyOptional && state.cursor >= 0 && state.cursor < len(fields) && fields[state.cursor].id == "key" {
-				hint += " · Delete 清除"
+				hint += " · Delete xóa"
 			}
 			if state.cursor >= 0 && state.cursor < len(fields) && fields[state.cursor].id == "test" {
-				lines = append(lines, lipgloss.NewStyle().Foreground(colorDim).Render("测试会发送最小请求，可能产生少量 API 用量"))
+				lines = append(lines, lipgloss.NewStyle().Foreground(colorDim).Render("Kiểm tra sẽ gửi yêu cầu tối thiểu, có thể phát sinh một ít lượt dùng API"))
 			}
 		}
 	case configStepProtocol:
