@@ -20,27 +20,27 @@ const (
 func (m startupMode) label() string {
 	switch m {
 	case startupModeCoCreate:
-		return "共创规划"
+		return "Cùng lên kế hoạch"
 	default:
-		return "快速开始"
+		return "Bắt nhanh"
 	}
 }
 
 func (m startupMode) subtitle() string {
 	switch m {
 	case startupModeCoCreate:
-		return "先与 AI 对话澄清，再开始创作"
+		return "Trao đổi với AI để làm rõ trước khi bắt đầu viết"
 	default:
-		return "一句话直接开始写"
+		return "Nhập một câu để bắt đầu viết ngay"
 	}
 }
 
 func placeholderForNewMode(mode startupMode) string {
 	switch mode {
 	case startupModeCoCreate:
-		return "先输入你的核心想法，Enter 开始与 AI 共创"
+		return "Nhập ý tưởng cốt lõi, Enter để bắt đầu cùng AI"
 	default:
-		return "输入一句小说需求，Enter 直接开始创作"
+		return "Nhập yêu cầu tiểu thuyết, Enter để bắt đầu viết ngay"
 	}
 }
 
@@ -50,14 +50,14 @@ func placeholderForCoCreate(state *cocreateState) string {
 	}
 	switch {
 	case state.awaiting:
-		return "AI 正在整理你的要求..."
+		return "AI đang tổng hợp yêu cầu của bạn..."
 	case state.canStart():
 		if state.stage {
-			return "继续补充，或按 Ctrl+S 应用方向并继续创作"
+			return "Tiếp tục bổ sung, hoặc nhấn Ctrl+S để áp dụng hướng và tiếp tục viết"
 		}
-		return "继续补充，或按 Ctrl+S 开始创作"
+		return "Tiếp tục bổ sung, hoặc nhấn Ctrl+S để bắt đầu viết"
 	default:
-		return "继续补充你的要求，Enter 发送给 AI"
+		return "Tiếp tục bổ sung yêu cầu, Enter để gửi cho AI"
 	}
 }
 
@@ -103,12 +103,12 @@ func newCoCreateState(initial string) *cocreateState {
 
 // stageCoCreateOpener 是阶段共创的合成开场用户语，作为 kickoff 的 user 轮次发给 LLM，
 // 让助手据"当前故事状态"主动开局，而不是空对话干等用户先说话。
-const stageCoCreateOpener = "我先暂停一下，想和你一起规划接下来的走向。"
+const stageCoCreateOpener = "Tôi tạm dừng một chút, muốn cùng bạn lên kế hoạch cho hướng đi tiếp theo."
 
 // stageCoCreateSystemLine 是这条开场在 UI 里的中性呈现：开场句本质是系统合成的、
 // 用户并未真打过，故不伪装成"你"的发言，改以系统行交代上下文（它仍以 stageCoCreateOpener
 // 发给 LLM，见 renderCoCreateConversationPanel 的 i==0 特判）。
-const stageCoCreateSystemLine = "已暂停创作，进入阶段共创 —— AI 会结合当前故事进度，和你一起规划接下来的走向。"
+const stageCoCreateSystemLine = "Đã tạm dừng sáng tác, vào cùng sáng tác giai đoạn —— AI sẽ kết hợp tiến độ câu chuyện hiện tại để cùng bạn lên kế hoạch cho hướng đi tiếp theo."
 
 // newStageCoCreateState 创建阶段共创状态：seed 开场并标记 stage，使 runCoCreate 走
 // StageCoCreateStream、Ctrl+S 走 ResumeFromCoCreate。
@@ -388,9 +388,9 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 		contentH = 10
 	}
 
-	titleText, subtitleText := "共创规划", "先把需求聊清楚，再开始创作"
+	titleText, subtitleText := "Cùng lên kế hoạch", "Trao đổi làm rõ yêu cầu trước khi bắt đầu viết"
 	if state.stage {
-		titleText, subtitleText = "阶段共创", "规划后续走向，再继续创作"
+		titleText, subtitleText = "Giai đoạn cùng sáng tác", "Lên kế hoạch hướng đi tiếp theo rồi tiếp tục viết"
 	}
 	headerStyle := lipgloss.NewStyle().Width(boxW).AlignHorizontal(lipgloss.Center)
 	title := headerStyle.Foreground(colorMuted).Bold(true).Render(titleText)
@@ -422,17 +422,17 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 func coCreateHint(state *cocreateState) string {
 	switch {
 	case state == nil:
-		return "Enter 发送 · Esc 退出"
+		return "Enter gửi · Esc thoát"
 	case state.awaiting:
-		return "AI 回复中 · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
+		return "AI đang trả lời · ↑↓ cuộn hội thoại · lăn chuột cuộn lệnh · Esc thoát"
 	case state.canStart():
 		action := "Ctrl+S 开始创作"
 		if state.stage {
 			action = "Ctrl+S 应用并继续"
 		}
-		return "Enter 继续补充 · " + action + " · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
+		return "Enter để bổ sung · " + action + " · ↑↓ cuộn hội thoại · lăn chuột cuộn lệnh · Esc thoát"
 	default:
-		return "Enter 发送 · ↑↓ 滚对话 · 滚轮滚指令 · Esc 退出"
+		return "Enter gửi · ↑↓ cuộn hội thoại · lăn chuột cuộn lệnh · Esc thoát"
 	}
 }
 
@@ -448,12 +448,12 @@ func renderCoCreateConversationPanel(width, height int, state *cocreateState, er
 	}
 	wrapW := max(12, contentW-4)
 
-	userRole := lipgloss.NewStyle().Foreground(colorAccent2).Bold(true).Render("你")
+	userRole := lipgloss.NewStyle().Foreground(colorAccent2).Bold(true).Render("Bạn")
 	aiRole := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("AI")
 	userBody := lipgloss.NewStyle().Foreground(colorAccent2)
 	aiBody := lipgloss.NewStyle().Foreground(bodyTextColor)
 	thinkingStyle := lipgloss.NewStyle().Foreground(colorDim).Italic(true)
-	thinkingTag := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("AI 思考")
+	thinkingTag := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("AI đang suy nghĩ")
 
 	sysStyle := lipgloss.NewStyle().Foreground(colorDim).Italic(true)
 
@@ -533,20 +533,20 @@ func renderCoCreateConversationPanel(width, height int, state *cocreateState, er
 		Width(contentW).
 		Height(height).
 		Padding(0, 1)
-	return style.Render(panelTitleStyle.Render(":: 共创对话") + "\n" + state.convVP.View())
+	return style.Render(panelTitleStyle.Render(":: Hội thoại cùng sáng tác") + "\n" + state.convVP.View())
 }
 
 func renderCoCreatePromptPanel(width, height int, state *cocreateState) string {
-	readyLabel := "已可开始创作"
+	readyLabel := "Sẵn sàng bắt đầu viết"
 	if state.stage {
-		readyLabel = "已可应用并继续"
+		readyLabel = "Sẵn sàng áp dụng và tiếp tục"
 	}
-	status := lipgloss.NewStyle().Foreground(colorDim).Render("继续对话中")
+	status := lipgloss.NewStyle().Foreground(colorDim).Render("Đang tiếp tục hội thoại")
 	if state.ready() {
 		status = lipgloss.NewStyle().Foreground(colorAccent).Render(readyLabel)
 	}
 	if state.awaiting {
-		status = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("AI 整理中")
+		status = lipgloss.NewStyle().Foreground(colorMuted).Italic(true).Render("AI đang tổng hợp")
 	}
 
 	// 内容宽 = 列总宽 - 2（padding 0,1 占用 2 列，无 border）。
@@ -555,8 +555,8 @@ func renderCoCreatePromptPanel(width, height int, state *cocreateState) string {
 		contentW = 8
 	}
 
-	emptyHint := "AI 会在这里持续整理出一段可直接进入创作的最终指令。"
-	panelTitle := ":: 当前创作指令"
+	emptyHint := "AI sẽ liên tục tổng hợp ở đây một chỉ thị cuối cùng có thể dùng để bắt đầu viết ngay."
+	panelTitle := ":: Chỉ thị sáng tác hiện tại"
 	if state.stage {
 		emptyHint = "AI 会在这里持续整理出后续阶段的方向 brief。"
 		panelTitle = ":: 后续方向"
