@@ -545,7 +545,7 @@ func (m *Model) outputDir() string {
 }
 
 func defaultSteerPlaceholder() string {
-	return "输入剧情干预，例如：把感情线提前到第4章"
+	return "Nhập can thiệp cốt truyện, ví dụ: đưa tuyến tình cảm lên chương 4"
 }
 
 func (m *Model) syncRuntimePlaceholder() {
