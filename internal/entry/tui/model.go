@@ -36,20 +36,20 @@ const (
 type appMode int
 
 const (
-	modeNew     appMode = iota // 等待用户输入小说需求
-	modeRunning                // 正在创作（包括出错停止，输入可恢复）
-	modeDone                   // 创作完成
+	modeNew     appMode = iota // Đang chờ người dùng nhập yêu cầu tiểu thuyết
+	modeRunning                // Đang sáng tác (bao gồm cả dừng do lỗi, có thể khôi phục bằng nhập liệu)
+	modeDone                   // Hoàn thành sáng tác
 )
 
 // 顶栏 / 流式活动共用的 spinner 帧序列（bubbles.Spinner.MiniDot）。
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// 事件流"进行中"行专用的 spinner 帧序列（bubbles.Spinner.Dot）。
-// 7 个点 + 1 个缺口沿 3×3 格子顺时针旋转，视觉上像完整的加载圆圈。
-// 用独立帧索引 + 更快 tick，不影响顶栏和星星动画的节奏。
+// Dòng spinner chuyên dụng cho hàng \"đang thực hiện\" của luồng sự kiện (bubbles.Spinner.Dot).
+// 7 dấu chấm + 1 khe hở xoay顺时针 quanh ô 3×3, tạo cảm giác như vòng tròn tải hoàn chỉnh.
+// Dùng chỉ mục khung riêng + tick nhanh hơn, không ảnh hưởng nhịp hoạt hình顶栏 và sao.
 var toolSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
-// Model 是 TUI 的顶层状态。
+// Model là trạng thái đỉnh của TUI.
 type Model struct {
 	runtime        *host.Host
 	cocreate       *cocreateState
@@ -65,15 +65,15 @@ type Model struct {
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
-	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
+	commandToken   string // Token lệnh đã đăng ký hiện tại; chỉ render đoạn này, không kèm tham số
 	snapshot       host.UISnapshot
 	events         []host.Event
-	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
-	viewport       viewport.Model   // 事件流 viewport
-	streamVP       viewport.Model   // 流式输出 viewport
-	detailVP       viewport.Model   // 右侧详情 viewport
-	stateVP        viewport.Model   // 左侧状态侧栏 viewport（可滚动）
-	streamBuf      *strings.Builder // 流式文本累积缓冲
+	eventIndex     map[string]int   // event.ID → chỉ mục trong m.events; cập nhật tại chỗ khi sự kiện gọi đến
+	viewport       viewport.Model   // viewport luồng sự kiện
+	streamVP       viewport.Model   // viewport đầu ra trực tiếp
+	detailVP       viewport.Model   // viewport chi tiết bên phải
+	stateVP        viewport.Model   // viewport thanh trạng thái bên trái (có thể cuộn)
+	streamBuf      *strings.Builder // bộ đệm tích lũy văn bản trực tiếp
 	streamRounds   []string
 	textarea       textarea.Model
 	width          int
@@ -443,19 +443,19 @@ func (m *Model) textareaIsMultiline() bool {
 func (m *Model) inputHints() string {
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	if m.quitPending {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Press Ctrl+C again to exit")
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Nhấn Ctrl+C thêm lần nữa để thoát")
 	}
 	limitHint := m.inputLimitHint()
 	// 欢迎页(modeNew)不开鼠标上报，终端原生拖拽即可复制，无需 Ctrl+R 提示；
 	// 工作台才开上报，复制需 Ctrl+R 临时关闭。
-	suffix := limitHint + " · Ctrl+R 切到选中复制模式"
+	suffix := limitHint + " · Ctrl+R chuyển sang chế độ chọn sao chép"
 	if m.mode == modeNew {
 		suffix = limitHint
 	}
 	if m.mouseOff && m.mode != modeNew {
 		// 工作台手动切到选中复制：用强调色提示当前处于"自由拖拽选中"状态，按 Ctrl+R 恢复
 		return lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
-			Render("✂ 选中复制模式：可拖拽选中文本复制 · Ctrl+R 退出恢复鼠标交互")
+			Render("✂ Chế độ chọn sao chép: kéo thả để chọn văn bản · Ctrl+R thoát để khôi phục tương tác chuột")
 	}
 	if m.cocreate != nil {
 		scrollHint := " · Tab 滚动:对话"
