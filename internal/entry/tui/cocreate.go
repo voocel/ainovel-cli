@@ -327,7 +327,7 @@ func renderCoCreateSuggestions(width int, state *cocreateState) string {
 	bodyStyle := lipgloss.NewStyle().Foreground(colorMuted)
 	hintStyle := lipgloss.NewStyle().Foreground(colorDim).Italic(true)
 
-	lines := []string{hintStyle.Render("AI 建议（按 1/2/3 组合，可编辑后发送）：")}
+	lines := []string{hintStyle.Render("Gợi ý AI (nhấn 1/2/3 để chọn, có thể chỉnh sửa rồi gửi):")}
 	for i, s := range sugs {
 		lines = append(lines, digitStyle.Render(digits[i]+" ")+bodyStyle.Render(strings.TrimSpace(s)))
 	}
@@ -426,9 +426,9 @@ func coCreateHint(state *cocreateState) string {
 	case state.awaiting:
 		return "AI đang trả lời · ↑↓ cuộn hội thoại · lăn chuột cuộn lệnh · Esc thoát"
 	case state.canStart():
-		action := "Ctrl+S 开始创作"
+		action := "Ctrl+S bắt đầu sáng tác"
 		if state.stage {
-			action = "Ctrl+S 应用并继续"
+			action = "Ctrl+S áp dụng và tiếp tục"
 		}
 		return "Enter để bổ sung · " + action + " · ↑↓ cuộn hội thoại · lăn chuột cuộn lệnh · Esc thoát"
 	default:
