@@ -13,7 +13,7 @@ import (
 func renderTopBar(snap host.UISnapshot, width int, spinnerFrame, version string) string {
 	bookTitle := snap.BookTitle
 	if bookTitle == "" {
-		bookTitle = "未定书名"
+		bookTitle = "Chưa đặt tên sách"
 	}
 
 	var infoParts []string
