@@ -558,8 +558,8 @@ func renderCoCreatePromptPanel(width, height int, state *cocreateState) string {
 	emptyHint := "AI sẽ liên tục tổng hợp ở đây một chỉ thị cuối cùng có thể dùng để bắt đầu viết ngay."
 	panelTitle := ":: Chỉ thị sáng tác hiện tại"
 	if state.stage {
-		emptyHint = "AI 会在这里持续整理出后续阶段的方向 brief。"
-		panelTitle = ":: 后续方向"
+		emptyHint = "AI sẽ liên tục tổng hợp ở đây hướng đi cho giai đoạn tiếp theo."
+		panelTitle = ":: Hướng tiếp theo"
 	}
 	text := strings.TrimSpace(state.draftPrompt())
 	if text == "" {
@@ -582,11 +582,11 @@ func renderCoCreatePromptPanel(width, height int, state *cocreateState) string {
 	if state.promptVP.TotalLineCount() > state.promptVP.VisibleLineCount() {
 		switch {
 		case state.promptVP.AtTop():
-			hint = "↓ 下方还有内容，可滚轮或 PgDn 查看"
+			hint = "↓ Còn nội dung bên dưới, lăn chuột hoặc nhấn PgDn để xem"
 		case state.promptVP.AtBottom():
-			hint = "↑ 上方还有内容，可滚轮或 PgUp 查看"
+			hint = "↑ Còn nội dung bên trên, lăn chuột hoặc nhấn PgUp để xem"
 		default:
-			hint = "↑↓ 可继续滚动查看"
+			hint = "↑↓ Có thể tiếp tục lăn để xem"
 		}
 	}
 
