@@ -1,47 +1,23 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Code coverage profiles and other test artifacts
+```
+# Compiled and build artifacts
+*.o
+*.obj
 *.out
-coverage.*
-*.coverprofile
-profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Dependencies
+vendor/
 
-# Go workspace file
-go.work
-go.work.sum
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# env file
-.env
-
-# 项目级配置 dotdir（镜像 ~/.ainovel/）：config.json 含密钥，rules/ 为本地写作偏好
-.ainovel/
-
-# Editor/IDE
-.idea/
+# Editors
 .vscode/
-.cache
-.DS_Store
+.idea/
 
-# GoReleaser artifacts
-dist/
-release-notes.md
-/ainovel-cli
-
-tasks
-refer/
-output*
-workspace/
+# Environment
+.env
+.env.local
+*.env.*
+```

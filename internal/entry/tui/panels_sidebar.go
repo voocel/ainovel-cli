@@ -202,7 +202,7 @@ func inProgressDisplay(snap host.UISnapshot) (label string, chapter int) {
 			}
 			ch = snap.PendingRewrites[0]
 		}
-		return "打磨中", ch
+		return "Đang hoàn thiện", ch
 	case "rewriting":
 		if ch <= 0 || !slices.Contains(snap.PendingRewrites, ch) {
 			if len(snap.PendingRewrites) == 0 {
@@ -210,30 +210,30 @@ func inProgressDisplay(snap host.UISnapshot) (label string, chapter int) {
 			}
 			ch = snap.PendingRewrites[0]
 		}
-		return "重写中", ch
+		return "Đang viết lại", ch
 	default:
 		if ch <= 0 {
 			return "", 0
 		}
-		return "写作中", ch
+		return "Đang viết", ch
 	}
 }
 
 func snapshotHeadline(snap host.UISnapshot) string {
 	if snap.PendingSteer != "" {
 		if !snap.IsRunning {
-			return "待恢复：处理用户干预"
+			return "Cần khôi phục: xử lý can thiệp người dùng"
 		}
-		return "等待处理用户干预"
+		return "Đang chờ xử lý can thiệp người dùng"
 	}
 	if len(snap.PendingRewrites) > 0 {
 		if !snap.IsRunning {
-			return "待恢复：返工处理"
+			return "Cần khôi phục: xử lý viết lại"
 		}
-		return "等待返工处理"
+		return "Đang chờ xử lý viết lại"
 	}
 	if snap.AdvanceMode == "review" && !snap.IsRunning && snap.Phase == "writing" {
-		return "逐章验收：等待放行下一章"
+		return "Duyệt từng chương: đang chờ cho phép chương tiếp theo"
 	}
 	return ""
 }
@@ -241,15 +241,15 @@ func snapshotHeadline(snap host.UISnapshot) string {
 func snapshotPhaseLabel(phase string) string {
 	switch phase {
 	case "premise":
-		return "前提"
+		return "Tiền đề"
 	case "outline":
-		return "大纲"
+		return "Đề cương"
 	case "writing":
-		return "写作"
+		return "Viết"
 	case "complete":
-		return "完成"
+		return "Hoàn thành"
 	case "init":
-		return "初始化"
+		return "Khởi tạo"
 	default:
 		if phase == "" {
 			return "-"
@@ -261,13 +261,13 @@ func snapshotPhaseLabel(phase string) string {
 func snapshotRuntimeStateLabel(state string) string {
 	switch state {
 	case "running":
-		return "运行中"
+		return "Đang chạy"
 	case "pausing":
-		return "暂停中"
+		return "Đang tạm dừng"
 	case "paused":
-		return "已暂停"
+		return "Đã tạm dừng"
 	case "completed":
-		return "已完成"
+		return "Đã hoàn thành"
 	default:
 		return "空闲"
 	}
@@ -278,7 +278,7 @@ func snapshotFlowLabel(flow string) string {
 	case "":
 		return "-"
 	case "writing":
-		return "写作"
+		return "Viết"
 	case "reviewing":
 		return "评审"
 	case "rewriting":
@@ -653,7 +653,7 @@ func agentOrder(name string) int {
 func agentStateLabel(state string) string {
 	switch state {
 	case "running":
-		return "运行中"
+		return "Đang chạy"
 	case "failed":
 		return "异常"
 	case "idle":
