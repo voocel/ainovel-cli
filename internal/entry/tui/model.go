@@ -553,26 +553,26 @@ func (m *Model) syncRuntimePlaceholder() {
 		return
 	}
 	if m.starting {
-		m.textarea.Placeholder = "正在初始化创作..."
+		m.textarea.Placeholder = "Đang khởi tạo sáng tác..."
 		return
 	}
 	switch m.snapshot.RuntimeState {
 	case "completed":
 		m.textarea.Placeholder = donePlaceholder
 	case "pausing":
-		m.textarea.Placeholder = "正在暂停创作..."
+		m.textarea.Placeholder = "Đang tạm dừng sáng tác..."
 	case "paused":
 		if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
-			m.textarea.Placeholder = "逐章验收等待中：输入修改意见，或 /next 放行下一章"
+			m.textarea.Placeholder = "Đang chờ nghiệm thu từng chương: nhập ý kiến sửa đổi, hoặc /next để duyệt chương tiếp theo"
 		} else {
-			m.textarea.Placeholder = "创作已暂停，输入任意内容继续创作"
+			m.textarea.Placeholder = "Sáng tác đã tạm dừng, nhập bất kỳ nội dung nào để tiếp tục"
 		}
 	default:
 		if !m.snapshot.IsRunning {
 			if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
-				m.textarea.Placeholder = "逐章验收等待中：输入修改意见，或 /next 放行下一章"
+				m.textarea.Placeholder = "Đang chờ nghiệm thu từng chương: nhập ý kiến sửa đổi, hoặc /next để duyệt chương tiếp theo"
 			} else {
-				m.textarea.Placeholder = "运行中断，输入任意内容恢复创作"
+				m.textarea.Placeholder = "Quá trình chạy bị gián đoạn, nhập bất kỳ nội dung nào để khôi phục sáng tác"
 			}
 		} else {
 			m.textarea.Placeholder = defaultSteerPlaceholder()
