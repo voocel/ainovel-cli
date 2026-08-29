@@ -81,6 +81,8 @@ func (m Model) handleOverlayKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m.handleBlockingModalKey(msg, m.handleImportKey)
 	case m.simulator != nil:
 		return m.handleBlockingModalKey(msg, m.handleSimulationKey)
+	case m.materials != nil:
+		return m.handleBlockingModalKey(msg, m.handleMaterialsKey)
 	default:
 		return m, nil, false
 	}
@@ -560,6 +562,23 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m, listenSimulationEvent(msg.reqID, msg.ch), true
+	case materialsCollectResultMsg:
+		// 后台 LLM 收集完成：把候选填充到 state 并切到 selecting 阶段。
+		// m.materials 为空说明用户已 Esc 取消，结果丢弃即可。
+		if m.materials == nil {
+			return m, nil, true
+		}
+		if msg.err != nil {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR",
+				Summary: "素材收集失败：" + msg.err.Error(), Level: "error",
+			})
+			m.refreshEventViewport()
+			m.materials = nil
+			return m, nil, true
+		}
+		m.materials.applyCollect(msg.candidates, msg.raw)
+		return m, nil, true
 	case exportDoneMsg:
 		if msg.err != nil {
 			m.applyEvent(host.Event{

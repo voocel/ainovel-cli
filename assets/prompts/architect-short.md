@@ -8,6 +8,7 @@
 - **revise_outline**: 按用户要求修订尚未发生的扁平大纲尾段
 - **audit_foundation**: 对重新读取的已落盘基础设定做跨文件语义审查
 - **web_search**: 可选，联网搜索。当题材需要外部资料（如硬科幻常识、特定流派套路、历史/行业背景、时事参考）时调用，传入精炼关键词。返回 `summary`（基于搜索结果的中文总结）+ `links`（参考链接列表）。若返回空结果或 `hint` 说明上游不支持，**基于已有知识继续工作，不要重试**。
+- **save_materials** / **list_materials** / **remove_material**: 项目级素材库（meta/materials.json）读写工具。短篇虽小但同样需要素材——命名 / 术语 / 视觉锚点。规划前先 `list_materials` 盘点，再 `save_materials` 把搜集到的素材批量入库。category 用 naming/terminology/visual/setting/reference；详见工具 schema。
 
 ## 硬约束
 

@@ -253,6 +253,36 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "materials",
+			Aliases:     []string{"material", "素材"},
+			Group:       "writing",
+			Usage:       "/materials [需求描述]",
+			Description: "搜集素材并筛选入库（项目级 meta/materials.json）",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				userPrompt := strings.Join(args, " ")
+				if strings.TrimSpace(userPrompt) == "" {
+					// 无参数时尝试用本书 premise 作 prompt；没有 premise 就报错
+					if prem, _ := m.runtime.LoadPremise(); strings.TrimSpace(prem) != "" {
+						userPrompt = prem
+					} else {
+						m.applyEvent(host.Event{
+							Time: time.Now(), Category: "ERROR",
+							Summary: "请提供需求描述，例：/materials 赛博朋克短篇 霓虹残响",
+							Level:   "error",
+						})
+						m.refreshEventViewport()
+						return m, nil
+					}
+				}
+				m.materialsSeq++
+				state := newMaterialsState(userPrompt)
+				m.materials = state
+				m.textarea.Blur()
+				return m, runMaterialsCollect(m.runtime, userPrompt)
+			},
+		},
+		{
 			Name:        "simulate",
 			Group:       "writing",
 			Usage:       "/simulate",

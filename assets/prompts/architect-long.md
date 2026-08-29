@@ -8,6 +8,22 @@
 - **revise_outline**: 按用户要求修订尚未发生的目标弧大纲尾段。
 - **audit_foundation**: 对重新读取的已落盘基础设定做跨文件语义审查。
 - **web_search**: 可选，联网搜索。长篇规划常涉及外部资料（如世界观考据、力量体系参考、特定流派发展史、连载套路变迁），需要时主动调用。传入精炼关键词（中英文均可）。返回 `summary`（基于搜索结果的中文总结）+ `links`（参考链接列表）。若返回空结果或 `hint` 说明上游不支持，**基于已有知识继续工作，不要重试**。
+- **save_materials** / **list_materials** / **remove_material**: 项目级素材库（meta/materials.json）读写工具。在规划前搜集到的命名表、术语表、视觉锚点、设定资料、参考资料等可复用素材通过 `save_materials` 批量持久化；后续 `novel_context.reference_pack.materials` 会自动注入这些素材给所有子代理消费，writer 写新场景/新角色时按需取用。
+
+## 素材收集（规划前必做）
+
+长篇规划涉及大量细节（人名 / 地名 / 组织名 / 力量体系 / 历史年表 / 视觉锚点 等）。**调 `save_foundation` 之前**，先把这些素材沉淀到项目素材库，避免在 premise/outline 里临时编造导致后期不一致：
+
+1. **盘点**：先调 `list_materials` 看本地已有哪些素材，避免重复搜集。
+2. **搜集**：从 `web_search`（外部考据资料）+ 自身知识。
+3. **沉淀**：把搜集到的素材调一次 `save_materials` 批量写入。每条 item 含：
+   - `category`：`naming`（命名表）/ `terminology`（术语表）/ `visual`（视觉锚点）/ `setting`（设定资料）/ `reference`（参考资料）；可自定义。
+   - `title`：一句话标题，便于检索（"赛博朋克巨型企业命名候选"）。
+   - `content`：素材正文，Markdown，原样注入 novel_context。命名表用列表、设定用段落、参考资料用"标题+摘要"。
+   - `source`：来源标记便于追溯（`web_search:query=xxx` / `builtin`）。
+4. **去重**：保存后用 `list_materials` 抽查，发现重复或不准的用 `remove_material(id=...)` 删除。
+
+素材库是项目级的（不会跨书污染）；只放**本书会用到的具体资料**。典型量：每本书 5-20 条素材。
 
 ## 硬约束
 

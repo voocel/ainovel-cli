@@ -34,6 +34,7 @@ type Store struct {
 	Simulation     *SimulationStore
 	Decisions      *DecisionStore
 	ChapterRecords *ChapterRecordStore
+	Materials      *MaterialsStore
 	Revisions      *RevisionStore
 
 	crossMu sync.Mutex // 串行化跨域协调；不代表多个文件具备事务原子性
@@ -71,6 +72,7 @@ func NewStore(dir string) *Store {
 		Sessions:       NewSessionStore(newIO(dir)),
 		Usage:          NewUsageStore(newIO(dir)),
 		Simulation:     NewSimulationStore(newIO(dir)),
+		Materials:      NewMaterialsStore(newIO(dir)),
 		Decisions:      NewDecisionStore(newIO(dir)),
 		ChapterRecords: NewChapterRecordStore(newIO(dir)),
 		Revisions:      NewRevisionStore(newIO(dir)),

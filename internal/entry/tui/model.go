@@ -62,6 +62,8 @@ type Model struct {
 	importSeq      int
 	simulator      *simulationState
 	simSeq         int
+	materials      *materialsState
+	materialsSeq   int
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
@@ -634,6 +636,9 @@ func (m Model) View() string {
 	}
 	if m.simulator != nil {
 		return renderSimulationModal(m.width, m.height, m.simulator)
+	}
+	if m.materials != nil {
+		return renderMaterialsModal(m.width, m.height, m.materials, m.currentSpinnerFrame())
 	}
 
 	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version)

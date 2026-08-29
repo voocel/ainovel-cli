@@ -53,6 +53,7 @@ type Host struct {
 	gate            *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
 	notifier        *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
 	configPath      string              // 配置写盘目标：/config、/model 就近写当前生效的那份（项目级存在则写它，否则全局）
+	webSearch       *tools.WebSearchTool // 联网搜索（素材收集用）；nil 表示 provider 未配置，纯靠模型自身知识
 	logCleanup      func()
 	fileLogErr      error
 
@@ -208,6 +209,13 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 		lifecycle:       lifecycleIdle,
 	}
 	h.runCtx, h.runCancel = context.WithCancel(context.Background())
+
+	// 联网搜索（素材收集增强用）。复用主 provider 链路，零额外配置；
+	// 未配置 baseURL 时置 nil，收集流程降级为纯模型知识。
+	if pc, ok := cfg.Providers[cfg.Provider]; ok && pc.BaseURL != "" {
+		h.webSearch = tools.NewWebSearchTool(pc.BaseURL, pc.APIKey, cfg.ModelName)
+	}
+
 	h.observer = newObserver(store, h.emitEvent, h.emitDelta, h.emitClear)
 	// 宿主侧 Arbiter 与 Worker 共用同一条 ToolProgress → observer → 工作台链路。
 	h.runCtx = agentcore.WithToolProgress(h.runCtx, h.observer.workerProgress)
@@ -1980,4 +1988,69 @@ func (h *Host) continueAfterImport(opts imp.Options) bool {
 // 只读到 Progress.CompletedChapters + 章节终稿 + 大纲 + premise 的一致快照。
 func (h *Host) Export(ctx context.Context, opts exp.Options) (*exp.Result, error) {
 	return exp.Run(ctx, exp.Deps{Store: h.store}, opts)
+}
+
+// ── 素材收集（项目级素材库）──
+
+// MaterialsCollect 触发一次素材收集：单轮 LLM 调用产出 8-15 条候选素材，
+// 调用方（TUI）展示候选给用户筛选，选中条目走 MaterialsApprove 落盘。
+//
+// onProgress 在流式事件到达时被回调（kind=thinking/reply），可用于渲染加载动画。
+// webSearch 是否可用取决于 Provider 配置；不可用时纯靠模型自身知识。
+func (h *Host) MaterialsCollect(ctx context.Context, userPrompt string, onProgress func(kind, text string)) ([]MaterialsCandidate, string, error) {
+	if h == nil {
+		return nil, "", fmt.Errorf("host 未初始化")
+	}
+	return materialsCollect(ctx, h.models, userPrompt, onProgress, h.webSearch)
+}
+
+// MaterialsApprove 把用户筛选后的候选批量落盘到 meta/materials.json。
+// 调用方应只传用户实际选中的条目；此处不做二次校验（信任 TUI 已经过滤）。
+// 返回每条的最终 ID，便于 TUI 在事件流提示"保存了哪几条"。
+func (h *Host) MaterialsApprove(items []MaterialsCandidate) ([]domain.MaterialItem, error) {
+	if h == nil {
+		return nil, fmt.Errorf("host 未初始化")
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	conv := make([]domain.MaterialItem, 0, len(items))
+	for _, c := range items {
+		conv = append(conv, domain.MaterialItem{
+			Category: c.Category,
+			Title:    c.Title,
+			Content:  c.Content,
+			Source:   c.Source,
+		})
+	}
+	return h.store.Materials.AddBatch(conv)
+}
+
+// MaterialsList 列出当前项目素材库。便于 TUI 在收集前展示已有素材。
+func (h *Host) MaterialsList() ([]domain.MaterialItem, error) {
+	if h == nil {
+		return nil, fmt.Errorf("host 未初始化")
+	}
+	lib, err := h.store.Materials.Load()
+	if err != nil {
+		return nil, err
+	}
+	return lib.Items, nil
+}
+
+// MaterialsRemove 按 ID 删除单条素材。
+func (h *Host) MaterialsRemove(id string) error {
+	if h == nil {
+		return fmt.Errorf("host 未初始化")
+	}
+	return h.store.Materials.Remove(id)
+}
+
+// LoadPremise 返回本书的 premise（Markdown 字符串）。空表示尚未规划。
+// 给 TUI 在 /materials 不带参数时复用规划前提作收集 prompt。
+func (h *Host) LoadPremise() (string, error) {
+	if h == nil {
+		return "", fmt.Errorf("host 未初始化")
+	}
+	return h.store.Outline.LoadPremise()
 }

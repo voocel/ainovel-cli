@@ -135,6 +135,14 @@ func BuildWorkers(
 	if pc, ok := cfg.Providers[cfg.Provider]; ok && pc.BaseURL != "" {
 		architectTools = append(architectTools, tools.NewWebSearchTool(pc.BaseURL, pc.APIKey, cfg.ModelName))
 	}
+
+	// 素材库写工具：architect 收集到的命名/术语/视觉/设定素材落盘到 meta/materials.json，
+	// 后续 novel_context.reference_pack.materials 自动注入。
+	architectTools = append(architectTools,
+		tools.NewSaveMaterialsTool(store),
+		tools.NewListMaterialsTool(store),
+		tools.NewRemoveMaterialTool(store),
+	)
 	writerTools := []agentcore.Tool{
 		contextTool,
 		readChapter,
