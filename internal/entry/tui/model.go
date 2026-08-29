@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
@@ -65,6 +66,7 @@ type Model struct {
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool
+	compLevel      paletteLevel // 当前菜单层级：命令列表 / skill 子菜单
 	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
 	snapshot       host.UISnapshot
 	events         []host.Event
@@ -680,7 +682,7 @@ func (m Model) View() string {
 	} else if m.modelConfig != nil {
 		view = overlayAboveInput(view, renderModelConfigModal(m.width, m.modelConfig), inputH)
 	} else if m.compActive {
-		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
+		commandBar := renderCommandPalette(m.width, m.compLevel, m.compItems, m.compIdx)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
 	return view
@@ -803,6 +805,21 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := utils.CleanInputLine(m.textarea.Value())
 		if text == "" {
 			return m, nil
+		}
+		// /skill-name 主动调用：展开为 skill 全文 + 用户补充
+		if req, ok := skills.ParseSkillRef(text); ok {
+			if m.runtime != nil {
+				result := m.runtime.SkillInject(req)
+				if result.Expanded {
+					text = result.Text
+				} else if hint := strings.TrimSpace(result.Hint); hint != "" {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: hint, Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+			}
 		}
 		m.err = nil
 		state.appendUser(text)

@@ -9,6 +9,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/voocel/ainovel-cli/internal/skills"
 )
 
 type slashCommandSpec struct {
@@ -365,6 +366,27 @@ func prepareFileStart(args []string) (string, error) {
 func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
 	spec, ok := commandRegistryInstance().Find(cmd.name)
 	if !ok {
+		// 未注册命令：尝试作为 skill 引用展开（/skill-name 用户消息）
+		if m.runtime != nil {
+			userMsg := strings.Join(cmd.args, " ")
+			result := m.runtime.SkillInject(skills.InjectRequest{
+				SkillName: cmd.name,
+				UserMsg:   userMsg,
+			})
+			if result.Expanded {
+				return m.submitUserText(result.Text)
+			}
+			// 未命中：显示 hint，输入框已 reset，让用户重输
+			hint := result.Hint
+			if hint == "" {
+				hint = "未知命令：/" + cmd.name
+			}
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR", Summary: hint, Level: "error",
+			})
+			m.refreshEventViewport()
+			return m, nil
+		}
 		m.applyEvent(host.Event{
 			Time: time.Now(), Category: "ERROR", Summary: "未知命令：/" + cmd.name, Level: "error",
 		})

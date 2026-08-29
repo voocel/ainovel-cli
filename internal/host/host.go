@@ -28,6 +28,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/notify"
 	"github.com/voocel/ainovel-cli/internal/revision"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 	"github.com/voocel/ainovel-cli/internal/userrules"
@@ -53,6 +54,7 @@ type Host struct {
 	gate            *ChapterAdvanceGate // 章节许可与一次性暂停的统一政策组件
 	notifier        *notify.Notifier    // 无人值守告警；未启用为 nil（Send nil 安全）
 	configPath      string              // 配置写盘目标：/config、/model 就近写当前生效的那份（项目级存在则写它，否则全局）
+	skillStore      *skills.Store       // 跨书 skill 库；nil 表示未启用（路径解析失败），相关入口应优雅降级
 	logCleanup      func()
 	fileLogErr      error
 
@@ -208,6 +210,13 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 		lifecycle:       lifecycleIdle,
 	}
 	h.runCtx, h.runCancel = context.WithCancel(context.Background())
+
+	// 跨书 skill 库（TUI 注入 /skill-name 用）。失败不阻断启动：置 nil 后相关入口降级。
+	h.skillStore = skills.NewStore(filepath.Join(bootstrap.DefaultConfigDir(), "skills"))
+	if err := h.skillStore.Refresh(); err != nil {
+		h.skillStore = nil
+	}
+
 	h.observer = newObserver(store, h.emitEvent, h.emitDelta, h.emitClear)
 	// 宿主侧 Arbiter 与 Worker 共用同一条 ToolProgress → observer → 工作台链路。
 	h.runCtx = agentcore.WithToolProgress(h.runCtx, h.observer.workerProgress)
@@ -1980,4 +1989,29 @@ func (h *Host) continueAfterImport(opts imp.Options) bool {
 // 只读到 Progress.CompletedChapters + 章节终稿 + 大纲 + premise 的一致快照。
 func (h *Host) Export(ctx context.Context, opts exp.Options) (*exp.Result, error) {
 	return exp.Run(ctx, exp.Deps{Store: h.store}, opts)
+}
+
+// SkillStore 返回跨书 skill 库的引用。nil 表示 skill 库未启用
+// （路径解析失败或被禁用），调用方应优雅降级。
+func (h *Host) SkillStore() *skills.Store {
+	if h == nil {
+		return nil
+	}
+	return h.skillStore
+}
+
+// SkillInject 把 /skill-name 用户消息展开为最终发给 LLM 的文本。
+// 调用方（TUI / cocreate）先用 skills.ParseSkillRef 解析原始输入，
+// 命中再调本方法。返回 (展开后文本, 是否命中, 错误提示)。
+//
+// host 自身不解析输入——拆分"解析"和"展开"两个职责让 cocreate 等场景
+// 可以独立测试解析逻辑。
+func (h *Host) SkillInject(req skills.InjectRequest) skills.InjectResult {
+	if h == nil {
+		return skills.InjectResult{
+			Expanded: false,
+			Hint:     "host 未初始化",
+		}
+	}
+	return h.skillStore.InjectSkill(req)
 }

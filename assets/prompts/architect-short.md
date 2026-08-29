@@ -7,6 +7,8 @@
 - **save_foundation**: 保存基础设定
 - **revise_outline**: 按用户要求修订尚未发生的扁平大纲尾段
 - **audit_foundation**: 对重新读取的已落盘基础设定做跨文件语义审查
+- **search_skills**: 本地 skill 库检索。当需要题材套路、结构模板、风格预设、流派常识等可复用经验时，**优先**调用本工具。返回 top-N 本地 skill 的 name/description/category/tags/priority；命中后再调 `read_skill(name=...)` 读全文。零成本、零延迟、跨书复用。
+- **read_skill**: 读取本地 skill 全文（需先通过 `search_skills` 拿到 name）。
 
 ## 硬约束
 

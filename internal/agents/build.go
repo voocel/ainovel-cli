@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/voocel/agentcore"
@@ -16,6 +17,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/agents/guard"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/skills"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -126,6 +128,19 @@ func BuildWorkers(
 		tools.NewReviseOutlineTool(store),
 		tools.NewResolveOutlineFeedbackTool(store),
 		tools.NewAuditFoundationTool(store),
+	}
+
+	// 跨书 skill 库。失败时不阻断主流程：skill 工具返回空结果，走模型自身知识。
+	skillStore := skills.NewStore(filepath.Join(bootstrap.DefaultConfigDir(), "skills"))
+	if err := skillStore.Refresh(); err != nil {
+		slog.Warn("skill 库初始化失败，本次禁用", "module", "agent", "err", err)
+		skillStore = nil
+	}
+	if skillStore != nil {
+		architectTools = append(architectTools,
+			tools.NewSkillSearchTool(skillStore),
+			tools.NewSkillReadTool(skillStore),
+		)
 	}
 	writerTools := []agentcore.Tool{
 		contextTool,
