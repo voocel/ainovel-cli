@@ -127,6 +127,14 @@ func BuildWorkers(
 		tools.NewResolveOutlineFeedbackTool(store),
 		tools.NewAuditFoundationTool(store),
 	}
+
+	// 联网搜索工具：复用主 provider 链路（代理 → 上游 provider，触发服务端
+	// web_search）。零额外配置，baseURL/apiKey/model 都从顶层推导。
+	// 仅挂载到 architect：写作阶段（writer/editor）需要的是故事内一致性
+	// 而非外部资料，挂上去反而引入幻觉风险。
+	if pc, ok := cfg.Providers[cfg.Provider]; ok && pc.BaseURL != "" {
+		architectTools = append(architectTools, tools.NewWebSearchTool(pc.BaseURL, pc.APIKey, cfg.ModelName))
+	}
 	writerTools := []agentcore.Tool{
 		contextTool,
 		readChapter,
