@@ -308,13 +308,13 @@ func (s *modelConfigState) beginInlineEdit(field string) tea.Cmd {
 
 	switch field {
 	case "key":
-		placeholder := "输入 API Key"
+		placeholder := "Nhập API Key"
 		if s.hasEffectiveAPIKey() {
-			placeholder = "输入新 Key，留空保留"
+			placeholder = "Nhập Key mới, để trống giữ nguyên"
 		}
 		return s.startTextInput("", placeholder, true)
 	case "baseurl":
-		return s.startTextInput(s.baseURL, "留空使用默认地址", false)
+		return s.startTextInput(s.baseURL, "Để trống dùng địa chỉ mặc định", false)
 	}
 	return nil
 }
@@ -355,7 +355,7 @@ func (s *modelConfigState) finishInlineEdit() bool {
 	case "key":
 		if value == "" {
 			if !s.apiKeyOptional && !s.hasEffectiveAPIKey() {
-				s.message = "该 Provider 必须配置 API Key"
+				s.message = "Provider này bắt buộc phải cấu hình API Key"
 				return false
 			}
 		} else {
@@ -449,7 +449,7 @@ func (s *modelConfigState) finishModelEdit() (tea.Cmd, bool) {
 		origin := s.modelOrigins[idx]
 		if origin != "" && origin != name {
 			if refs := s.snapshot.ReferencesFor(s.provider, origin); len(refs) > 0 {
-				s.message = "保存时将同步更新引用：" + strings.Join(refs, "、")
+				s.message = "Khi lưu sẽ đồng bộ cập nhật tham chiếu: " + strings.Join(refs, "、")
 			}
 		}
 		return nil, true
@@ -498,14 +498,14 @@ func (s *modelConfigState) deleteModel(idx int) bool {
 		identity = model.Name
 	}
 	if identity == s.currentModel {
-		s.message = "该模型正在使用中，请先用 /model 切换后再删除"
+		s.message = "Mô hình này đang được sử dụng, vui lòng chuyển bằng /model trước khi xóa"
 		return false
 	}
 	for _, ref := range s.snapshot.ReferencesFor(s.provider, identity) {
 		if ref == "default" {
 			continue // 顶层引用已由 currentModel 拦截，避免重复提示
 		}
-		s.message = fmt.Sprintf("模型仍被 %s 引用，请先在 /model 切换后再删除", ref)
+		s.message = fmt.Sprintf("Mô hình vẫn được %s tham chiếu, vui lòng chuyển trong /model trước khi xóa", ref)
 		return false
 	}
 	s.models = append(s.models[:idx], s.models[idx+1:]...)
@@ -561,7 +561,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if state.testCancel != nil {
 				state.testCancel()
 			}
-			state.message = "正在取消连接测试..."
+			state.message = "Đang hủy kiểm tra kết nối..."
 			return m, nil
 		}
 		if state.editingField != "" && (state.step == configStepHub || state.step == configStepModels) {
@@ -642,12 +642,12 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		moveConfigCursor(state, msg, len(fields))
 		if msg.Type == tea.KeyDelete && state.cursor >= 0 && state.cursor < len(fields) && fields[state.cursor].id == "key" {
 			if !state.apiKeyOptional {
-				state.message = "该 Provider 必须配置 API Key，不能清除"
+				state.message = "Provider này bắt buộc phải cấu hình API Key, không thể xóa"
 				break
 			}
 			state.apiKeyAction = host.APIKeyClear
 			state.apiKey = ""
-			state.message = "API Key 已标记清除，保存配置后生效"
+			state.message = "API Key đã được đánh dấu xóa, có hiệu lực sau khi lưu cấu hình"
 			break
 		}
 		if msg.Type == tea.KeyEnter && state.cursor >= 0 && state.cursor < len(fields) {
@@ -663,7 +663,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 				state.testing = true
-				state.message = fmt.Sprintf("正在测试连接：%s/%s...", state.provider, model)
+				state.message = fmt.Sprintf("Đang kiểm tra kết nối: %s/%s...", state.provider, model)
 				ctx, cancel := context.WithCancel(context.Background())
 				state.testCancel = cancel
 				return m, testModelConnection(ctx, m.runtime, state.draft(), model)
@@ -679,7 +679,7 @@ func (m Model) handleModelConfigKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 				state.saving = true
-				state.message = "正在校验并保存配置..."
+				state.message = "Đang xác thực và lưu cấu hình..."
 				return m, saveModelConfiguration(m.runtime, state.draft())
 			}
 			return m, cmd
@@ -780,7 +780,7 @@ func parseContextWindowInput(input string) (int, error) {
 	}
 	number, err := strconv.ParseFloat(value, 64)
 	if err != nil || number <= 0 {
-		return 0, fmt.Errorf("上下文窗口请输入正整数、128K、1M，或留空使用自动值")
+		return 0, fmt.Errorf("Cửa sổ ngữ cảnh vui lòng nhập số nguyên dương, 128K, 1M hoặc để trống dùng giá trị tự động")
 	}
 	result := number * multiplier
 	if result > float64(math.MaxInt) || math.Trunc(result) != result {
@@ -797,18 +797,18 @@ func renderModelConfigModal(width int, state *modelConfigState) string {
 	boxW := min(max(60, width*3/5), 76, width-4)
 	contentW := paddedModalContentWidth(boxW)
 	var lines []string
-	title := "/config 配置模型"
-	hint := "↑↓ 选择 · Enter 确认 · Esc 取消"
+	title := "/config cấu hình model"
+	hint := "↑↓ chọn · Enter xác nhận · Esc hủy"
 
 	switch state.step {
 	case configStepProvider:
-		lines = append(lines, configHeading("选择要编辑的 Provider，或新增一个"))
+		lines = append(lines, configHeading("Chọn Provider cần sửa hoặc thêm mới"))
 		lines = append(lines, renderConfigChoices(labelsForProviderChoices(state.providerChoices), state.cursor, contentW, 12)...)
 	case configStepAddPicker:
-		lines = append(lines, configHeading("选择要新增的 Provider"))
+		lines = append(lines, configHeading("Chọn Provider cần thêm"))
 		lines = append(lines, renderConfigChoices(labelsForProviderChoices(state.presetChoices), state.cursor, contentW, 12)...)
 	case configStepCustomName:
-		lines = append(lines, configHeading("自定义 Provider 名称"), renderConfigTextInput(&state.input, contentW))
+		lines = append(lines, configHeading("Tùy chỉnh tên Provider"), renderConfigTextInput(&state.input, contentW))
 		hint = configInputHint
 	case configStepHub:
 		heading := state.provider
@@ -823,41 +823,41 @@ func renderModelConfigModal(width int, state *modelConfigState) string {
 			lines = appendWrappedConfigText(lines, advanced, contentW, lipgloss.NewStyle().Foreground(colorDim))
 		}
 		if state.editingField != "" {
-			hint = "输入 · Enter 确认 · Esc 取消"
+			hint = "Nhập · Enter xác nhận · Esc hủy"
 		} else {
-			hint = "↑↓ 选择 · Enter 编辑/进入 · Esc 返回"
+			hint = "↑↓ chọn · Enter sửa/nhập · Esc quay lại"
 			fields := state.hubFields()
 			if state.apiKeyOptional && state.cursor >= 0 && state.cursor < len(fields) && fields[state.cursor].id == "key" {
-				hint += " · Delete 清除"
+				hint += " · Delete xóa"
 			}
 			if state.cursor >= 0 && state.cursor < len(fields) && fields[state.cursor].id == "test" {
-				lines = append(lines, lipgloss.NewStyle().Foreground(colorDim).Render("测试会发送最小请求，可能产生少量 API 用量"))
+				lines = append(lines, lipgloss.NewStyle().Foreground(colorDim).Render("Kiểm tra sẽ gửi yêu cầu tối thiểu, có thể phát sinh một ít lượt dùng API"))
 			}
 		}
 	case configStepProtocol:
-		lines = append(lines, configHeading("API 协议类型"))
+		lines = append(lines, configHeading("Loại giao thức API"))
 		lines = append(lines, renderConfigChoices(configProtocols, state.cursor, contentW, 8)...)
 	case configStepAPI:
 		lines = append(lines, configHeading("OpenAI Endpoint"))
 		lines = append(lines, renderConfigChoices([]string{"chat · /v1/chat/completions", "responses · /v1/responses"}, state.cursor, contentW, 8)...)
 	case configStepModels:
-		lines = append(lines, configHeading("管理模型列表"))
+		lines = append(lines, configHeading("Quản lý danh sách model"))
 		lines = append(lines, renderModelConfigRows(state, contentW)...)
 		if state.editingField != "" {
-			hint = "输入 · Enter 确认 · Esc 取消"
+			hint = "Nhập · Enter xác nhận · Esc hủy"
 		} else {
-			hint = "↑↓ 行 · ←→ 字段 · Enter 编辑 · Delete 删除 · Esc 返回"
+			hint = "↑↓ dòng · ←→ trường · Enter sửa · Delete xóa · Esc quay lại"
 		}
 	}
 
 	if state.message != "" {
 		color := colorError
-		if strings.HasPrefix(state.message, "连接测试成功") {
+		if strings.HasPrefix(state.message, "Kiểm tra kết nối thành công") {
 			color = colorSuccess
-		} else if state.saving || state.testing || strings.HasPrefix(state.message, "已选择") ||
-			strings.HasPrefix(state.message, "API Key 已") || strings.HasPrefix(state.message, "连接测试已取消") {
+		} else if state.saving || state.testing || strings.HasPrefix(state.message, "Đã chọn") ||
+			strings.HasPrefix(state.message, "API Key đã") || strings.HasPrefix(state.message, "Đã hủy kiểm tra kết nối") {
 			color = colorAccent
-		} else if strings.HasPrefix(state.message, "保存时将同步更新引用") {
+		} else if strings.HasPrefix(state.message, "Khi lưu sẽ đồng bộ cập nhật tham chiếu") {
 			color = colorAccent
 		}
 		lines = append(lines, "")
@@ -866,7 +866,7 @@ func renderModelConfigModal(width int, state *modelConfigState) string {
 	return renderPaddedModalFrame(boxW, len(lines)+2, title, hint, lines)
 }
 
-const configInputHint = "输入 · Enter 确认 · Ctrl+U 清空 · Esc 取消"
+const configInputHint = "Nhập · Enter xác nhận · Ctrl+U xóa · Esc hủy"
 
 func configHeading(text string) string {
 	return lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(text)
