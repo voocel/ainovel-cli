@@ -2,10 +2,10 @@
 # ainovel-cli 一键安装脚本
 #
 #   curl -fsSL https://raw.githubusercontent.com/voocel/ainovel-cli/main/scripts/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/voocel/ainovel-cli/v1.2.3/scripts/install.sh | sh -s -- v1.2.3
+#   curl -fsSL https://raw.githubusercontent.com/voocel/ainovel-cli/v1.0.0/scripts/install.sh | sh -s -- v1.0.0
 #
 # 自定义安装目录： AINOVEL_INSTALL_DIR=~/.local/bin curl -fsSL ... | sh
-# 指定版本：AINOVEL_VERSION=v1.2.3 curl -fsSL ... | sh
+# 指定版本：AINOVEL_VERSION=v1.0.0 curl -fsSL ... | sh
 set -e
 
 REPO="voocel/ainovel-cli"

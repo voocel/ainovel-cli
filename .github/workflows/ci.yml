@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - v1
 
 permissions:
   contents: read
@@ -48,4 +49,4 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GOWORK: "off"
-        run: go test -race -buildvcs=false -count=1 ./internal/host ./internal/store ./internal/tools
+        run: go test -race -buildvcs=false -count=1 ./internal/change ./internal/operation ./internal/service ./internal/store

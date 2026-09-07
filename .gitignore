@@ -40,8 +40,8 @@ go.work.sum
 dist/
 release-notes.md
 /ainovel-cli
+/ainovel.db
 
 tasks
 refer/
 output*
-workspace/
