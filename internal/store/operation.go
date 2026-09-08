@@ -338,7 +338,45 @@ func (s *Store) RenewOperationLease(ctx context.Context, id, workerID string, le
 	return operation, nil
 }
 
+// TransitionOperation 是用户控制入口（暂停、恢复、取消、裁决）：只按状态机校验，
+// 不受执行归属限制——取消永远赢过在途执行，之后的收尾会被 ConcludeOperation 拒绝。
 func (s *Store) TransitionOperation(ctx context.Context, id string, from, to domain.OperationState, message string, now time.Time) (domain.Operation, error) {
+	return s.transitionOperation(ctx, id, from, to, message, now, 0)
+}
+
+// ConcludeOperation 是执行实例的收尾入口：只有持有当前 attempt 的执行者才能把
+// running 推进到结局态。过期或被接替的实例拿到 ErrStateConflict，不能改写
+// 后继尝试的状态（执行归属不变量）。
+func (s *Store) ConcludeOperation(ctx context.Context, id string, attempt int, to domain.OperationState, message string, now time.Time) (domain.Operation, error) {
+	if attempt <= 0 {
+		return domain.Operation{}, fmt.Errorf("execution attempt is required: %w", domain.ErrInvalid)
+	}
+	return s.transitionOperation(ctx, id, domain.OperationRunning, to, message, now, attempt)
+}
+
+// AssertActiveAttempt 是执行侧在准备提案前的快速自检；受保护写入的真正围栏在各自事务内
+// 完成（PutWorkspaceArtifact、SaveExecutionDerivedDocument、CommitExecutionProposal、ConcludeOperation）。
+func (s *Store) AssertActiveAttempt(ctx context.Context, id string, attempt int) error {
+	return assertActiveAttempt(ctx, s.db, id, attempt)
+}
+
+// assertActiveAttempt 在调用方的事务内校验归属，让检查与受保护写入原子化（D42）。
+func assertActiveAttempt(ctx context.Context, query rowQuerier, id string, attempt int) error {
+	var active bool
+	err := query.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM operations WHERE id = ? AND state = ? AND attempt = ?)`,
+		id, domain.OperationRunning, attempt).Scan(&active)
+	if err != nil {
+		return fmt.Errorf("check operation execution: %w", err)
+	}
+	if !active {
+		return fmt.Errorf("operation %q attempt %d is no longer the active execution: %w", id, attempt, ErrStateConflict)
+	}
+	return nil
+}
+
+// transitionOperation 的 attempt 为 0 时不做执行归属围栏。
+func (s *Store) transitionOperation(ctx context.Context, id string, from, to domain.OperationState, message string, now time.Time, attempt int) (domain.Operation, error) {
 	if strings.TrimSpace(id) == "" || now.IsZero() {
 		return domain.Operation{}, fmt.Errorf("operation id and time are required: %w", domain.ErrInvalid)
 	}
@@ -354,9 +392,9 @@ func (s *Store) TransitionOperation(ctx context.Context, id string, from, to dom
 	row := tx.QueryRowContext(ctx, `
 		UPDATE operations
 		SET state = ?, error = ?, lease_owner = NULL, lease_until_unix_ms = NULL, updated_at_unix_ms = ?
-		WHERE id = ? AND state = ?
+		WHERE id = ? AND state = ? AND (? = 0 OR attempt = ?)
 		RETURNING `+operationColumns,
-		to, message, now.UnixMilli(), id, from)
+		to, message, now.UnixMilli(), id, from, attempt, attempt)
 	operation, err := scanOperation(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Operation{}, ErrStateConflict
@@ -465,7 +503,9 @@ func (s *Store) RecoverExpiredOperations(ctx context.Context, now time.Time) ([]
 	return ids, nil
 }
 
-func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact domain.WorkspaceArtifact, expectedVersion int64) (domain.WorkspaceArtifact, error) {
+// PutWorkspaceArtifact 只接受当前执行实例的写入：writerAttempt 必须等于 Operation
+// 的当前 attempt，过期实例不能污染后继尝试的工作区。
+func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact domain.WorkspaceArtifact, expectedVersion int64, writerAttempt int) (domain.WorkspaceArtifact, error) {
 	if strings.TrimSpace(artifact.OperationID) == "" || strings.TrimSpace(artifact.Key) == "" || strings.TrimSpace(artifact.MediaType) == "" || len(artifact.Content) == 0 {
 		return domain.WorkspaceArtifact{}, fmt.Errorf("artifact operation, key, media type and content are required: %w", domain.ErrInvalid)
 	}
@@ -487,6 +527,10 @@ func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact domain.Worksp
 	}
 	if state != domain.OperationRunning {
 		return domain.WorkspaceArtifact{}, fmt.Errorf("operation %q is %s: %w", artifact.OperationID, state, ErrStateConflict)
+	}
+	if writerAttempt != attempt {
+		return domain.WorkspaceArtifact{}, fmt.Errorf(
+			"operation %q is on attempt %d, writer holds attempt %d: %w", artifact.OperationID, attempt, writerAttempt, ErrStateConflict)
 	}
 
 	var current int64

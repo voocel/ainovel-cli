@@ -39,7 +39,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 		MediaType:   "text/markdown",
 		Content:     []byte("第一版正文"),
 		UpdatedAt:   createdAt.Add(3 * time.Second),
-	}, 0)
+	}, 0, claimed.Attempt)
 	if err != nil {
 		t.Fatalf("put first artifact: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	}
 	artifact.Content = []byte("第二版正文")
 	artifact.UpdatedAt = createdAt.Add(4 * time.Second)
-	artifact, err = s.PutWorkspaceArtifact(ctx, artifact, 1)
+	artifact, err = s.PutWorkspaceArtifact(ctx, artifact, 1, claimed.Attempt)
 	if err != nil {
 		t.Fatalf("put second artifact: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	stale := artifact
 	stale.Content = []byte("过期写入")
 	stale.UpdatedAt = createdAt.Add(5 * time.Second)
-	if _, err := s.PutWorkspaceArtifact(ctx, stale, 1); !errors.Is(err, ErrWorkspaceConflict) {
+	if _, err := s.PutWorkspaceArtifact(ctx, stale, 1, claimed.Attempt); !errors.Is(err, ErrWorkspaceConflict) {
 		t.Fatalf("stale artifact error = %v, want ErrWorkspaceConflict", err)
 	}
 	stored, err := s.GetWorkspaceArtifact(ctx, claimed.ID, artifact.Key)
@@ -86,7 +86,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	}
 	if _, err := s.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 		OperationID: claimed.ID, Key: "late", MediaType: "text/plain", Content: []byte("late"), UpdatedAt: createdAt.Add(7 * time.Second),
-	}, 0); !errors.Is(err, ErrStateConflict) {
+	}, 0, claimed.Attempt); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("terminal artifact error = %v, want ErrStateConflict", err)
 	}
 
@@ -441,4 +441,65 @@ func testOperation(id string, priority int, createdAt time.Time) domain.Operatio
 
 func operationTime() time.Time {
 	return time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+}
+
+// TestSupersededAttemptCannotWriteOrConclude 守护执行归属不变量：租约过期被接替后，
+// 旧执行实例既不能再写工作区，也不能把后继尝试的状态改成自己的结局；
+// 用户取消先于收尾时，收尾必须被拒绝而不是覆盖取消。
+func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	start := operationTime()
+	if _, err := s.CreateOperation(ctx, testOperation("op", 1, start)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	first, err := s.ClaimNextOperation(ctx, "worker-1", time.Minute, start)
+	if err != nil || first.Attempt != 1 {
+		t.Fatalf("first claim = %#v, %v", first, err)
+	}
+	if _, err := s.RecoverExpiredOperations(ctx, start.Add(2*time.Minute)); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	second, err := s.ClaimNextOperation(ctx, "worker-2", time.Minute, start.Add(3*time.Minute))
+	if err != nil || second.Attempt != 2 || second.LeaseOwner != "worker-2" {
+		t.Fatalf("second claim = %#v, %v", second, err)
+	}
+
+	late := domain.WorkspaceArtifact{
+		OperationID: "op", Key: "chapter/late", MediaType: "text/plain",
+		Content: []byte("旧实例的迟到写入"), UpdatedAt: start.Add(4 * time.Minute),
+	}
+	if _, err := s.PutWorkspaceArtifact(ctx, late, 0, first.Attempt); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale workspace write error = %v, want ErrStateConflict", err)
+	}
+	if err := s.AssertActiveAttempt(ctx, "op", first.Attempt); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale attempt assertion error = %v, want ErrStateConflict", err)
+	}
+	if _, err := s.ConcludeOperation(ctx, "op", first.Attempt, domain.OperationFailed, "stale worker", start.Add(4*time.Minute)); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale conclude error = %v, want ErrStateConflict", err)
+	}
+	if err := s.AssertActiveAttempt(ctx, "op", second.Attempt); err != nil {
+		t.Fatalf("active attempt must pass: %v", err)
+	}
+	if _, err := s.PutWorkspaceArtifact(ctx, late, 0, second.Attempt); err != nil {
+		t.Fatalf("active workspace write: %v", err)
+	}
+	concluded, err := s.ConcludeOperation(ctx, "op", second.Attempt, domain.OperationSucceeded, "", start.Add(5*time.Minute))
+	if err != nil || concluded.State != domain.OperationSucceeded {
+		t.Fatalf("active conclude = %#v, %v", concluded, err)
+	}
+
+	if _, err := s.CreateOperation(ctx, testOperation("cancelled", 1, start)); err != nil {
+		t.Fatalf("create cancelled: %v", err)
+	}
+	claimed, err := s.ClaimNextOperation(ctx, "worker-3", time.Minute, start.Add(6*time.Minute))
+	if err != nil || claimed.ID != "cancelled" {
+		t.Fatalf("claim cancelled = %#v, %v", claimed, err)
+	}
+	if _, err := s.TransitionOperation(ctx, claimed.ID, domain.OperationRunning, domain.OperationCancelled, "cancelled by user", start.Add(7*time.Minute)); err != nil {
+		t.Fatalf("user cancel: %v", err)
+	}
+	if _, err := s.ConcludeOperation(ctx, claimed.ID, claimed.Attempt, domain.OperationSucceeded, "", start.Add(8*time.Minute)); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("conclude after cancel error = %v, want ErrStateConflict", err)
+	}
 }

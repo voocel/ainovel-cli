@@ -180,12 +180,13 @@ func (e *Engine) runClaimed(
 		}
 		proposal.Impact.Compliance = compliance
 	}
+	if err := e.store.AssertActiveAttempt(ctx, operation.ID, operation.Attempt); err != nil {
+		return RunResult{}, err
+	}
 	prepared, err := e.changes.Prepare(ctx, proposal)
 	if err != nil {
 		if errors.Is(err, store.ErrRevisionConflict) {
-			stale, transitionErr := e.store.TransitionOperation(
-				ctx, operation.ID, domain.OperationRunning, domain.OperationStale, err.Error(), now,
-			)
+			stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, err.Error(), now)
 			if transitionErr != nil {
 				return RunResult{}, errors.Join(err, transitionErr)
 			}
@@ -236,24 +237,20 @@ func (e *Engine) finalizeVerdict(
 			"verdict base revision %d, current revision %d: %w",
 			operation.Snapshot.BaseRevision, currentRevision, store.ErrRevisionConflict,
 		)
-		stale, transitionErr := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationStale, cause.Error(), now,
-		)
+		stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, cause.Error(), now)
 		if transitionErr != nil {
 			return RunResult{}, errors.Join(cause, transitionErr)
 		}
 		return RunResult{Operation: stale}, cause
 	}
-	if _, err := e.store.SaveDerivedDocument(ctx, domain.DerivedDocument{
+	if _, err := e.store.SaveExecutionDerivedDocument(ctx, domain.DerivedDocument{
 		ProjectID: operation.Target.ID, Revision: operation.Snapshot.BaseRevision,
 		Kind: domain.DerivedVerdictKind, Key: operation.ID,
 		Content: verdict, CreatedAt: now,
-	}); err != nil {
+	}, operation.ID, operation.Attempt); err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	succeeded, err := e.store.TransitionOperation(
-		ctx, operation.ID, domain.OperationRunning, domain.OperationSucceeded, "", now,
-	)
+	succeeded, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationSucceeded, "", now)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -357,9 +354,7 @@ func (e *Engine) finalize(
 		if err != nil {
 			return e.fail(ctx, operation, err, now)
 		}
-		succeeded, err := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationSucceeded, "", now,
-		)
+		succeeded, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationSucceeded, "", now)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -381,9 +376,7 @@ func (e *Engine) finalize(
 			"proposal base revision %d, current revision %d: %w",
 			prepared.BaseRevision, currentRevision, store.ErrRevisionConflict,
 		)
-		stale, transitionErr := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationStale, cause.Error(), now,
-		)
+		stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, cause.Error(), now)
 		if transitionErr != nil {
 			return RunResult{}, errors.Join(cause, transitionErr)
 		}
@@ -397,8 +390,7 @@ func (e *Engine) finalize(
 		return e.fail(ctx, operation, fmt.Errorf("custom approval policy requires an explicit policy contract: %w", domain.ErrInvalid), now)
 	}
 	if policy == domain.ApprovalManual || (policy == domain.ApprovalMilestone && milestoneProposal(prepared)) {
-		awaiting, err := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationAwaitingApproval,
+		awaiting, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationAwaitingApproval,
 			"proposal awaits user approval", now,
 		)
 		if err != nil {
@@ -410,9 +402,7 @@ func (e *Engine) finalize(
 	if reason, err := e.semanticApprovalReason(ctx, operation, prepared); err != nil {
 		return e.fail(ctx, operation, err, now)
 	} else if reason != "" {
-		awaiting, err := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationAwaitingApproval, reason, now,
-		)
+		awaiting, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationAwaitingApproval, reason, now)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -427,10 +417,9 @@ func (e *Engine) finalize(
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	committed, err := e.changes.Commit(ctx, approved)
+	committed, err := e.changes.CommitExecution(ctx, approved, operation.Attempt)
 	if errors.Is(err, change.ErrUnauthorized) {
-		awaiting, transitionErr := e.store.TransitionOperation(
-			ctx, operation.ID, domain.OperationRunning, domain.OperationAwaitingApproval,
+		awaiting, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationAwaitingApproval,
 			err.Error(), now,
 		)
 		if transitionErr != nil {
@@ -442,9 +431,7 @@ func (e *Engine) finalize(
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	succeeded, err := e.store.TransitionOperation(
-		ctx, operation.ID, domain.OperationRunning, domain.OperationSucceeded, "", now,
-	)
+	succeeded, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationSucceeded, "", now)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -676,9 +663,7 @@ func milestoneProposal(proposal domain.Proposal) bool {
 }
 
 func (e *Engine) fail(ctx context.Context, operation domain.Operation, cause error, now time.Time) (RunResult, error) {
-	failed, err := e.store.TransitionOperation(
-		ctx, operation.ID, domain.OperationRunning, domain.OperationFailed, cause.Error(), now,
-	)
+	failed, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationFailed, cause.Error(), now)
 	if err != nil {
 		return RunResult{}, errors.Join(cause, err)
 	}

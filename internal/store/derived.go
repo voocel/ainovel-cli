@@ -12,11 +12,41 @@ import (
 )
 
 func (s *Store) SaveDerivedDocument(ctx context.Context, document domain.DerivedDocument) (domain.DerivedDocument, error) {
+	return saveDerivedDocument(ctx, s.db, document)
+}
+
+// SaveExecutionDerivedDocument 是执行侧写派生产出（如审阅裁定）的路径（D42）：归属检查与
+// 写入同事务，被接替或已取消的执行落不了盘；幂等语义同 SaveDerivedDocument。
+func (s *Store) SaveExecutionDerivedDocument(
+	ctx context.Context, document domain.DerivedDocument, operationID string, attempt int,
+) (domain.DerivedDocument, error) {
+	if attempt <= 0 || strings.TrimSpace(operationID) == "" {
+		return domain.DerivedDocument{}, fmt.Errorf("execution derived write requires the operation and its attempt: %w", domain.ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.DerivedDocument{}, fmt.Errorf("begin execution derived write: %w", err)
+	}
+	defer tx.Rollback()
+	if err := assertActiveAttempt(ctx, tx, operationID, attempt); err != nil {
+		return domain.DerivedDocument{}, err
+	}
+	stored, err := saveDerivedDocument(ctx, tx, document)
+	if err != nil {
+		return domain.DerivedDocument{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.DerivedDocument{}, fmt.Errorf("commit execution derived write: %w", err)
+	}
+	return stored, nil
+}
+
+func saveDerivedDocument(ctx context.Context, db execQuerier, document domain.DerivedDocument) (domain.DerivedDocument, error) {
 	if err := document.Validate(); err != nil {
 		return domain.DerivedDocument{}, err
 	}
 	document.Digest = domain.Digest(document.Content)
-	result, err := s.db.ExecContext(ctx, `
+	result, err := db.ExecContext(ctx, `
 		INSERT INTO derived_documents (
 			project_id, revision, kind, cache_key, content, content_digest, created_at_unix_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -30,7 +60,7 @@ func (s *Store) SaveDerivedDocument(ctx context.Context, document domain.Derived
 	if err != nil {
 		return domain.DerivedDocument{}, fmt.Errorf("inspect derived document save: %w", err)
 	}
-	stored, err := s.GetDerivedDocument(ctx, document.ProjectID, document.Revision, document.Kind, document.Key)
+	stored, err := getDerivedDocument(ctx, db, document.ProjectID, document.Revision, document.Kind, document.Key)
 	if err != nil {
 		return domain.DerivedDocument{}, err
 	}
@@ -46,6 +76,12 @@ func (s *Store) GetDerivedDocument(
 	revision domain.Revision,
 	kind, key string,
 ) (domain.DerivedDocument, error) {
+	return getDerivedDocument(ctx, s.db, projectID, revision, kind, key)
+}
+
+func getDerivedDocument(
+	ctx context.Context, query rowQuerier, projectID string, revision domain.Revision, kind, key string,
+) (domain.DerivedDocument, error) {
 	if strings.TrimSpace(projectID) == "" || revision <= domain.InitialRevision ||
 		strings.TrimSpace(kind) == "" || strings.TrimSpace(key) == "" {
 		return domain.DerivedDocument{}, fmt.Errorf("derived document identity and revision are required: %w", domain.ErrInvalid)
@@ -53,7 +89,7 @@ func (s *Store) GetDerivedDocument(
 	var document domain.DerivedDocument
 	var content []byte
 	var createdAt int64
-	err := s.db.QueryRowContext(ctx, `
+	err := query.QueryRowContext(ctx, `
 		SELECT content, content_digest, created_at_unix_ms
 		FROM derived_documents
 		WHERE project_id = ? AND revision = ? AND kind = ? AND cache_key = ?`,

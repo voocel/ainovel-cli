@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
@@ -68,6 +69,51 @@ func TestRejectedProposalCannotCommit(t *testing.T) {
 	}
 	if _, err := s.CurrentRevision(ctx, target); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("current revision error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestExecutionCommitIsFencedInsideTheTransaction 守护 D42 的提交边界：执行侧提交在同一
+// 事务内确认任务仍在运行且 attempt 未被接替；取消先于提交时 ChangeSet 不得落库，
+// 用户裁决路径不受围栏限制。
+func TestExecutionCommitIsFencedInsideTheTransaction(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	start := operationTime()
+	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}
+
+	if _, err := s.CreateOperation(ctx, testOperation("op", 1, start)); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	claimed, err := s.ClaimNextOperation(ctx, "worker-1", time.Minute, start)
+	if err != nil || claimed.Attempt != 1 {
+		t.Fatalf("claim = %#v, %v", claimed, err)
+	}
+	approved := testChange("op-proposal", target, 0, domain.Patch{
+		Document:  domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"},
+		Operation: domain.PatchPut,
+		Content:   []byte(`{"premise":"凡人修仙"}`),
+	})
+	approved.OperationID = claimed.ID
+	if _, err := s.SaveProposal(ctx, pendingTestProposal(approved)); err != nil {
+		t.Fatalf("save proposal: %v", err)
+	}
+
+	if _, err := s.CommitExecutionProposal(ctx, approved, claimed.Attempt+1); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("foreign attempt commit error = %v, want ErrStateConflict", err)
+	}
+	if _, err := s.TransitionOperation(ctx, claimed.ID, domain.OperationRunning, domain.OperationCancelled, "cancelled by user", start.Add(time.Minute)); err != nil {
+		t.Fatalf("user cancel: %v", err)
+	}
+	if _, err := s.CommitExecutionProposal(ctx, approved, claimed.Attempt); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("commit after cancel error = %v, want ErrStateConflict", err)
+	}
+	if _, err := s.CurrentRevision(ctx, target); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cancelled execution must not create a revision, got %v", err)
+	}
+
+	committed, err := s.CommitProposal(ctx, approved)
+	if err != nil || committed.NewRevision != 1 {
+		t.Fatalf("user commit = %#v, %v", committed, err)
 	}
 }
 

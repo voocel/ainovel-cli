@@ -95,7 +95,7 @@ func (r *Runtime) toolExecutor(
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
 			}
-			artifact, err := r.workspace.PutChapter(ctx, operation.ID, args.Key, args.Chapter, args.ExpectedVersion, r.now())
+			artifact, err := r.workspace.PutChapter(ctx, operation.ID, args.Key, args.Chapter, args.ExpectedVersion, operation.Attempt, r.now())
 			if err != nil {
 				return nil, err
 			}
@@ -113,7 +113,7 @@ func (r *Runtime) toolExecutor(
 				return nil, err
 			}
 			artifact, err := r.workspace.ReplaceChapterBlock(
-				ctx, operation.ID, args.Key, args.BlockID, args.Text, args.ExpectedVersion, r.now(),
+				ctx, operation.ID, args.Key, args.BlockID, args.Text, args.ExpectedVersion, operation.Attempt, r.now(),
 			)
 			if err != nil {
 				return nil, err
@@ -133,7 +133,7 @@ func (r *Runtime) toolExecutor(
 			artifact, err := r.store.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 				OperationID: operation.ID, Key: args.Key, MediaType: "application/json",
 				Content: args.Content, UpdatedAt: r.now(),
-			}, args.ExpectedVersion)
+			}, args.ExpectedVersion, operation.Attempt)
 			if err != nil {
 				return nil, err
 			}
@@ -156,7 +156,7 @@ func (r *Runtime) toolExecutor(
 			artifact, err := r.store.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 				OperationID: operation.ID, Key: args.Key,
 				MediaType: domain.ReviewArtifactMediaType, Content: content, UpdatedAt: r.now(),
-			}, args.ExpectedVersion)
+			}, args.ExpectedVersion, operation.Attempt)
 			if err != nil {
 				return nil, err
 			}

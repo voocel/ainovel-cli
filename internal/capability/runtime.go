@@ -43,7 +43,7 @@ type runtimeStore interface {
 	ListPlanNodes(context.Context, domain.AuthorityTarget, domain.Revision) ([]domain.PlanNode, error)
 	GetWorkspaceArtifact(context.Context, string, string) (domain.WorkspaceArtifact, error)
 	ListWorkspaceArtifacts(context.Context, string) ([]domain.WorkspaceArtifact, error)
-	PutWorkspaceArtifact(context.Context, domain.WorkspaceArtifact, int64) (domain.WorkspaceArtifact, error)
+	PutWorkspaceArtifact(context.Context, domain.WorkspaceArtifact, int64, int) (domain.WorkspaceArtifact, error)
 	AppendOperationEvent(context.Context, domain.OperationEvent) (domain.OperationEvent, error)
 	ListOperationEvents(context.Context, string) ([]domain.OperationEvent, error)
 }

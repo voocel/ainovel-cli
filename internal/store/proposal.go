@@ -72,9 +72,22 @@ func (s *Store) GetProposalByOperation(ctx context.Context, operationID string) 
 	return s.GetProposal(ctx, id)
 }
 
-// CommitProposal stores the approval decision and authority revision in one
-// transaction. Either both become visible, or neither does.
+// CommitProposal 是用户裁决路径：审批决定与新 Revision 同事务落库，提案已由用户批准，
+// 不受执行归属限制。
 func (s *Store) CommitProposal(ctx context.Context, proposal domain.Proposal) (domain.ChangeSet, error) {
+	return s.commitProposal(ctx, proposal, 0)
+}
+
+// CommitExecutionProposal 是执行侧的自动提交路径（D42）：归属检查与 ChangeSet 写入在同一
+// 事务内完成，任务已取消或执行已被接替时提交被拒；分成两步会让取消落在缝隙里。
+func (s *Store) CommitExecutionProposal(ctx context.Context, proposal domain.Proposal, attempt int) (domain.ChangeSet, error) {
+	if attempt <= 0 || proposal.OperationID == "" {
+		return domain.ChangeSet{}, fmt.Errorf("execution commit requires the operation and its attempt: %w", domain.ErrInvalid)
+	}
+	return s.commitProposal(ctx, proposal, attempt)
+}
+
+func (s *Store) commitProposal(ctx context.Context, proposal domain.Proposal, attempt int) (domain.ChangeSet, error) {
 	if err := proposal.Validate(); err != nil {
 		return domain.ChangeSet{}, err
 	}
@@ -119,6 +132,11 @@ func (s *Store) CommitProposal(ctx context.Context, proposal domain.Proposal) (d
 		return domain.ChangeSet{}, fmt.Errorf("proposal %q has invalid state %q: %w", proposal.ID, stored.ApprovalState, ErrStateConflict)
 	}
 
+	if attempt > 0 {
+		if err := assertActiveAttempt(ctx, tx, proposal.OperationID, attempt); err != nil {
+			return domain.ChangeSet{}, err
+		}
+	}
 	committed, err := commitProposalTx(ctx, tx, proposal, changeDigest)
 	if err != nil {
 		return domain.ChangeSet{}, err
@@ -210,11 +228,7 @@ func (s *Store) RejectProposal(ctx context.Context, proposal domain.Proposal) (d
 	return proposal, nil
 }
 
-type proposalQuery interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func (s *Store) getProposal(ctx context.Context, query proposalQuery, id string) (domain.Proposal, string, error) {
+func (s *Store) getProposal(ctx context.Context, query rowQuerier, id string) (domain.Proposal, string, error) {
 	var payload []byte
 	var digest string
 	err := query.QueryRowContext(ctx, `SELECT payload, content_digest FROM proposals WHERE id = ?`, id).

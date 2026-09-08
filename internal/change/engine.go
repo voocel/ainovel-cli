@@ -118,25 +118,43 @@ func Decide(proposal domain.Proposal, state domain.ApprovalState, decider domain
 }
 
 func (e *Engine) Commit(ctx context.Context, approved domain.Proposal) (domain.ChangeSet, error) {
+	ready, err := e.prepareCommit(ctx, approved)
+	if err != nil {
+		return domain.ChangeSet{}, err
+	}
+	return e.store.CommitProposal(ctx, ready)
+}
+
+// CommitExecution 提交执行实例自动批准的提案：校验与授权同 Commit，落库时在同一事务内
+// 确认 attempt 仍是 approved.OperationID 的当前执行（D42）。
+func (e *Engine) CommitExecution(ctx context.Context, approved domain.Proposal, attempt int) (domain.ChangeSet, error) {
+	ready, err := e.prepareCommit(ctx, approved)
+	if err != nil {
+		return domain.ChangeSet{}, err
+	}
+	return e.store.CommitExecutionProposal(ctx, ready, attempt)
+}
+
+func (e *Engine) prepareCommit(ctx context.Context, approved domain.Proposal) (domain.Proposal, error) {
 	if approved.ApprovalState != domain.ApprovalApproved {
-		return domain.ChangeSet{}, store.ErrNotApproved
+		return domain.Proposal{}, store.ErrNotApproved
 	}
 	if err := approved.Validate(); err != nil {
-		return domain.ChangeSet{}, err
+		return domain.Proposal{}, err
 	}
 	impact, baseState, err := e.validateAndAnalyze(ctx, approved)
 	if err != nil {
-		return domain.ChangeSet{}, err
+		return domain.Proposal{}, err
 	}
 	if err := authorize(approved, baseState); err != nil {
-		return domain.ChangeSet{}, err
+		return domain.Proposal{}, err
 	}
 	payload, err := json.Marshal(impact)
 	if err != nil {
-		return domain.ChangeSet{}, fmt.Errorf("marshal structural impact: %w", err)
+		return domain.Proposal{}, fmt.Errorf("marshal structural impact: %w", err)
 	}
 	approved.Impact.Structural = payload
-	return e.store.CommitProposal(ctx, approved)
+	return approved, nil
 }
 
 func (e *Engine) Reject(ctx context.Context, rejected domain.Proposal) (domain.Proposal, error) {

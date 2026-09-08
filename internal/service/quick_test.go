@@ -772,7 +772,7 @@ func (e *scriptedQuickExecutor) Execute(
 			OperationID: operation.ID, Key: verdict.ReviewKey,
 			MediaType: domain.ReviewArtifactMediaType, Content: findings,
 			UpdatedAt: e.now.Add(time.Duration(e.calls) * time.Second),
-		}, 0); err != nil {
+		}, 0, operation.Attempt); err != nil {
 			return domain.OperationOutcome{}, err
 		}
 		payload, err := json.Marshal(verdict)

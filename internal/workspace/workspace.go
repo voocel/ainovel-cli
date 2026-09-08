@@ -34,6 +34,7 @@ func (s *Service) PutChapter(
 	operationID, key string,
 	chapter domain.ManuscriptChapter,
 	expectedVersion int64,
+	attempt int,
 	updatedAt time.Time,
 ) (domain.WorkspaceArtifact, error) {
 	payload, err := json.Marshal(chapter)
@@ -50,13 +51,14 @@ func (s *Service) PutChapter(
 		MediaType:   ChapterMediaType,
 		Content:     payload,
 		UpdatedAt:   updatedAt,
-	}, expectedVersion)
+	}, expectedVersion, attempt)
 }
 
 func (s *Service) ReplaceChapterBlock(
 	ctx context.Context,
 	operationID, key, blockID, text string,
 	expectedVersion int64,
+	attempt int,
 	updatedAt time.Time,
 ) (domain.WorkspaceArtifact, error) {
 	if strings.TrimSpace(blockID) == "" || strings.TrimSpace(text) == "" {
@@ -94,5 +96,5 @@ func (s *Service) ReplaceChapterBlock(
 	if !found {
 		return domain.WorkspaceArtifact{}, fmt.Errorf("chapter block %q: %w", blockID, ErrBlockNotFound)
 	}
-	return s.PutChapter(ctx, operationID, key, chapter, expectedVersion, updatedAt)
+	return s.PutChapter(ctx, operationID, key, chapter, expectedVersion, attempt, updatedAt)
 }

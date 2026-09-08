@@ -673,7 +673,7 @@ func TestRestartOperationFreezesNewSnapshotAndSeedsWorkspace(t *testing.T) {
 	if _, err := authorityStore.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 		OperationID: running.ID, Key: "chapter/chapter-1", MediaType: "text/plain",
 		Content: []byte("保留的工作稿"), UpdatedAt: now.Add(3 * time.Minute),
-	}, 0); err != nil {
+	}, 0, running.Attempt); err != nil {
 		t.Fatalf("write workspace: %v", err)
 	}
 	if _, err := authorityStore.TransitionOperation(

@@ -15,6 +15,16 @@ type Store struct {
 	db *sql.DB
 }
 
+// rowQuerier / execQuerier 让同一段读写逻辑既能跑在 *sql.DB 上，也能跑在调用方事务里。
+type rowQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type execQuerier interface {
+	rowQuerier
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

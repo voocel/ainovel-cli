@@ -177,7 +177,7 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 		Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "已经写入工作区的半成品。"}},
 	}
 	artifact, err := workspace.New(authorityStore).PutChapter(
-		ctx, first.ID, "chapter/chapter-1", chapter, 0, now.Add(2*time.Second),
+		ctx, first.ID, "chapter/chapter-1", chapter, 0, first.Attempt, now.Add(2*time.Second),
 	)
 	if err != nil {
 		t.Fatalf("write recoverable draft: %v", err)
@@ -823,7 +823,7 @@ func TestAffectedRewriteSubmissionCoversEveryWorkspaceChapter(t *testing.T) {
 		if _, err := authorityStore.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 			OperationID: operation.ID, Key: key, MediaType: workspace.ChapterMediaType,
 			Content: content, UpdatedAt: now,
-		}, 0); err != nil {
+		}, 0, operation.Attempt); err != nil {
 			t.Fatalf("put workspace chapter: %v", err)
 		}
 		patches = append(patches,
@@ -879,7 +879,7 @@ func TestWriterSubmissionEnforcesDirectiveWordCounts(t *testing.T) {
 		if _, err := authorityStore.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
 			OperationID: operation.ID, Key: "chapter/chapter-1", MediaType: workspace.ChapterMediaType,
 			Content: content, UpdatedAt: now,
-		}, version); err != nil {
+		}, version, operation.Attempt); err != nil {
 			t.Fatalf("put workspace chapter: %v", err)
 		}
 		patches := []domain.Patch{
