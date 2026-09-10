@@ -50,7 +50,7 @@ go run ./cmd/ainovel-cli --headless quick write \
 
 ## 详细创作入口（Headless 动作）
 
-以下动作均通过 `ainovel-cli --headless <动作>` 执行，与 TUI 调用同一组 Service 用例：
+以下动作均通过 `ainovel-cli --headless <动作>` 执行，与 TUI 调用同一组具名应用用例：
 
 ```text
 creation start|show|strategy|pause|cancel|events
@@ -85,16 +85,16 @@ Canon 事实使用受控 `kind` 与 predicate namespace；`new_value` 是当前�
 ## 模块边界
 
 ```text
-cmd/ainovel-cli      进程装配
-internal/entry       TUI 与 headless 入口，只调用 Service
-internal/service     用户用例与应用事务边界
-internal/operation   持久化队列、快照、Workspace、恢复
-internal/capability  Agent Runtime、固定 Worker、Prompt、Pack
-internal/change      Proposal、影响、权限、ChangeSet
-internal/store       SQLite Authority/Workspace/Event Store
-internal/derive      按 Revision 可重建、可缓存的故事上下文
-internal/domain      不依赖基础设施的领域对象与不变量
+internal/
+├── domain/       创作领域模型、变更与执行机制、目标推进、上下文推导
+├── app/          小说、作品、资源、任务、审批和工作台用例
+├── infra/        SQLite、工作区、模型运行时、Prompt/Pack、活动和配置适配
+├── entry/        TUI 与 headless 入口
+├── bootstrap/    静态装配具名组件，不承载业务或转发方法
+└── arch/         包依赖与架构契约检查
 ```
+
+`domain/model` 同时承载通用协议与当前创作内容类型；这是创作应用的领域内核，不是纯通用媒体框架。`domain/change`、`domain/operation`、`domain/creation` 自己声明所需的持久化接口，由 `infra/store` 实现；推进驱动通过任务接口调用 `app/task` 装配的执行能力，不反向依赖应用包。新增功能按领域规则、应用用例、外部适配各自归属，具体边界以架构文档 §11–12 为准。
 
 硬约束：
 

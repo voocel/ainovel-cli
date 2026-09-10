@@ -65,14 +65,16 @@ v1 面向个人创作者，本地单机使用，一本书由一个人拥有。�
 | 层 | 内容 | 稳定要求 |
 |---|---|---|
 | 内核机制 | 版本与授权（§4.7、§5.4）、变更提交（§5）、任务执行与隔离（§6–§6.2）、工件与证据有效性（§6.6、§6.4）、推进驱动（§6.3） | 发布后保持契约兼容；持久化格式或语义变化需显式演进 |
-| 创作领域 | 文档类型及其结构、校验、依赖提取（Intent / Plan / Canon / 正文 / 实体 / 附件 / Directive…），在 `domain` 内以一张类型登记表声明 | 可增类型，沿用提交算法；跨文档不变量保留为一个函数，不做每类型钩子 |
-| 应用编排 | 小说怎样推进、什么算完成（`service/novel_goal.go` 的推导器）、预设与入口 | 随产品演进，共用机制 |
+| 创作领域 | 文档类型及其结构、校验、依赖提取（Intent / Plan / Canon / 正文 / 实体 / 附件 / Directive…），在 `domain/model` 内以一张类型登记表声明 | 可增类型，沿用提交算法；跨文档不变量保留为一个函数，不做每类型钩子 |
+| 应用编排 | 小说怎样推进、什么算完成（`app/novel/novel_goal.go` 的推导器）、预设与入口 | 随产品演进，共用机制 |
 
 “所有章节写完并通过审阅才完成”是应用规则；“持久化目标、驱动任务、等待裁决、验证证据、记录完成”是内核。确定性代码不一定属于内核。内核机制里的每个抽象都只为真实使用者存在——今天是 LLM 小说执行器与外部生成执行器两族、小说与渲染两种目标——没有第二使用者的机制不写；应用编排层不做成通用框架、工作流引擎或插件系统。
 
 归属判据：一件东西属于内核，当且仅当它是两种预设共用且不可缺的——去掉它，所有权、纠正、完成三者之一就没有保证——并且它不做文学判断。文档类型的具体字段、Prompt、Worker、摘要与检索、界面与导出都不满足这条，它们是扩展面。
 
-内核职责主要由 `domain`、`store`、`change`、`operation`、`workspace` 与 `service`（含 Coordinator 循环）承载，但目录不等于内核：这些包里也有领域扩展（新文档类型与校验器）和应用用例（查询、资产管理、投影、目标推导器），它们随产品演进。是否改了内核，只看权威归属、授权规则、提交前提、执行隔离、生命周期、恢复或完成语义是否改变。扩展面是 `capability/*`、`derive`、`llm`、`entry`、`config`。依赖只向下，由 `internal/arch` 的白名单测试守护（§12.1）。
+内核机制由 `domain/change`、`domain/operation`、`domain/creation` 与 `domain/model` 中的契约承载，`infra/store`、`infra/workspace` 提供持久化与隔离实现。目录不是“纯通用内核”的声明：`domain/model` 仍包含 Intent、Plan、Canon、正文、审阅及小说运行策略，变更校验也包含创作领域不变量。本项目建立的是创作应用的领域内核，不把现有类型伪装成任意媒体的通用框架。是否改变内核契约，仍看权威归属、授权规则、提交前提、执行隔离、生命周期、恢复或完成语义是否改变。
+
+应用用例位于 `app`，具体技术实现位于 `infra`，用户入口位于 `entry`，静态装配位于 `bootstrap`。核心机制声明所需的持久化接口，基础设施实现这些接口；`creation` 声明任务驱动契约，由 `app/task` 绑定执行配置与执行器。源码依赖按此方向组织，不等于运行时调用只能由上向下；允许边界由 `internal/arch` 白名单测试守护（§12.1）。
 
 产品层与内核的关系只有一种：**一切产品能力都在内核之上、经 §14 的扩展点实现。产品层可以拥有交互状态（焦点、页面、输入草稿、请求状态），但不得形成第二套决定作品版本、审批结果、任务生命周期或完成状态的业务权威，也不得绕过统一变更协议。** 预期变化范围：
 
@@ -322,7 +324,7 @@ status       active | retired
 2. **原话保留，不翻译成事实变更**。Directive 不改写 Plan 或 Canon。如果用户的要求实质上是事实变更（“第 10 章 A 其实已经知道秘密了”），产品层引导走 Proposal 与影响分析（S4），而不是把 Directive 当成隐式补丁；两条路径在界面上可以是同一个输入框，在模型上必须是两个对象。
 3. **按作用域装配与核验**。命中的 active Directive 列表装入对应 Operation 的 Task（指令平面）：Story Context 是数据块，核心协议规定数据块里的命令式文字不能改变任务，所以 Directive 不走 Story Context；命中集随任务冻结，裁定的覆盖检查与确定性校验才有确定依据。审阅裁定必须对每条命中的 Directive 给出满足 / 未满足声明，与 Intent 核验同构（§6.4）。未满足即阻塞级发现，走既有的重写-再审闭环。
 4. **可机械校验的字段由确定性校验器执行**，属于 §4.7 第一层的同类：提交前检查、不满足报告偏差并回到 Agent 修正，修正次数受 RunStrategy 自动修复预算约束（§6.3），预算用尽即等待用户。同一作用域内可机械发现的矛盾（如字数区间不相交）在 Directive 入账时就报告，由用户修改或退役，不交给模型撞墙。不可机械校验的文本只进语义核验；自然语言要求之间的语义冲突不承诺确定性消解，由审阅报告、用户裁决。
-5. **Coordinator 零分支**。Directive 只通过 Task 影响创作内容，不改变 Coordinator 的推导表（架构测试守护 `service/run.go` 不引用任何控制类文档常量）。新增或退役 Directive 是内容变化：章节任务的基线只钉住本章的要求作用域摘要（D48/D51），作用域与在途任务目标不相交时提案重定位、在途任务不 stale；相交时按 §5.5 第 4 条处理，后继继承工作区并按当前快照重算任务输入，带上新要求（已实现）。
+5. **Coordinator 零分支**。Directive 只通过 Task 影响创作内容，不改变 Coordinator 的推导表（架构测试守护 `domain/creation/run.go` 不引用任何控制类文档常量）。新增或退役 Directive 是内容变化：章节任务的基线只钉住本章的要求作用域摘要（D48/D51），作用域与在途任务目标不相交时提案重定位、在途任务不 stale；相交时按 §5.5 第 4 条处理，后继继承工作区并按当前快照重算任务输入，带上新要求（已实现）。
 6. **退役不删除**。Directive 完成使命后由用户退役，或由作用域自然失效（章范围已全部批准且核验通过）；历史 Revision 仍可查它当时对哪些章生效。
 
 Directive 不是聊天记录，也不是 Overlay 的别名：Overlay 是全书级、长期的创作规则；Directive 有作用域与生命周期，且必须被核验。S10 的拒绝理由在语义上是作用域为被拒章节的 Directive，实现上由否决动作自动创建一条，不另建第二条回流通道。
@@ -413,7 +415,7 @@ milestone 的判定对象是变化的重大性。例行推进——每章正文�
 
 长期操作本身必须持久化，使用户可以查看、暂停、取消、重排和恢复任务。下一步可以由 Coordinator 根据当前事实确定性推导（§6.3），但推导结果必须先持久化为 Operation 才能执行；禁止只存在于内存中的隐式调度循环。
 
-首批 Operation 类型（`domain` 内一张种类登记表 `OperationKindSpec`：执行族、是否归属 CreationRun、是否消耗修订预算、进行中的文案、类型化任务输入；各层按类型解码，不各写一份匿名结构，D50）：
+首批 Operation 类型（`domain/model` 内一张种类登记表 `OperationKindSpec`：执行族、是否归属 CreationRun、是否消耗修订预算、进行中的文案、类型化任务输入；各层按类型解码，不各写一份匿名结构，D50）：
 
 ```text
 InitializeProject   llm
@@ -468,7 +470,7 @@ config_digest     执行配置摘要：LLM 族是 Execution Profile 的内容摘
 approval_policy   启动时刻的审批策略（追溯记录与最低约束）
 ```
 
-快照不区分执行族的字段形状：Execution Profile（Worker、核心协议、模型配置、Prompt 与工具摘要、来源清单）是 LLM 族的配置记录，按内容寻址、同摘要天然幂等，不再对快照自身取摘要。同一 Service 以 `ExecutorSet` 静态装配 LLM 与 external 两族，按任务族创建、按冻结身份运行；跨执行器领取仍保持全局优先级。领取按 `executor` 相等过滤，执行前核对身份；引擎与推导器都不认识 Prompt Registry。运行中 Prompt、Pack、Profile 或模型配置发生变化，不回头改写当前 Operation 的执行环境。系统把它标记为仍可继续、需要用户重启或已经 stale；不得把新旧配置混入同一次结果。用户希望新配置立即作用于当前任务时，产品执行“取消/保留旧工作区 → 基于新快照重启”的显式操作。
+快照不区分执行族的字段形状：Execution Profile（Worker、核心协议、模型配置、Prompt 与工具摘要、来源清单）是 LLM 族的配置记录，按内容寻址、同摘要天然幂等，不再对快照自身取摘要。`bootstrap` 通过 `app/task.ExecutorSet` 静态装配 LLM 与 external 两族，按任务族创建、按冻结身份运行；跨执行器领取仍保持全局优先级。领取按 `executor` 相等过滤，执行前核对身份；引擎与推导器都不认识 Prompt Registry。运行中 Prompt、Pack、Profile 或模型配置发生变化，不回头改写当前 Operation 的执行环境。系统把它标记为仍可继续、需要用户重启或已经 stale；不得把新旧配置混入同一次结果。用户希望新配置立即作用于当前任务时，产品执行“取消/保留旧工作区 → 基于新快照重启”的显式操作。
 
 但权限与审批不属于执行环境：提交裁决始终取快照与最新已批准 Revision 中更严格的一方（§5.5），`approval_policy_snapshot` 作追溯记录与最低约束，用户新加的锁对在途任务的后续提交立即可见。
 
@@ -498,11 +500,13 @@ Goal 与运行策略的每次修改都记录为版本化 Run 事件；每个 Ope
 
 状态语义：`running / waiting_user / paused / completed / failed / cancelled`。`waiting_user` 是 §5.4 无人值守等待态的载体：已写内容、工作区与上下文全部保留，用户裁决后原地继续。Operation 层的结局向上传导时必须区分三类：`stale`（由 Project 内容变化导致）可按 §5.5 的确定性规则创建继承 Workspace 的后继 Operation；明确可重试错误只归唯一重试策略（§6.2）处理；`failed` 必须显式暴露，CreationRun 转入 `failed` 或 `waiting_user`——未经明确策略或用户操作，Coordinator 不得把 failed 自动转换成新任务，不吞错、不隐藏失败、不无限重跑。
 
-Creation Coordinator 是 Project Service 内的逻辑组件，依据 Goal、运行策略和最新 Project Revision **确定性地**产生下一项 Operation；它不做文学判断，属于 §11 模块纪律第 7 条的第一类。
+Creation Coordinator 位于独立的 `creation` 包，通过公开 Goal 契约接收应用依据运行策略和作品版本产生的下一步；它校验、执行并记录落点，不做文学判断，属于 §11 模块纪律第 7 条的第一类。
 
-推导契约（D49）把 Coordinator 分成内核循环与目标推导器。Goal 是 `{kind, payload}`：内核只持有种类与载荷，按种类找到推导器校验载荷；小说目标 `novel` 的载荷是前提与目标章数。内核循环每轮：读快照与 Run、用户裁决优先、收集证据（基线仍成立的审阅裁定与工件、本轮已用修订次数）、向推导器要**恰好一个**下一步、按步骤种类落点——`work` 驱动一个 Operation（槽位 ID、种类、类型化输入与等待/失败/卡死文案），`wait` 转 `waiting_user`，`done` 绑定当前 Revision 完成，`fail` 是确定性失败；同一槽位成功后再次出现即卡死判定，绝不无限重试。推导器是纯函数，只读快照与证据，不触存储与执行引擎；小说规则（完成契约、先审后扩、预算、重写目标）全部住在小说推导器里，内核循环不引用任何小说标识（架构测试守护）。新目标种类只登记一个推导器，内核零改动。
+推导契约（D49/D53）分为通用驱动、应用目标适配器和应用纯规则。持久化 Goal 是 `{kind, payload}`；组合根按种类静态注册 `creation.Goal`，由其校验载荷。驱动每轮读取 Run 并尊重用户暂停/取消，调用 `Goal.Next(ctx, run)`；适配器自行读取领域快照、选择有效证据并调用纯规则，返回 `Decision{Revision, Step}`。驱动验证恰好一个步骤和实际存在的观察版本；观察期间来源版本、运行目标或策略变化则重新推导，不执行旧观察的步骤。
 
-推导方式是**缺口对账**而不是固定流程（D36）：Coordinator 从当前 Revision 与 Run 证据中枚举缺口——尚无已批准正文的章节、缺失或已失效的审阅裁定、未满足的 Directive、受影响待重写的章节、用户显式发起的任务——按确定性优先级填补；缺口清零且完成契约（§6.4）满足即 completed。用户发起的 Operation（点名重写某章、影响修复 `RewriteAffected`）是缺口的一种来源，必须进入同一推导链并由同一驱动循环执行，不得成为无人驱动的孤儿任务。新增一种用户控制形式不得为 Coordinator 增加分支：控制通过权威文档改变“缺口是什么”与“Story Context 里有什么”，Coordinator 只对缺口做对账。
+`work` 驱动一个 Operation（槽位 ID、种类、类型化输入与等待/失败/卡死文案），`wait` 转 `waiting_user`，`done` 绑定所检查的 Revision 完成，`fail` 是确定性失败；同一槽位成功后再次出现即卡死判定，绝不无限重试。小说适配器负责读取审阅裁定和预算，小说 `Policy.Next` 是纯函数；完成契约、先审后扩和重写目标都在小说包内。驱动不加载小说快照、审阅或媒体证据，新目标实现通过公开构造接口注册，测试不访问注册表私有字段。
+
+小说的推导方式是**缺口对账**而不是固定流程（D36）：小说规则从当前 Revision 与 Run 证据中枚举缺口——尚无已批准正文的章节、缺失或已失效的审阅裁定、未满足的 Directive、受影响待重写的章节、用户显式发起的任务——按确定性优先级填补；缺口清零且完成契约（§6.4）满足即 completed。用户发起的 Operation（点名重写某章、影响修复 `RewriteAffected`）是缺口的一种来源，必须进入同一推导链并由同一驱动循环执行，不得成为无人驱动的孤儿任务。新增一种用户控制形式不得为 Coordinator 增加分支：控制通过权威文档改变“缺口是什么”与“Story Context 里有什么”，Coordinator 只对缺口做对账。
 
 任务的创作指导语（“如何设计卷弧”“如何按审阅意见重写”）属于 Prompt Slot（§7.2）。Coordinator 与 Operation Task 只提供事实：目标节点、窗口、命中的 Directive、审阅意见与基线 Revision；不得在 Coordinator 里硬编码创作方法文本，否则 Overlay / Profile / Pack 的分层覆盖对它无效。
 
@@ -733,54 +737,36 @@ SQLite 保存唯一权威状态与版本；Markdown/JSONC 只是带 `base_revisi
 
 ## 11. 目标模块边界
 
-```text
-┌────────────────────────────────────────────┐
-│             TUI / Web / CLI / API          │
-└───────────────────┬────────────────────────┘
-                    ▼
-┌────────────────────────────────────────────┐
-│              Project Service               │
-│ Command · Query · Approval · Revision      │
-│ Creation Coordinator（确定性产生下一项任务）│
-└───────────┬────────────────────┬───────────┘
-            ▼                    ▼
-┌──────────────────────┐  ┌──────────────────┐
-│    Change Engine     │◀─│ Operation Engine │
-│ Proposal · Impact    │  │ Queue · Workspace│
-│ Validate · Commit    │  │ Pause · Resume   │
-└───────────┬──────────┘  └────────┬─────────┘
-            │                      ▼
-            │            ┌───────────────────┐
-            │            │Capability Runtime │
-            │            │Worker · Tool      │
-            │            │Prompt · Pack      │
-            │            └────────┬──────────┘
-            ▼                     ▼
-┌────────────────────────────────────────────┐
-│           SQLite-backed Store Plane        │
-│ Authority: Project · Profile · Pack         │
-│ Runtime: CreationRun · Operation ·          │
-│          Workspace · Derived                │
-└────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    UI[entry：TUI / headless] --> UC[app：具名应用用例]
+    Assembly[bootstrap：仅静态装配] -. 注入依赖 .-> UC
+    UC --> Domain[domain：创作模型与机制]
+    UC --> Adapters[infra：存储与执行适配]
+    Adapters --> Domain
+    Domain --> Model[domain/model：协议与创作类型]
+    Assembly -. 绑定任务驱动与持久化接口 .-> Domain
 ```
+
+图中实线表示源码依赖。运行时 `domain/creation` 通过自己声明的任务接口请求工作，由 `app/task` 完成执行配置装配；`domain/change`、`domain/operation` 与 `domain/creation` 通过各自接口访问存储，由 `infra/store` 兑现事务与归属检查。领域机制不导入 `app` 或 `infra`。
 
 模块纪律：
 
-1. UI 只通过 Project Service 读写，不直接访问 Store。
+1. UI 通过具名用例组件读写，不直接访问 Store；bootstrap 只负责装配。
 2. Agent 和 Extension 可以写所属 Operation Workspace；对任何 Authority Stream 的唯一输出是 Proposal，不能直接提交内容事实。
 3. Change Engine 是 Project/Profile/Pack Authority 写入的唯一入口；Operation Engine 只写任务与工作区，Derive 只写可重建数据，三类写权限不混用。
 4. Operation Engine 负责任务生命周期，不参与文学判断。
 5. Store Plane 负责事务和版本，不理解 Prompt 或模型。
 6. Derived Data 有明确基线版本，允许重建。
 7. 三分法纪律：可枚举的决策用确定性代码并配穷举规格测试；边界清晰的判断用独立的单次 LLM 函数，裁定落盘可审计；开放创作交给 Agent。Operation 的前置条件、过期判定和 Change Engine 的结构校验属于第一类，不得下放给模型。这条纪律是全部架构的地基。
-8. Creation Coordinator 是 Project Service 内的逻辑组件，语义见 §6.3、D36 与 D49：内核循环（`service/run.go`）只做机制，目标推导器（`service/novel_goal.go`）按目标种类做缺口对账与确定性推导；不构成第二控制权威、不因新增控制类型增加分支、不引用任何小说标识。
+8. Creation Coordinator 独立于小说应用，语义见 §6.3、D36、D49 与 D53：`domain/creation` 接收 `Goal.Next(ctx, run)` 返回的 `Decision{Revision, Step}`，校验版本与单一落点，再驱动任务。目标适配器自行读取快照和证据；小说适配器调用 `app/novel/novel_goal.go` 的纯推导规则。Coordinator 不加载小说审阅、不接受小说快照或 QuickWriteCommand，不构成第二控制权威。
 
 ## 12. 技术基线
 
 - 语言继续使用 Go。
 - LLM Provider 层复用 `agentcore` / `litellm`；若未来替换，只能改变适配实现，不能把模型细节带入领域层。
 - 本地唯一权威存储使用 SQLite。
-- 当前 TUI 使用 Bubble Tea，但 Project Service 不依赖具体 UI，CLI、Web 与未来入口共用同一 API。
+- 当前 TUI 使用 Bubble Tea，但用例组件不依赖具体 UI，CLI、Web 与未来入口复用相同用例。
 
 ### 12.1 仓库形态与目录结构（随 D17 已决定）
 
@@ -806,64 +792,71 @@ ainovel-cli/
 
 代码基调：**简洁优雅、方便扩展、不过度设计、流程清晰**。落到结构上是四条原则：
 
-1. 顶层目录与 §11 模块边界一一对应，看目录即看架构。
-2. 依赖只向下、无环，一张图说得清；任何反向引用都是设计错误。
+1. 顶层目录表达领域、应用、基础设施、入口与装配层次；子包表达具体职责。
+2. 源码依赖无环；核心机制面向自身声明的接口，技术实现依赖契约，运行时调用不决定源码依赖方向。
 3. 不为未实现的能力预留空目录（如 Capability Extension），能力落地时目录才出现。
 4. 语义判断的业务 Contract 就近归属唯一调用方；通用模型调用、结构化输出、usage 和 provider 能力统一收口到 `llm`，沿用 §11 模块纪律第 7 条。
 
-目录结构基线（模块边界不动，包内细节允许随实现演进）：
+目录结构基线（只列已有职责，不为空想能力预建包）：
 
 ```text
-ainovel-cli/
-├── go.mod                 # module github.com/voocel/ainovel-cli
-├── cmd/ainovel-cli/       # 唯一二进制：TUI 默认，--headless，eval 子命令
-├── assets/                # 内置 Novel Pack 的打包位置；有实际内容时建立
-├── docs/                  # 唯一核心架构 + product/ 上层产品文档
-├── evals/                 # 评测样例与基线
-└── internal/
-    ├── domain/            # Intent/Plan/Canon/Entity/Manuscript/Ownership/Directive/Revision 纯类型与不变量，零 IO、零依赖
-    ├── store/             # SQLite Store Plane：Authority / CreationRun / Operation Workspace / Derived 的独立 Repository；只依赖 domain
-    ├── change/            # Change Engine：Proposal → Impact → Validate → Commit，Authority 内容写入唯一入口
-    ├── operation/         # Operation Engine：持久化队列、执行快照、Workspace 与生命周期
-    ├── service/           # Project Service：Command / Query / Approval 门面，UI 唯一依赖点
-    ├── capability/        # Capability Runtime
-    │   ├── agents/        # Stable Worker Profile：固定工具/输入输出/StopGuard；工作于 Operation Workspace
-    │   ├── prompt/        # Prompt Compiler：Slot / Overlay / Execution Snapshot / 来源追踪 / lint / cache digest
-    │   ├── pack/          # Novel Pack：清单 / 安装 / 启用 / 合并
-    │   └── profile/       # Creator Profile：规则 / 正反例 / 候选确认
-    ├── derive/            # 派生数据：摘要 / 索引 / 文风统计 / 上下文包；记录基线 revision、可重建
-    ├── llm/               # 通用模型供给面；不理解故事，被 capability/change/derive 的局部 Contract 调用
-    │   ├── contract/      # 单次结构化裁定：Contract + Execute[T]
-    │   ├── retry/         # 唯一的调用重试策略与错误分类；不得与 agentcore/provider 重试叠加
-    │   └── models/        # 模型供给：Settings / ModelSet / 角色映射
-    ├── entry/
-    │   ├── tui/           # Bubble Tea；只 import service
-    │   └── headless/
-    ├── config/            # 配置加载与首次引导
-    └── logger/ errs/ diag/ # 首个切片确实需要的支撑包；其他小件就近放置，不建 utils 杂物间
+internal/
+├── domain/                 # 创作领域及内核机制
+│   ├── model/              # 通用协议、创作类型、注册表与值校验；零 IO
+│   ├── change/             # 影响、授权、校验、提交；声明持久化契约
+│   ├── operation/          # 执行、隔离、恢复、结果收尾；声明持久化契约
+│   ├── creation/           # Goal 决策、任务驱动、运行落点；声明任务及持久化契约
+│   └── derive/             # 确定性创作上下文与可重建数据推导
+├── app/                    # 应用用例，各自持有所需依赖
+│   ├── novel/              # 小说预设、纯推进规则、审阅解释和用户裁决
+│   ├── project/            # 作品读模型、创建、编辑、所有权、要求及投影
+│   ├── resource/           # 创作资源、偏好、工件查询与回收
+│   ├── profile/            # LLM 上下文与执行配置编译
+│   ├── task/               # 任务启动、重启、执行器路由与用户控制
+│   ├── decision/           # 候选审批、拒绝、回退与受影响内容重写
+│   ├── evidence/           # 有效工件与检查证据查询
+│   └── workbench/          # 工作台只读模型、展示数据与活动订阅
+├── infra/                  # 技术适配与持久化实现
+│   ├── store/              # SQLite 权威版本、任务、运行、派生数据与事务
+│   ├── workspace/          # 所属 Operation 的工作区访问
+│   ├── capability/         # Agent Runtime、Worker、工具与执行适配
+│   │   ├── prompt/         # Prompt 编译、来源与摘要
+│   │   └── pack/           # Novel Pack 安装、加载与合并
+│   ├── llm/                # 通用模型调用、结构化输出与重试
+│   │   └── models/         # 模型配置与角色映射
+│   ├── activity/           # 活动发布与订阅管道
+│   └── config/             # 配置加载与首次引导
+├── entry/
+│   ├── tui/                # Bubble Tea，调用具名用例
+│   └── headless/           # 命令入口，调用具名用例
+├── bootstrap/              # 静态构造和连接组件；无业务或转发方法
+└── arch/                   # 包依赖与关键架构契约测试
 ```
+
+新增内容类型与确定性规则归 `domain`；用户操作与创作流程归 `app`；模型、文件、数据库或外部服务接入归 `infra`；入口仅转换输入与呈现结果。只有连接依赖的代码进入 `bootstrap`。本轮不重定义 Evidence Scope 或 RunStrategy 的持久化协议；媒体目标的受控测试证明机制可复用，不证明领域模型已经与小说语义完全解耦。
 
 主流程一句话：
 
 > 用户入口或预设 → 创建/更新 CreationRun → Coordinator 依据 Goal、运行策略与最新 Project Revision 确定性产生下一项 Operation → Operation 固定执行快照并创建 Workspace → 派固定 Worker Profile 产出 Outcome → 如需修改 Authority 则提交 Proposal → Change Engine 算影响、做校验 → 按审批策略提交为 ChangeSet → Authority Store 落新 Revision → Derive 按新 Revision 重建 → Coordinator 重新协调：继续、等待用户，或依完成契约进入 completed。
 
-依赖方向（单向、无环）：
+依赖方向（以架构测试中每个包的明确白名单为准）：
 
 ```text
-entry → service → { operation, change }
-operation → { capability, change, store.operation }
-change → store.authority
-derive → { store.authority(read), store.derived(write) }
-capability → { store.authority(read), store.operation(workspace write), llm }
-change / derive → llm（仅各自局部的单次结构化语义 Contract）
-llm → agentcore / litellm
-domain 被所有层引用，自身零依赖
+entry → bootstrap 装配出的 app 具名用例及 creation 驱动入口
+bootstrap → app / domain / infra 的构造器；任何组件不得反向依赖 bootstrap
+app → domain；按用例需要依赖其他具名 app 组件与 infra 适配
+domain/{change,operation,creation} → 自己声明的接口、model 及必要的领域机制
+domain/derive → domain/model
+domain/model → 标准库（零 IO）
+infra/store → 领域契约；不理解 Prompt 或模型
+infra/capability → 领域契约、工作区、模型与提示词适配
 ```
 
+核心机制不导入具体 Store，也不通过全能 Repository 转移耦合；接口仅包含该机制实际调用的方法。`app/task` 实现 `creation` 所需的任务驱动契约，`bootstrap` 连接两者，因而新增执行配置不会让推进驱动反向依赖应用。
 依赖方向的五条硬规则（与 §11 的模块纪律是两组清单）：
 
 1. capability 对 Authority Store 只读，只能写所属 Operation Workspace；Agent 的正式产出经 change 提交，不存在“工具直写事实”的旁路。
-2. service 是 UI 唯一入口；entry 不得 import change / operation / store。
+2. entry 显式调用具名用例组件；不得 import change / operation / store。bootstrap 只装配，不新增业务方法或以转发方式重新建立全能门面。
 3. store 不理解 Prompt 与模型；llm 不理解故事。
 4. operation 可以编排 capability 和 change，但不能自行提交 Authority，也不能做文学判断。
 5. change 的结构影响、权限、版本和提交是确定性代码；模型只补充语义影响，不能绕过确定性结果。
@@ -883,9 +876,9 @@ README 只负责启动和使用入口，不维护另一份架构或完成度清�
 
 ## 14. 核心稳定与变更治理
 
-产品需求一律在 §0.5 的内核之上、通过既有扩展点落地：entry 与 Service 扩展交互；Worker/Tool 扩展创作能力；Derived/Context Builder 扩展摘要和检索；Pack/Profile/Overlay 扩展创作资产；只读 Adapter 扩展导出；Provider Adapter 扩展模型支持。
+产品需求一律在 §0.5 的内核之上、通过既有扩展点落地：entry 与 app 具名用例扩展交互；Worker/Tool 扩展创作能力；Derived/Context Builder 扩展摘要和检索；Pack/Profile/Overlay 扩展创作资产；只读 Adapter 扩展导出；Provider Adapter 扩展模型支持。
 
-用户控制分三类，各有唯一落点（D39）。**内容要求**（这章怎么写、哪些不能动）首选复用 Directive 与 Ownership 的作用域和约束字段，现有文档无法承载其语义时才新增权威文档类型；标准落法只有一种：权威文档类型（含校验）+ Context Builder 装配 + 裁定核验（+ 可选的确定性校验器），见 §0.4 第 1 条。**运行控制**（写到第几章停、修复预算、每章候选数）在 CreationRun 的 Goal 与 RunStrategy 上以版本化事件演进；调整已有策略值不改协议，新增运行语义可演进 Coordinator 的确定性推导，触及生命周期、恢复或完成契约时记录决策。**需要架构决策**的是改变权威归属、授权规则、提交前提、执行隔离、生命周期、恢复或完成语义；沿既有契约增加数据类型、校验器和应用用例不需要重新定义架构。若某个内容要求需要修改 Coordinator 推导表、Operation Engine 或 Change Engine 的授权规则，先视为设计错误，回到 §0.1 第二问与 §4.9；确有证据时再按下文修订架构。该纪律由架构测试守护：service 包的协调器推导不得依赖具体控制类型的枚举分支。
+用户控制分三类，各有唯一落点（D39）。**内容要求**（这章怎么写、哪些不能动）首选复用 Directive 与 Ownership 的作用域和约束字段，现有文档无法承载其语义时才新增权威文档类型；标准落法只有一种：权威文档类型（含校验）+ Context Builder 装配 + 裁定核验（+ 可选的确定性校验器），见 §0.4 第 1 条。**运行控制**（写到第几章停、修复预算、每章候选数）在 CreationRun 的 Goal 与 RunStrategy 上以版本化事件演进；调整已有策略值不改协议，新增运行语义可演进 Coordinator 的确定性推导，触及生命周期、恢复或完成契约时记录决策。**需要架构决策**的是改变权威归属、授权规则、提交前提、执行隔离、生命周期、恢复或完成语义；沿既有契约增加数据类型、校验器和应用用例不需要重新定义架构。若某个内容要求需要修改 Coordinator 推导表、Operation Engine 或 Change Engine 的授权规则，先视为设计错误，回到 §0.1 第二问与 §4.9；确有证据时再按下文修订架构。该纪律由架构测试守护：creation 包的协调器不得依赖具体控制类型的枚举分支。
 
 修改本文件必须同时满足：
 
@@ -927,7 +920,7 @@ README 只负责启动和使用入口，不维护另一份架构或完成度清�
 | D24 | 预设只是策略参数包 | **已决定**（2026-08-29） | 预设在启动时展开为 Project 边界与 CreationRun 运行策略，此后系统不再判断预设身份；允许多个薄入口，禁止并行的领域模型、运行协议与状态机 |
 | D25 | 无条件确认清单 | **已决定**（2026-08-29） | Intent、Ownership 规则、审批策略三类变更无论策略均需用户确认，AI 不得自动批准；初始化事务中的 Intent 补全是唯一例外（D28） |
 | D26 | 拒绝理由回流与无人值守等待 | **已决定**（2026-08-29） | reject 携带理由并入账为该章作用域的 Directive（D33），随后继任务输入进入重写与审阅核验；无人值守遇强制确认转入可恢复等待，不中止整本创作；术语隐藏覆盖失败与等待文案，默认创作语言、原始诊断可展开 |
-| D27 | CreationRun | **已决定**（2026-08-29） | 整书连续创作的持久化运行对象，属 Runtime Plane，不构成第二故事/控制权威；Coordinator 为 Project Service 内逻辑组件，确定性产生下一项 Operation，不做文学判断；每个 Project 同时至多一个非终态 Run，内容类 AI Operation 必须归属某个 Run |
+| D27 | CreationRun | **已决定**（2026-08-29） | 整书连续创作的持久化运行对象，属 Runtime Plane，不构成第二故事/控制权威；Coordinator 位于独立 creation 包，经应用目标契约驱动下一项 Operation（D53），不做文学判断；每个 Project 同时至多一个非终态 Run，内容类 AI Operation 必须归属某个 Run |
 | D28 | 初始 Intent 补全边界 | **已决定**（2026-08-29） | 仅在用户主动发起的初始化事务中，AI 可按预设补全缺失 Intent；初始 Revision 形成后，任何 Intent 变化（含补填空字段）均需用户确认 |
 | D29 | 完整作品完成契约 | **已决定**（2026-08-29） | CreationRun 进入 completed 需满足 §6.4 五项条件并绑定明确 Project Revision；队列为空不构成完成 |
 | D30 | OperationOutcome | **已决定**（2026-08-29） | Operation 产出统一为 Outcome（工件/发现/裁定），Proposal 可选；只有改变 Authority 才提交 Proposal，审阅通过不制造空 Patch |
@@ -949,7 +942,30 @@ README 只负责启动和使用入口，不维护另一份架构或完成度清�
 | D46 | 外部任务契约 | **已决定并实现**（2026-09-08） | 不加新状态：请求记录先于提交落为工作区工件，恢复按 RequestID 查询，服务不认识则同 ID 重提，无法回答即失败码 `result_unknown`；对账 = Resume、重提 = Restart（后继继承记录，但只有目标、执行器、输入（含基线）、配置与来源快照身份相同才可复用；不同或用户决定重提的未知结果使用新 ID）；失败码随下一次状态变化清空（§6.2） |
 | D47 | 产出与工件契约 | **已决定并实现**（2026-09-08） | Outcome 为 proposal / verdict / artifacts 三合一（前两者互斥，至少一项）；工件内容寻址、原子发布、元数据走执行侧围栏并先于提案落盘；`attachment` 是工件进入权威的唯一方式；GC 只显式触发；审阅裁定仍是派生文档（§6、§6.6） |
 | D48 | 证据基线 | **已决定并实现**（2026-09-08） | 审阅裁定与生成工件携带 EvidenceBasis（文档最后变化 revision、作用域成员摘要、工件摘要）；基线由装配层构造进类型化输入、产出继承、内核收尾时核对属实；有效性只看基线是否成立，不看整本 Revision；相关 Canon 生效位置由事实版本和作用域覆盖，执行配置变化不追溯失效；派生文档键不变，有效裁定跨 Revision 检索；基线不进模型提示词（§6.4） |
-| D49 | 目标种类化与推导契约 | **已决定并实现**（2026-09-08） | Goal 为 `{kind, payload}`；内核循环只做机制（读快照、用户裁决优先、收集证据、驱动步骤、落点），目标推导器是纯函数返回恰好一个下一步（work / wait / done / fail）；小说规则住在 `service/novel_goal.go`，内核循环不引用小说标识，推导器不触存储与执行引擎（架构测试守护）；新目标种类只登记一个推导器（§6.3） |
-| D50 | 文档与任务种类登记 | **已决定并实现**（2026-09-08） | `domain` 内一张文档类型登记表（权威、单例、用户专属、校验、依赖提取）与一张任务种类登记表（执行族、Run 归属、预算计数、文案、类型化输入）；各层按登记与类型解码，跨文档不变量保留为一个函数；完整性由 TestEveryOperationKindIsAssembled 守护（§6） |
+| D49 | 目标种类化与推导契约 | **已决定并实现**（2026-09-08） | Goal 为 `{kind, payload}`；内核循环只做机制（校验应用观察版本、用户裁决优先、驱动步骤、落点）；应用 Goal 适配器负责读取快照与证据，小说纯推导规则返回恰好一个下一步（work / wait / done / fail）；小说规则住在 `app/novel/novel_goal.go`，内核循环不引用小说标识，推导器不触存储与执行引擎（架构测试守护）；新目标种类只登记一个推导器（§6.3） |
+| D50 | 文档与任务种类登记 | **已决定并实现**（2026-09-08） | `domain/model` 内一张文档类型登记表（权威、单例、用户专属、校验、依赖提取）与一张任务种类登记表（执行族、Run 归属、预算计数、文案、类型化输入）；各层按登记与类型解码，跨文档不变量保留为一个函数；完整性由 TestEveryOperationKindIsAssembled 守护（§6） |
 | D51 | 提案重定位规则 | **已决定并实现**（2026-09-09） | 提案基线落后时，仅当中间各 ChangeSet 只改过用户专属文档、未碰提案自己的文档，且任务基线（章节任务为本章要求作用域，扩窗为所依据的窗口裁定基线）在当前仍成立，才把基线搬到当前、重算影响并重新裁决；合规报告由宿主绑定候选补丁及实际检查的约束，恢复或重定位后绑定不同就重做独立检查；否则 stale 由后继继承工作区。执行收尾、用户批准与工作台共用同一规则；裁定只核对基线不重定位；重定位后落库前的提交冲突转 stale 而非 failed；执行配置（Overlay/Assets）不使在途任务失效（§5.5、§6.2） |
 | D52 | 复审后的内核边界收口 | **已实现，协议回归验收**（2026-09-09） | Canon 上下文与证据共用选择规则；合规报告绑定候选与约束，恢复重定位不能复用不相容证据；外部请求绑定冻结身份；工件以数据库为所有权边界、发布保护记录与 GC 事务互斥；Service 静态装配多个执行器，检查契约可扩展，小说与媒体检查共用收尾和恢复。受控执行器验证机制，不代表真实媒体服务或长篇模型质量已经验收 |
+
+### D53：应用职责拆分（2026-09-10；目录归属由 D54 更新）
+
+删除 `internal/service`。`application.App` 只持有具名组件，由组合根静态装配，禁止添加业务方法或统一转发入口。各组件的允许依赖由架构测试单独登记；新增能力必须选择其领域、用例或执行适配的归属，不能默认进入组合根。
+
+`creation.Goal` 是公开的目标适配契约：应用自行加载状态并返回 `Decision{Revision, Step}`；`Step` 恰好为 work、wait、done、fail 之一。`Revision` 必须是本作品实际存在的版本；观察期间作品、目标或策略变化时重新推导，并按最新目标种类选择适配器。小说的 `Policy.Next` 保持纯函数。`project.Snapshot` 是当前创作领域的读模型，不是内核强加给新应用的快照格式。第二个媒体目标通过外部测试包的公开构造接口注册，不修改私有字段。
+
+小说审阅、媒体检查和工件有效性复用 Change Engine 的基线判断；领域负责声明依赖与解释结果。此轮不变更数据库 schema、任务状态或持久化格式，不引入动态插件或工作流框架。
+
+
+### D54：目录层次与核心持久化边界（2026-09-10）
+
+将职责按 `domain / app / infra / entry / bootstrap / arch` 组织，替代所有组件平铺于 `internal`。D53 的组合根迁为 `bootstrap.App`，仍仅持有具名组件，无业务或转发方法；`domain/creation` 不依赖 `app/task`，由任务契约与静态装配连接。变更、执行和推进机制自行定义持久化接口，由 `infra/store` 实现，领域不导入具体数据库适配。
+
+`domain/model` 明确保留当前创作领域语义与注册表，`domain/change` 保留创作内容不变量；这些包并非与小说完全无关的通用框架。本次调整解决导航、职责与依赖方向，不重定义已持久化的作用域、运行策略、任务状态或数据库格式。后续扩展在已有契约内增加类型、用例与适配；只有真实需求触及协议语义时才按 §14 演进。
+
+### D55：决策落盘、后继创建与归属检查收口（2026-09-10）
+
+Goal 的完成、等待、失败决策通过 `SettleCreationRun` 落盘：同一原子写入校验所观察的运行状态、目标、策略和作品 Revision。检查后到写入前发生变化则重新推导；带诊断错误的失败决策遵循同一规则，不得绕过基线检查。用户暂停、取消等显式控制继续使用状态转移入口。
+
+Restart 的后继创建与前任工作区继承必须在同一事务内提交，避免出现可被领取但缺失外部请求记录、草稿或反馈的后继。相同后继 ID 的重入比较完整执行配置，不能把不同 Pack、Creator Profile 或执行器视为同一请求；推进适配器完整传递显式 Worker 与模型配置。
+
+心跳续租同时校验 worker 与 attempt，旧执行不能为新 attempt 续租。工件同 ID 的幂等写入同时校验内容、证据及作品和生成任务归属，跨任务 ID 碰撞返回冲突。以上沿用既有状态和持久化格式，不增加任务状态或 schema 迁移。

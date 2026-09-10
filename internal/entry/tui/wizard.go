@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
 // 配置向导（workbench §4）：未配置模型时的启动落点，完成后进入首页。
@@ -21,7 +21,7 @@ type wizardState struct {
 }
 
 type wizardVerifiedMsg struct {
-	config app.Config
+	config appconfig.Config
 	err    error
 }
 
@@ -37,7 +37,7 @@ var wizardFields = []struct {
 	{label: "Base URL（可选）", placeholder: "自建或中转网关才需要，直接回车跳过", optional: true},
 }
 
-func newWizardState(initial app.Config, initialErr string, fromHome bool) wizardState {
+func newWizardState(initial appconfig.Config, initialErr string, fromHome bool) wizardState {
 	state := wizardState{inputs: make([]textinput.Model, len(wizardFields)), err: initialErr, fromHome: fromHome}
 	values := []string{initial.Provider, initial.Model, initial.APIKey, initial.BaseURL}
 	for i, field := range wizardFields {
@@ -86,7 +86,7 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.wizard.inputs[m.wizard.step].Focus()
 			return m, nil
 		}
-		config := app.Config{
+		config := appconfig.Config{
 			Provider: strings.TrimSpace(m.wizard.inputs[0].Value()),
 			Model:    strings.TrimSpace(m.wizard.inputs[1].Value()),
 			APIKey:   strings.TrimSpace(m.wizard.inputs[2].Value()),
@@ -100,7 +100,7 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) verifyConfigCmd(config app.Config) tea.Cmd {
+func (m model) verifyConfigCmd(config appconfig.Config) tea.Cmd {
 	verify, ctx := m.deps.Verify, m.ctx
 	return func() tea.Msg {
 		if verify == nil {
@@ -119,7 +119,7 @@ func (m model) finishWizard(verified wizardVerifiedMsg) (tea.Model, tea.Cmd) {
 		m.wizard.err = "连不上模型，请检查配置：" + verified.err.Error()
 		return m, nil
 	}
-	if err := app.SaveConfig(m.deps.ConfigDir, verified.config); err != nil {
+	if err := appconfig.SaveConfig(m.deps.ConfigDir, verified.config); err != nil {
 		m.wizard.err = err.Error()
 		return m, nil
 	}
@@ -139,7 +139,7 @@ func (m model) viewWizard() string {
 	var view strings.Builder
 	view.WriteString(splash(min(64, max(40, m.width-8))))
 	view.WriteString(styleTitle.Render("配置模型") + "\n")
-	view.WriteString(styleHint.Render("配置一次，之后直接开写。保存在 "+app.ConfigPath(m.deps.ConfigDir)) + "\n\n")
+	view.WriteString(styleHint.Render("配置一次，之后直接开写。保存在 "+appconfig.ConfigPath(m.deps.ConfigDir)) + "\n\n")
 	for i, field := range wizardFields {
 		if i == m.wizard.step {
 			view.WriteString(marker(true, field.label) + "\n")

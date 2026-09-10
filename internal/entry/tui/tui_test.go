@@ -12,14 +12,17 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/activity"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
-	"github.com/voocel/ainovel-cli/internal/service"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/app/novel"
+	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"github.com/voocel/ainovel-cli/internal/app/workbench"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/activity"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
+	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
-func newTestDeps(t *testing.T, configured bool) (Deps, *service.Service) {
+func newTestDeps(t *testing.T, configured bool) (Deps, *bootstrap.App) {
 	t.Helper()
 	ctx := context.Background()
 	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
@@ -27,10 +30,10 @@ func newTestDeps(t *testing.T, configured bool) (Deps, *service.Service) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { authorityStore.Close() })
-	api := service.New(authorityStore)
+	api := bootstrap.New(authorityStore, bootstrap.Options{})
 	return Deps{
 		API: api, Configured: configured, ConfigDir: t.TempDir(), UserID: "tester",
-		Rebuild: func(app.Config) (*service.Service, error) { return api, nil },
+		Rebuild: func(appconfig.Config) (*bootstrap.App, error) { return api, nil },
 	}, api
 }
 
@@ -63,7 +66,7 @@ func pressTimes(t *testing.T, m model, key tea.KeyType, times int) model {
 func TestWizardVerifiesThenSavesConfigAndEntersHome(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	verified := false
-	deps.Verify = func(context.Context, app.Config) error { verified = true; return nil }
+	deps.Verify = func(context.Context, appconfig.Config) error { verified = true; return nil }
 	m := newModel(context.Background(), deps)
 	if m.page != pageWizard {
 		t.Fatalf("page = %v, want wizard when unconfigured", m.page)
@@ -81,7 +84,7 @@ func TestWizardVerifiesThenSavesConfigAndEntersHome(t *testing.T) {
 	if !verified || m.page != pageHome {
 		t.Fatalf("page = %v verified=%v (err %q), want home after verify", m.page, verified, m.wizard.err)
 	}
-	saved, err := app.LoadConfig(deps.ConfigDir)
+	saved, err := appconfig.LoadConfig(deps.ConfigDir)
 	if err != nil || saved.Provider != "deepseek" || saved.Model != "deepseek-chat" {
 		t.Fatalf("saved config = %#v, %v", saved, err)
 	}
@@ -90,7 +93,7 @@ func TestWizardVerifiesThenSavesConfigAndEntersHome(t *testing.T) {
 func TestWizardVerifyFailureLeavesConfigUnsaved(t *testing.T) {
 	// 先验证再落盘（Codex 复审 #2）：连不上的配置绝不写进文件，不会锁死下次启动。
 	deps, _ := newTestDeps(t, false)
-	deps.Verify = func(context.Context, app.Config) error { return errors.New("api key invalid") }
+	deps.Verify = func(context.Context, appconfig.Config) error { return errors.New("api key invalid") }
 	m := newModel(context.Background(), deps)
 	for _, value := range []string{"bad-provider", "bad-model", "sk-test"} {
 		m = typeText(t, m, value)
@@ -102,7 +105,7 @@ func TestWizardVerifyFailureLeavesConfigUnsaved(t *testing.T) {
 	if m.page != pageWizard || !strings.Contains(m.wizard.err, "连不上模型") {
 		t.Fatalf("page=%v err=%q, want wizard with connectivity error", m.page, m.wizard.err)
 	}
-	if _, err := os.Stat(app.ConfigPath(deps.ConfigDir)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(appconfig.ConfigPath(deps.ConfigDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("config file exists after failed verify: %v", err)
 	}
 }
@@ -125,7 +128,7 @@ func TestHomeCreateEntersWorkbenchAndSurfacesRunError(t *testing.T) {
 		t.Fatalf("create: page=%v writing=%v", m.page, m.bench.writing)
 	}
 	if strings.Contains(m.bench.projectID, "book-") == false {
-		t.Fatalf("project id = %q, want service-generated book id", m.bench.projectID)
+		t.Fatalf("project id = %q, want generated book id", m.bench.projectID)
 	}
 	// 执行异步命令：无执行器的服务会返回明确错误，工作台要把它呈现出来。
 	message := findMsg[quickDoneMsg](t, cmd)
@@ -166,8 +169,8 @@ func TestStaleAsyncMessageFromPreviousBookIsDropped(t *testing.T) {
 	if m.bench.gen == staleGen {
 		t.Fatalf("generation not advanced: %d", m.bench.gen)
 	}
-	updated, _ = m.Update(quickDoneMsg{gen: staleGen, result: service.QuickWriteResult{
-		RunState: domain.RunWaitingUser, RunReason: "A 的稿件等你确认",
+	updated, _ = m.Update(quickDoneMsg{gen: staleGen, result: novel.QuickWriteResult{
+		RunState: domainmodel.RunWaitingUser, RunReason: "A 的稿件等你确认",
 	}})
 	m = updated.(model)
 	if m.bench.decision != nil || m.bench.err != "" || m.bench.projectID != "book-b" {
@@ -194,10 +197,10 @@ func TestLibraryDeleteRequiresDoubleConfirm(t *testing.T) {
 	// 删除是不可恢复的危险操作：第一次 d 只出确认提示，按其他键取消；
 	// 连按两次 d 才真正删除并刷新作品库。
 	deps, api := newTestDeps(t, true)
-	if _, err := api.CreateProject(context.Background(), service.CreateProjectCommand{
+	if _, err := api.Projects.CreateProject(context.Background(), projectdoc.CreateProjectCommand{
 		ProjectID: "book-del", ChangeID: "create-del", UserID: deps.UserID,
-		Reason: "删除测试", Draft: service.ProjectDraft{
-			Intent: domain.Intent{Premise: "写废的书", TargetChapters: 1},
+		Reason: "删除测试", Draft: projectdoc.ProjectDraft{
+			Intent: domainmodel.Intent{Premise: "写废的书", TargetChapters: 1},
 		},
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
@@ -226,7 +229,7 @@ func TestLibraryDeleteRequiresDoubleConfirm(t *testing.T) {
 	if message.err != nil || message.projectID != "book-del" {
 		t.Fatalf("delete result = %#v", message)
 	}
-	if projects, err := api.ListProjects(context.Background()); err != nil || len(projects) != 0 {
+	if projects, err := api.Projects.ListProjects(context.Background()); err != nil || len(projects) != 0 {
 		t.Fatalf("projects after delete = %#v, %v", projects, err)
 	}
 	updated, refreshCmd := m.Update(message)
@@ -240,7 +243,7 @@ func TestStartupLandsOnWelcomeWithLastProjectPreselected(t *testing.T) {
 	// 启动流程（用户定，2026-08-30）：配置完成一律落欢迎页；
 	// 上次打开的作品在作品库预选，回车即恢复；打不开则回首页并说明原因。
 	deps, _ := newTestDeps(t, true)
-	if err := app.SaveState(deps.ConfigDir, app.State{LastProjectID: "book-2"}); err != nil {
+	if err := appconfig.SaveState(deps.ConfigDir, appconfig.State{LastProjectID: "book-2"}); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
 	m := newModel(context.Background(), deps)
@@ -276,13 +279,13 @@ func TestOpenWaitingProjectRestoresDecisionCard(t *testing.T) {
 	updated, _ := m.openProject("book-1")
 	m = updated.(model)
 	gen := m.bench.gen
-	waiting := domain.CreationRun{ID: "run:book-1", State: domain.RunWaitingUser, StateReason: "第 1 章等你确认"}
+	waiting := domainmodel.CreationRun{ID: "run:book-1", State: domainmodel.RunWaitingUser, StateReason: "第 1 章等你确认"}
 	updated, _ = m.Update(benchRefreshedMsg{
-		gen: gen, snap: service.WorkbenchSnapshot{
+		gen: gen, snap: workbench.WorkbenchSnapshot{
 			ProjectID: "book-1", Run: &waiting,
-			Decision: &service.PendingDecision{
+			Decision: &workbench.PendingDecision{
 				Reason:   "第 1 章等你确认",
-				Proposal: domain.Proposal{ID: "p-1", Reason: "第一章候选"}, HasProposal: true,
+				Proposal: domainmodel.Proposal{ID: "p-1", Reason: "第一章候选"}, HasProposal: true,
 			},
 		},
 	})
@@ -308,7 +311,7 @@ func TestDecisionRequiresExplicitApproveAndReasonRejects(t *testing.T) {
 	present := func() {
 		m.bench.presentDecision(&decisionState{
 			reason: "第 1 章写好了，等你确认", continueAfter: true,
-			proposal: domain.Proposal{ID: "p-1", Reason: "第一章候选"}, hasProposal: true,
+			proposal: domainmodel.Proposal{ID: "p-1", Reason: "第一章候选"}, hasProposal: true,
 		})
 	}
 	present()
@@ -372,7 +375,7 @@ func TestHomeRefineFormCreatesProjectWithFullIntent(t *testing.T) {
 		t.Fatalf("form create: page=%v writing=%v", m.page, m.bench.writing)
 	}
 	findMsg[quickDoneMsg](t, cmd) // 执行异步命令：CreateProject 成功，QuickWrite 因无执行器报错
-	snapshot, err := api.Project(context.Background(), m.bench.projectID, domain.InitialRevision)
+	snapshot, err := api.Projects.Project(context.Background(), m.bench.projectID, domainmodel.InitialRevision)
 	if err != nil || snapshot.Intent.Audience != "都市悬疑读者" || snapshot.Intent.Premise == "" {
 		t.Fatalf("project intent = %#v, %v", snapshot.Intent, err)
 	}
@@ -381,18 +384,18 @@ func TestHomeRefineFormCreatesProjectWithFullIntent(t *testing.T) {
 func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T) {
 	deps, api := newTestDeps(t, true)
 	ctx := context.Background()
-	origin, err := api.CreateProject(ctx, service.CreateProjectCommand{
+	origin, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 		ProjectID: "origin-book", ChangeID: "create-origin", UserID: "tester", Reason: "导出源",
-		Draft: service.ProjectDraft{
-			Intent: domain.Intent{Premise: "旧书", TargetChapters: 1},
-			Plan:   []domain.PlanNode{{ID: "v1", Kind: domain.PlanVolume, Title: "卷一", Summary: "起"}},
+		Draft: projectdoc.ProjectDraft{
+			Intent: domainmodel.Intent{Premise: "旧书", TargetChapters: 1},
+			Plan:   []domainmodel.PlanNode{{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一", Summary: "起"}},
 		},
 		CreatedAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("create origin: %v", err)
 	}
-	projection, err := api.ExportProject(ctx, origin.ID, origin.Revision)
+	projection, err := api.Projects.ExportProject(ctx, origin.ID, origin.Revision)
 	if err != nil {
 		t.Fatalf("export origin: %v", err)
 	}
@@ -426,7 +429,7 @@ func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T
 	m = updated.(model)
 	updated, _ = m.Update(findMsg[decisionDoneMsg](t, cmd))
 	m = updated.(model)
-	copied, err := api.Project(ctx, "copied-book", domain.InitialRevision)
+	copied, err := api.Projects.Project(ctx, "copied-book", domainmodel.InitialRevision)
 	if err != nil || len(copied.Plan) != 1 {
 		t.Fatalf("copied book = %#v, %v", copied, err)
 	}
@@ -442,32 +445,32 @@ func TestWorkbenchThreePaneOutlineDetailAndCandidateReading(t *testing.T) {
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
-	run := domain.CreationRun{ID: "run:book-1", State: domain.RunWaitingUser}
-	m.bench.snap = service.WorkbenchSnapshot{
+	run := domainmodel.CreationRun{ID: "run:book-1", State: domainmodel.RunWaitingUser}
+	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-1",
-		Intent:    domain.Intent{Premise: "测试书", TargetChapters: 3, EndingDirection: "圆满"},
-		Outline: []service.OutlineNode{
-			{Node: domain.PlanNode{ID: "v1", Kind: domain.PlanVolume, Title: "卷一"}},
-			{Node: domain.PlanNode{ID: "a1", Kind: domain.PlanArc, ParentID: "v1", Title: "弧一"}},
-			{Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: service.ChapterConfirmed},
-			{Node: domain.PlanNode{ID: "c2", Kind: domain.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: service.ChapterPending},
+		Intent:    domainmodel.Intent{Premise: "测试书", TargetChapters: 3, EndingDirection: "圆满"},
+		Outline: []workbench.OutlineNode{
+			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
+			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
+			{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: workbench.ChapterConfirmed},
+			{Node: domainmodel.PlanNode{ID: "c2", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: workbench.ChapterPending},
 		},
-		Manuscript: []domain.ManuscriptChapter{{
+		Manuscript: []domainmodel.ManuscriptChapter{{
 			ID: "chapter-1", PlanNodeID: "c1", Number: 1, Title: "第一章",
-			Blocks: []domain.ManuscriptBlock{{ID: "b1", Text: "正文一"}},
+			Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "正文一"}},
 		}},
-		Candidates: []service.ChapterCandidate{{
+		Candidates: []workbench.ChapterCandidate{{
 			OperationID: "op-2", BaseRevision: 3,
-			Chapter: domain.ManuscriptChapter{
+			Chapter: domainmodel.ManuscriptChapter{
 				ID: "chapter-2", PlanNodeID: "c2", Number: 2, Title: "第二章",
-				Blocks: []domain.ManuscriptBlock{{ID: "b2", Text: "候选正文二"}},
+				Blocks: []domainmodel.ManuscriptBlock{{ID: "b2", Text: "候选正文二"}},
 			},
 		}},
-		Canon: []domain.CanonFact{{
-			ID: "f1", Kind: domain.CanonState, SubjectID: "hero", Predicate: "state.mood",
+		Canon: []domainmodel.CanonFact{{
+			ID: "f1", Kind: domainmodel.CanonState, SubjectID: "hero", Predicate: "state.mood",
 			Value: []byte(`"平静"`), SourceChapterID: "chapter-1",
 		}},
-		Findings: []service.WorkbenchFinding{{ID: "review/0", ReviewFinding: domain.ReviewFinding{ChapterID: "chapter-1", Severity: domain.FindingNote, Note: "伏笔呼应完整"}}},
+		Findings: []workbench.WorkbenchFinding{{ID: "review/0", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "chapter-1", Severity: domainmodel.FindingNote, Note: "伏笔呼应完整"}}},
 		Run:      &run,
 	}
 	// 快照刷新会把光标锚定在第一个章行（此处直接注入快照，手动对齐）。
@@ -502,17 +505,17 @@ func TestOutlineFoldingCollapsesSubtreeAndAnchorsCursor(t *testing.T) {
 	m.bench = newWorkbenchState("book-fold", 1)
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
-	outline := []service.OutlineNode{
-		{Node: domain.PlanNode{ID: "v1", Kind: domain.PlanVolume, Title: "卷一"}},
-		{Node: domain.PlanNode{ID: "a1", Kind: domain.PlanArc, ParentID: "v1", Title: "弧一"}},
-		{Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: service.ChapterConfirmed},
-		{Node: domain.PlanNode{ID: "c2", Kind: domain.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: service.ChapterPending},
-		{Node: domain.PlanNode{ID: "v2", Kind: domain.PlanVolume, Title: "卷二"}},
-		{Node: domain.PlanNode{ID: "a2", Kind: domain.PlanArc, ParentID: "v2", Title: "弧二"}},
-		{Node: domain.PlanNode{ID: "c3", Kind: domain.PlanChapter, ParentID: "a2", Title: "第三章"}, Number: 3, State: service.ChapterPlanned},
+	outline := []workbench.OutlineNode{
+		{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
+		{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
+		{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: workbench.ChapterConfirmed},
+		{Node: domainmodel.PlanNode{ID: "c2", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: workbench.ChapterPending},
+		{Node: domainmodel.PlanNode{ID: "v2", Kind: domainmodel.PlanVolume, Title: "卷二"}},
+		{Node: domainmodel.PlanNode{ID: "a2", Kind: domainmodel.PlanArc, ParentID: "v2", Title: "弧二"}},
+		{Node: domainmodel.PlanNode{ID: "c3", Kind: domainmodel.PlanChapter, ParentID: "a2", Title: "第三章"}, Number: 3, State: workbench.ChapterPlanned},
 	}
-	m.bench.snap = service.WorkbenchSnapshot{
-		ProjectID: "book-fold", Intent: domain.Intent{Premise: "折叠", TargetChapters: 5},
+	m.bench.snap = workbench.WorkbenchSnapshot{
+		ProjectID: "book-fold", Intent: domainmodel.Intent{Premise: "折叠", TargetChapters: 5},
 		Outline: outline,
 	}
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0) // 第一个章行（行 2）
@@ -563,12 +566,12 @@ func TestFoldPreferencePersistsAcrossReopen(t *testing.T) {
 	m.bench = newWorkbenchState("book-pref", 1)
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
-	m.bench.snap = service.WorkbenchSnapshot{
-		ProjectID: "book-pref", Intent: domain.Intent{Premise: "偏好", TargetChapters: 1},
-		Outline: []service.OutlineNode{
-			{Node: domain.PlanNode{ID: "v1", Kind: domain.PlanVolume, Title: "卷一"}},
-			{Node: domain.PlanNode{ID: "a1", Kind: domain.PlanArc, ParentID: "v1", Title: "弧一"}},
-			{Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1},
+	m.bench.snap = workbench.WorkbenchSnapshot{
+		ProjectID: "book-pref", Intent: domainmodel.Intent{Premise: "偏好", TargetChapters: 1},
+		Outline: []workbench.OutlineNode{
+			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
+			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
+			{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1},
 		},
 	}
 	m.bench.cursor = 0 // 卷一头行
@@ -582,7 +585,7 @@ func TestFoldPreferencePersistsAcrossReopen(t *testing.T) {
 	if !m.bench.collapsed["v1"] {
 		t.Fatalf("reopen must restore fold preference: %v", m.bench.collapsed)
 	}
-	state, err := app.LoadState(deps.ConfigDir)
+	state, err := appconfig.LoadState(deps.ConfigDir)
 	if err != nil || state.LastProjectID != "book-pref" || len(state.Collapsed["book-pref"]) != 1 {
 		t.Fatalf("state must keep both landing and preference: %#v, %v", state, err)
 	}
@@ -593,23 +596,23 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	// 点击章行选中、点击头行折叠；单栏点击标签行切视图。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
-	api.AttachActivityFeed(hub)
+	api.Workbench.AttachActivityFeed(hub)
 	m := newModel(context.Background(), deps)
 	m.gen = 1
 	m.page = pageWorkbench
 	m.bench = newWorkbenchState("book-mouse", 1)
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
-	m.bench.snap = service.WorkbenchSnapshot{
-		ProjectID: "book-mouse", Intent: domain.Intent{Premise: "鼠标", TargetChapters: 3},
-		Outline: []service.OutlineNode{
-			{Node: domain.PlanNode{ID: "v1", Kind: domain.PlanVolume, Title: "卷一"}},
-			{Node: domain.PlanNode{ID: "a1", Kind: domain.PlanArc, ParentID: "v1", Title: "弧一"}},
-			{Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: service.ChapterConfirmed},
-			{Node: domain.PlanNode{ID: "c2", Kind: domain.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: service.ChapterConfirmed},
-			{Node: domain.PlanNode{ID: "v2", Kind: domain.PlanVolume, Title: "卷二"}},
-			{Node: domain.PlanNode{ID: "a2", Kind: domain.PlanArc, ParentID: "v2", Title: "弧二"}},
-			{Node: domain.PlanNode{ID: "c3", Kind: domain.PlanChapter, ParentID: "a2", Title: "第三章"}, Number: 3, State: service.ChapterPlanned},
+	m.bench.snap = workbench.WorkbenchSnapshot{
+		ProjectID: "book-mouse", Intent: domainmodel.Intent{Premise: "鼠标", TargetChapters: 3},
+		Outline: []workbench.OutlineNode{
+			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
+			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
+			{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1, State: workbench.ChapterConfirmed},
+			{Node: domainmodel.PlanNode{ID: "c2", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第二章"}, Number: 2, State: workbench.ChapterConfirmed},
+			{Node: domainmodel.PlanNode{ID: "v2", Kind: domainmodel.PlanVolume, Title: "卷二"}},
+			{Node: domainmodel.PlanNode{ID: "a2", Kind: domainmodel.PlanArc, ParentID: "v2", Title: "弧二"}},
+			{Node: domainmodel.PlanNode{ID: "c3", Kind: domainmodel.PlanChapter, ParentID: "a2", Title: "第三章"}, Number: 3, State: workbench.ChapterPlanned},
 		},
 	}
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0) // c1，行 2
@@ -677,8 +680,8 @@ func TestWorkbenchTargetPromptContinuesWithNewGoal(t *testing.T) {
 	m.page = pageWorkbench
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
-	m.bench.snap = service.WorkbenchSnapshot{
-		ProjectID: "book-1", Intent: domain.Intent{Premise: "写书", TargetChapters: 3},
+	m.bench.snap = workbench.WorkbenchSnapshot{
+		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 3},
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m = updated.(model)
@@ -697,14 +700,14 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 	// 文字回车入账为 Directive 并刷新工作台。
 	deps, api := newTestDeps(t, true)
 	ctx := context.Background()
-	plan := []domain.PlanNode{
-		{ID: "volume-1", Kind: domain.PlanVolume, Title: "第一卷", Summary: "入道"},
-		{ID: "arc-1", Kind: domain.PlanArc, ParentID: "volume-1", Title: "山门", Summary: "入门"},
-		{ID: "chapter-plan-1", Kind: domain.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达"},
+	plan := []domainmodel.PlanNode{
+		{ID: "volume-1", Kind: domainmodel.PlanVolume, Title: "第一卷", Summary: "入道"},
+		{ID: "arc-1", Kind: domainmodel.PlanArc, ParentID: "volume-1", Title: "山门", Summary: "入门"},
+		{ID: "chapter-plan-1", Kind: domainmodel.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达"},
 	}
-	if _, err := api.CreateProject(ctx, service.CreateProjectCommand{
+	if _, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 		ProjectID: "book-1", ChangeID: "create", UserID: "tester", Reason: "创建",
-		Draft: service.ProjectDraft{Intent: domain.Intent{Premise: "写书"}, Plan: plan}, CreatedAt: time.Now().UTC(),
+		Draft: projectdoc.ProjectDraft{Intent: domainmodel.Intent{Premise: "写书"}, Plan: plan}, CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -713,9 +716,9 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 	m.page = pageWorkbench
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
-	m.bench.snap = service.WorkbenchSnapshot{
-		ProjectID: "book-1", Intent: domain.Intent{Premise: "写书", TargetChapters: 1},
-		Outline: []service.OutlineNode{{Node: plan[0]}, {Node: plan[1]}, {Node: plan[2], Number: 1}},
+	m.bench.snap = workbench.WorkbenchSnapshot{
+		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 1},
+		Outline: []workbench.OutlineNode{{Node: plan[0]}, {Node: plan[1]}, {Node: plan[2], Number: 1}},
 	}
 	m, _ = pressRune(t, m, 'i')
 	if m.bench.prompt == nil || m.bench.prompt.purpose != "directive" || m.bench.prompt.scope != "plan_node:volume-1" {
@@ -734,7 +737,7 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 	if message.err != nil || message.next != "refresh" {
 		t.Fatalf("add directive message = %#v", message)
 	}
-	project, err := api.Project(ctx, "book-1", 0)
+	project, err := api.Projects.Project(ctx, "book-1", 0)
 	if err != nil || len(project.Directives) != 1 || project.Directives[0].Scope != "plan_node:volume-1" ||
 		project.Directives[0].Text != "每章结尾留钩子" {
 		t.Fatalf("project directives = %#v, err = %v", project.Directives, err)
@@ -747,7 +750,7 @@ func TestWorkbenchActivityFeedRendersAndUnsubscribes(t *testing.T) {
 	// 陈旧代际的唤醒被丢弃；Esc 回首页只退订（channel 关闭），绝不取消创作。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
-	api.AttachActivityFeed(hub)
+	api.Workbench.AttachActivityFeed(hub)
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-live")
 	m = updated.(model)
@@ -821,7 +824,7 @@ func TestWorkbenchRendersStreamingProsePreview(t *testing.T) {
 	// 易失投影，必须带"最终以确认稿为准"的标注（三层校正链）。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
-	api.AttachActivityFeed(hub)
+	api.Workbench.AttachActivityFeed(hub)
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-live")
 	m = updated.(model)
@@ -854,7 +857,7 @@ func TestActivityShowsThinkingSummaryAndErrorReason(t *testing.T) {
 	// 构思行展示尾部摘要，否则只报"构思中……"。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
-	api.AttachActivityFeed(hub)
+	api.Workbench.AttachActivityFeed(hub)
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-think")
 	m = updated.(model)
@@ -891,20 +894,20 @@ func TestRewriteCandidateTakesPrecedenceOverOldAuthorityChapter(t *testing.T) {
 	m = updated.(model)
 	m.width, m.height = 120, 40
 	m.bench.loaded = true
-	m.bench.snap = service.WorkbenchSnapshot{
+	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-rw", Revision: 3,
-		Outline: []service.OutlineNode{{
-			Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, Title: "重写稿"}, Number: 1, State: service.ChapterPending,
+		Outline: []workbench.OutlineNode{{
+			Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, Title: "重写稿"}, Number: 1, State: workbench.ChapterPending,
 		}},
-		Manuscript: []domain.ManuscriptChapter{{
+		Manuscript: []domainmodel.ManuscriptChapter{{
 			ID: "ch-1", Number: 1, Title: "旧稿",
-			Blocks: []domain.ManuscriptBlock{{ID: "b1", Text: "旧版本正文"}},
+			Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "旧版本正文"}},
 		}},
-		Candidates: []service.ChapterCandidate{{
+		Candidates: []workbench.ChapterCandidate{{
 			OperationID: "op-rw", BaseRevision: 3,
-			Chapter: domain.ManuscriptChapter{
+			Chapter: domainmodel.ManuscriptChapter{
 				ID: "ch-1", Number: 1, Title: "重写稿",
-				Blocks: []domain.ManuscriptBlock{{ID: "b1", Text: "重写后的正文"}},
+				Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "重写后的正文"}},
 			},
 		}},
 	}
@@ -926,7 +929,7 @@ func TestInitialLoadOnlyToleratesNotFoundDuringWriting(t *testing.T) {
 	m = typeText(t, m, "吞错收窄测试")
 	m, _ = press(t, m, tea.KeyEnter)
 	updated, _ := m.Update(benchRefreshedMsg{
-		gen: m.bench.gen, err: fmt.Errorf("load project: %w", store.ErrNotFound),
+		gen: m.bench.gen, err: fmt.Errorf("load project: %w", domainmodel.ErrNotFound),
 	})
 	m = updated.(model)
 	if m.bench.err != "" || m.page != pageWorkbench {
@@ -946,7 +949,7 @@ func TestActivityFeedScrollPausesFollowAndResumes(t *testing.T) {
 	// 补偿偏移并计数提示；↓ 回到底部（0）恢复自动跟随。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
-	api.AttachActivityFeed(hub)
+	api.Workbench.AttachActivityFeed(hub)
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-scroll")
 	m = updated.(model)
@@ -1002,9 +1005,9 @@ func TestDecisionFailureRestoresCardFromSnapshot(t *testing.T) {
 	if m.bench.err == "" || cmd == nil {
 		t.Fatalf("failure must surface error and refresh: err=%q cmd=%v", m.bench.err, cmd)
 	}
-	snap := service.WorkbenchSnapshot{
+	snap := workbench.WorkbenchSnapshot{
 		ProjectID: "book-retry",
-		Decision:  &service.PendingDecision{Reason: "稿件等你确认", HasProposal: true},
+		Decision:  &workbench.PendingDecision{Reason: "稿件等你确认", HasProposal: true},
 	}
 	updated, _ = m.Update(benchRefreshedMsg{gen: m.bench.gen, snap: snap})
 	m = updated.(model)
@@ -1022,21 +1025,21 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	m = updated.(model)
 	m.width, m.height = 180, 20 // 矮终端逼出大纲窗口化
 	m.bench.loaded = true
-	snap := service.WorkbenchSnapshot{ProjectID: "book-long", Revision: 1}
-	snap.Outline = append(snap.Outline, service.OutlineNode{
-		Node: domain.PlanNode{ID: "v1", Kind: domain.PlanVolume, Title: "卷一"},
+	snap := workbench.WorkbenchSnapshot{ProjectID: "book-long", Revision: 1}
+	snap.Outline = append(snap.Outline, workbench.OutlineNode{
+		Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"},
 	})
 	for i := 1; i <= 30; i++ {
-		snap.Outline = append(snap.Outline, service.OutlineNode{
-			Node:   domain.PlanNode{ID: fmt.Sprintf("c%d", i), Kind: domain.PlanChapter, Title: fmt.Sprintf("第%d回", i)},
-			Number: i, State: service.ChapterConfirmed,
+		snap.Outline = append(snap.Outline, workbench.OutlineNode{
+			Node:   domainmodel.PlanNode{ID: fmt.Sprintf("c%d", i), Kind: domainmodel.PlanChapter, Title: fmt.Sprintf("第%d回", i)},
+			Number: i, State: workbench.ChapterConfirmed,
 		})
 	}
-	var blocks []domain.ManuscriptBlock
+	var blocks []domainmodel.ManuscriptBlock
 	for i := 1; i <= 5; i++ {
-		blocks = append(blocks, domain.ManuscriptBlock{ID: fmt.Sprintf("b%d", i), Text: fmt.Sprintf("第25章第%d段", i)})
+		blocks = append(blocks, domainmodel.ManuscriptBlock{ID: fmt.Sprintf("b%d", i), Text: fmt.Sprintf("第25章第%d段", i)})
 	}
-	snap.Manuscript = []domain.ManuscriptChapter{{ID: "ch-25", Number: 25, Title: "第25回", Blocks: blocks}}
+	snap.Manuscript = []domainmodel.ManuscriptChapter{{ID: "ch-25", Number: 25, Title: "第25回", Blocks: blocks}}
 	m.bench.snap = snap
 	m.bench.cursor = 25 // 行索引：0 是卷头行，章 N 在第 N 行
 	view := m.View()
@@ -1074,15 +1077,15 @@ func TestManualSelectionPinsMainPaneDuringWriting(t *testing.T) {
 	m = updated.(model)
 	m.width, m.height = 120, 40
 	m.bench.loaded, m.bench.writing = true, true
-	m.bench.snap = service.WorkbenchSnapshot{
+	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-pin", Revision: 2,
-		Outline: []service.OutlineNode{
-			{Node: domain.PlanNode{ID: "c1", Kind: domain.PlanChapter, Title: "开端"}, Number: 1, State: service.ChapterConfirmed},
-			{Node: domain.PlanNode{ID: "c2", Kind: domain.PlanChapter, Title: "转折"}, Number: 2, State: service.ChapterConfirmed},
+		Outline: []workbench.OutlineNode{
+			{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, Title: "开端"}, Number: 1, State: workbench.ChapterConfirmed},
+			{Node: domainmodel.PlanNode{ID: "c2", Kind: domainmodel.PlanChapter, Title: "转折"}, Number: 2, State: workbench.ChapterConfirmed},
 		},
-		Manuscript: []domain.ManuscriptChapter{
-			{ID: "ch-1", Number: 1, Title: "开端", Blocks: []domain.ManuscriptBlock{{ID: "b1", Text: "第一章内容"}}},
-			{ID: "ch-2", Number: 2, Title: "转折", Blocks: []domain.ManuscriptBlock{{ID: "b1", Text: "第二章内容"}}},
+		Manuscript: []domainmodel.ManuscriptChapter{
+			{ID: "ch-1", Number: 1, Title: "开端", Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "第一章内容"}}},
+			{ID: "ch-2", Number: 2, Title: "转折", Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "第二章内容"}}},
 		},
 	}
 	m, _ = press(t, m, tea.KeyDown)
@@ -1113,7 +1116,7 @@ func TestWritingStateAllowsPauseCancelDiagnostics(t *testing.T) {
 	if !m.bench.writing {
 		t.Fatal("expected writing state after creating a book")
 	}
-	m.bench.snap.Run = &domain.CreationRun{ID: "run-1", State: domain.RunRunning}
+	m.bench.snap.Run = &domainmodel.CreationRun{ID: "run-1", State: domainmodel.RunRunning}
 	m.bench.loaded = true
 	if _, cmd := pressRune(t, m, 'p'); cmd == nil {
 		t.Fatal("p must issue pause during writing")

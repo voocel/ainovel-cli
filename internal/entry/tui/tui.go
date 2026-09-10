@@ -1,5 +1,5 @@
 // Package tui 是人类主入口：配置向导 → 首页 → 作品工作台。
-// 它只调用 Service 用例，与 Headless 对同一动作产生相同结果（workbench §3/§9）。
+// 它只调用 应用用例，与 Headless 对同一动作产生相同结果（workbench §3/§9）。
 package tui
 
 import (
@@ -9,32 +9,32 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
-	"github.com/voocel/ainovel-cli/internal/service"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
 // Deps 由组合根注入：TUI 不装配服务，也不接触 Store。
 type Deps struct {
-	API        *service.Service
+	API        *bootstrap.App
 	Configured bool
 	ConfigDir  string
 	UserID     string
 	// InitialConfig 用于向导预填；ConfigError 是启动时的配置/装配失败原因，
 	// 交互模式降级进向导修复而不是退出。
-	InitialConfig app.Config
+	InitialConfig appconfig.Config
 	ConfigError   string
 	// Rebuild 在配置向导完成后重建带执行器的服务。
-	Rebuild func(app.Config) (*service.Service, error)
+	Rebuild func(appconfig.Config) (*bootstrap.App, error)
 	// Verify 在落盘前验证配置可真实连通；nil 表示跳过（测试）。
-	Verify func(context.Context, app.Config) error
+	Verify func(context.Context, appconfig.Config) error
 	Input  io.Reader
 	Output io.Writer
 }
 
 func Run(ctx context.Context, deps Deps) error {
 	if deps.API == nil {
-		return fmt.Errorf("TUI service is required: %w", domain.ErrInvalid)
+		return fmt.Errorf("TUI application is required: %w", domainmodel.ErrInvalid)
 	}
 	// AltScreen 全屏渲染是“进入应用”的关键：不开则界面内联在滚动缓冲区里，
 	// 看起来像普通输出。不开启鼠标捕获，保留终端原生滚动与复制（workbench §4）。
@@ -61,8 +61,8 @@ const (
 type model struct {
 	ctx    context.Context
 	deps   Deps
-	api    *service.Service
-	config app.Config
+	api    *bootstrap.App
+	config appconfig.Config
 	page   page
 	wizard wizardState
 	home   homeState
@@ -85,7 +85,7 @@ func newModel(ctx context.Context, deps Deps) model {
 	// 启动流程：配置完成一律落欢迎页；上次打开的作品在作品库中预选，
 	// 回车即回到它的工作台恢复落点（workbench §4）。
 	m.page = pageHome
-	state, err := app.LoadState(deps.ConfigDir)
+	state, err := appconfig.LoadState(deps.ConfigDir)
 	if err != nil {
 		m.home.notice = "界面偏好文件异常（按空状态启动）：" + err.Error()
 	}
@@ -103,7 +103,7 @@ func (m *model) openBench(projectID string) tea.Cmd {
 	m.bench = newWorkbenchState(projectID, m.gen)
 	// 布局偏好记忆（M3）：恢复本作品的大纲折叠；落点更新不得抹掉其他偏好，
 	// 偏好文件读不出来时不回写（否则等于用空状态覆盖全部偏好）。
-	state, err := app.LoadState(m.deps.ConfigDir)
+	state, err := appconfig.LoadState(m.deps.ConfigDir)
 	if err != nil {
 		m.bench.notice = "界面偏好文件异常，本次不更新偏好：" + err.Error()
 	} else {
@@ -111,12 +111,12 @@ func (m *model) openBench(projectID string) tea.Cmd {
 			m.bench.collapsed[id] = true
 		}
 		state.LastProjectID = projectID
-		if err := app.SaveState(m.deps.ConfigDir, state); err != nil {
+		if err := appconfig.SaveState(m.deps.ConfigDir, state); err != nil {
 			// 落点/偏好只影响下次启动的呈现，保存失败不阻塞进入，但要让用户知道。
 			m.bench.notice = "界面偏好保存失败：" + err.Error()
 		}
 	}
-	if wake, cancel, ok := m.api.SubscribeRunActivity(projectID); ok {
+	if wake, cancel, ok := m.api.Workbench.SubscribeRunActivity(projectID); ok {
 		m.bench.activityCh, m.bench.activityOff = wake, cancel
 	}
 	m.page = pageWorkbench
@@ -176,30 +176,30 @@ func truncate(text string, limit int) string {
 	return string(runes[:limit-1]) + "…"
 }
 
-func approvalLabel(policy domain.ApprovalPolicy) string {
+func approvalLabel(policy domainmodel.ApprovalPolicy) string {
 	switch policy {
-	case domain.ApprovalMilestone:
+	case domainmodel.ApprovalMilestone:
 		return "里程碑确认"
-	case domain.ApprovalManual:
+	case domainmodel.ApprovalManual:
 		return "逐章确认"
 	default:
 		return "自动推进"
 	}
 }
 
-func runStateLabel(state domain.CreationRunState) string {
+func runStateLabel(state domainmodel.CreationRunState) string {
 	switch state {
-	case domain.RunRunning:
+	case domainmodel.RunRunning:
 		return "创作中"
-	case domain.RunWaitingUser:
+	case domainmodel.RunWaitingUser:
 		return "等你决定"
-	case domain.RunPaused:
+	case domainmodel.RunPaused:
 		return "已暂停"
-	case domain.RunCompleted:
+	case domainmodel.RunCompleted:
 		return "已完成"
-	case domain.RunFailed:
+	case domainmodel.RunFailed:
 		return "需要处理"
-	case domain.RunCancelled:
+	case domainmodel.RunCancelled:
 		return "已取消"
 	default:
 		return string(state)

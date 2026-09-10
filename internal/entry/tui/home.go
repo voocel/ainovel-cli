@@ -2,15 +2,15 @@ package tui
 
 import (
 	"fmt"
+	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
+	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/entry/headless"
-	"github.com/voocel/ainovel-cli/internal/service"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
 // 首页（workbench §4）：一句话输入为主体；其他入口只有完善创作设定、
@@ -37,7 +37,7 @@ const (
 type homeState struct {
 	premise   textinput.Model
 	chapters  int
-	approval  domain.ApprovalPolicy
+	approval  domainmodel.ApprovalPolicy
 	focus     int
 	mode      homeMode
 	form      []textinput.Model
@@ -75,11 +75,11 @@ type projectDeletedMsg struct {
 
 type importDoneMsg struct {
 	projectID string
-	proposal  domain.Proposal
+	proposal  domainmodel.Proposal
 	err       error
 }
 
-var approvalOrder = []domain.ApprovalPolicy{domain.ApprovalAuto, domain.ApprovalMilestone, domain.ApprovalManual}
+var approvalOrder = []domainmodel.ApprovalPolicy{domainmodel.ApprovalAuto, domainmodel.ApprovalMilestone, domainmodel.ApprovalManual}
 
 // 完善创作设定（workbench §4）：只是更完整的初始化输入，全部可空。
 var formFields = []struct{ label, placeholder string }{
@@ -93,28 +93,28 @@ var formFields = []struct{ label, placeholder string }{
 func newHomeState() homeState {
 	premise := newInput("一句话说想写什么，回车开写")
 	premise.Focus()
-	return homeState{premise: premise, chapters: 3, approval: domain.ApprovalAuto}
+	return homeState{premise: premise, chapters: 3, approval: domainmodel.ApprovalAuto}
 }
 
 // loadLibraryCmd 读取作品库：每本书的目标、进度与运行状态。
 func (m model) loadLibraryCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	return func() tea.Msg {
-		records, err := api.ListProjects(ctx)
+		records, err := api.Projects.ListProjects(ctx)
 		if err != nil {
 			return libraryLoadedMsg{err: err}
 		}
 		entries := make([]libraryEntry, 0, len(records))
 		for _, record := range records {
 			entry := libraryEntry{id: record.ID, state: "空闲"}
-			snapshot, err := api.Project(ctx, record.ID, domain.InitialRevision)
+			snapshot, err := api.Projects.Project(ctx, record.ID, domainmodel.InitialRevision)
 			if err != nil {
 				return libraryLoadedMsg{err: err}
 			}
 			entry.premise = snapshot.Intent.Premise
 			entry.target = snapshot.Intent.TargetChapters
 			entry.written = len(snapshot.Manuscript)
-			run, hasRun, err := api.LatestCreationRun(ctx, record.ID)
+			run, hasRun, err := api.Runs.LatestCreationRun(ctx, record.ID)
 			if err != nil {
 				return libraryLoadedMsg{err: err}
 			}
@@ -156,10 +156,10 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.home.lastOpened == message.projectID {
 			// 只清落点，读改写保住其他作品的折叠偏好；读失败不回写不覆盖。
 			m.home.lastOpened = ""
-			state, err := app.LoadState(m.deps.ConfigDir)
+			state, err := appconfig.LoadState(m.deps.ConfigDir)
 			if err == nil {
 				state.LastProjectID = ""
-				err = app.SaveState(m.deps.ConfigDir, state)
+				err = appconfig.SaveState(m.deps.ConfigDir, state)
 			}
 			if err != nil {
 				m.home.notice = "已删除（落点偏好未能更新：" + err.Error() + "）"
@@ -316,7 +316,7 @@ func (m model) handleFormKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			home.form[home.formStep].Focus()
 			return m, nil
 		}
-		intent := domain.Intent{
+		intent := domainmodel.Intent{
 			Premise:           strings.TrimSpace(home.premise.Value()),
 			Audience:          strings.TrimSpace(home.form[0].Value()),
 			DesiredExperience: splitList(home.form[1].Value()),
@@ -354,7 +354,7 @@ func (m model) handleImportKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // importProjectCmd 导入作品文件：库中已有的作品走差异导入，新作品先建再导；
-// 与 Headless `project import` 调同一 Service 用例（workbench §9）。
+// 与 Headless `project import` 调同一 应用用例（workbench §9）。
 func (m model) importProjectCmd(path string) tea.Cmd {
 	api, ctx, user := m.api, m.ctx, m.deps.UserID
 	known := make(map[string]bool, len(m.home.library))
@@ -362,18 +362,18 @@ func (m model) importProjectCmd(path string) tea.Cmd {
 		known[entry.id] = true
 	}
 	return func() tea.Msg {
-		var projection service.ProjectProjection
+		var projection projectdoc.ProjectProjection
 		if err := headless.DecodeFile(path, &projection); err != nil {
 			return importDoneMsg{err: err}
 		}
 		now := time.Now().UTC()
-		changeID := service.NewID("import", now)
-		var proposal domain.Proposal
+		changeID := projectdoc.NewID("import", now)
+		var proposal domainmodel.Proposal
 		var err error
 		if known[projection.ProjectID] {
-			proposal, err = api.ImportProject(ctx, changeID, user, "导入作品文件", projection, now)
+			proposal, err = api.Projects.ImportProject(ctx, changeID, user, "导入作品文件", projection, now)
 		} else {
-			proposal, err = api.ImportNewProject(ctx, changeID, user, "导入作品文件", projection, now)
+			proposal, err = api.Projects.ImportNewProject(ctx, changeID, user, "导入作品文件", projection, now)
 		}
 		if err != nil {
 			return importDoneMsg{err: err}
@@ -384,13 +384,13 @@ func (m model) importProjectCmd(path string) tea.Cmd {
 
 // createProject 创建作品并进入工作台开始创作；intent 非空时（完善设定入口）
 // 先以完整 Intent 初始化，再走同一条 QuickWrite 路径。
-func (m model) createProject(intent *domain.Intent) (tea.Model, tea.Cmd) {
+func (m model) createProject(intent *domainmodel.Intent) (tea.Model, tea.Cmd) {
 	premise := strings.TrimSpace(m.home.premise.Value())
 	if premise == "" {
 		m.home.err = "先用一句话说想写什么"
 		return m, nil
 	}
-	projectID := service.NewID("book", time.Now())
+	projectID := projectdoc.NewID("book", time.Now())
 	params := quickParams{
 		projectID: projectID, premise: premise,
 		chapters: m.home.chapters, approval: m.home.approval, intent: intent,
@@ -409,7 +409,7 @@ func (m model) openProject(projectID string) (tea.Model, tea.Cmd) {
 func (m model) deleteProject(projectID string) (tea.Model, tea.Cmd) {
 	api, ctx := m.api, m.ctx
 	return m, func() tea.Msg {
-		return projectDeletedMsg{projectID: projectID, err: api.DeleteProject(ctx, projectID)}
+		return projectDeletedMsg{projectID: projectID, err: api.Projects.DeleteProject(ctx, projectID)}
 	}
 }
 

@@ -49,4 +49,4 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GOWORK: "off"
-        run: go test -race -buildvcs=false -count=1 ./internal/change ./internal/operation ./internal/service ./internal/store
+        run: go test -race -buildvcs=false -count=1 ./internal/domain/change ./internal/domain/operation ./internal/bootstrap ./internal/domain/creation ./internal/app/novel ./internal/app/task ./internal/infra/store

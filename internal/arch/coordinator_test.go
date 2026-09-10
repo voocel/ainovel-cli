@@ -4,53 +4,84 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// TestCoordinatorDoesNotReferenceControlDocumentKinds 守护 D33/D49 纪律：协调器只做
-// 机制。控制类文档（Ownership/Approval/Overlay/Assets/Directive）由 Change Engine 消化、
-// 由装配层带进任务；小说规则（目标载荷、章节计划、写作类 Operation）只住在推导器里，
-// service/run.go 不得按它们分支。
+// D33/D49 applies to the whole driver package, so moving a business branch into
+// another file cannot circumvent the boundary. State-loading goal adapters and
+// pure application policies live outside creation.
 func TestCoordinatorDoesNotReferenceControlDocumentKinds(t *testing.T) {
-	path := filepath.Join("..", "service", "run.go")
-	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	root := filepath.Join("..", "domain", "creation")
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatal(err)
 	}
 	forbidden := map[string]string{
 		"DocumentOwnership": "D33", "DocumentApproval": "D33", "DocumentOverlay": "D33",
 		"DocumentAssets": "D33", "DocumentDirective": "D33", "DocumentAdjudication": "D43",
-		"NovelGoal": "D49", "DecodeNovelGoal": "D49", "GoalNovel": "D49", "PlanChapter": "D49",
-		"OperationDevelopPlan": "D49", "OperationRevisePlan": "D49", "OperationWriteChapter": "D49",
-		"OperationRewriteChapter": "D49", "OperationReviewRange": "D49",
+		"DocumentIntent": "D49", "DocumentPlan": "D49", "DocumentEntity": "D49",
+		"DocumentCanon": "D49", "DocumentManuscript": "D49", "DocumentAttachment": "D49",
+		"NovelGoal": "D49", "DecodeNovelGoal": "D49", "GoalNovel": "D49",
+		"Intent": "D49", "PlanNode": "D49", "CanonFact": "D49", "ManuscriptChapter": "D49",
+		"ReviewVerdict": "D49", "ReviewFinding": "D49", "PlanChapter": "D49",
+		"OperationInitializeProject": "D49", "OperationDevelopPlan": "D49", "OperationRevisePlan": "D49",
+		"OperationWriteChapter": "D49", "OperationRewriteChapter": "D49", "OperationRewriteAffected": "D49",
+		"OperationReviewRange": "D49", "OperationReviseCanon": "D49",
+		"OperationGenerateAsset": "D49", "OperationInspectAsset": "D49",
 	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		selector, ok := node.(*ast.SelectorExpr)
-		if !ok {
-			return true
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
 		}
-		if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "domain" {
-			if decision, banned := forbidden[selector.Sel.Name]; banned {
-				t.Errorf("service/run.go 引用了 domain.%s：协调器只做机制，不得按它分支（%s）", selector.Sel.Name, decision)
+		path := filepath.Join(root, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		domainAlias := "model"
+		for _, spec := range file.Imports {
+			if strings.Trim(spec.Path.Value, `"`) == modulePath+"/internal/domain/model" && spec.Name != nil {
+				domainAlias = spec.Name.Name
+				if domainAlias == "." {
+					t.Errorf("%s 不得点导入 domain，业务符号必须可审查", path)
+				}
 			}
 		}
-		return true
-	})
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == domainAlias {
+				if decision, banned := forbidden[selector.Sel.Name]; banned {
+					t.Errorf("%s 引用了 model.%s：协调器只做机制，不得按业务类型分支（%s）", path, selector.Sel.Name, decision)
+				}
+			}
+			return true
+		})
+	}
 }
 
-// TestNovelDeriverStaysPure 守护 D49：小说推导器是纯函数，不触存储也不触执行引擎。
+// The novel policy can inspect snapshots and return a step; I/O belongs to Goal.
 func TestNovelDeriverStaysPure(t *testing.T) {
-	path := filepath.Join("..", "service", "novel_goal.go")
+	path := filepath.Join("..", "app", "novel", "novel_goal.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	for _, spec := range file.Imports {
-		switch strings.Trim(spec.Path.Value, `"`) {
-		case "github.com/voocel/ainovel-cli/internal/store", "github.com/voocel/ainovel-cli/internal/operation":
-			t.Errorf("service/novel_goal.go 依赖了 %s：推导器只读快照与证据，不得触存储或执行引擎（D49）", spec.Path.Value)
+		imported := strings.Trim(spec.Path.Value, `"`)
+		dependency, internal := strings.CutPrefix(imported, modulePath+"/internal/")
+		if !internal {
+			continue
+		}
+		switch dependency {
+		case "domain/model", "app/project", "domain/creation":
+		default:
+			t.Errorf("%s 依赖了 %s：纯规则只读快照并返回步骤，不能加载状态或执行任务（D49）", path, imported)
 		}
 	}
 }

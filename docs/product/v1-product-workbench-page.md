@@ -4,7 +4,7 @@
 >
 > 约束：遵循 [`../v1-architecture-plan.md`](../v1-architecture-plan.md) 与
 > [`v1-product-creation-workbench.md`](v1-product-creation-workbench.md)（工作台总纲）。
-> 本文细化总纲 §5 五视图的页面布局、实时活动体验与流式数据管道（Service 用例层），
+> 本文细化总纲 §5 五视图的页面布局、实时活动体验与流式数据管道（`app/workbench` 查询用例），
 > 不定义新的创作内核语义。
 
 ## 1. 设计目标
@@ -146,7 +146,7 @@ v1 的章节正文不是模型的对话文本：Writer 通过 `workspace_put_cha
 - 批准后切换为 Authority 版本（徽标 `●`）；
 - TUI 中途退出或重进不回放历史 delta，直接从候选稿/权威快照续起。
 
-## 4. 数据契约（Service 用例设计）
+## 4. 数据契约（工作台查询用例）
 
 ### WorkbenchSnapshot：统一只读查询模型（M1）
 
@@ -180,13 +180,13 @@ capability.Runtime.Execute —— 可选 ActivitySink 注入（nil 则零开销�
    ▼
 ActivityHub —— 进程内最新活动快照（非持久化）
    ▼
-service —— SubscribeRunActivity(projectID) 订阅活动变化
+app/workbench.Query —— SubscribeRunActivity(projectID) 订阅活动变化
    ▼
 TUI 工作台（bubbletea 消息泵）
 ```
 
-ActivityHub 属于 Runtime Plane，由组合根注入；`capability` 与 `service` 只依赖其接口，
-`capability` 不得反向依赖 `service`。
+ActivityHub 属于 Runtime Plane，实现在 `infra/activity`，由 `bootstrap` 注入；`infra/capability` 与 `app/workbench` 只依赖其接口，
+`infra/capability` 不得反向依赖 `app/workbench`。
 
 **交付契约（必须全部满足）**：
 
@@ -249,5 +249,5 @@ ActivityHub 属于 Runtime Plane，由组合根注入；`capability` 与 `servic
 5. 宽度降级只减并排呈现，不减能力；窄终端仍可完成全部操作；
 6. 活动发布不反压模型执行：UI 消费停滞时创作速度不受影响（可测：阻塞订阅者，
    对比 operation 耗时）；
-7. entry 不碰 store（架构测试）；headless 行为与性能不受活动管道影响；
+7. `entry` 通过 `app/workbench` 和具名用例访问状态，不碰 `infra/store`（架构测试）；headless 行为与性能不受活动管道影响；
 8. 活动事件带作品归属，消费侧代际号校验，跨作品切换不串台。

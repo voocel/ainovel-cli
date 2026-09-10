@@ -12,14 +12,16 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/activity"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
-	"github.com/voocel/ainovel-cli/internal/service"
+	"github.com/voocel/ainovel-cli/internal/app/novel"
+	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"github.com/voocel/ainovel-cli/internal/app/workbench"
+	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/activity"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
 // 工作台（v1-product-workbench-page.md）：三栏布局（大纲/主区/详情），窄屏降级
-// 单栏；数据统一来自 service.WorkbenchSnapshot，入口层不自行拼接权威数据；
+// 单栏；数据统一来自 workbench.WorkbenchSnapshot，入口层不自行拼接权威数据；
 // 出现待决定事项时决定卡置顶，是工作台的第一交互。
 
 // benchPane 是多栏形态下的栏焦点（§5 Tab 轮换：大纲 → 主区 → 详情）。
@@ -35,7 +37,7 @@ type workbenchState struct {
 	projectID string
 	// gen 是本次打开的代际号：全部异步消息带着它出生，不匹配即丢弃。
 	gen    int
-	snap   service.WorkbenchSnapshot
+	snap   workbench.WorkbenchSnapshot
 	loaded bool
 	view   int // 单栏降级形态下：0 总览 1 正文
 	cursor int // 大纲可见行索引（含卷/弧头行；快照刷新后按身份重新锚定）
@@ -81,9 +83,9 @@ func (b *workbenchState) stopActivity() {
 
 func (b *workbenchState) hasRun() bool { return b.snap.Run != nil }
 
-func (b *workbenchState) run() domain.CreationRun {
+func (b *workbenchState) run() domainmodel.CreationRun {
 	if b.snap.Run == nil {
-		return domain.CreationRun{}
+		return domainmodel.CreationRun{}
 	}
 	return *b.snap.Run
 }
@@ -93,7 +95,7 @@ func (b *workbenchState) run() domain.CreationRun {
 // stale 表示稿件基线已过期（直接通过会撞版本冲突），只留重写路径。
 type decisionState struct {
 	reason        string
-	proposal      domain.Proposal
+	proposal      domainmodel.Proposal
 	hasProposal   bool
 	continueAfter bool
 	stale         bool
@@ -120,20 +122,20 @@ type quickParams struct {
 	projectID string
 	premise   string
 	chapters  int
-	approval  domain.ApprovalPolicy
+	approval  domainmodel.ApprovalPolicy
 	// intent 非空时（完善设定入口）先以完整 Intent 初始化作品。
-	intent *domain.Intent
+	intent *domainmodel.Intent
 }
 
 type quickDoneMsg struct {
 	gen    int
-	result service.QuickWriteResult
+	result novel.QuickWriteResult
 	err    error
 }
 
 type benchRefreshedMsg struct {
 	gen  int
-	snap service.WorkbenchSnapshot
+	snap workbench.WorkbenchSnapshot
 	err  error
 }
 
@@ -195,16 +197,16 @@ func (m model) startQuickWriteCmd(params quickParams) tea.Cmd {
 	return func() tea.Msg {
 		now := time.Now().UTC()
 		if params.intent != nil {
-			if _, err := api.CreateProject(ctx, service.CreateProjectCommand{
+			if _, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 				ProjectID: params.projectID, ChangeID: params.projectID + ":create",
 				UserID: user, Reason: "完善设定后创建作品",
-				Draft:     service.ProjectDraft{Intent: *params.intent, Approval: params.approval},
+				Draft:     projectdoc.ProjectDraft{Intent: *params.intent, Approval: params.approval},
 				CreatedAt: now,
 			}); err != nil {
 				return quickDoneMsg{gen: gen, err: err}
 			}
 		}
-		result, err := api.QuickWrite(ctx, service.QuickWriteCommand{
+		result, err := api.Novels.QuickWrite(ctx, novel.QuickWriteCommand{
 			ProjectID: params.projectID, UserID: user,
 			Premise: params.premise, Chapters: params.chapters, Approval: params.approval,
 			WorkerID: "tui-" + user, LeaseDuration: time.Minute, CreatedAt: now,
@@ -219,7 +221,7 @@ func (m model) refreshBenchCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	gen, projectID := m.bench.gen, m.bench.projectID
 	return func() tea.Msg {
-		snap, err := api.WorkbenchSnapshot(ctx, projectID)
+		snap, err := api.Workbench.WorkbenchSnapshot(ctx, projectID)
 		return benchRefreshedMsg{gen: gen, snap: snap, err: err}
 	}
 }
@@ -228,7 +230,7 @@ func (m model) loadDiagnosticsCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	gen, run := m.bench.gen, m.bench.run()
 	return func() tea.Msg {
-		events, err := api.CreationRunEvents(ctx, run.ID)
+		events, err := api.Runs.CreationRunEvents(ctx, run.ID)
 		if err != nil {
 			return diagnosticsMsg{gen: gen, err: err}
 		}
@@ -247,7 +249,7 @@ func (m model) loadDiagnosticsCmd() tea.Cmd {
 		// 下钻各 Operation（M3 错误诊断）：run 事件只有编排流水，真实失败原因
 		// 在 Operation.Error 与 operation_events——失败理由里"可展开事件记录"的
 		// 承诺在这里兑现。
-		operations, err := api.RunOperations(ctx, run.ID)
+		operations, err := api.Runs.RunOperations(ctx, run.ID)
 		if err != nil {
 			return diagnosticsMsg{gen: gen, err: err}
 		}
@@ -258,7 +260,7 @@ func (m model) loadDiagnosticsCmd() tea.Cmd {
 			}
 			// 成功任务自纠过的工具报错也要可见：从已持久化消息确定性提取，
 			// 不然"曾经出错又纠回来"的过程在诊断里是黑箱。
-			issues, err := api.OperationToolIssues(ctx, operation.ID)
+			issues, err := api.Tasks.OperationToolIssues(ctx, operation.ID)
 			if err != nil {
 				return diagnosticsMsg{gen: gen, err: err}
 			}
@@ -270,10 +272,10 @@ func (m model) loadDiagnosticsCmd() tea.Cmd {
 				// 错误本体不截断：诊断页是可滚动阅读视图，错误必须完整可见。
 				text.WriteString(fmt.Sprintf("  工具报错 %s：%s\n", label, issue.Err))
 			}
-			if operation.State != domain.OperationFailed {
+			if operation.State != domainmodel.OperationFailed {
 				continue
 			}
-			operationEvents, err := api.OperationEvents(ctx, operation.ID)
+			operationEvents, err := api.Tasks.OperationEvents(ctx, operation.ID)
 			if err != nil {
 				return diagnosticsMsg{gen: gen, err: err}
 			}
@@ -317,7 +319,7 @@ func (m model) updateWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.gen != bench.gen || !message.open {
 			return m, nil
 		}
-		if feed, ok := m.api.RunActivity(bench.projectID); ok {
+		if feed, ok := m.api.Workbench.RunActivity(bench.projectID); ok {
 			// 用户上翻暂停跟随时，新条目到达按增量补偿偏移，让窗口锚定不动
 			// （条目触顶被丢弃后锚点最多漂移一条，可接受）。
 			if bench.feedOffset > 0 && len(feed.Entries) > len(bench.activity.Entries) {
@@ -337,7 +339,7 @@ func (m model) updateWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 			// 唯一可宽容的瞬态：建书起步、作品还没落库（未加载 + 创作中 +
 			// 确为"不存在"）；其余错误（如库损坏）创作中也必须呈现。
 			if !bench.loaded {
-				if bench.writing && service.IsNotFound(message.err) {
+				if bench.writing && projectdoc.IsNotFound(message.err) {
 					return m, nil
 				}
 				if bench.writing {
@@ -432,14 +434,14 @@ func (m model) handleQuickDone(message quickDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	result := message.result
 	switch result.RunState {
-	case domain.RunCompleted:
+	case domainmodel.RunCompleted:
 		bench.notice = fmt.Sprintf("全书完成：%d 章都写好了，在大纲里选章阅读吧", len(result.Chapters))
-	case domain.RunWaitingUser:
+	case domainmodel.RunWaitingUser:
 		// 待批稿件由下一次快照刷新带回并重建决定卡；无稿件等待先显示原因。
 		if result.WaitingOperationID == "" {
 			bench.presentDecision(&decisionState{reason: result.RunReason})
 		}
-	case domain.RunFailed:
+	case domainmodel.RunFailed:
 		// 失败理由已是创作语言（D26），比原始错误链更有用。
 		bench.err = result.RunReason
 	}
@@ -576,13 +578,13 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 完成后收束），诊断只读；其余键位在 writing 态屏蔽以免并发驱动。
 	switch key.String() {
 	case "p":
-		if bench.hasRun() && (bench.run().State == domain.RunRunning || bench.run().State == domain.RunWaitingUser) {
+		if bench.hasRun() && (bench.run().State == domainmodel.RunRunning || bench.run().State == domainmodel.RunWaitingUser) {
 			return m, m.pauseRunCmd()
 		}
 		return m, nil
 	case "x":
-		if bench.hasRun() && bench.run().State != domain.RunCompleted &&
-			bench.run().State != domain.RunFailed && bench.run().State != domain.RunCancelled {
+		if bench.hasRun() && bench.run().State != domainmodel.RunCompleted &&
+			bench.run().State != domainmodel.RunFailed && bench.run().State != domainmodel.RunCancelled {
 			return m, m.cancelRunCmd()
 		}
 		return m, nil
@@ -639,14 +641,14 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // firstBlockingFinding 取选中章节第一条尚未被接受的阻塞发现（D43 的 a 键一次只裁一条）。
-func (m model) firstBlockingFinding() (service.WorkbenchFinding, bool) {
+func (m model) firstBlockingFinding() (workbench.WorkbenchFinding, bool) {
 	chapterID := m.selectedChapterID()
 	for _, finding := range m.bench.snap.Findings {
-		if chapterID != "" && finding.ChapterID == chapterID && finding.Severity == domain.FindingBlocking {
+		if chapterID != "" && finding.ChapterID == chapterID && finding.Severity == domainmodel.FindingBlocking {
 			return finding, true
 		}
 	}
-	return service.WorkbenchFinding{}, false
+	return workbench.WorkbenchFinding{}, false
 }
 
 // directiveScope 按大纲选中行定要求的作用域（§4.9）：章行只管该章，卷/弧行
@@ -659,9 +661,9 @@ func (m model) directiveScope() (scope, label string) {
 		case row.placeholder:
 			return fmt.Sprintf("from_chapter:%d", row.chapter), fmt.Sprintf("对第 %d 章起的要求", row.chapter)
 		case row.isChapter():
-			return domain.DirectiveScopePlanNode(row.node.Node.ID), fmt.Sprintf("对第 %d 章的要求", row.chapter)
+			return domainmodel.DirectiveScopePlanNode(row.node.Node.ID), fmt.Sprintf("对第 %d 章的要求", row.chapter)
 		default:
-			return domain.DirectiveScopePlanNode(row.node.Node.ID), fmt.Sprintf("对「%s」的要求", row.node.Node.Title)
+			return domainmodel.DirectiveScopePlanNode(row.node.Node.ID), fmt.Sprintf("对「%s」的要求", row.node.Node.Title)
 		}
 	}
 	next := len(m.bench.snap.Manuscript) + 1
@@ -711,7 +713,7 @@ func (m model) toggleFold(id string) string {
 	} else {
 		bench.collapsed[id] = true
 	}
-	state, err := app.LoadState(m.deps.ConfigDir)
+	state, err := appconfig.LoadState(m.deps.ConfigDir)
 	if err != nil {
 		// 读不出来就不回写：用空状态读改写会抹掉其他作品的偏好。
 		return "折叠已生效，但偏好文件异常未保存：" + err.Error()
@@ -729,7 +731,7 @@ func (m model) toggleFold(id string) string {
 	} else {
 		state.Collapsed[bench.projectID] = ids
 	}
-	if err := app.SaveState(m.deps.ConfigDir, state); err != nil {
+	if err := appconfig.SaveState(m.deps.ConfigDir, state); err != nil {
 		return "折叠已生效，但布局偏好保存失败：" + err.Error()
 	}
 	return ""
@@ -847,10 +849,10 @@ func (m model) multiPane() bool { return m.width >= 100 }
 func (m model) threePane() bool { return m.width >= 140 }
 
 // chapterCount 是大纲可选章节数。
-func chapterCount(snap service.WorkbenchSnapshot) int {
+func chapterCount(snap workbench.WorkbenchSnapshot) int {
 	count := 0
 	for _, entry := range snap.Outline {
-		if entry.Node.Kind == domain.PlanChapter {
+		if entry.Node.Kind == domainmodel.PlanChapter {
 			count++
 		}
 	}
@@ -872,8 +874,8 @@ func (m model) addDirectiveCmd(scope, text string) tea.Cmd {
 	gen, projectID := m.bench.gen, m.bench.projectID
 	return func() tea.Msg {
 		now := time.Now().UTC()
-		_, err := api.AddDirective(ctx, service.AddDirectiveCommand{
-			ProjectID: projectID, ChangeID: service.NewID("directive", now), UserID: user,
+		_, err := api.Projects.AddDirective(ctx, projectdoc.AddDirectiveCommand{
+			ProjectID: projectID, ChangeID: projectdoc.NewID("directive", now), UserID: user,
 			Scope: scope, Text: text, Reason: "工作台提出创作要求", CreatedAt: now,
 		})
 		return runControlMsg{gen: gen, err: err, next: "refresh", note: "要求已记录：之后的创作照此执行，审阅逐条核验"}
@@ -887,8 +889,8 @@ func (m model) adjudicateCmd(finding, reason string) tea.Cmd {
 	gen, projectID := m.bench.gen, m.bench.projectID
 	return func() tea.Msg {
 		now := time.Now().UTC()
-		_, err := api.AddAdjudication(ctx, service.AddAdjudicationCommand{
-			ProjectID: projectID, ChangeID: service.NewID("adjudication", now), UserID: user,
+		_, err := api.Reviews.AddAdjudication(ctx, novel.AddAdjudicationCommand{
+			ProjectID: projectID, ChangeID: projectdoc.NewID("adjudication", now), UserID: user,
 			Finding: finding, Reason: reason, CreatedAt: now,
 		})
 		return runControlMsg{gen: gen, err: err, next: "refresh", note: "已接受这条发现：续写时不再为它重写；相关内容再变化时裁决自动失效"}
@@ -898,7 +900,7 @@ func (m model) adjudicateCmd(finding, reason string) tea.Cmd {
 // currentTarget 取当前目标章数：小说目标优先，其余回退到 Intent。
 func (m model) currentTarget() int {
 	if m.bench.hasRun() {
-		if goal, err := domain.DecodeNovelGoal(m.bench.run().Goal); err == nil {
+		if goal, err := domainmodel.DecodeNovelGoal(m.bench.run().Goal); err == nil {
 			return goal.TargetChapters
 		}
 	}
@@ -916,9 +918,9 @@ func (m model) decideCmd(approve bool, reason string) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		var err error
 		if approve {
-			_, err = api.Approve(ctx, proposal.ID, user, time.Now().UTC())
+			_, err = api.Decisions.Approve(ctx, proposal.ID, user, time.Now().UTC())
 		} else {
-			_, err = api.Reject(ctx, proposal.ID, user, reason, time.Now().UTC())
+			_, err = api.Decisions.Reject(ctx, proposal.ID, user, reason, time.Now().UTC())
 		}
 		return decisionDoneMsg{gen: gen, continueAfter: continueAfter, err: err}
 	}
@@ -932,7 +934,7 @@ func (m model) pauseRunCmd() tea.Cmd {
 		note = "暂停指令已发出：当前这一步完成后就会停下"
 	}
 	return func() tea.Msg {
-		_, err := api.PauseCreationRun(ctx, runID, time.Now().UTC())
+		_, err := api.Runs.PauseCreationRun(ctx, runID, time.Now().UTC())
 		return runControlMsg{gen: gen, err: err, next: "refresh", note: note}
 	}
 }
@@ -945,7 +947,7 @@ func (m model) cancelRunCmd() tea.Cmd {
 		note = "取消指令已发出：当前这一步完成后停下；已写内容保留"
 	}
 	return func() tea.Msg {
-		_, err := api.CancelCreationRun(ctx, runID, time.Now().UTC())
+		_, err := api.Runs.CancelCreationRun(ctx, runID, time.Now().UTC())
 		return runControlMsg{gen: gen, err: err, next: "refresh", note: note}
 	}
 }
@@ -956,7 +958,7 @@ func (m model) applyBudgetCmd(budget int) tea.Cmd {
 	return func() tea.Msg {
 		strategy := run.Strategy
 		strategy.AutoRepairBudget = budget
-		_, err := api.UpdateCreationRunStrategy(ctx, run.ID, strategy, time.Now().UTC())
+		_, err := api.Runs.UpdateCreationRunStrategy(ctx, run.ID, strategy, time.Now().UTC())
 		return runControlMsg{gen: gen, err: err, next: "continue"}
 	}
 }
@@ -995,7 +997,7 @@ func (m model) continueRunWith(chapters int) (tea.Model, tea.Cmd) {
 
 // selectedChapter 取选中章的呈现版本。候选稿优先（三层校正链，页面设计 §3）：
 // 重写场景下旧权威正文与新候选并存，等你裁决的是候选，不能被旧稿遮住。
-func (m model) selectedChapter(number int) (domain.ManuscriptChapter, string, bool) {
+func (m model) selectedChapter(number int) (domainmodel.ManuscriptChapter, string, bool) {
 	for _, candidate := range m.bench.snap.Candidates {
 		if candidate.Chapter.Number == number {
 			return candidate.Chapter, "候选稿 · 等你验收，尚未写入正式书稿", true
@@ -1004,7 +1006,7 @@ func (m model) selectedChapter(number int) (domain.ManuscriptChapter, string, bo
 	if chapter, ok := chapterByNumber(m.bench.snap.Manuscript, number); ok {
 		return chapter, "", true
 	}
-	return domain.ManuscriptChapter{}, "", false
+	return domainmodel.ManuscriptChapter{}, "", false
 }
 
 // openChapter 全屏阅读选中章。
@@ -1046,16 +1048,16 @@ func (m model) selectedChapterID() string {
 	return ""
 }
 
-func chapterByNumber(chapters []domain.ManuscriptChapter, number int) (domain.ManuscriptChapter, bool) {
+func chapterByNumber(chapters []domainmodel.ManuscriptChapter, number int) (domainmodel.ManuscriptChapter, bool) {
 	for _, chapter := range chapters {
 		if chapter.Number == number {
 			return chapter, true
 		}
 	}
-	return domain.ManuscriptChapter{}, false
+	return domainmodel.ManuscriptChapter{}, false
 }
 
-func renderChapterBody(chapter domain.ManuscriptChapter, badge string) string {
+func renderChapterBody(chapter domainmodel.ManuscriptChapter, badge string) string {
 	var text strings.Builder
 	text.WriteString(fmt.Sprintf("第%d章 %s\n", chapter.Number, chapter.Title))
 	if badge != "" {
@@ -1078,8 +1080,8 @@ func (m model) openBody(content string) tea.Model {
 	return m
 }
 
-func orderedChapters(snap service.WorkbenchSnapshot) []domain.ManuscriptChapter {
-	chapters := append([]domain.ManuscriptChapter(nil), snap.Manuscript...)
+func orderedChapters(snap workbench.WorkbenchSnapshot) []domainmodel.ManuscriptChapter {
+	chapters := append([]domainmodel.ManuscriptChapter(nil), snap.Manuscript...)
 	sort.Slice(chapters, func(i, j int) bool { return chapters[i].Number < chapters[j].Number })
 	return chapters
 }
@@ -1156,7 +1158,7 @@ func paneBox(content string, width, height int) string {
 // outlineRow 是折叠过滤后的大纲可见行：卷/弧头行（回车折叠/展开）、
 // 章行（回车阅读）或未规划占位行（不可选）。
 type outlineRow struct {
-	node        service.OutlineNode
+	node        workbench.OutlineNode
 	chapter     int // 章行与占位行的章节号
 	placeholder bool
 	collapsed   bool // 头行且已折叠
@@ -1164,19 +1166,19 @@ type outlineRow struct {
 	pending     int  // 子树待确认（◐）章数
 }
 
-func (r outlineRow) isChapter() bool { return r.node.Node.Kind == domain.PlanChapter }
+func (r outlineRow) isChapter() bool { return r.node.Node.Kind == domainmodel.PlanChapter }
 func (r outlineRow) header() bool {
-	return r.node.Node.Kind == domain.PlanVolume || r.node.Node.Kind == domain.PlanArc
+	return r.node.Node.Kind == domainmodel.PlanVolume || r.node.Node.Kind == domainmodel.PlanArc
 }
 
 // outlineDepth 卷→弧→章的层级深度；beat 是章内节拍，不入大纲。
-func outlineDepth(kind domain.PlanNodeKind) (int, bool) {
+func outlineDepth(kind domainmodel.PlanNodeKind) (int, bool) {
 	switch kind {
-	case domain.PlanVolume:
+	case domainmodel.PlanVolume:
 		return 0, true
-	case domain.PlanArc:
+	case domainmodel.PlanArc:
 		return 1, true
-	case domain.PlanChapter:
+	case domainmodel.PlanChapter:
 		return 2, true
 	default:
 		return 0, false
@@ -1186,7 +1188,7 @@ func outlineDepth(kind domain.PlanNodeKind) (int, bool) {
 type outlineNodeStats struct{ chapters, pending int }
 
 // outlineStats 统计每个卷/弧子树的章节数与待确认数（折叠头行的摘要）。
-func outlineStats(outline []service.OutlineNode) map[string]outlineNodeStats {
+func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
 	stats := make(map[string]outlineNodeStats)
 	var ancestors []string
 	for _, entry := range outline {
@@ -1194,11 +1196,11 @@ func outlineStats(outline []service.OutlineNode) map[string]outlineNodeStats {
 		if !ok {
 			continue
 		}
-		if entry.Node.Kind == domain.PlanChapter {
+		if entry.Node.Kind == domainmodel.PlanChapter {
 			for _, id := range ancestors {
 				s := stats[id]
 				s.chapters++
-				if entry.State == service.ChapterPending {
+				if entry.State == workbench.ChapterPending {
 					s.pending++
 				}
 				stats[id] = s
@@ -1229,7 +1231,7 @@ func (m model) outlineRows() []outlineRow {
 			skipDepth = -1
 		}
 		row := outlineRow{node: entry, chapter: entry.Number}
-		if entry.Node.Kind != domain.PlanChapter && bench.collapsed[entry.Node.ID] {
+		if entry.Node.Kind != domainmodel.PlanChapter && bench.collapsed[entry.Node.ID] {
 			row.collapsed = true
 			row.chapters, row.pending = stats[entry.Node.ID].chapters, stats[entry.Node.ID].pending
 			skipDepth = depth
@@ -1350,7 +1352,7 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 		if row.collapsed {
 			fold = "▸ "
 		}
-		if row.node.Node.Kind == domain.PlanArc {
+		if row.node.Node.Kind == domainmodel.PlanArc {
 			style, indent = styleSubtitle, " "
 		}
 		line := style.Render(indent + fold + truncate(row.node.Node.Title, max(4, width-10)))
@@ -1372,15 +1374,15 @@ func paneTitle(text string, focused bool) string {
 	return styleHint.Render(text)
 }
 
-func (m model) outlineChapterLine(entry service.OutlineNode, selected bool, width int) string {
+func (m model) outlineChapterLine(entry workbench.OutlineNode, selected bool, width int) string {
 	badge := "○"
 	style := styleHint
 	switch entry.State {
-	case service.ChapterConfirmed:
+	case workbench.ChapterConfirmed:
 		badge, style = "●", styleNotice
-	case service.ChapterPending:
+	case workbench.ChapterPending:
 		badge, style = "◐", styleWarn
-	case service.ChapterInProgress:
+	case workbench.ChapterInProgress:
 		badge, style = "▸", styleFocus
 	}
 	line := fmt.Sprintf("%s %d %s", badge, entry.Number, truncate(entry.Node.Title, max(4, width-8)))
@@ -1627,7 +1629,7 @@ func (m model) viewDetailPane(width int) string {
 			view.WriteString("\n" + styleTitle.Render("审阅发现") + "\n")
 		}
 		marker := "· "
-		if finding.Severity == domain.FindingBlocking {
+		if finding.Severity == domainmodel.FindingBlocking {
 			marker = "! "
 		}
 		view.WriteString(styleHint.Render(marker) + truncate(finding.Note, width-3) + "\n")

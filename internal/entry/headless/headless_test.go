@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/service"
-	"github.com/voocel/ainovel-cli/internal/store"
+	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
 func TestProjectCreateAndShowCommands(t *testing.T) {
@@ -23,14 +24,14 @@ func TestProjectCreateAndShowCommands(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer authorityStore.Close()
-	api := service.New(authorityStore)
+	api := bootstrap.New(authorityStore, bootstrap.Options{})
 	draftPath := filepath.Join(t.TempDir(), "draft.json")
-	draft, _ := json.Marshal(service.ProjectDraft{
-		Intent: domain.Intent{Premise: "凡人修仙"},
-		Plan: []domain.PlanNode{
-			{ID: "volume-1", Kind: domain.PlanVolume, Title: "第一卷", Summary: "入道"},
-			{ID: "arc-1", Kind: domain.PlanArc, ParentID: "volume-1", Title: "山门", Summary: "入门"},
-			{ID: "chapter-plan-1", Kind: domain.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达"},
+	draft, _ := json.Marshal(projectdoc.ProjectDraft{
+		Intent: model.Intent{Premise: "凡人修仙"},
+		Plan: []model.PlanNode{
+			{ID: "volume-1", Kind: model.PlanVolume, Title: "第一卷", Summary: "入道"},
+			{ID: "arc-1", Kind: model.PlanArc, ParentID: "volume-1", Title: "山门", Summary: "入门"},
+			{ID: "chapter-plan-1", Kind: model.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达"},
 		},
 	})
 	if err := os.WriteFile(draftPath, draft, 0o644); err != nil {
@@ -44,7 +45,7 @@ func TestProjectCreateAndShowCommands(t *testing.T) {
 	}, &output, &errorsOutput); err != nil {
 		t.Fatalf("project create: %v; stderr=%s", err, errorsOutput.String())
 	}
-	var created service.ProjectSnapshot
+	var created projectdoc.Snapshot
 	if err := json.Unmarshal(output.Bytes(), &created); err != nil {
 		t.Fatalf("decode create output: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestProjectCreateAndShowCommands(t *testing.T) {
 	if err := Run(ctx, api, []string{"project", "show", "--project", "book-1"}, &output, &errorsOutput); err != nil {
 		t.Fatalf("project show: %v", err)
 	}
-	var shown service.ProjectSnapshot
+	var shown projectdoc.Snapshot
 	if err := json.Unmarshal(output.Bytes(), &shown); err != nil {
 		t.Fatalf("decode show output: %v", err)
 	}
@@ -72,10 +73,10 @@ func TestProjectDirectiveCommands(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer authorityStore.Close()
-	api := service.New(authorityStore)
-	if _, err := api.CreateProject(ctx, service.CreateProjectCommand{
+	api := bootstrap.New(authorityStore, bootstrap.Options{})
+	if _, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 		ProjectID: "book-1", ChangeID: "create-book-1", UserID: "user-1", Reason: "创建作品",
-		Draft: service.ProjectDraft{Intent: domain.Intent{Premise: "凡人修仙"}}, CreatedAt: time.Now().UTC(),
+		Draft: projectdoc.ProjectDraft{Intent: model.Intent{Premise: "凡人修仙"}}, CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestProjectDirectiveCommands(t *testing.T) {
 	}, &output, &errorsOutput); err != nil {
 		t.Fatalf("directive add: %v; stderr=%s", err, errorsOutput.String())
 	}
-	var added service.DirectiveResult
+	var added projectdoc.DirectiveResult
 	if err := json.Unmarshal(output.Bytes(), &added); err != nil {
 		t.Fatalf("decode add output: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestProjectDirectiveCommands(t *testing.T) {
 	if err := Run(ctx, api, []string{"project", "show", "--project", "book-1"}, &output, &errorsOutput); err != nil {
 		t.Fatalf("project show: %v", err)
 	}
-	var shown service.ProjectSnapshot
+	var shown projectdoc.Snapshot
 	if err := json.Unmarshal(output.Bytes(), &shown); err != nil {
 		t.Fatalf("decode show output: %v", err)
 	}
@@ -123,11 +124,11 @@ func TestProjectDirectiveCommands(t *testing.T) {
 	if err := Run(ctx, api, []string{"project", "directive", "list", "--project", "book-1"}, &output, &errorsOutput); err != nil {
 		t.Fatalf("directive list: %v", err)
 	}
-	var listed []domain.Directive
+	var listed []model.Directive
 	if err := json.Unmarshal(output.Bytes(), &listed); err != nil {
 		t.Fatalf("decode list output: %v", err)
 	}
-	if len(listed) != 1 || listed[0].Status != domain.DirectiveRetired {
+	if len(listed) != 1 || listed[0].Status != model.DirectiveRetired {
 		t.Fatalf("listed = %#v", listed)
 	}
 }
@@ -139,10 +140,10 @@ func TestProjectAdjudicationCommands(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer authorityStore.Close()
-	api := service.New(authorityStore)
-	if _, err := api.CreateProject(ctx, service.CreateProjectCommand{
+	api := bootstrap.New(authorityStore, bootstrap.Options{})
+	if _, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 		ProjectID: "book-1", ChangeID: "create-book-1", UserID: "user-1", Reason: "创建作品",
-		Draft: service.ProjectDraft{Intent: domain.Intent{Premise: "凡人修仙"}}, CreatedAt: time.Now().UTC(),
+		Draft: projectdoc.ProjectDraft{Intent: model.Intent{Premise: "凡人修仙"}}, CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestProjectAdjudicationCommands(t *testing.T) {
 	}
 	if err := Run(ctx, api, []string{
 		"project", "adjudication", "add", "--project", "book-1", "--user", "user-1", "--reason", "接受", "--finding", "review/0",
-	}, &output, &errorsOutput); !errors.Is(err, domain.ErrInvalid) {
+	}, &output, &errorsOutput); !errors.Is(err, model.ErrInvalid) {
 		t.Fatalf("adjudication add for an unknown verdict err = %v", err)
 	}
 }

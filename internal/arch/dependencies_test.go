@@ -22,33 +22,44 @@ const modulePath = "github.com/voocel/ainovel-cli"
 // 新增包必须在此显式登记，让"它可以依赖谁"成为一次明确的 review 决定，而不是随手
 // import 的既成事实。
 var allowedImports = map[string][]string{
-	"arch":   {},
-	"domain": {},
-	// activity 是运行时平面的实时活动通道（页面设计 §4）：叶子包，capability 发布、
-	// service 订阅、entry 消费快照类型；权威语义与持久化不经过它。
-	"activity":          {},
-	"store":             {"domain"},
-	"change":            {"domain", "store"},
-	"derive":            {"domain"},
-	"workspace":         {"domain", "store"},
-	"llm/models":        {"domain"},
-	"capability/pack":   {"domain"},
-	"capability/prompt": {"domain", "store"},
-	"capability":        {"activity", "domain", "store", "change", "capability/prompt", "workspace"},
-	"operation":         {"domain", "store", "change"},
-	"service":           {"activity", "domain", "store", "change", "derive", "operation", "capability/pack", "capability/prompt"},
-	"entry/app":         {},
-	"entry/headless":    {"domain", "service"},
-	"entry/tui":         {"activity", "domain", "service", "entry/app", "entry/headless"},
+	"arch":                    {},
+	"domain/model":            {},
+	"infra/activity":          {},
+	"infra/store":             {"domain/model"},
+	"domain/change":           {"domain/model"},
+	"domain/derive":           {"domain/model"},
+	"infra/workspace":         {"domain/model", "infra/store"},
+	"infra/llm/models":        {"domain/model"},
+	"infra/capability/pack":   {"domain/model"},
+	"infra/capability/prompt": {"domain/model", "infra/store"},
+	"infra/capability":        {"infra/activity", "domain/model", "infra/store", "domain/change", "infra/capability/prompt", "infra/workspace"},
+	"domain/operation":        {"domain/model", "domain/change"},
+	"app/project":             {"domain/model", "infra/store", "domain/change"},
+	"app/resource":            {"domain/model", "infra/store", "domain/change", "app/project", "infra/capability/pack", "infra/capability/prompt"},
+	"app/profile":             {"domain/model", "infra/store", "app/project", "app/resource", "domain/derive", "infra/capability/prompt"},
+	"app/task":                {"domain/creation", "domain/model", "infra/store", "app/project", "app/resource", "app/profile", "domain/operation", "infra/capability/prompt"},
+	// The driver cannot depend on application snapshots, evidence interpretation,
+	// novel policies, presentation queries, or application assembly.
+	"domain/creation": {"domain/model"},
+	"app/evidence":    {"domain/model", "infra/store", "domain/change", "domain/operation"},
+	"app/novel":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/project", "app/resource", "app/task"},
+	"app/decision":    {"domain/model", "infra/store", "domain/change", "app/project", "app/resource", "app/task"},
+	"app/workbench":   {"infra/activity", "domain/model", "infra/store", "domain/creation", "app/decision", "app/novel", "app/project"},
+	"bootstrap":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/decision", "app/evidence", "app/novel", "domain/operation", "app/profile", "app/project", "app/resource", "app/task", "app/workbench"},
+	"infra/config":    {},
+	"entry/headless":  {"domain/model", "bootstrap", "domain/creation", "app/decision", "app/novel", "app/profile", "app/project", "app/resource", "app/task"},
+	"entry/tui":       {"infra/activity", "domain/model", "bootstrap", "app/decision", "app/novel", "app/project", "app/workbench", "infra/config", "entry/headless"},
 }
 
-// allowedTestImports 是测试文件在生产白名单之外额外允许的依赖，用于搭建测试环境
-// （例如打开一个真实 SQLite）。它与生产白名单严格分开：测试可以用 store 搭台子，
-// 与"UI 层可以直连 store"是两件事，混为一谈会让规则失去意义。
+// Tests may open a real store for assembly; entry production code may not.
 var allowedTestImports = map[string][]string{
-	// headless/tui 的用例需要真实存储装配 Service；生产代码仍只依赖 service。
-	"entry/headless": {"store"},
-	"entry/tui":      {"store"},
+	"app/task":         {"domain/change"},
+	"domain/change":    {"infra/store"},
+	"domain/operation": {"infra/store"},
+	"domain/creation":  {"infra/store"},
+	"bootstrap":        {"infra/activity", "infra/capability/prompt", "domain/derive"},
+	"entry/headless":   {"infra/store"},
+	"entry/tui":        {"infra/store"},
 }
 
 func TestInternalPackagesRespectDependencyDirection(t *testing.T) {
@@ -82,6 +93,7 @@ func TestInternalPackagesRespectDependencyDirection(t *testing.T) {
 		visited[name] = true
 
 		checkImports(t, name, pkg.Imports, allowed, "生产代码")
+		checkLayerDirection(t, name, pkg.Imports)
 		testAllowed := slices.Concat(allowed, allowedTestImports[name])
 		checkImports(t, name, slices.Concat(pkg.TestImports, pkg.XTestImports), testAllowed, "测试代码")
 		return nil
@@ -110,16 +122,42 @@ func checkImports(t *testing.T, name string, imports, allowed []string, kind str
 	}
 }
 
-// TestDomainHasNoInternalDependencies 单独钉住地基：domain 是所有层的共同依赖，
+// TestModelHasNoInternalDependencies 单独钉住地基：model 是所有层的共同依赖，
 // 一旦它反向依赖任何包，整张依赖图立刻失去方向。
-func TestDomainHasNoInternalDependencies(t *testing.T) {
-	pkg, err := build.ImportDir(filepath.Join("..", "domain"), 0)
+func TestModelHasNoInternalDependencies(t *testing.T) {
+	pkg, err := build.ImportDir(filepath.Join("..", "domain", "model"), 0)
 	if err != nil {
-		t.Fatalf("import domain: %v", err)
+		t.Fatalf("import domain/model: %v", err)
 	}
 	for _, imported := range slices.Concat(pkg.Imports, pkg.TestImports, pkg.XTestImports) {
 		if strings.HasPrefix(imported, modulePath+"/") {
-			t.Errorf("domain 必须零内部依赖，实际依赖 %s", imported)
+			t.Errorf("domain/model 必须零内部依赖，实际依赖 %s", imported)
+		}
+	}
+}
+
+// Layer restrictions remain independent of package allowlists so a new entry
+// cannot silently reverse the architecture's direction.
+func checkLayerDirection(t *testing.T, name string, imports []string) {
+	t.Helper()
+	layer, _, _ := strings.Cut(name, "/")
+	for _, imported := range imports {
+		dependency, internal := strings.CutPrefix(imported, modulePath+"/internal/")
+		if !internal {
+			continue
+		}
+		target, _, _ := strings.Cut(dependency, "/")
+		forbidden := false
+		switch layer {
+		case "domain":
+			forbidden = target != "domain"
+		case "infra":
+			forbidden = target != "domain" && target != "infra"
+		case "app":
+			forbidden = target != "domain" && target != "infra" && target != "app"
+		}
+		if forbidden {
+			t.Errorf("包 %s 不得依赖 %s：违反 %s 层的生产依赖方向", name, dependency, layer)
 		}
 	}
 }

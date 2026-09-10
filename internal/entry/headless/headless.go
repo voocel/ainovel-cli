@@ -12,11 +12,18 @@ import (
 	"time"
 
 	"github.com/tailscale/hujson"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/service"
+	"github.com/voocel/ainovel-cli/internal/app/decision"
+	"github.com/voocel/ainovel-cli/internal/app/novel"
+	"github.com/voocel/ainovel-cli/internal/app/profile"
+	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"github.com/voocel/ainovel-cli/internal/app/resource"
+	"github.com/voocel/ainovel-cli/internal/app/task"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/domain/creation"
+	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
-func Run(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func Run(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return writeHelp(stdout)
 	}
@@ -46,7 +53,7 @@ func Run(ctx context.Context, api *service.Service, args []string, stdout, stder
 	}
 }
 
-func runCreation(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runCreation(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("creation 需要 start、show、strategy、pause、cancel 或 events 子命令")
 	}
@@ -68,26 +75,26 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		if *repairBudget == -1 {
 			*repairBudget = *chapters
 		}
-		project, err := api.Project(ctx, *projectID, domain.InitialRevision)
+		project, err := api.Projects.Project(ctx, *projectID, model.InitialRevision)
 		if err != nil {
 			return err
 		}
 		approval := project.Approval
 		if approval == "" {
-			approval = domain.ApprovalAuto
+			approval = model.ApprovalAuto
 		}
-		strategy := domain.CreationRunStrategy{
+		strategy := model.CreationRunStrategy{
 			PlanWindowChapters: *window,
-			ReviewCadence:      domain.ReviewPerPlanWindow,
+			ReviewCadence:      model.ReviewPerPlanWindow,
 			AutoRepairBudget:   *repairBudget,
 		}
-		preset, err := domain.NewCreationRunPreset("custom", approval, strategy)
+		preset, err := model.NewCreationRunPreset("custom", approval, strategy)
 		if err != nil {
 			return err
 		}
-		run, err := api.StartCreationRun(ctx, service.StartCreationRunCommand{
+		run, err := api.Runs.StartCreationRun(ctx, creation.StartCreationRunCommand{
 			RunID: *runID, ProjectID: *projectID,
-			Goal:     domain.NovelGoal{Premise: *premise, TargetChapters: *chapters}.Goal(),
+			Goal:     model.NovelGoal{Premise: *premise, TargetChapters: *chapters}.Goal(),
 			Strategy: strategy, Preset: preset,
 			CreatedAt: time.Now().UTC(),
 		})
@@ -101,7 +108,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		if *runID == "" {
 			return fmt.Errorf("creation show 需要 --id")
 		}
-		run, err := api.CreationRun(ctx, *runID)
+		run, err := api.Runs.CreationRun(ctx, *runID)
 		return writeResult(stdout, run, err)
 	case "strategy":
 		flags := newFlags("creation strategy", stderr)
@@ -115,7 +122,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 			(*window == 0 && *repairBudget == -1) || flags.NArg() != 0 {
 			return fmt.Errorf("creation strategy 需要 --id 以及 --window 或 --repair-budget 至少之一")
 		}
-		run, err := api.CreationRun(ctx, *runID)
+		run, err := api.Runs.CreationRun(ctx, *runID)
 		if err != nil {
 			return err
 		}
@@ -126,7 +133,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		if *repairBudget >= 0 {
 			strategy.AutoRepairBudget = *repairBudget
 		}
-		updated, err := api.UpdateCreationRunStrategy(ctx, *runID, strategy, time.Now().UTC())
+		updated, err := api.Runs.UpdateCreationRunStrategy(ctx, *runID, strategy, time.Now().UTC())
 		return writeResult(stdout, updated, err)
 	case "events":
 		flags := newFlags("creation events", stderr)
@@ -137,7 +144,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		if *runID == "" {
 			return fmt.Errorf("creation events 需要 --id")
 		}
-		events, err := api.CreationRunEvents(ctx, *runID)
+		events, err := api.Runs.CreationRunEvents(ctx, *runID)
 		return writeResult(stdout, events, err)
 	case "pause", "cancel":
 		flags := newFlags("creation "+args[0], stderr)
@@ -148,12 +155,12 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		if *runID == "" {
 			return fmt.Errorf("creation %s 需要 --id", args[0])
 		}
-		var run domain.CreationRun
+		var run model.CreationRun
 		var err error
 		if args[0] == "pause" {
-			run, err = api.PauseCreationRun(ctx, *runID, time.Now().UTC())
+			run, err = api.Runs.PauseCreationRun(ctx, *runID, time.Now().UTC())
 		} else {
-			run, err = api.CancelCreationRun(ctx, *runID, time.Now().UTC())
+			run, err = api.Runs.CancelCreationRun(ctx, *runID, time.Now().UTC())
 		}
 		return writeResult(stdout, run, err)
 	default:
@@ -161,7 +168,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 	}
 }
 
-func runQuick(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runQuick(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "write" {
 		return fmt.Errorf("quick 需要 write 子命令")
 	}
@@ -182,17 +189,17 @@ func runQuick(ctx context.Context, api *service.Service, args []string, stdout, 
 	if flags.NArg() != 0 || *projectID == "" || *userID == "" || *premise == "" {
 		return fmt.Errorf("quick write 需要 --project --user --premise")
 	}
-	packs := make([]service.PackRef, len(packIDs))
+	packs := make([]resource.PackRef, len(packIDs))
 	for i, id := range packIDs {
-		packs[i] = service.PackRef{ID: id}
+		packs[i] = resource.PackRef{ID: id}
 	}
 	profiles, err := parseCreatorProfileRefs(profileRefs)
 	if err != nil {
 		return err
 	}
-	result, err := api.QuickWrite(ctx, service.QuickWriteCommand{
+	result, err := api.Novels.QuickWrite(ctx, novel.QuickWriteCommand{
 		ProjectID: *projectID, UserID: *userID, Premise: *premise,
-		Chapters: *chapters, Approval: domain.ApprovalPolicy(*approval),
+		Chapters: *chapters, Approval: model.ApprovalPolicy(*approval),
 		WorkerID: *workerID, LeaseDuration: *lease,
 		Packs: packs, CreatorProfiles: profiles,
 		CreatedAt: time.Now().UTC(),
@@ -208,15 +215,15 @@ func runQuick(ctx context.Context, api *service.Service, args []string, stdout, 
 // 原始候选与诊断仍可通过列出的命令展开查看。
 func writeQuickGuidance(
 	ctx context.Context,
-	api *service.Service,
-	result service.QuickWriteResult,
+	api *bootstrap.App,
+	result novel.QuickWriteResult,
 	userID string,
 	stdout io.Writer,
 ) {
-	if result.RunState != domain.RunWaitingUser || result.WaitingOperationID == "" {
+	if result.RunState != model.RunWaitingUser || result.WaitingOperationID == "" {
 		return
 	}
-	proposal, err := api.ProposalForOperation(ctx, result.WaitingOperationID)
+	proposal, err := api.Decisions.ProposalForOperation(ctx, result.WaitingOperationID)
 	if err != nil {
 		return
 	}
@@ -226,7 +233,7 @@ func writeQuickGuidance(
 	fmt.Fprintf(stdout, "  想改就否决：ainovel-cli --headless proposal reject --id %s --user %s --reason \"想调整的方向\"，重写会带上你的反馈\n", proposal.ID, userID)
 }
 
-func runPack(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runPack(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("pack 需要 install、export 或 eval 子命令")
 	}
@@ -251,15 +258,15 @@ func runPack(ctx context.Context, api *service.Service, args []string, stdout, s
 		if sources != 1 || *changeID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("pack install 需要在 --dir、--file、--url 中选择一个，并提供 --change --user --reason")
 		}
-		var installed service.InstalledPack
+		var installed resource.InstalledPack
 		var err error
 		switch {
 		case *directory != "":
-			installed, err = api.InstallPackDirectory(ctx, *directory, *changeID, *userID, *reason, time.Now().UTC())
+			installed, err = api.Resources.InstallPackDirectory(ctx, *directory, *changeID, *userID, *reason, time.Now().UTC())
 		case *archive != "":
-			installed, err = api.InstallPackArchive(ctx, *archive, *changeID, *userID, *reason, time.Now().UTC())
+			installed, err = api.Resources.InstallPackArchive(ctx, *archive, *changeID, *userID, *reason, time.Now().UTC())
 		default:
-			installed, err = api.InstallPackURL(ctx, *remoteURL, *changeID, *userID, *reason, time.Now().UTC())
+			installed, err = api.Resources.InstallPackURL(ctx, *remoteURL, *changeID, *userID, *reason, time.Now().UTC())
 		}
 		return writeResult(stdout, installed, err)
 	case "export":
@@ -277,13 +284,13 @@ func runPack(ctx context.Context, api *service.Service, args []string, stdout, s
 		if err != nil {
 			return err
 		}
-		if err := api.ExportPack(ctx, service.PackRef{ID: *id, Revision: revision}, *path); err != nil {
+		if err := api.Resources.ExportPack(ctx, resource.PackRef{ID: *id, Revision: revision}, *path); err != nil {
 			return err
 		}
 		return writeResult(stdout, struct {
-			ID       string          `json:"id"`
-			Revision domain.Revision `json:"revision"`
-			File     string          `json:"file"`
+			ID       string         `json:"id"`
+			Revision model.Revision `json:"revision"`
+			File     string         `json:"file"`
 		}{ID: *id, Revision: revision, File: *path}, nil)
 	case "eval":
 		flags := newFlags("pack eval", stderr)
@@ -304,14 +311,14 @@ func runPack(ctx context.Context, api *service.Service, args []string, stdout, s
 		if err != nil {
 			return fmt.Errorf("read eval output: %w", err)
 		}
-		result, err := api.EvaluatePack(ctx, service.PackRef{ID: *id, Revision: revision}, string(output))
+		result, err := api.Resources.EvaluatePack(ctx, resource.PackRef{ID: *id, Revision: revision}, string(output))
 		return writeResult(stdout, result, err)
 	default:
 		return fmt.Errorf("未知 pack 子命令 %q", args[0])
 	}
 }
 
-func runProfile(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runProfile(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("profile 需要 save、show、learn、candidates 或 confirm 子命令")
 	}
@@ -328,11 +335,11 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 		if *path == "" || *changeID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("profile save 需要 --file --change --user --reason")
 		}
-		var profile domain.CreatorProfile
+		var profile model.CreatorProfile
 		if err := DecodeFile(*path, &profile); err != nil {
 			return err
 		}
-		changeSet, err := api.SaveCreatorProfile(ctx, *changeID, *userID, *reason, profile, time.Now().UTC())
+		changeSet, err := api.Resources.SaveCreatorProfile(ctx, *changeID, *userID, *reason, profile, time.Now().UTC())
 		return writeResult(stdout, changeSet, err)
 	case "show":
 		flags := newFlags("profile show", stderr)
@@ -349,10 +356,10 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		profile, storedRevision, err := api.CreatorProfile(ctx, *id, *scope, revision)
+		profile, storedRevision, err := api.Resources.CreatorProfile(ctx, *id, *scope, revision)
 		return writeResult(stdout, struct {
-			Revision domain.Revision       `json:"revision"`
-			Profile  domain.CreatorProfile `json:"profile"`
+			Revision model.Revision       `json:"revision"`
+			Profile  model.CreatorProfile `json:"profile"`
 		}{Revision: storedRevision, Profile: profile}, err)
 	case "learn":
 		flags := newFlags("profile learn", stderr)
@@ -376,7 +383,7 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		record, err := api.LearnPreference(ctx, service.LearnPreferenceCommand{
+		record, err := api.Resources.LearnPreference(ctx, resource.LearnPreferenceCommand{
 			CandidateID: *candidate, ProfileID: *id, Scope: *scope, ProjectID: *projectID,
 			FromRevision: from, ToRevision: to, CreatedAt: time.Now().UTC(),
 		})
@@ -391,7 +398,7 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 		if *id == "" || *scope == "" {
 			return fmt.Errorf("profile candidates 需要 --id --scope")
 		}
-		candidates, err := api.PreferenceCandidates(ctx, *id, *scope)
+		candidates, err := api.Resources.PreferenceCandidates(ctx, *id, *scope)
 		return writeResult(stdout, candidates, err)
 	case "confirm":
 		flags := newFlags("profile confirm", stderr)
@@ -407,7 +414,7 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 		if *id == "" || *scope == "" || *candidate == "" || *changeID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("profile confirm 需要 --id --scope --candidate --change --user --reason")
 		}
-		changeSet, err := api.ConfirmPreferenceCandidate(
+		changeSet, err := api.Resources.ConfirmPreferenceCandidate(
 			ctx, *changeID, *userID, *reason, *id, *scope, *candidate, time.Now().UTC(),
 		)
 		return writeResult(stdout, changeSet, err)
@@ -416,7 +423,7 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 	}
 }
 
-func runProject(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runProject(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("project 需要 create、show、export、import、delete、derived、revert、approval、overlay、assets、directive、adjudication、lock 或 unlock 子命令")
 	}
@@ -434,7 +441,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if flags.NArg() != 0 || *projectID == "" {
 			return fmt.Errorf("project delete 需要 --project")
 		}
-		if err := api.DeleteProject(ctx, *projectID); err != nil {
+		if err := api.Projects.DeleteProject(ctx, *projectID); err != nil {
 			return err
 		}
 		return writeResult(stdout, map[string]string{"deleted": *projectID}, nil)
@@ -454,9 +461,9 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("approval:%s:%d", *policy, time.Now().UnixMilli())
 		}
-		result, err := api.SetApprovalPolicy(ctx, service.SetApprovalPolicyCommand{
+		result, err := api.Projects.SetApprovalPolicy(ctx, projectdoc.SetApprovalPolicyCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
-			Policy: domain.ApprovalPolicy(*policy), Reason: *reason,
+			Policy: model.ApprovalPolicy(*policy), Reason: *reason,
 			CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, result, err)
@@ -477,7 +484,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("overlay:%d", time.Now().UnixMilli())
 		}
-		result, err := api.SetProjectOverlay(ctx, service.SetProjectOverlayCommand{
+		result, err := api.Resources.SetProjectOverlay(ctx, resource.SetProjectOverlayCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			Rules: rules, Reason: *reason, CreatedAt: time.Now().UTC(),
 		})
@@ -497,15 +504,15 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if flags.NArg() != 0 || *projectID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("project assets 需要 --project --user --reason；--pack/--profile 全不传即移除固定引用")
 		}
-		packs := make([]service.PackRef, 0, len(packRefs))
+		packs := make([]resource.PackRef, 0, len(packRefs))
 		for _, ref := range packRefs {
 			id, revision, err := splitAssetRef(ref)
 			if err != nil {
 				return fmt.Errorf("--pack %q: %w", ref, err)
 			}
-			packs = append(packs, service.PackRef{ID: id, Revision: revision})
+			packs = append(packs, resource.PackRef{ID: id, Revision: revision})
 		}
-		profiles := make([]service.CreatorProfileRef, 0, len(profileRefs))
+		profiles := make([]resource.CreatorProfileRef, 0, len(profileRefs))
 		for _, ref := range profileRefs {
 			key, revision, err := splitAssetRef(ref)
 			if err != nil {
@@ -515,12 +522,12 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 			if !ok {
 				return fmt.Errorf("--profile %q 需要 id/scope 形式", ref)
 			}
-			profiles = append(profiles, service.CreatorProfileRef{ID: id, Scope: scope, Revision: revision})
+			profiles = append(profiles, resource.CreatorProfileRef{ID: id, Scope: scope, Revision: revision})
 		}
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("assets:%d", time.Now().UnixMilli())
 		}
-		result, err := api.SetProjectAssets(ctx, service.SetProjectAssetsCommand{
+		result, err := api.Resources.SetProjectAssets(ctx, resource.SetProjectAssetsCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			Packs: packs, CreatorProfiles: profiles, Reason: *reason, CreatedAt: time.Now().UTC(),
 		})
@@ -542,16 +549,16 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if flags.NArg() != 0 || *projectID == "" || *userID == "" || *reason == "" || !ok {
 			return fmt.Errorf("project %s 需要 --project --user --reason --doc kind/id", args[0])
 		}
-		control := domain.ControlLevel(*level)
+		control := model.ControlLevel(*level)
 		if args[0] == "unlock" {
-			control = domain.ControlOpen
+			control = model.ControlOpen
 		}
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("ownership:%s/%s:%d", kind, id, time.Now().UnixMilli())
 		}
-		result, err := api.SetOwnership(ctx, service.SetOwnershipCommand{
+		result, err := api.Projects.SetOwnership(ctx, projectdoc.SetOwnershipCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
-			Target:  domain.DocumentRef{Kind: domain.DocumentKind(kind), ID: id},
+			Target:  model.DocumentRef{Kind: model.DocumentKind(kind), ID: id},
 			Control: control, Guidance: guidance, Reason: *reason,
 			CreatedAt: time.Now().UTC(),
 		})
@@ -569,11 +576,11 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if flags.NArg() != 0 || *projectID == "" || *changeID == "" || *userID == "" || *reason == "" || *draftPath == "" {
 			return fmt.Errorf("project create 需要 --project --change --user --reason --draft")
 		}
-		var draft service.ProjectDraft
+		var draft projectdoc.ProjectDraft
 		if err := DecodeFile(*draftPath, &draft); err != nil {
 			return err
 		}
-		project, err := api.CreateProject(ctx, service.CreateProjectCommand{
+		project, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			Reason: *reason, Draft: draft, CreatedAt: time.Now().UTC(),
 		})
@@ -592,7 +599,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		project, err := api.Project(ctx, *projectID, revision)
+		project, err := api.Projects.Project(ctx, *projectID, revision)
 		return writeResult(stdout, project, err)
 	case "export":
 		flags := newFlags("project export", stderr)
@@ -608,7 +615,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		projection, err := api.ExportProject(ctx, *projectID, revision)
+		projection, err := api.Projects.ExportProject(ctx, *projectID, revision)
 		return writeResult(stdout, projection, err)
 	case "derived":
 		flags := newFlags("project derived", stderr)
@@ -624,7 +631,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		documents, err := api.DerivedDocuments(ctx, *projectID, revision)
+		documents, err := api.Projects.DerivedDocuments(ctx, *projectID, revision)
 		return writeResult(stdout, documents, err)
 	case "import":
 		flags := newFlags("project import", stderr)
@@ -639,18 +646,18 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if *path == "" || *proposalID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("project import 需要 --file --proposal --user --reason")
 		}
-		var projection service.ProjectProjection
+		var projection projectdoc.ProjectProjection
 		if err := DecodeFile(*path, &projection); err != nil {
 			return err
 		}
-		var proposal domain.Proposal
+		var proposal model.Proposal
 		var err error
 		if *semantic {
-			proposal, err = api.ImportProjectWithSemantic(
+			proposal, err = api.Projects.ImportProjectWithSemantic(
 				ctx, *proposalID, *userID, *reason, projection, time.Now().UTC(),
 			)
 		} else {
-			proposal, err = api.ImportProject(
+			proposal, err = api.Projects.ImportProject(
 				ctx, *proposalID, *userID, *reason, projection, time.Now().UTC(),
 			)
 		}
@@ -672,7 +679,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 		if err != nil {
 			return err
 		}
-		proposal, err := api.PrepareRevert(
+		proposal, err := api.Decisions.PrepareRevert(
 			ctx, *proposalID, *projectID, *userID, *reason, revision, time.Now().UTC(),
 		)
 		return writeResult(stdout, proposal, err)
@@ -681,7 +688,7 @@ func runProject(ctx context.Context, api *service.Service, args []string, stdout
 	}
 }
 
-func runProposal(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runProposal(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("proposal 需要 show、approve、reject 或 resolve 子命令")
 	}
@@ -703,15 +710,15 @@ func runProposal(ctx context.Context, api *service.Service, args []string, stdou
 		if *id == "" || *userID == "" || *strategy == "" || flags.NArg() != 0 {
 			return fmt.Errorf("proposal resolve 需要 --id --user --strategy")
 		}
-		packs := make([]service.PackRef, len(packIDs))
+		packs := make([]resource.PackRef, len(packIDs))
 		for index, packID := range packIDs {
-			packs[index] = service.PackRef{ID: packID}
+			packs[index] = resource.PackRef{ID: packID}
 		}
 		profiles, err := parseCreatorProfileRefs(profileRefs)
 		if err != nil {
 			return err
 		}
-		result, err := api.ResolveProposal(ctx, service.ResolveProposalCommand{
+		result, err := api.Decisions.ResolveProposal(ctx, decision.ResolveProposalCommand{
 			ProposalID: *id, UserID: *userID, Strategy: *strategy, Reason: *reason,
 			RunID: *runID,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: *coreVersion,
@@ -731,26 +738,26 @@ func runProposal(ctx context.Context, api *service.Service, args []string, stdou
 	}
 	switch args[0] {
 	case "show":
-		proposal, err := api.Proposal(ctx, *id)
+		proposal, err := api.Decisions.Proposal(ctx, *id)
 		return writeResult(stdout, proposal, err)
 	case "approve":
 		if *userID == "" {
 			return fmt.Errorf("proposal approve 需要 --user")
 		}
-		changeSet, err := api.Approve(ctx, *id, *userID, time.Now().UTC())
+		changeSet, err := api.Decisions.Approve(ctx, *id, *userID, time.Now().UTC())
 		return writeResult(stdout, changeSet, err)
 	case "reject":
 		if *userID == "" {
 			return fmt.Errorf("proposal reject 需要 --user")
 		}
-		proposal, err := api.Reject(ctx, *id, *userID, *reason, time.Now().UTC())
+		proposal, err := api.Decisions.Reject(ctx, *id, *userID, *reason, time.Now().UTC())
 		return writeResult(stdout, proposal, err)
 	default:
 		return fmt.Errorf("未知 proposal 子命令 %q", args[0])
 	}
 }
 
-func runOperation(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runOperation(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("operation 需要 start、restart、run、show、events、pause、resume、cancel、priority 或 recover 子命令")
 	}
@@ -773,7 +780,7 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		spec, err := domain.KindSpec(domain.OperationKind(*kind))
+		spec, err := model.KindSpec(model.OperationKind(*kind))
 		if err != nil {
 			return err
 		}
@@ -784,20 +791,20 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if err != nil {
 			return fmt.Errorf("read operation input: %w", err)
 		}
-		packs := make([]service.PackRef, len(packIDs))
+		packs := make([]resource.PackRef, len(packIDs))
 		for i, id := range packIDs {
-			packs[i] = service.PackRef{ID: id}
+			packs[i] = resource.PackRef{ID: id}
 		}
 		profiles, err := parseCreatorProfileRefs(profileRefs)
 		if err != nil {
 			return err
 		}
-		operation, err := api.StartOperation(ctx, service.StartOperationCommand{
+		operation, err := api.Tasks.StartOperation(ctx, task.StartOperationCommand{
 			OperationID: *id, ProjectID: *projectID, Kind: spec.Kind, RunID: *runID,
 			WorkerProfileID: *worker, Priority: *priority, Input: input,
 			Packs: packs, CreatorProfiles: profiles, DependsOn: dependencyIDs,
 			CoreProtocolVersion: "core-v1", ModelConfigDigest: *modelDigest,
-			ApprovalPolicy: domain.ApprovalPolicy(*policy), CreatedAt: time.Now().UTC(),
+			ApprovalPolicy: model.ApprovalPolicy(*policy), CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, operation, err)
 	case "restart":
@@ -817,14 +824,14 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if *fromID == "" || *id == "" || flags.NArg() != 0 {
 			return fmt.Errorf("operation restart 需要 --from --id")
 		}
-		var packs []service.PackRef
+		var packs []resource.PackRef
 		if len(packIDs) != 0 {
-			packs = make([]service.PackRef, len(packIDs))
+			packs = make([]resource.PackRef, len(packIDs))
 			for i, packID := range packIDs {
-				packs[i] = service.PackRef{ID: packID}
+				packs[i] = resource.PackRef{ID: packID}
 			}
 		}
-		var profiles []service.CreatorProfileRef
+		var profiles []resource.CreatorProfileRef
 		var err error
 		if len(profileRefs) != 0 {
 			profiles, err = parseCreatorProfileRefs(profileRefs)
@@ -832,10 +839,10 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 				return err
 			}
 		}
-		operation, err := api.RestartOperation(ctx, service.RestartOperationCommand{
+		operation, err := api.Tasks.RestartOperation(ctx, task.RestartOperationCommand{
 			FromOperationID: *fromID, OperationID: *id, WorkerProfileID: *worker,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: *coreVersion,
-			ModelConfigDigest: *modelDigest, ApprovalPolicy: domain.ApprovalPolicy(*policy),
+			ModelConfigDigest: *modelDigest, ApprovalPolicy: model.ApprovalPolicy(*policy),
 			CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, operation, err)
@@ -853,9 +860,9 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		var result any
 		var err error
 		if *id == "" {
-			result, err = api.RunNextOperation(ctx, *worker, *lease, time.Now().UTC())
+			result, err = api.Tasks.RunNextOperation(ctx, *worker, *lease, time.Now().UTC())
 		} else {
-			result, err = api.RunOperation(ctx, *id, *worker, *lease, time.Now().UTC())
+			result, err = api.Tasks.RunOperation(ctx, *id, *worker, *lease, time.Now().UTC())
 		}
 		return writeResult(stdout, result, err)
 	case "show":
@@ -867,7 +874,7 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if *id == "" {
 			return fmt.Errorf("operation show 需要 --id")
 		}
-		operation, err := api.Operation(ctx, *id)
+		operation, err := api.Tasks.Operation(ctx, *id)
 		return writeResult(stdout, operation, err)
 	case "events":
 		flags := newFlags("operation events", stderr)
@@ -878,7 +885,7 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if *id == "" {
 			return fmt.Errorf("operation events 需要 --id")
 		}
-		events, err := api.OperationEvents(ctx, *id)
+		events, err := api.Tasks.OperationEvents(ctx, *id)
 		return writeResult(stdout, events, err)
 	case "pause", "resume", "cancel":
 		flags := newFlags("operation "+args[0], stderr)
@@ -889,15 +896,15 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if *id == "" {
 			return fmt.Errorf("operation %s 需要 --id", args[0])
 		}
-		var operation domain.Operation
+		var operation model.Operation
 		var err error
 		switch args[0] {
 		case "pause":
-			operation, err = api.PauseOperation(ctx, *id, time.Now().UTC())
+			operation, err = api.Tasks.PauseOperation(ctx, *id, time.Now().UTC())
 		case "resume":
-			operation, err = api.ResumeOperation(ctx, *id, time.Now().UTC())
+			operation, err = api.Tasks.ResumeOperation(ctx, *id, time.Now().UTC())
 		case "cancel":
-			operation, err = api.CancelOperation(ctx, *id, time.Now().UTC())
+			operation, err = api.Tasks.CancelOperation(ctx, *id, time.Now().UTC())
 		}
 		return writeResult(stdout, operation, err)
 	case "priority":
@@ -910,21 +917,21 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if *id == "" {
 			return fmt.Errorf("operation priority 需要 --id --value")
 		}
-		operation, err := api.ReprioritizeOperation(ctx, *id, *priority, time.Now().UTC())
+		operation, err := api.Tasks.ReprioritizeOperation(ctx, *id, *priority, time.Now().UTC())
 		return writeResult(stdout, operation, err)
 	case "recover":
 		flags := newFlags("operation recover", stderr)
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		ids, err := api.RecoverOperations(ctx, time.Now().UTC())
+		ids, err := api.Tasks.RecoverOperations(ctx, time.Now().UTC())
 		return writeResult(stdout, ids, err)
 	default:
 		return fmt.Errorf("未知 operation 子命令 %q", args[0])
 	}
 }
 
-func runPrompt(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runPrompt(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("prompt 需要 show、sources、diff、lint 或 reload 子命令")
 	}
@@ -952,12 +959,12 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 		if err != nil {
 			return err
 		}
-		packs := make([]service.PackRef, len(packIDs))
+		packs := make([]resource.PackRef, len(packIDs))
 		for i, id := range packIDs {
-			packs[i] = service.PackRef{ID: id}
+			packs[i] = resource.PackRef{ID: id}
 		}
-		result, err := api.ReloadPrompt(ctx, service.ReloadPromptCommand{
-			ProjectID: *projectID, Kind: domain.OperationKind(*kind), WorkerProfileID: *worker, Input: input,
+		result, err := api.Prompts.ReloadPrompt(ctx, profile.ReloadPromptCommand{
+			ProjectID: *projectID, Kind: model.OperationKind(*kind), WorkerProfileID: *worker, Input: input,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: "core-v1",
 			ModelConfigDigest: *modelDigest, CreatedAt: time.Now().UTC(),
 		})
@@ -973,7 +980,7 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 		if *left == "" || *right == "" {
 			return fmt.Errorf("prompt diff 需要 --left --right")
 		}
-		diff, err := api.PromptDiff(ctx, *left, *right)
+		diff, err := api.Prompts.PromptDiff(ctx, *left, *right)
 		return writeResult(stdout, diff, err)
 	}
 	if args[0] == "lint" {
@@ -985,7 +992,7 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 		if *digest == "" {
 			return fmt.Errorf("prompt lint 需要 --profile")
 		}
-		diagnostics, err := api.PromptLint(ctx, *digest)
+		diagnostics, err := api.Prompts.PromptLint(ctx, *digest)
 		return writeResult(stdout, diagnostics, err)
 	}
 	if args[0] != "show" && args[0] != "sources" {
@@ -999,7 +1006,7 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 	if *digest == "" {
 		return fmt.Errorf("prompt %s 需要 --profile", args[0])
 	}
-	text, sources, err := api.Prompt(ctx, *digest)
+	text, sources, err := api.Prompts.Prompt(ctx, *digest)
 	if err != nil {
 		return err
 	}
@@ -1020,18 +1027,18 @@ func DecodeFile(path string, target any) error {
 	if err != nil {
 		return fmt.Errorf("parse JSONC file: %w", err)
 	}
-	if err := domain.DecodeStrict(standard, target); err != nil {
+	if err := model.DecodeStrict(standard, target); err != nil {
 		return fmt.Errorf("decode JSON file: %w", err)
 	}
 	return nil
 }
 
-func parseRevision(value string) (domain.Revision, error) {
+func parseRevision(value string) (model.Revision, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < 0 {
-		return 0, fmt.Errorf("invalid revision %q: %w", value, domain.ErrInvalid)
+		return 0, fmt.Errorf("invalid revision %q: %w", value, model.ErrInvalid)
 	}
-	return domain.Revision(parsed), nil
+	return model.Revision(parsed), nil
 }
 
 func newFlags(name string, stderr io.Writer) *flag.FlagSet {
@@ -1055,20 +1062,20 @@ func (values *stringValues) Set(value string) error {
 	return nil
 }
 
-func parseCreatorProfileRefs(values []string) ([]service.CreatorProfileRef, error) {
-	refs := make([]service.CreatorProfileRef, 0, len(values))
+func parseCreatorProfileRefs(values []string) ([]resource.CreatorProfileRef, error) {
+	refs := make([]resource.CreatorProfileRef, 0, len(values))
 	for _, value := range values {
 		id, scope, ok := strings.Cut(value, "@")
 		if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(scope) == "" {
 			return nil, fmt.Errorf("creator profile %q must use id@scope", value)
 		}
-		refs = append(refs, service.CreatorProfileRef{ID: id, Scope: scope})
+		refs = append(refs, resource.CreatorProfileRef{ID: id, Scope: scope})
 	}
 	return refs, nil
 }
 
 // splitAssetRef 解析 name 或 name@revision 形式的资产引用；不带版本表示固定为当前版本。
-func splitAssetRef(ref string) (string, domain.Revision, error) {
+func splitAssetRef(ref string) (string, model.Revision, error) {
 	name, version, ok := strings.Cut(ref, "@")
 	if strings.TrimSpace(name) == "" {
 		return "", 0, fmt.Errorf("引用不能为空")
@@ -1080,11 +1087,11 @@ func splitAssetRef(ref string) (string, domain.Revision, error) {
 	if err != nil || value <= 0 {
 		return "", 0, fmt.Errorf("版本必须是正整数")
 	}
-	return name, domain.Revision(value), nil
+	return name, model.Revision(value), nil
 }
 
 // runProjectDirective 维护用户创作要求（§4.9）：add 入账、retire 退役、list 列出（含已退役）。
-func runProjectDirective(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runProjectDirective(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("project directive 需要 add、retire 或 list 子命令")
 	}
@@ -1095,7 +1102,7 @@ func runProjectDirective(ctx context.Context, api *service.Service, args []strin
 		changeID := flags.String("change", "", "Change ID；留空自动生成")
 		userID := flags.String("user", "", "User ID")
 		reason := flags.String("reason", "", "提出要求的原因")
-		scope := flags.String("scope", domain.DirectiveScopeProject, "作用域：project、plan_node:<id>、chapter_range:<from>-<to> 或 from_chapter:<n>")
+		scope := flags.String("scope", model.DirectiveScopeProject, "作用域：project、plan_node:<id>、chapter_range:<from>-<to> 或 from_chapter:<n>")
 		text := flags.String("text", "", "创作要求原话")
 		targetWords := flags.Int("target-words", 0, "目标字数（±10%）")
 		minWords := flags.Int("min-words", 0, "最少字数")
@@ -1106,14 +1113,14 @@ func runProjectDirective(ctx context.Context, api *service.Service, args []strin
 		if flags.NArg() != 0 || *projectID == "" || *userID == "" || *reason == "" || *text == "" {
 			return fmt.Errorf("project directive add 需要 --project --user --reason --text")
 		}
-		var constraints *domain.DirectiveConstraints
+		var constraints *model.DirectiveConstraints
 		if *targetWords > 0 || *minWords > 0 || *maxWords > 0 {
-			constraints = &domain.DirectiveConstraints{TargetWords: *targetWords, MinWords: *minWords, MaxWords: *maxWords}
+			constraints = &model.DirectiveConstraints{TargetWords: *targetWords, MinWords: *minWords, MaxWords: *maxWords}
 		}
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("directive:%d", time.Now().UnixMilli())
 		}
-		result, err := api.AddDirective(ctx, service.AddDirectiveCommand{
+		result, err := api.Projects.AddDirective(ctx, projectdoc.AddDirectiveCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			Scope: *scope, Text: *text, Constraints: constraints, Reason: *reason,
 			CreatedAt: time.Now().UTC(),
@@ -1133,7 +1140,7 @@ func runProjectDirective(ctx context.Context, api *service.Service, args []strin
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("directive-retire:%s:%d", *directiveID, time.Now().UnixMilli())
 		}
-		result, err := api.RetireDirective(ctx, service.RetireDirectiveCommand{
+		result, err := api.Projects.RetireDirective(ctx, projectdoc.RetireDirectiveCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			DirectiveID: *directiveID, Reason: *reason, CreatedAt: time.Now().UTC(),
 		})
@@ -1145,17 +1152,17 @@ func runProjectDirective(ctx context.Context, api *service.Service, args []strin
 		if flags.NArg() != 0 || *projectID == "" {
 			return fmt.Errorf("project directive list 需要 --project")
 		}
-		project, err := api.Project(ctx, *projectID, 0)
+		project, err := api.Projects.Project(ctx, *projectID, 0)
 		if err != nil {
 			return err
 		}
-		return writeResult(stdout, append([]domain.Directive{}, project.Directives...), nil)
+		return writeResult(stdout, append([]model.Directive{}, project.Directives...), nil)
 	}
 	return fmt.Errorf("未知的 project directive 子命令 %q", args[0])
 }
 
 // runProjectAdjudication 维护用户裁决（D43）：add 接受一条阻塞发现、withdraw 撤回、list 列出全部记录。
-func runProjectAdjudication(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runProjectAdjudication(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("project adjudication 需要 add、withdraw 或 list 子命令")
 	}
@@ -1176,7 +1183,7 @@ func runProjectAdjudication(ctx context.Context, api *service.Service, args []st
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("adjudication:%d", time.Now().UnixMilli())
 		}
-		result, err := api.AddAdjudication(ctx, service.AddAdjudicationCommand{
+		result, err := api.Reviews.AddAdjudication(ctx, novel.AddAdjudicationCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			Finding: *finding, Reason: *reason, CreatedAt: time.Now().UTC(),
 		})
@@ -1195,7 +1202,7 @@ func runProjectAdjudication(ctx context.Context, api *service.Service, args []st
 		if *changeID == "" {
 			*changeID = fmt.Sprintf("adjudication-withdraw:%s:%d", *adjudicationID, time.Now().UnixMilli())
 		}
-		result, err := api.WithdrawAdjudication(ctx, service.WithdrawAdjudicationCommand{
+		result, err := api.Reviews.WithdrawAdjudication(ctx, novel.WithdrawAdjudicationCommand{
 			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
 			AdjudicationID: *adjudicationID, Reason: *reason, CreatedAt: time.Now().UTC(),
 		})
@@ -1207,11 +1214,11 @@ func runProjectAdjudication(ctx context.Context, api *service.Service, args []st
 		if flags.NArg() != 0 || *projectID == "" {
 			return fmt.Errorf("project adjudication list 需要 --project")
 		}
-		project, err := api.Project(ctx, *projectID, 0)
+		project, err := api.Projects.Project(ctx, *projectID, 0)
 		if err != nil {
 			return err
 		}
-		return writeResult(stdout, append([]domain.Adjudication{}, project.Adjudications...), nil)
+		return writeResult(stdout, append([]model.Adjudication{}, project.Adjudications...), nil)
 	}
 	return fmt.Errorf("未知的 project adjudication 子命令 %q", args[0])
 }
@@ -1240,7 +1247,7 @@ func writeHelp(output io.Writer) error {
 	return err
 }
 
-func runArtifact(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+func runArtifact(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("artifact 需要 list 或 gc 子命令")
 	}
@@ -1254,14 +1261,14 @@ func runArtifact(ctx context.Context, api *service.Service, args []string, stdou
 		if *projectID == "" {
 			return fmt.Errorf("artifact list 需要 --project")
 		}
-		artifacts, err := api.Artifacts(ctx, *projectID)
+		artifacts, err := api.Resources.Artifacts(ctx, *projectID)
 		return writeResult(stdout, artifacts, err)
 	case "gc":
 		grace := flags.Duration("grace", 24*time.Hour, "宽限期：比它更新的对象与暂存文件不回收")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		removed, err := api.CollectArtifactGarbage(ctx, *grace)
+		removed, err := api.Resources.CollectArtifactGarbage(ctx, *grace)
 		return writeResult(stdout, map[string]int{"removed": removed}, err)
 	default:
 		return fmt.Errorf("未知 artifact 子命令 %q", args[0])

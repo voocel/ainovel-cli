@@ -1,0 +1,17 @@
+package resource
+
+import (
+	"context"
+	"time"
+
+	"github.com/voocel/ainovel-cli/internal/domain/model"
+)
+
+func (s *Catalog) Artifacts(ctx context.Context, projectID string) ([]model.Artifact, error) {
+	return s.store.ListArtifacts(ctx, projectID)
+}
+
+// CollectArtifactGarbage 显式回收无引用且超过宽限期的工件对象与暂存文件，返回删除数。
+func (s *Catalog) CollectArtifactGarbage(ctx context.Context, grace time.Duration) (int, error) {
+	return s.store.CollectArtifactGarbage(ctx, time.Now().UTC(), grace)
+}

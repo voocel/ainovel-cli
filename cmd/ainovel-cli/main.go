@@ -9,14 +9,15 @@ import (
 	"os"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/activity"
-	"github.com/voocel/ainovel-cli/internal/capability"
-	"github.com/voocel/ainovel-cli/internal/entry/app"
+	"github.com/voocel/ainovel-cli/internal/app/task"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/entry/headless"
 	"github.com/voocel/ainovel-cli/internal/entry/tui"
-	"github.com/voocel/ainovel-cli/internal/llm/models"
-	"github.com/voocel/ainovel-cli/internal/service"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/infra/activity"
+	"github.com/voocel/ainovel-cli/internal/infra/capability"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
+	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
 var version = "v1-dev"
@@ -79,40 +80,40 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	configDir, err := app.DefaultDir()
+	configDir, err := appconfig.DefaultDir()
 	if err != nil {
 		return err
 	}
 	// 配置解析失败不锁死 TUI（Codex 复审 #2）：交互模式降级进向导修复，
 	// Headless 面向脚本保持硬失败。
 	var configError string
-	config, err := app.ResolveConfig(configDir)
+	config, err := appconfig.ResolveConfig(configDir)
 	if err != nil {
 		if *headlessMode {
 			return err
 		}
 		configError = err.Error()
-		config, _ = app.LoadConfig(configDir)
+		config, _ = appconfig.LoadConfig(configDir)
 	}
 	dataPath := *databasePath
 	if dataPath == "" {
 		if err := os.MkdirAll(configDir, 0o700); err != nil {
 			return fmt.Errorf("create app data dir: %w", err)
 		}
-		dataPath = app.DataPath(configDir)
+		dataPath = appconfig.DataPath(configDir)
 	}
 	authorityStore, err := store.Open(context.Background(), dataPath)
 	if err != nil {
 		return err
 	}
-	api, err := buildService(authorityStore, config, !*headlessMode)
+	api, err := buildApplication(authorityStore, config, !*headlessMode)
 	if err != nil {
 		if *headlessMode {
 			authorityStore.Close()
 			return err
 		}
 		configError = err.Error()
-		api = service.New(authorityStore)
+		api = bootstrap.New(authorityStore, bootstrap.Options{})
 	}
 	configured := config.Configured() && configError == ""
 
@@ -124,13 +125,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 			API:           api,
 			Configured:    configured,
 			ConfigDir:     configDir,
-			UserID:        app.DefaultUserID(),
+			UserID:        appconfig.DefaultUserID(),
 			InitialConfig: config,
 			ConfigError:   configError,
-			Rebuild: func(next app.Config) (*service.Service, error) {
-				return buildService(authorityStore, next, true)
+			Rebuild: func(next appconfig.Config) (*bootstrap.App, error) {
+				return buildApplication(authorityStore, next, true)
 			},
-			Verify: func(ctx context.Context, next app.Config) error {
+			Verify: func(ctx context.Context, next appconfig.Config) error {
 				return models.Verify(ctx, models.Config{
 					Provider: next.Provider, Model: next.Model,
 					APIKey: next.APIKey, BaseURL: next.BaseURL,
@@ -148,12 +149,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return closeErr
 }
 
-// buildService 是唯一的服务装配点：无模型配置时返回只读服务（无执行器）；
+// buildApplication 装配入口使用的应用组件；无模型配置时不安装执行器。
 // 有配置时装配真实 capability Runtime。实时活动通道只在交互入口装配
 // （发布与订阅共用同一 Hub），Headless 保持零活动开销。
-func buildService(authorityStore *store.Store, config app.Config, withActivity bool) (*service.Service, error) {
+func buildApplication(authorityStore *store.Store, config appconfig.Config, withActivity bool) (*bootstrap.App, error) {
 	if !config.Configured() {
-		return service.New(authorityStore), nil
+		return bootstrap.New(authorityStore, bootstrap.Options{}), nil
 	}
 	modelConfig := models.Config{
 		Provider: config.Provider, Model: config.Model,
@@ -168,11 +169,11 @@ func buildService(authorityStore *store.Store, config app.Config, withActivity b
 		return nil, err
 	}
 	runtime := capability.NewRuntime(model, modelDigest, authorityStore)
-	api := service.NewWithExecutor(authorityStore, runtime)
+	api := bootstrap.New(authorityStore, bootstrap.Options{Executors: task.ExecutorSet{LLM: runtime}})
 	if withActivity {
 		hub := activity.NewHub()
 		runtime.SetActivitySink(hub)
-		api.AttachActivityFeed(hub)
+		api.Workbench.AttachActivityFeed(hub)
 	}
 	return api, nil
 }
