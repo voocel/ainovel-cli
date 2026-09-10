@@ -18,7 +18,6 @@ type ReloadPromptCommand struct {
 	CreatorProfiles     []CreatorProfileRef
 	CoreProtocolVersion string
 	ModelConfigDigest   string
-	ApprovalPolicy      domain.ApprovalPolicy
 	CreatedAt           time.Time
 }
 
@@ -31,11 +30,15 @@ type ReloadPromptResult struct {
 }
 
 func (s *Service) ReloadPrompt(ctx context.Context, command ReloadPromptCommand) (ReloadPromptResult, error) {
+	revision, err := s.store.CurrentRevision(ctx, domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: command.ProjectID})
+	if err != nil {
+		return ReloadPromptResult{}, err
+	}
 	compiled, err := s.compileExecutionProfile(ctx, executionProfileCommand{
-		ProjectID: command.ProjectID, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
+		ProjectID: command.ProjectID, Revision: revision, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
 		Input: command.Input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
 		CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest,
-		ApprovalPolicy: command.ApprovalPolicy, CreatedAt: command.CreatedAt,
+		CreatedAt: command.CreatedAt,
 	})
 	if err != nil {
 		return ReloadPromptResult{}, err

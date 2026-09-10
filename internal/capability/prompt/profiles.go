@@ -62,8 +62,8 @@ func BuiltinCapabilities() ([]CapabilityDefinition, error) {
 			Worker: WorkerProfile{
 				ID: "writer.revise", Version: "1", ModelRole: "writer",
 				PromptSlots: []Slot{SlotWriterRewrite}, Tools: writerTools(),
-				InputContract: json.RawMessage(`{"type":"object","required":["chapter_id","base_revision"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["proposal_id","workspace_key"]}`),
-				StopCondition: "修订工作稿通过本地校验并提交 Proposal，或返回明确错误",
+				InputContract: json.RawMessage(`{"type":"object","required":["chapter_id"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["proposal_id","workspace_key"]}`),
+				StopCondition: "修订工作稿通过本地校验，并重申报本章全部既有事实（确认、更新或删除）后提交 Proposal，或返回明确错误",
 			},
 		},
 		{
@@ -84,9 +84,9 @@ func BuiltinCapabilities() ([]CapabilityDefinition, error) {
 				Tools: []ToolSchema{
 					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
 					tool(ToolWorkspacePutReview, "把审阅过程记录写入当前 Operation Workspace", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"findings":{"type":"array","items":{"type":"object"}}},"required":["key","expected_version","findings"],"additionalProperties":false}`),
-					tool(ToolVerdictSubmit, "引用审阅工作区记录并提交覆盖请求范围的结构化裁定（D30）：pass 表示无阻塞发现；任务要求核验 Intent（verify_intent）时 pass 必须附逐项意图核验声明，意图未满足应给出阻塞发现；任务输入携带 directives 时必须逐条声明核验结果（directives），未满足应给出阻塞发现；blocked 必须给出阻塞发现", `{"type":"object","properties":{"status":{"type":"string","enum":["pass","blocked"]},"chapter_ids":{"type":"array","items":{"type":"string"},"minItems":1},"review_key":{"type":"string","minLength":1},"intent":{"type":"object","properties":{"required_present":{"type":"boolean"},"forbidden_absent":{"type":"boolean"},"ending_consistent":{"type":"boolean"}},"required":["required_present","forbidden_absent","ending_consistent"],"additionalProperties":false},"directives":{"type":"array","items":{"type":"object","properties":{"directive_id":{"type":"string"},"satisfied":{"type":"boolean"},"note":{"type":"string"}},"required":["directive_id","satisfied"],"additionalProperties":false}},"findings":{"type":"array","items":{"type":"object","properties":{"chapter_id":{"type":"string"},"severity":{"type":"string","enum":["blocking","note"]},"note":{"type":"string"}},"required":["chapter_id","severity","note"],"additionalProperties":false}}},"required":["status","chapter_ids","review_key","findings"],"additionalProperties":false}`),
+					tool(ToolVerdictSubmit, "引用审阅工作区记录并提交覆盖请求范围的结构化裁定（D30）：pass 表示无阻塞发现；任务要求核验 Intent（verify_intent）时 pass 必须附逐项意图核验声明，意图未满足应给出阻塞发现；任务输入携带 directives 时必须逐条声明核验结果（directives）；每个未满足的要求或意图维度必须至少有一条阻塞发现通过 directive_id / intent 链接到它，用户据此裁决；blocked 必须给出阻塞发现", `{"type":"object","properties":{"status":{"type":"string","enum":["pass","blocked"]},"chapter_ids":{"type":"array","items":{"type":"string"},"minItems":1},"review_key":{"type":"string","minLength":1},"intent":{"type":"object","properties":{"required_present":{"type":"boolean"},"forbidden_absent":{"type":"boolean"},"ending_consistent":{"type":"boolean"}},"required":["required_present","forbidden_absent","ending_consistent"],"additionalProperties":false},"directives":{"type":"array","items":{"type":"object","properties":{"directive_id":{"type":"string"},"satisfied":{"type":"boolean"},"note":{"type":"string"}},"required":["directive_id","satisfied"],"additionalProperties":false}},"findings":{"type":"array","items":{"type":"object","properties":{"chapter_id":{"type":"string"},"severity":{"type":"string","enum":["blocking","note"]},"note":{"type":"string"},"directive_id":{"type":"string"},"intent":{"type":"string","enum":["required_present","forbidden_absent","ending_consistent"]}},"required":["chapter_id","severity","note"],"additionalProperties":false}}},"required":["status","chapter_ids","review_key","findings"],"additionalProperties":false}`),
 				},
-				InputContract: json.RawMessage(`{"type":"object","required":["range"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["verdict"]}`),
+				InputContract: json.RawMessage(`{"type":"object","required":["chapter_ids"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["verdict"]}`),
 				StopCondition: "已提交覆盖请求范围的结构化裁定（verdict_submit），或返回明确错误",
 			},
 		},
@@ -160,7 +160,7 @@ func writerTools() []ToolSchema {
 		tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
 		tool(ToolWorkspaceList, "列出当前 Operation Workspace 的持久化工件和版本", `{"type":"object","properties":{},"additionalProperties":false}`),
 		tool(ToolWorkspaceRead, "读取当前 Operation Workspace 的工件", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}`),
-		tool(ToolWorkspacePutChapter, "以版本前提写入章节工作稿", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"chapter":{"type":"object","properties":{"id":{"type":"string"},"plan_node_id":{"type":"string"},"number":{"type":"integer"},"title":{"type":"string"},"blocks":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","plan_node_id","number","title","blocks"],"additionalProperties":false}},"required":["key","expected_version","chapter"],"additionalProperties":false}`),
+		tool(ToolWorkspacePutChapter, "以版本前提写入章节工作稿", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"chapter":{"type":"object","properties":{"id":{"type":"string"},"plan_node_id":{"type":"string"},"number":{"type":"integer"},"title":{"type":"string"},"author":{"type":"string","enum":["ai"]},"blocks":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","plan_node_id","number","title","author","blocks"],"additionalProperties":false}},"required":["key","expected_version","chapter"],"additionalProperties":false}`),
 		tool(ToolWorkspaceReplaceBlock, "按稳定 block_id 和版本前提修改一个章节块", `{"type":"object","properties":{"key":{"type":"string"},"block_id":{"type":"string"},"text":{"type":"string"},"expected_version":{"type":"integer"}},"required":["key","block_id","text","expected_version"],"additionalProperties":false}`),
 		proposalTool([]string{"workspace_key"}),
 	}
@@ -172,14 +172,14 @@ func writerTools() []ToolSchema {
 const patchesSchema = `{
 	"type": "array",
 	"minItems": 1,
-	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；manuscript: {id,plan_node_id,number,title,blocks:[{id,text}]}；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id}，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，old_value 仅在更新已有事实时必填且须与上一版本一致；intent: 完整 Intent 文档。",
+	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；entity: {id,kind,name,aliases}，kind 取 character/location/item/organization，角色、地点、物品、组织都是实体；manuscript: {id,plan_node_id,number,title,author,blocks:[{id,text}]}，author 固定为 ai；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id,effective_chapter_id}，subject_id 必须是已存在或同一 Proposal 中新建的 entity 的 id，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，old_value 仅在更新已有事实时必填且须与上一版本一致；随正文提交时 source_chapter_id 必须是本次提交的正文章节，重写章节必须重申报该章全部既有事实（原样确认、更新或删除），event 类事实跨章只追加、不得改动其他章的事件；effective_chapter_id 是状态类事实在故事中的生效章节，只在插叙/回忆时填写、缺省等于来源章，状态的生效位置不得早于现值，倒叙内容记为 event；intent: 完整 Intent 文档。",
 	"items": {
 		"type": "object",
 		"properties": {
 			"document": {
 				"type": "object",
 				"properties": {
-					"kind": {"type": "string", "enum": ["intent", "plan", "canon", "manuscript"]},
+					"kind": {"type": "string", "enum": ["intent", "plan", "entity", "canon", "manuscript"]},
 					"id": {"type": "string"}
 				},
 				"required": ["kind", "id"],

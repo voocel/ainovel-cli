@@ -22,7 +22,7 @@ func TestReplaceChapterBlockUsesStableIDAndWorkspaceVersion(t *testing.T) {
 	defer authorityStore.Close()
 	run := domain.CreationRun{
 		ID: "run:book-1", ProjectID: "book-1",
-		Goal: domain.CreationRunGoal{Premise: "测试创作", TargetChapters: 1},
+		Goal: domain.NovelGoal{Premise: "测试创作", TargetChapters: 1}.Goal(),
 		Strategy: domain.CreationRunStrategy{
 			PlanWindowChapters: 1, ReviewCadence: domain.ReviewPerPlanWindow, AutoRepairBudget: 1,
 		},
@@ -32,17 +32,16 @@ func TestReplaceChapterBlockUsesStableIDAndWorkspaceVersion(t *testing.T) {
 	if _, err := authorityStore.CreateCreationRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	input := json.RawMessage(`{"chapter_id":"chapter-1","chapter_plan_id":"chapter-plan-1","chapter_number":1,"findings":["结尾仓促"]}`)
 	operation := domain.Operation{
 		ID: "rewrite-1", Kind: domain.OperationRewriteChapter,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
 		State:  domain.OperationQueued, RunID: run.ID,
 		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "execution-profile",
-			BaseRevision:           1, CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.revise-v1",
-			ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-			ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "approval",
+			Executor: "llm.agent@1/model", BaseRevision: 1, InputDigest: domain.Digest(input),
+			ConfigDigest: "execution-profile", ApprovalPolicy: domain.ApprovalManual,
 		},
-		Input: json.RawMessage(`{"chapter_id":"chapter-1"}`), CreatedAt: now, UpdatedAt: now,
+		Input: input, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -54,7 +53,7 @@ func TestReplaceChapterBlockUsesStableIDAndWorkspaceVersion(t *testing.T) {
 
 	workspace := New(authorityStore)
 	chapter := domain.ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: domain.AuthorAI,
 		Blocks: []domain.ManuscriptBlock{{ID: "p-1", Text: "旧段落"}, {ID: "p-2", Text: "保持不变"}},
 	}
 	artifact, err := workspace.PutChapter(ctx, operation.ID, "chapter/chapter-1", chapter, 0, claimed.Attempt, now.Add(2*time.Second))

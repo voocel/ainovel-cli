@@ -13,17 +13,17 @@ import (
 
 func (r *Runtime) toolsFor(
 	operation domain.Operation,
-	schemas []prompt.ToolSchema,
+	compiled prompt.Compiled,
 	submit func(domain.Proposal) (domain.Proposal, error),
 	submitVerdict func(domain.ReviewVerdict) (domain.ReviewVerdict, error),
 ) ([]agentcore.Tool, error) {
-	tools := make([]agentcore.Tool, 0, len(schemas))
-	for _, definition := range schemas {
+	tools := make([]agentcore.Tool, 0, len(compiled.Tools))
+	for _, definition := range compiled.Tools {
 		var schema map[string]any
 		if err := json.Unmarshal(definition.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("decode tool schema %q: %w", definition.Name, err)
 		}
-		execute, err := r.toolExecutor(operation, definition.Name, submit, submitVerdict)
+		execute, err := r.toolExecutor(operation, compiled.WorkerProfile, definition.Name, submit, submitVerdict)
 		if err != nil {
 			return nil, err
 		}
@@ -32,9 +32,10 @@ func (r *Runtime) toolsFor(
 	return tools, nil
 }
 
+// toolExecutor 构造单个工具；worker 是提交提案时署名的 Worker Profile 标识。
 func (r *Runtime) toolExecutor(
 	operation domain.Operation,
-	name string,
+	worker, name string,
 	submit func(domain.Proposal) (domain.Proposal, error),
 	submitVerdict func(domain.ReviewVerdict) (domain.ReviewVerdict, error),
 ) (func(context.Context, json.RawMessage) (json.RawMessage, error), error) {
@@ -187,7 +188,7 @@ func (r *Runtime) toolExecutor(
 			proposal := domain.Proposal{
 				ID: operation.ID + "-proposal", OperationID: operation.ID,
 				Target: operation.Target, BaseRevision: operation.Snapshot.BaseRevision,
-				Author: domain.Author{Kind: domain.AuthorAI, ID: operation.Snapshot.WorkerProfileVersion},
+				Author: domain.Author{Kind: domain.AuthorAI, ID: worker},
 				Reason: args.Reason, Patches: args.Patches,
 				ApprovalState: domain.ApprovalPending, CreatedAt: r.now(),
 			}
@@ -215,11 +216,15 @@ func (r *Runtime) toolExecutor(
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
 			}
-			// 裁定的 Revision 由宿主绑定启动快照，模型不能宣称基线；范围必须
-			// 与任务请求完全一致，防止漏审或越界裁定。
+			// 裁定的 Revision 与证据基线由宿主从启动快照和任务输入盖入，模型不能
+			// 宣称基线；范围必须与任务请求完全一致，防止漏审或越界裁定。
+			input, err := domain.TaskInputAs[domain.ReviewRangeInput](operation)
+			if err != nil {
+				return nil, err
+			}
 			verdict := domain.ReviewVerdict{
 				Status: args.Status, Revision: operation.Snapshot.BaseRevision,
-				ChapterIDs: args.ChapterIDs, ReviewKey: args.ReviewKey,
+				ChapterIDs: args.ChapterIDs, ReviewKey: args.ReviewKey, Basis: input.Basis.Normalize(),
 				Intent: args.Intent, Directives: args.Directives, Findings: args.Findings,
 			}
 			if err := domain.ValidateReviewVerdictForOperation(operation, verdict); err != nil {
@@ -228,7 +233,7 @@ func (r *Runtime) toolExecutor(
 			if err := r.validateReviewArtifact(ctx, operation, verdict); err != nil {
 				return nil, err
 			}
-			verdict, err := submitVerdict(verdict)
+			verdict, err = submitVerdict(verdict)
 			if err != nil {
 				return nil, err
 			}

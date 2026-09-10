@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
@@ -96,8 +97,6 @@ type CompileRequest struct {
 	BaseRevision           domain.Revision
 	ProjectOverlayRevision domain.Revision
 	ModelConfigDigest      string
-	ApprovalPolicy         domain.ApprovalPolicy
-	ApprovalPolicyDigest   string
 }
 
 type SourceKind string
@@ -115,15 +114,49 @@ type Source struct {
 	Slots    []Slot          `json:"slots,omitempty"`
 }
 
+// Compiled 是编译好的 Execution Profile：ProfileDigest 是其持久化记录的内容
+// 身份，Operation 以 Snapshot.ConfigDigest 引用它。
 type Compiled struct {
-	StablePrefix     string                   `json:"stable_prefix"`
-	DynamicTail      string                   `json:"dynamic_tail"`
-	Tools            []ToolSchema             `json:"ordered_tool_schemas"`
-	Sources          []Source                 `json:"sources"`
-	PromptDigest     string                   `json:"prompt_digest"`
-	ToolSchemaDigest string                   `json:"tool_schema_digest"`
-	ProfileDigest    string                   `json:"execution_profile_digest"`
-	Snapshot         domain.ExecutionSnapshot `json:"execution_snapshot"`
+	ProjectID           string       `json:"project_id"`
+	WorkerProfile       string       `json:"worker_profile"`
+	CoreProtocolVersion string       `json:"core_protocol_version"`
+	ModelConfigDigest   string       `json:"model_config_digest"`
+	StablePrefix        string       `json:"stable_prefix"`
+	DynamicTail         string       `json:"dynamic_tail"`
+	Tools               []ToolSchema `json:"ordered_tool_schemas"`
+	Sources             []Source     `json:"sources"`
+	PromptDigest        string       `json:"prompt_digest"`
+	ToolSchemaDigest    string       `json:"tool_schema_digest"`
+	ProfileDigest       string       `json:"execution_profile_digest"`
+}
+
+// record 是 Compiled 的持久化形态；Digest 由记录内容推导，与 ProfileDigest 一致。
+func (c Compiled) record(createdAt time.Time) (domain.ExecutionProfileRecord, error) {
+	tools, err := json.Marshal(c.Tools)
+	if err != nil {
+		return domain.ExecutionProfileRecord{}, fmt.Errorf("encode compiled tools: %w", err)
+	}
+	sources, err := json.Marshal(c.Sources)
+	if err != nil {
+		return domain.ExecutionProfileRecord{}, fmt.Errorf("encode prompt sources: %w", err)
+	}
+	record := domain.ExecutionProfileRecord{
+		ProjectID: c.ProjectID, WorkerProfile: c.WorkerProfile,
+		CoreProtocolVersion: c.CoreProtocolVersion, ModelConfigDigest: c.ModelConfigDigest,
+		PromptDigest: c.PromptDigest, ToolSchemaDigest: c.ToolSchemaDigest,
+		StablePrefix: c.StablePrefix, DynamicTail: c.DynamicTail,
+		Tools: tools, Sources: sources, CreatedAt: createdAt,
+	}
+	if record.Digest, err = record.Identity(); err != nil {
+		return domain.ExecutionProfileRecord{}, fmt.Errorf("digest execution profile: %w", err)
+	}
+	return record, nil
+}
+
+// ExecutorIdentity 是 LLM 执行族的身份（D45）：agent 循环版本加模型配置路由。
+// 同一模型配置的 Runtime 才能领取并执行按它冻结的任务。
+func ExecutorIdentity(modelConfigDigest string) string {
+	return "llm.agent@1/" + modelConfigDigest
 }
 
 func validSlot(slot Slot) bool {

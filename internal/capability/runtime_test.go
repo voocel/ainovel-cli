@@ -42,16 +42,12 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 		t.Fatalf("commit seed: %v", err)
 	}
 
+	task := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	operation := domain.Operation{
 		ID: "write-1", Kind: domain.OperationWriteChapter, Target: target,
 		State: domain.OperationQueued, RunID: createRuntimeTestRun(t, ctx, authorityStore, target.ID, now),
-		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 1,
-			CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.compose@1",
-			ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-			ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "manual",
-		},
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+		Snapshot: runtimeSnapshot(task, 1, domain.ApprovalManual, "profile"),
+		Input:    task, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -63,7 +59,7 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 	runtime := NewRuntime(nil, "model", authorityStore)
 	runtime.now = func() time.Time { return now.Add(2 * time.Second) }
 
-	read, err := runtime.toolExecutor(operation, "authority_read", nil, nil)
+	read, err := runtime.toolExecutor(operation, "writer.compose@1", "authority_read", nil, nil)
 	if err != nil {
 		t.Fatalf("build read tool: %v", err)
 	}
@@ -74,12 +70,12 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 		t.Fatalf("read frozen revision: %v", err)
 	}
 
-	putChapter, err := runtime.toolExecutor(operation, "workspace_put_chapter", nil, nil)
+	putChapter, err := runtime.toolExecutor(operation, "writer.compose@1", "workspace_put_chapter", nil, nil)
 	if err != nil {
 		t.Fatalf("build put chapter tool: %v", err)
 	}
 	chapter := domain.ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: domain.AuthorAI,
 		Blocks: []domain.ManuscriptBlock{{ID: "p-1", Text: "他抵达山门。"}},
 	}
 	chapterArgs, _ := json.Marshal(map[string]any{
@@ -91,7 +87,7 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 	}
 
 	var submitted domain.Proposal
-	submitTool, err := runtime.toolExecutor(operation, "proposal_submit", func(proposal domain.Proposal) (domain.Proposal, error) {
+	submitTool, err := runtime.toolExecutor(operation, "writer.compose@1", "proposal_submit", func(proposal domain.Proposal) (domain.Proposal, error) {
 		submitted = proposal
 		return proposal, nil
 	}, nil)
@@ -130,7 +126,8 @@ func TestBuiltinCapabilityToolsHaveRuntimeImplementations(t *testing.T) {
 	runtime := &Runtime{}
 	for _, definition := range definitions {
 		operation := domain.Operation{Kind: definition.OperationKinds[0]}
-		if _, err := runtime.toolsFor(operation, definition.Worker.Tools, func(proposal domain.Proposal) (domain.Proposal, error) {
+		compiled := prompt.Compiled{WorkerProfile: definition.Worker.ID + "@" + definition.Worker.Version, Tools: definition.Worker.Tools}
+		if _, err := runtime.toolsFor(operation, compiled, func(proposal domain.Proposal) (domain.Proposal, error) {
 			return proposal, nil
 		}, func(verdict domain.ReviewVerdict) (domain.ReviewVerdict, error) {
 			return verdict, nil
@@ -152,18 +149,15 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load writer capability: %v", err)
 	}
-	snapshot := domain.ExecutionSnapshot{
-		ExecutionProfileDigest: "recovery-profile", BaseRevision: 0,
-		CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.compose@1",
-		ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-		ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "manual",
-	}
+	task := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	operation := domain.Operation{
 		ID: "recover-draft", Kind: domain.OperationWriteChapter,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-recovery"},
 		State:  domain.OperationQueued,
-		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-recovery", now), Snapshot: snapshot,
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-recovery", now),
+		Snapshot: runtimeSnapshot(task, 0, domain.ApprovalManual,
+			seedRuntimeProfile(t, ctx, authorityStore, "book-recovery", worker, task, 0)),
+		Input: task, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -173,7 +167,7 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 		t.Fatalf("claim first attempt: %v", err)
 	}
 	chapter := domain.ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: domain.AuthorAI,
 		Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "已经写入工作区的半成品。"}},
 	}
 	artifact, err := workspace.New(authorityStore).PutChapter(
@@ -221,10 +215,7 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	model := &recoveryRuntimeModel{proposalArgs: proposalArgs, now: now.Add(7 * time.Second)}
 	runtime := NewRuntime(model, "model", authorityStore)
 	runtime.now = func() time.Time { return now.Add(8 * time.Second) }
-	outcome, err := runtime.Execute(ctx, second, prompt.Compiled{
-		StablePrefix: "stable", DynamicTail: "original dynamic task", Tools: worker.Tools,
-		ProfileDigest: snapshot.ExecutionProfileDigest, Snapshot: snapshot,
-	})
+	outcome, err := runtime.Execute(ctx, second)
 	if err != nil {
 		t.Fatalf("resume runtime: %v", err)
 	}
@@ -256,19 +247,15 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load review capability: %v", err)
 	}
-	snapshot := domain.ExecutionSnapshot{
-		ExecutionProfileDigest: "review-profile", BaseRevision: 3,
-		CoreProtocolVersion: "core-v1", WorkerProfileVersion: worker.ID + "@" + worker.Version,
-		ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-		ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-	}
+	task := json.RawMessage(`{"chapter_ids":["chapter-1","chapter-2"],"verify_intent":true,"directives":[{"id":"hook","scope":"project","text":"每章结尾留钩子","status":"active"}],"basis":{"documents":[{"ref":{"kind":"manuscript","id":"chapter-1"},"revision":2}]}}`)
 	operation := domain.Operation{
 		ID: "review-1", Kind: domain.OperationReviewRange,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-review"},
 		State:  domain.OperationQueued,
-		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-review", now), Snapshot: snapshot,
-		Input:     json.RawMessage(`{"range":{"chapter_ids":["chapter-1","chapter-2"]},"verify_intent":true,"directives":[{"id":"hook","scope":"project","text":"每章结尾留钩子","status":"active"}]}`),
-		CreatedAt: now, UpdatedAt: now,
+		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-review", now),
+		Snapshot: runtimeSnapshot(task, 3, domain.ApprovalAuto,
+			seedRuntimeProfile(t, ctx, authorityStore, "book-review", worker, task, 3)),
+		Input: task, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -318,10 +305,7 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
 	hub := activity.NewHub()
 	runtime.SetActivitySink(hub)
-	outcome, err := runtime.Execute(ctx, operation, prompt.Compiled{
-		StablePrefix: "stable", DynamicTail: "review task", Tools: worker.Tools,
-		ProfileDigest: snapshot.ExecutionProfileDigest, Snapshot: snapshot,
-	})
+	outcome, err := runtime.Execute(ctx, operation)
 	if err != nil {
 		t.Fatalf("execute review: %v", err)
 	}
@@ -423,7 +407,7 @@ func createRuntimeTestRun(
 	t.Helper()
 	run := domain.CreationRun{
 		ID: "run:" + projectID, ProjectID: projectID,
-		Goal: domain.CreationRunGoal{Premise: "测试创作", TargetChapters: 3},
+		Goal: domain.NovelGoal{Premise: "测试创作", TargetChapters: 3}.Goal(),
 		Strategy: domain.CreationRunStrategy{
 			PlanWindowChapters: 3, ReviewCadence: domain.ReviewPerPlanWindow, AutoRepairBudget: 3,
 		},
@@ -651,16 +635,12 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if _, err := authorityStore.CommitProposal(ctx, seed); err != nil {
 		t.Fatalf("commit seed: %v", err)
 	}
+	task := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	operation := domain.Operation{
 		ID: "semantic-operation", Kind: domain.OperationWriteChapter, Target: target,
 		State: domain.OperationQueued, RunID: createRuntimeTestRun(t, ctx, authorityStore, target.ID, now),
-		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 1,
-			CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.compose@1",
-			ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-			ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-		},
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+		Snapshot: runtimeSnapshot(task, 1, domain.ApprovalAuto, "profile"),
+		Input:    task, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -792,24 +772,23 @@ func TestAffectedRewriteSubmissionCoversEveryWorkspaceChapter(t *testing.T) {
 		ID: "rewrite-affected", Kind: domain.OperationRewriteAffected,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}, State: domain.OperationQueued,
 		RunID: createRuntimeTestRun(t, ctx, authorityStore, "book-1", now),
-		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 3, CoreProtocolVersion: "core-v1",
-			WorkerProfileVersion: "writer.revise_affected@1", ToolSchemaDigest: "tools", PromptDigest: "prompt",
-			ModelConfigDigest: "model", ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "manual",
-		},
+		Snapshot: runtimeSnapshot(
+			json.RawMessage(`{"chapter_ids":["chapter-1","chapter-2"],"base_revision":3,"resolution_proposal_id":"change-1","reason":"同步旧事实"}`),
+			3, domain.ApprovalManual, "profile",
+		),
 		Input:     json.RawMessage(`{"chapter_ids":["chapter-1","chapter-2"],"base_revision":3,"resolution_proposal_id":"change-1","reason":"同步旧事实"}`),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	operation, err = authorityStore.ClaimOperationForModel(ctx, operation.ID, "worker-1", "model", time.Minute, now)
+	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
 	chapters := []domain.ManuscriptChapter{
-		{ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "第一章", Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "新正文一"}}},
-		{ID: "chapter-2", PlanNodeID: "plan-2", Number: 2, Title: "第二章", Blocks: []domain.ManuscriptBlock{{ID: "block-2", Text: "新正文二"}}},
+		{ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "第一章", Author: domain.AuthorAI, Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "新正文一"}}},
+		{ID: "chapter-2", PlanNodeID: "plan-2", Number: 2, Title: "第二章", Author: domain.AuthorAI, Blocks: []domain.ManuscriptBlock{{ID: "block-2", Text: "新正文二"}}},
 	}
 	var patches []domain.Patch
 	keys := make([]string, 0, len(chapters))
@@ -854,25 +833,24 @@ func TestWriterSubmissionEnforcesDirectiveWordCounts(t *testing.T) {
 		ID: "write-counted", Kind: domain.OperationWriteChapter,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}, State: domain.OperationQueued,
 		RunID: createRuntimeTestRun(t, ctx, authorityStore, "book-1", now),
-		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 2, CoreProtocolVersion: "core-v1",
-			WorkerProfileVersion: "writer.compose@1", ToolSchemaDigest: "tools", PromptDigest: "prompt",
-			ModelConfigDigest: "model", ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-		},
-		Input:     json.RawMessage(`{"chapter_plan_id":"plan-1","directives":[{"id":"length","scope":"project","text":"每章十字左右","constraints":{"target_words":10},"status":"active"}]}`),
+		Snapshot: runtimeSnapshot(
+			json.RawMessage(`{"chapter_plan_id":"plan-1","chapter_number":1,"directives":[{"id":"length","scope":"project","text":"每章十字左右","constraints":{"target_words":10},"status":"active"}]}`),
+			2, domain.ApprovalAuto, "profile",
+		),
+		Input:     json.RawMessage(`{"chapter_plan_id":"plan-1","chapter_number":1,"directives":[{"id":"length","scope":"project","text":"每章十字左右","constraints":{"target_words":10},"status":"active"}]}`),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	operation, err = authorityStore.ClaimOperationForModel(ctx, operation.ID, "worker-1", "model", time.Minute, now)
+	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
 	runtime := NewRuntime(nil, "model", authorityStore)
 	submit := func(text string, version int64) error {
 		chapter := domain.ManuscriptChapter{
-			ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "标题不计入字数",
+			ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "标题不计入字数", Author: domain.AuthorAI,
 			Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: text}},
 		}
 		content, _ := json.Marshal(chapter)
@@ -914,19 +892,15 @@ func TestRuntimePlanSubmissionEnforcesRequestedChapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load architect capability: %v", err)
 	}
-	snapshot := domain.ExecutionSnapshot{
-		ExecutionProfileDigest: "plan-profile", BaseRevision: 1,
-		CoreProtocolVersion: "core-v1", WorkerProfileVersion: worker.ID + "@" + worker.Version,
-		ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-		ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-	}
+	task := json.RawMessage(`{"intent":"规划开篇","target_chapters":3,"requested_chapters":1}`)
 	operation := domain.Operation{
 		ID: "plan-1", Kind: domain.OperationDevelopPlan,
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-plan"},
 		State:  domain.OperationQueued,
-		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-plan", now), Snapshot: snapshot,
-		Input:     json.RawMessage(`{"intent":"规划开篇","requested_chapters":1}`),
-		CreatedAt: now, UpdatedAt: now,
+		RunID:  createRuntimeTestRun(t, ctx, authorityStore, "book-plan", now),
+		Snapshot: runtimeSnapshot(task, 1, domain.ApprovalAuto,
+			seedRuntimeProfile(t, ctx, authorityStore, "book-plan", worker, task, 1)),
+		Input: task, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -960,10 +934,7 @@ func TestRuntimePlanSubmissionEnforcesRequestedChapters(t *testing.T) {
 	model := &planRuntimeModel{steps: []json.RawMessage{overshoot, exact}, now: now.Add(2 * time.Second)}
 	runtime := NewRuntime(model, "model", authorityStore)
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
-	outcome, err := runtime.Execute(ctx, operation, prompt.Compiled{
-		StablePrefix: "stable", DynamicTail: "plan task", Tools: worker.Tools,
-		ProfileDigest: snapshot.ExecutionProfileDigest, Snapshot: snapshot,
-	})
+	outcome, err := runtime.Execute(ctx, operation)
 	if err != nil {
 		t.Fatalf("execute plan: %v", err)
 	}
@@ -1020,3 +991,169 @@ func (m *planRuntimeModel) GenerateStream(
 }
 
 func (m *planRuntimeModel) SupportsTools() bool { return true }
+
+// runtimeSnapshot 按 D45 形状冻结快照；config 为已落盘的 Execution Profile 摘要，
+// 只走工具校验不执行模型的用例可以用任意非空值。
+func runtimeSnapshot(input json.RawMessage, base domain.Revision, policy domain.ApprovalPolicy, config string) domain.ExecutionSnapshot {
+	return domain.ExecutionSnapshot{
+		Executor: prompt.ExecutorIdentity("model"), BaseRevision: base, InputDigest: domain.Digest(input),
+		ConfigDigest: config, ApprovalPolicy: policy,
+	}
+}
+
+// seedRuntimeProfile 编译并落盘一份 Execution Profile，返回其摘要供快照引用。
+func seedRuntimeProfile(
+	t *testing.T,
+	ctx context.Context,
+	authorityStore *store.Store,
+	projectID string,
+	worker prompt.WorkerProfile,
+	task json.RawMessage,
+	base domain.Revision,
+) string {
+	t.Helper()
+	compiled, err := prompt.NewRegistry(authorityStore).Reload(ctx, prompt.CompileRequest{
+		ProjectID: projectID, CoreProtocolVersion: "core-v1", Worker: worker,
+		Intent: domain.Intent{Premise: "测试作品"}, StoryContext: json.RawMessage(`{"revision":` + fmt.Sprint(base) + `}`),
+		Task: task, BaseRevision: base, ProjectOverlayRevision: base, ModelConfigDigest: "model",
+	}, time.Date(2026, 8, 18, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("seed execution profile: %v", err)
+	}
+	return compiled.ProfileDigest
+}
+
+// TestWriterSubmissionRequiresRedeclaringChapterFacts：工具边界当场执行 D41 的重申报与
+// 来源归属，偏差回给模型在同一会话内纠正。
+func TestWriterSubmissionRequiresRedeclaringChapterFacts(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}
+	document := func(ref domain.DocumentRef, value any) domain.Patch {
+		content, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return domain.Patch{Document: ref, Operation: domain.PatchPut, Content: content}
+	}
+	seed, err := change.New(authorityStore).Prepare(ctx, domain.Proposal{
+		ID: "seed", Target: target, Author: domain.Author{Kind: domain.AuthorUser, ID: "user-1"}, Reason: "seed",
+		Patches: []domain.Patch{
+			document(domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}, domain.Intent{Premise: "凡人修仙"}),
+			document(domain.DocumentRef{Kind: domain.DocumentPlan, ID: "volume-1"}, domain.PlanNode{ID: "volume-1", Kind: domain.PlanVolume, Title: "卷一", Summary: "入道"}),
+			document(domain.DocumentRef{Kind: domain.DocumentPlan, ID: "arc-1"}, domain.PlanNode{ID: "arc-1", Kind: domain.PlanArc, ParentID: "volume-1", Title: "弧一", Summary: "山门"}),
+			document(domain.DocumentRef{Kind: domain.DocumentPlan, ID: "plan-1"}, domain.PlanNode{ID: "plan-1", Kind: domain.PlanChapter, ParentID: "arc-1", Order: 1, Title: "第一章", Summary: "抵达"}),
+			document(domain.DocumentRef{Kind: domain.DocumentEntity, ID: "hero"}, domain.Entity{ID: "hero", Kind: domain.EntityCharacter, Name: "主角"}),
+			document(domain.DocumentRef{Kind: domain.DocumentManuscript, ID: "chapter-1"}, domain.ManuscriptChapter{
+				ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "第一章", Author: domain.AuthorAI,
+				Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "旧正文"}},
+			}),
+			document(domain.DocumentRef{Kind: domain.DocumentCanon, ID: "fact-1"}, domain.CanonFact{
+				ID: "fact-1", Kind: domain.CanonEvent, SubjectID: "hero", Predicate: "event.done", Value: json.RawMessage(`true`), SourceChapterID: "chapter-1",
+			}),
+		},
+		ApprovalState: domain.ApprovalPending, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("prepare seed: %v", err)
+	}
+	if seed, err = change.Decide(seed, domain.ApprovalApproved, domain.Author{Kind: domain.AuthorUser, ID: "user-1"}, now); err != nil {
+		t.Fatalf("approve seed: %v", err)
+	}
+	if _, err := change.New(authorityStore).Commit(ctx, seed); err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+	input := json.RawMessage(`{"chapter_id":"chapter-1","chapter_plan_id":"plan-1","chapter_number":1,"findings":["结尾仓促"]}`)
+	operation := domain.Operation{
+		ID: "rewrite-1", Kind: domain.OperationRewriteChapter, Target: target, State: domain.OperationQueued,
+		RunID: createRuntimeTestRun(t, ctx, authorityStore, "book-1", now), Snapshot: runtimeSnapshot(input, 1, domain.ApprovalAuto, "profile"),
+		Input: input, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	if operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now); err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	chapter := domain.ManuscriptChapter{
+		ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "第一章", Author: domain.AuthorAI,
+		Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "新正文"}},
+	}
+	content, _ := json.Marshal(chapter)
+	if _, err := authorityStore.PutWorkspaceArtifact(ctx, domain.WorkspaceArtifact{
+		OperationID: operation.ID, Key: "chapter/chapter-1", MediaType: workspace.ChapterMediaType, Content: content, UpdatedAt: now,
+	}, 0, operation.Attempt); err != nil {
+		t.Fatalf("put workspace chapter: %v", err)
+	}
+	runtime := NewRuntime(nil, "model", authorityStore)
+	manuscript := domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentManuscript, ID: "chapter-1"}, Operation: domain.PatchPut, Content: content}
+	canon := func(raw string) domain.Patch {
+		var fact domain.CanonFact
+		if err := json.Unmarshal([]byte(raw), &fact); err != nil {
+			t.Fatal(err)
+		}
+		return domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: fact.ID}, Operation: domain.PatchPut, Content: json.RawMessage(raw)}
+	}
+	submit := func(patches ...domain.Patch) error {
+		return runtime.validateSubmissionArtifact(ctx, operation, []string{"chapter/chapter-1"}, "", append([]domain.Patch{manuscript}, patches...))
+	}
+	fresh := `{"id":"fact-2","kind":"event","subject_id":"hero","predicate":"event.left","new_value":true,"source_chapter_id":"chapter-1"}`
+	if err := submit(canon(fresh)); !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), `redeclare canon "fact-1"`) {
+		t.Fatalf("missing redeclaration err = %v", err)
+	}
+	foreign := `{"id":"fact-3","kind":"event","subject_id":"hero","predicate":"event.elsewhere","new_value":true,"source_chapter_id":"chapter-9"}`
+	if err := submit(canon(fresh), canon(foreign)); !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "sourced from a submitted chapter") {
+		t.Fatalf("foreign source err = %v", err)
+	}
+	confirmed := `{"id":"fact-1","kind":"event","subject_id":"hero","predicate":"event.done","old_value":true,"new_value":true,"source_chapter_id":"chapter-1"}`
+	if err := submit(canon(confirmed), canon(fresh)); err != nil {
+		t.Fatalf("redeclared submission err = %v", err)
+	}
+	deleted := domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: "fact-1"}, Operation: domain.PatchDelete}
+	if err := submit(deleted, canon(fresh)); err != nil {
+		t.Fatalf("deletion counts as redeclaration: %v", err)
+	}
+}
+
+// TestReviseCanonSubmissionCoversRequestedFacts：事实核验任务只提交 canon 补丁、
+// 来源固定为任务章节、待核验事实全部处理且至少留一条事实。
+func TestReviseCanonSubmissionCoversRequestedFacts(t *testing.T) {
+	input := json.RawMessage(`{"chapter_id":"chapter-1","fact_ids":["fact-1"],"reason":"正文被改过"}`)
+	operation := domain.Operation{
+		ID: "canon-1", Kind: domain.OperationReviseCanon,
+		Target:   domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
+		Snapshot: runtimeSnapshot(input, 3, domain.ApprovalAuto, "profile"), Input: input,
+	}
+	canon := func(id, source string) domain.Patch {
+		return domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: id}, Operation: domain.PatchPut,
+			Content: json.RawMessage(fmt.Sprintf(`{"id":%q,"kind":"event","subject_id":"hero","predicate":"event.done","old_value":true,"new_value":true,"source_chapter_id":%q}`, id, source))}
+	}
+	deleted := domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: "fact-1"}, Operation: domain.PatchDelete}
+	manuscript := domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentManuscript, ID: "chapter-1"}, Operation: domain.PatchPut, Content: json.RawMessage(`{}`)}
+	cases := []struct {
+		name    string
+		patches []domain.Patch
+		wantErr string
+	}{
+		{"manuscript patches are rejected", []domain.Patch{manuscript, canon("fact-1", "chapter-1")}, "only change canon facts"},
+		{"pending fact must be handled", []domain.Patch{canon("fact-2", "chapter-1")}, "pending verification"},
+		{"chapter keeps at least one fact", []domain.Patch{deleted}, "at least one canon fact"},
+		{"source must be the task chapter", []domain.Patch{canon("fact-1", "chapter-2")}, "sourced from chapter"},
+		{"confirmation passes", []domain.Patch{canon("fact-1", "chapter-1")}, ""},
+		{"replacement passes", []domain.Patch{deleted, canon("fact-2", "chapter-1")}, ""},
+	}
+	for _, tc := range cases {
+		err := validateCanonRevision(operation, tc.patches)
+		if tc.wantErr == "" && err != nil {
+			t.Fatalf("%s: unexpected err %v", tc.name, err)
+		}
+		if tc.wantErr != "" && (!errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Fatalf("%s: err = %v, want %q", tc.name, err, tc.wantErr)
+		}
+	}
+}

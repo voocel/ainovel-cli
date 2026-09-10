@@ -16,7 +16,8 @@ func TestSetOwnershipLockGuidedAndUnlock(t *testing.T) {
 	if _, err := api.CreateProject(ctx, CreateProjectCommand{
 		ProjectID: "owned-book", ChangeID: "create", UserID: "user-1", Reason: "建立作品",
 		Draft: ProjectDraft{
-			Intent: domain.Intent{Premise: "一个失忆的邮差替亡者送完最后一封信"},
+			Intent:   domain.Intent{Premise: "一个失忆的邮差替亡者送完最后一封信"},
+			Entities: []domain.Entity{{ID: "hero", Kind: domain.EntityCharacter, Name: "邮差"}},
 			Canon: []domain.CanonFact{{
 				ID: "fact-1", Kind: domain.CanonState, SubjectID: "hero",
 				Predicate: "state.hero_identity", Value: json.RawMessage(`"邮差"`),

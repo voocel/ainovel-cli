@@ -37,6 +37,8 @@ func Run(ctx context.Context, api *service.Service, args []string, stdout, stder
 		return runPack(ctx, api, args[1:], stdout, stderr)
 	case "profile":
 		return runProfile(ctx, api, args[1:], stdout, stderr)
+	case "artifact":
+		return runArtifact(ctx, api, args[1:], stdout, stderr)
 	case "help":
 		return writeHelp(stdout)
 	default:
@@ -85,7 +87,7 @@ func runCreation(ctx context.Context, api *service.Service, args []string, stdou
 		}
 		run, err := api.StartCreationRun(ctx, service.StartCreationRunCommand{
 			RunID: *runID, ProjectID: *projectID,
-			Goal:     domain.CreationRunGoal{Premise: *premise, TargetChapters: *chapters},
+			Goal:     domain.NovelGoal{Premise: *premise, TargetChapters: *chapters}.Goal(),
 			Strategy: strategy, Preset: preset,
 			CreatedAt: time.Now().UTC(),
 		})
@@ -416,11 +418,13 @@ func runProfile(ctx context.Context, api *service.Service, args []string, stdout
 
 func runProject(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("project 需要 create、show、export、import、delete、derived、revert、approval、overlay、assets、directive、lock 或 unlock 子命令")
+		return fmt.Errorf("project 需要 create、show、export、import、delete、derived、revert、approval、overlay、assets、directive、adjudication、lock 或 unlock 子命令")
 	}
 	switch args[0] {
 	case "directive":
 		return runProjectDirective(ctx, api, args[1:], stdout, stderr)
+	case "adjudication":
+		return runProjectAdjudication(ctx, api, args[1:], stdout, stderr)
 	case "delete":
 		flags := newFlags("project delete", stderr)
 		projectID := flags.String("project", "", "Project ID")
@@ -769,9 +773,11 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		operationKind := domain.OperationKind(*kind)
-		if *id == "" || *projectID == "" || *kind == "" || *inputPath == "" ||
-			(operationKind.RequiresCreationRun() && *runID == "") {
+		spec, err := domain.KindSpec(domain.OperationKind(*kind))
+		if err != nil {
+			return err
+		}
+		if *id == "" || *projectID == "" || *inputPath == "" || (spec.RequiresRun && *runID == "") {
 			return fmt.Errorf("operation start 需要 --id --project --kind --input；内容类任务还需要 --run")
 		}
 		input, err := os.ReadFile(*inputPath)
@@ -787,7 +793,7 @@ func runOperation(ctx context.Context, api *service.Service, args []string, stdo
 			return err
 		}
 		operation, err := api.StartOperation(ctx, service.StartOperationCommand{
-			OperationID: *id, ProjectID: *projectID, Kind: operationKind, RunID: *runID,
+			OperationID: *id, ProjectID: *projectID, Kind: spec.Kind, RunID: *runID,
 			WorkerProfileID: *worker, Priority: *priority, Input: input,
 			Packs: packs, CreatorProfiles: profiles, DependsOn: dependencyIDs,
 			CoreProtocolVersion: "core-v1", ModelConfigDigest: *modelDigest,
@@ -928,7 +934,6 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 		kind := flags.String("kind", "", "Operation kind，用于构建对应故事上下文")
 		worker := flags.String("profile", "", "Worker Profile ID；默认由 Operation kind 决定")
 		inputPath := flags.String("input", "", "任务输入 JSON 文件")
-		policy := flags.String("approval", "manual", "auto、milestone 或 manual；custom 需未来的显式策略契约")
 		modelDigest := flags.String("model-digest", "", "模型配置摘要")
 		var packIDs, profileRefs stringValues
 		flags.Var(&packIDs, "pack", "启用 Pack ID；可重复，编译时冻结最新 Revision")
@@ -954,8 +959,7 @@ func runPrompt(ctx context.Context, api *service.Service, args []string, stdout,
 		result, err := api.ReloadPrompt(ctx, service.ReloadPromptCommand{
 			ProjectID: *projectID, Kind: domain.OperationKind(*kind), WorkerProfileID: *worker, Input: input,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: "core-v1",
-			ModelConfigDigest: *modelDigest, ApprovalPolicy: domain.ApprovalPolicy(*policy),
-			CreatedAt: time.Now().UTC(),
+			ModelConfigDigest: *modelDigest, CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, result, err)
 	}
@@ -1150,6 +1154,68 @@ func runProjectDirective(ctx context.Context, api *service.Service, args []strin
 	return fmt.Errorf("未知的 project directive 子命令 %q", args[0])
 }
 
+// runProjectAdjudication 维护用户裁决（D43）：add 接受一条阻塞发现、withdraw 撤回、list 列出全部记录。
+func runProjectAdjudication(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("project adjudication 需要 add、withdraw 或 list 子命令")
+	}
+	flags := newFlags("project adjudication "+args[0], stderr)
+	projectID := flags.String("project", "", "Project ID")
+	switch args[0] {
+	case "add":
+		changeID := flags.String("change", "", "Change ID；留空自动生成")
+		userID := flags.String("user", "", "User ID")
+		reason := flags.String("reason", "", "接受该发现的理由")
+		finding := flags.String("finding", "", "发现标识：<审阅 Operation ID>/<发现序号>（见 workbench 或 creation show）")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *projectID == "" || *userID == "" || *reason == "" || *finding == "" {
+			return fmt.Errorf("project adjudication add 需要 --project --user --reason --finding")
+		}
+		if *changeID == "" {
+			*changeID = fmt.Sprintf("adjudication:%d", time.Now().UnixMilli())
+		}
+		result, err := api.AddAdjudication(ctx, service.AddAdjudicationCommand{
+			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
+			Finding: *finding, Reason: *reason, CreatedAt: time.Now().UTC(),
+		})
+		return writeResult(stdout, result, err)
+	case "withdraw":
+		changeID := flags.String("change", "", "Change ID；留空自动生成")
+		userID := flags.String("user", "", "User ID")
+		reason := flags.String("reason", "", "撤回的理由")
+		adjudicationID := flags.String("id", "", "要撤回的裁决 ID")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *projectID == "" || *userID == "" || *reason == "" || *adjudicationID == "" {
+			return fmt.Errorf("project adjudication withdraw 需要 --project --user --reason --id")
+		}
+		if *changeID == "" {
+			*changeID = fmt.Sprintf("adjudication-withdraw:%s:%d", *adjudicationID, time.Now().UnixMilli())
+		}
+		result, err := api.WithdrawAdjudication(ctx, service.WithdrawAdjudicationCommand{
+			ProjectID: *projectID, ChangeID: *changeID, UserID: *userID,
+			AdjudicationID: *adjudicationID, Reason: *reason, CreatedAt: time.Now().UTC(),
+		})
+		return writeResult(stdout, result, err)
+	case "list":
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *projectID == "" {
+			return fmt.Errorf("project adjudication list 需要 --project")
+		}
+		project, err := api.Project(ctx, *projectID, 0)
+		if err != nil {
+			return err
+		}
+		return writeResult(stdout, append([]domain.Adjudication{}, project.Adjudications...), nil)
+	}
+	return fmt.Errorf("未知的 project adjudication 子命令 %q", args[0])
+}
+
 func writeResult(stdout io.Writer, value any, err error) error {
 	if err != nil {
 		return err
@@ -1164,11 +1230,40 @@ func writeHelp(output io.Writer) error {
 	_, err := fmt.Fprintln(output, strings.TrimSpace(`ainovel-cli v1 commands:
   quick write
   creation start|show|strategy|pause|cancel|events
-  project create|show|export|import|delete|derived|revert|lock|unlock|approval|overlay|assets|directive add|retire|list
+  project create|show|export|import|delete|derived|revert|lock|unlock|approval|overlay|assets|directive add|retire|list|adjudication add|withdraw|list
   proposal show|approve|reject|resolve
   operation start|restart|run|show|events|pause|resume|cancel|priority|recover
   prompt show|sources|diff|lint|reload
   pack install|export|eval
-  profile save|show|learn|candidates|confirm`))
+  profile save|show|learn|candidates|confirm
+  artifact list|gc`))
 	return err
+}
+
+func runArtifact(ctx context.Context, api *service.Service, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("artifact 需要 list 或 gc 子命令")
+	}
+	flags := newFlags("artifact "+args[0], stderr)
+	switch args[0] {
+	case "list":
+		projectID := flags.String("project", "", "Project ID")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *projectID == "" {
+			return fmt.Errorf("artifact list 需要 --project")
+		}
+		artifacts, err := api.Artifacts(ctx, *projectID)
+		return writeResult(stdout, artifacts, err)
+	case "gc":
+		grace := flags.Duration("grace", 24*time.Hour, "宽限期：比它更新的对象与暂存文件不回收")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		removed, err := api.CollectArtifactGarbage(ctx, *grace)
+		return writeResult(stdout, map[string]int{"removed": removed}, err)
+	default:
+		return fmt.Errorf("未知 artifact 子命令 %q", args[0])
+	}
 }

@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // 工作台统一只读查询（v1-product-workbench-page.md §4）：TUI 与未来入口复用同一
@@ -65,9 +67,13 @@ type WorkbenchSnapshot struct {
 	// CurrentPhase 是进行中的环节（创作语言），仅 Run 非终态时非空。
 	CurrentPhase string           `json:"current_phase,omitempty"`
 	Decision     *PendingDecision `json:"decision,omitempty"`
-	// Findings 是绑定当前 Revision 的最新审阅发现；Revision 漂移即失效。
-	Findings []domain.ReviewFinding `json:"findings,omitempty"`
-	NextStep string                 `json:"next_step,omitempty"`
+	// Findings 是基线仍成立的最新审阅发现（D48）中尚未被用户接受的部分；
+	// Adjudications 是仍然有效的接受记录（D43）。
+	Findings      []WorkbenchFinding    `json:"findings,omitempty"`
+	Adjudications []domain.Adjudication `json:"adjudications,omitempty"`
+	// PendingCanon 是正文改动后待核验的事实 ID（D41）。
+	PendingCanon []string `json:"pending_canon,omitempty"`
+	NextStep     string   `json:"next_step,omitempty"`
 }
 
 func (s *Service) WorkbenchSnapshot(ctx context.Context, projectID string) (WorkbenchSnapshot, error) {
@@ -89,15 +95,18 @@ func (s *Service) WorkbenchSnapshot(ctx context.Context, projectID string) (Work
 	writingPlanID := ""
 	if hasRun {
 		snapshot.Run = &run
-		if snapshot.Candidates, snapshot.Decision, err = s.workbenchDecision(ctx, run, project.Revision); err != nil {
+		if snapshot.Candidates, snapshot.Decision, err = s.workbenchDecision(ctx, run); err != nil {
 			return WorkbenchSnapshot{}, err
 		}
 		if snapshot.CurrentPhase, writingPlanID, err = s.workbenchPhase(ctx, run, project); err != nil {
 			return WorkbenchSnapshot{}, err
 		}
 	}
-	if snapshot.Findings, err = s.validFindings(ctx, projectID, project.Revision); err != nil {
+	if snapshot.Findings, snapshot.Adjudications, err = s.validFindings(ctx, project); err != nil {
 		return WorkbenchSnapshot{}, err
+	}
+	for _, gap := range canonGaps(project) {
+		snapshot.PendingCanon = append(snapshot.PendingCanon, gap.Pending...)
 	}
 	snapshot.Outline = buildOutline(project, snapshot.Candidates, writingPlanID)
 	snapshot.NextStep = workbenchNextStep(snapshot)
@@ -106,7 +115,7 @@ func (s *Service) WorkbenchSnapshot(ctx context.Context, projectID string) (Work
 
 // workbenchDecision 提取待确认候选与决定卡：Run 等待用户时才有。
 func (s *Service) workbenchDecision(
-	ctx context.Context, run domain.CreationRun, revision domain.Revision,
+	ctx context.Context, run domain.CreationRun,
 ) ([]ChapterCandidate, *PendingDecision, error) {
 	if run.State != domain.RunWaitingUser {
 		return nil, nil, nil
@@ -119,12 +128,18 @@ func (s *Service) workbenchDecision(
 	if !ok {
 		return nil, decision, nil
 	}
-	// 等待期间 Revision 漂移（用户编辑/导入/锁定）：稿件基线已过期，不解出
-	// 章节候选（大纲不得标 ◐），由界面引导重写而不是直接通过。
-	if proposal.BaseRevision != revision {
+	// 等待期间的漂移按 D51 判定：只有用户专属变化时候选可重定位、仍是当前稿件；
+	// 正文/规划/相干要求变过则基线过期，不解出章节候选（大纲不得标 ◐），由界面
+	// 引导重写而不是直接通过。
+	relocated, _, err := s.relocateProposal(ctx, proposal)
+	if errors.Is(err, store.ErrRevisionConflict) {
 		decision.Stale = true
 		return nil, decision, nil
 	}
+	if err != nil {
+		return nil, nil, err
+	}
+	proposal = relocated
 	var candidates []ChapterCandidate
 	for _, patch := range proposal.Patches {
 		if patch.Document.Kind != domain.DocumentManuscript || patch.Operation != domain.PatchPut {
@@ -169,59 +184,66 @@ func (s *Service) workbenchPhase(
 	return "持续创作中", "", nil
 }
 
+// operationPhase 推导进行中的环节文案：章节任务带章号与 Plan 节点，其余用种类登记的文案。
 func operationPhase(operation domain.Operation, project ProjectSnapshot) (string, string) {
-	switch operation.Kind {
-	case domain.OperationInitializeProject:
-		return "正在整理创作设定", ""
-	case domain.OperationDevelopPlan, domain.OperationRevisePlan:
-		return "正在规划故事蓝图", ""
-	case domain.OperationWriteChapter:
-		var input struct {
-			ChapterPlanID string `json:"chapter_plan_id"`
-			ChapterNumber int    `json:"chapter_number"`
-		}
-		if json.Unmarshal(operation.Input, &input) == nil && input.ChapterNumber > 0 {
-			return fmt.Sprintf("正在落笔第 %d 章", input.ChapterNumber), input.ChapterPlanID
-		}
-		return "正在落笔新章节", ""
-	case domain.OperationRewriteChapter:
-		var input struct {
-			ChapterID string `json:"chapter_id"`
-		}
-		if json.Unmarshal(operation.Input, &input) == nil {
-			for _, chapter := range project.Manuscript {
-				if chapter.ID == input.ChapterID {
-					return fmt.Sprintf("正在按意见重写第 %d 章", chapter.Number), chapter.PlanNodeID
-				}
+	spec, err := domain.KindSpec(operation.Kind)
+	if err != nil {
+		return "持续创作中", ""
+	}
+	input, err := domain.DecodeTaskInput(operation.Kind, operation.Input)
+	if err != nil {
+		return spec.Label, ""
+	}
+	switch input := input.(type) {
+	case *domain.WriteChapterInput:
+		return fmt.Sprintf("正在落笔第 %d 章", input.ChapterNumber), input.ChapterPlanID
+	case *domain.RewriteChapterInput:
+		for _, chapter := range project.Manuscript {
+			if chapter.ID == input.ChapterID {
+				return fmt.Sprintf("正在按意见重写第 %d 章", chapter.Number), chapter.PlanNodeID
 			}
 		}
-		return "正在按意见重写章节", ""
-	case domain.OperationRewriteAffected:
-		return "正在同步修订受影响章节", ""
-	case domain.OperationReviewRange:
-		return "正在审阅已完成章节", ""
-	case domain.OperationReviseCanon:
-		return "正在修订已确认事实", ""
 	}
-	return "持续创作中", ""
+	return spec.Label, ""
 }
 
-// validFindings 返回绑定指定 Revision 的最新有效审阅发现（只读投影）。
+// WorkbenchFinding 是带稳定标识的审阅发现：用户按 ID 接受（D43）。
+type WorkbenchFinding struct {
+	ID string `json:"id"`
+	domain.ReviewFinding
+}
+
+// validFindings 返回基线仍成立的最新审阅发现里未被接受的部分，以及仍然有效的接受记录。
 // 有效性与"最新"的裁决规则同协调器（listVerdicts/latestVerdict），两处不分叉。
-func (s *Service) validFindings(
-	ctx context.Context, projectID string, revision domain.Revision,
-) ([]domain.ReviewFinding, error) {
-	verdicts, err := s.listVerdicts(ctx, projectID, revision)
+func (s *Service) validFindings(ctx context.Context, project ProjectSnapshot) ([]WorkbenchFinding, []domain.Adjudication, error) {
+	verdicts, err := s.listVerdicts(ctx, project)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	latest := latestVerdict(verdicts, func(verdict domain.ReviewVerdict) bool {
-		return verdict.Revision == revision
-	})
+	adjudications, err := s.validAdjudications(ctx, project)
+	if err != nil {
+		return nil, nil, err
+	}
+	accepted := domain.AcceptedFindings(adjudications)
+	var effective []domain.Adjudication
+	for _, record := range adjudications {
+		if _, ok := accepted[record.Finding]; ok && record.Finding != "" {
+			effective = append(effective, record)
+		}
+	}
+	latest := latestStoredVerdict(verdicts, func(domain.ReviewVerdict) bool { return true })
 	if latest == nil {
-		return nil, nil
+		return nil, effective, nil
 	}
-	return latest.Findings, nil
+	var findings []WorkbenchFinding
+	for index, finding := range latest.verdict.Findings {
+		id := domain.FindingID(latest.key, index)
+		if _, ok := accepted[id]; ok && finding.Severity == domain.FindingBlocking {
+			continue
+		}
+		findings = append(findings, WorkbenchFinding{ID: id, ReviewFinding: finding})
+	}
+	return findings, effective, nil
 }
 
 // buildOutline 组装大纲树（先序，按 parent/order 排序）并推导章节呈现状态。

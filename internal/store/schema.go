@@ -7,7 +7,7 @@ import (
 
 // schemaVersion 是当前唯一支持的库结构版本。v1 没有历史数据，结构演进直接改
 // schema 并升版本号；不保留迁移阶梯，版本不符即拒绝打开。
-const schemaVersion = 1
+const schemaVersion = 2
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -116,7 +116,8 @@ var schema = []string{
 		execution_snapshot BLOB NOT NULL,
 		input BLOB NOT NULL,
 		error TEXT NOT NULL DEFAULT '',
-		model_config_digest TEXT NOT NULL,
+		failure_code TEXT NOT NULL DEFAULT '',
+		executor TEXT NOT NULL,
 		lease_owner TEXT,
 		lease_until_unix_ms INTEGER,
 		run_id TEXT NOT NULL DEFAULT '',
@@ -126,8 +127,8 @@ var schema = []string{
 	) STRICT`,
 	`CREATE INDEX operations_queue
 		ON operations (state, priority DESC, created_at_unix_ms, id)`,
-	`CREATE INDEX operations_queue_by_model
-		ON operations (state, model_config_digest, priority DESC, created_at_unix_ms, id)`,
+	`CREATE INDEX operations_queue_by_executor
+		ON operations (state, executor, priority DESC, created_at_unix_ms, id)`,
 	`CREATE INDEX operations_by_run ON operations (run_id) WHERE run_id != ''`,
 	`CREATE TABLE operation_dependencies (
 		operation_id TEXT NOT NULL,
@@ -164,14 +165,37 @@ var schema = []string{
 		UNIQUE (operation_id, idempotency_key),
 		FOREIGN KEY (operation_id) REFERENCES operations (id)
 	) STRICT`,
+	// 工件元数据（D47）：内容按摘要寻址落在对象目录，行只记归属与身份。
+	`CREATE TABLE artifacts (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		content_digest TEXT NOT NULL,
+		media_type TEXT NOT NULL,
+		size INTEGER NOT NULL CHECK (size >= 0),
+		basis BLOB NOT NULL,
+		operation_id TEXT NOT NULL,
+		attempt INTEGER NOT NULL CHECK (attempt > 0),
+		created_at_unix_ms INTEGER NOT NULL,
+		FOREIGN KEY (operation_id) REFERENCES operations (id)
+	) STRICT`,
+	`CREATE INDEX artifacts_by_project ON artifacts (project_id, id)`,
+	`CREATE INDEX artifacts_by_digest ON artifacts (content_digest)`,
+	// 发布 pin 跨进程保护已落盘、尚未提交元数据的对象。与 GC 共用 SQLite 写锁。
+	`CREATE TABLE artifact_publications (
+		operation_id TEXT NOT NULL,
+		attempt INTEGER NOT NULL CHECK (attempt > 0),
+		content_digest TEXT NOT NULL,
+		created_at_unix_ms INTEGER NOT NULL,
+		PRIMARY KEY (operation_id, attempt, content_digest)
+	) STRICT`,
 	`CREATE TABLE execution_profiles (
 		digest TEXT PRIMARY KEY,
-		content_digest TEXT NOT NULL,
 		project_id TEXT NOT NULL,
 		worker_profile TEXT NOT NULL,
+		core_protocol_version TEXT NOT NULL,
+		model_config_digest TEXT NOT NULL,
 		prompt_digest TEXT NOT NULL,
 		tool_schema_digest TEXT NOT NULL,
-		snapshot BLOB NOT NULL,
 		stable_prefix TEXT NOT NULL,
 		dynamic_tail TEXT NOT NULL,
 		tools BLOB NOT NULL,
@@ -205,6 +229,9 @@ var schema = []string{
 	) STRICT`,
 	`CREATE INDEX derived_documents_by_project
 		ON derived_documents (project_id, revision, kind, cache_key)`,
+	// 证据类派生文档跨 Revision 检索（D48）：有效性按基线判定，不按 Revision 键。
+	`CREATE INDEX derived_documents_by_kind
+		ON derived_documents (project_id, kind, created_at_unix_ms)`,
 	// CreationRun（§6.3）：goal 与 strategy 是版本化运行策略，preset 只追溯启动边界。
 	`CREATE TABLE creation_runs (
 		id TEXT PRIMARY KEY,
@@ -235,5 +262,5 @@ var schema = []string{
 		PRIMARY KEY (run_id, sequence),
 		FOREIGN KEY (run_id) REFERENCES creation_runs (id)
 	) STRICT`,
-	`PRAGMA user_version = 1`,
+	fmt.Sprintf("PRAGMA user_version = %d", schemaVersion),
 }

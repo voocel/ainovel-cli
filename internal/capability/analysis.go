@@ -161,7 +161,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	if r.model == nil {
 		return domain.SemanticComplianceReport{}, fmt.Errorf("semantic compliance model is required: %w", domain.ErrInvalid)
 	}
-	if operation.State != domain.OperationRunning || operation.Snapshot.ModelConfigDigest != r.modelDigest {
+	if operation.State != domain.OperationRunning || operation.Snapshot.Executor != r.Identity() {
 		return domain.SemanticComplianceReport{}, fmt.Errorf("semantic compliance operation context is invalid: %w", store.ErrStateConflict)
 	}
 	type constraintDocument struct {
@@ -186,7 +186,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 		return domain.SemanticComplianceReport{}, fmt.Errorf("encode semantic compliance input: %w", err)
 	}
 	cacheKey, err := prompt.CacheKey(
-		operation.Target.ID, "semantic.compliance@1", operation.Snapshot.ExecutionProfileDigest,
+		operation.Target.ID, "semantic.compliance@1", operation.Snapshot.ConfigDigest,
 		operation.ID+":semantic-compliance",
 	)
 	if err != nil {

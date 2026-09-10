@@ -2,59 +2,94 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// TestWorkbenchSnapshotMarksStaleCandidateAfterRevisionDrift 守卫"过期候选不得
-// 伪装成当前稿件"（页面设计 §4）：等待裁决期间用户变更推进了 Revision，
-// 决定卡标记 Stale、不再解出章节候选，大纲不得出现待确认态。
-func TestWorkbenchSnapshotMarksStaleCandidateAfterRevisionDrift(t *testing.T) {
+// TestWorkbenchStaleCandidateFollowsRelocationRule 守卫"过期候选不得伪装成当前稿件"
+// （页面设计 §4）与 D51：等待裁决期间的相干要求使候选过期（标 Stale、不解出候选、
+// 大纲不得待确认）；只锁定设定则候选重定位到当前 Revision，照常裁决通过。
+func TestWorkbenchStaleCandidateFollowsRelocationRule(t *testing.T) {
 	ctx := context.Background()
-	executor := &scriptedQuickExecutor{now: serviceTime()}
-	api := newQuickTestService(t, executor)
-	command := QuickWriteCommand{
-		ProjectID: "drift-book", UserID: "user-1", Premise: "漂移测试",
-		Chapters: 1, Approval: domain.ApprovalManual,
-		WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
-	}
-	result, err := api.QuickWrite(ctx, command)
-	if err != nil {
-		t.Fatalf("quick write to plan wait: %v", err)
-	}
-	if _, err := api.Approve(ctx, runQuickID(result.RunID, "plan")+"-proposal", "user-1", serviceTime().Add(time.Hour)); err != nil {
-		t.Fatalf("approve plan: %v", err)
-	}
-	command.CreatedAt = serviceTime().Add(time.Hour + time.Minute)
-	if result, err = api.QuickWrite(ctx, command); err != nil || result.RunState != domain.RunWaitingUser {
-		t.Fatalf("resume to chapter wait: %#v, %v", result, err)
-	}
-	// 等待期间用户锁定设定：Revision 前进，候选基线随之过期。
-	if _, err := api.SetOwnership(ctx, SetOwnershipCommand{
-		ProjectID: "drift-book", ChangeID: "drift-lock", UserID: "user-1",
-		Target:  domain.DocumentRef{Kind: domain.DocumentPlan, ID: "arc-1"},
-		Control: domain.ControlGuided, Guidance: []string{"保持启程弧基调"},
-		Reason: "写作中途锁定", CreatedAt: serviceTime().Add(2 * time.Hour),
-	}); err != nil {
-		t.Fatalf("drift via ownership change: %v", err)
-	}
-	snapshot, err := api.WorkbenchSnapshot(ctx, "drift-book")
-	if err != nil {
-		t.Fatalf("snapshot after drift: %v", err)
-	}
-	if snapshot.Decision == nil || !snapshot.Decision.HasProposal || !snapshot.Decision.Stale {
-		t.Fatalf("decision after drift = %#v", snapshot.Decision)
-	}
-	if len(snapshot.Candidates) != 0 {
-		t.Fatalf("stale candidates leaked: %#v", snapshot.Candidates)
-	}
-	for _, entry := range snapshot.Outline {
-		if entry.State == ChapterPending {
-			t.Fatalf("stale candidate must not mark outline pending: %#v", entry)
+	prepare := func(projectID string) (*Service, string) {
+		t.Helper()
+		executor := &scriptedQuickExecutor{now: serviceTime()}
+		api := newQuickTestService(t, executor)
+		command := QuickWriteCommand{
+			ProjectID: projectID, UserID: "user-1", Premise: "漂移测试",
+			Chapters: 1, Approval: domain.ApprovalManual,
+			WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
 		}
+		result, err := api.QuickWrite(ctx, command)
+		if err != nil {
+			t.Fatalf("quick write to plan wait: %v", err)
+		}
+		if _, err := api.Approve(ctx, runQuickID(result.RunID, "plan")+"-proposal", "user-1", serviceTime().Add(time.Hour)); err != nil {
+			t.Fatalf("approve plan: %v", err)
+		}
+		command.CreatedAt = serviceTime().Add(time.Hour + time.Minute)
+		if result, err = api.QuickWrite(ctx, command); err != nil || result.RunState != domain.RunWaitingUser {
+			t.Fatalf("resume to chapter wait: %#v, %v", result, err)
+		}
+		return api, runQuickID(result.RunID, "chapter", "chapter-plan-1") + "-proposal"
 	}
+
+	t.Run("related directive expires the candidate", func(t *testing.T) {
+		api, proposalID := prepare("drift-book")
+		if _, err := api.AddDirective(ctx, AddDirectiveCommand{
+			ProjectID: "drift-book", ChangeID: "drift-hook", UserID: "user-1", DirectiveID: "hook",
+			Scope: "chapter_range:1-1", Text: "结尾留钩子", Reason: "等待裁决时提出要求",
+			CreatedAt: serviceTime().Add(2 * time.Hour),
+		}); err != nil {
+			t.Fatalf("drift via directive: %v", err)
+		}
+		snapshot, err := api.WorkbenchSnapshot(ctx, "drift-book")
+		if err != nil {
+			t.Fatalf("snapshot after drift: %v", err)
+		}
+		if snapshot.Decision == nil || !snapshot.Decision.HasProposal || !snapshot.Decision.Stale {
+			t.Fatalf("decision after drift = %#v", snapshot.Decision)
+		}
+		if len(snapshot.Candidates) != 0 {
+			t.Fatalf("stale candidates leaked: %#v", snapshot.Candidates)
+		}
+		for _, entry := range snapshot.Outline {
+			if entry.State == ChapterPending {
+				t.Fatalf("stale candidate must not mark outline pending: %#v", entry)
+			}
+		}
+		if _, err := api.Approve(ctx, proposalID, "user-1", serviceTime().Add(3*time.Hour)); !errors.Is(err, store.ErrRevisionConflict) {
+			t.Fatalf("approving a stale candidate err = %v, want ErrRevisionConflict", err)
+		}
+	})
+
+	t.Run("ownership change relocates the candidate", func(t *testing.T) {
+		api, proposalID := prepare("relocate-book")
+		if _, err := api.SetOwnership(ctx, SetOwnershipCommand{
+			ProjectID: "relocate-book", ChangeID: "drift-lock", UserID: "user-1",
+			Target:  domain.DocumentRef{Kind: domain.DocumentPlan, ID: "arc-1"},
+			Control: domain.ControlGuided, Guidance: []string{"保持启程弧基调"},
+			Reason: "写作中途锁定", CreatedAt: serviceTime().Add(2 * time.Hour),
+		}); err != nil {
+			t.Fatalf("drift via ownership change: %v", err)
+		}
+		snapshot, err := api.WorkbenchSnapshot(ctx, "relocate-book")
+		if err != nil {
+			t.Fatalf("snapshot after drift: %v", err)
+		}
+		if snapshot.Decision == nil || snapshot.Decision.Stale || len(snapshot.Candidates) != 1 ||
+			snapshot.Candidates[0].BaseRevision != snapshot.Revision {
+			t.Fatalf("relocated decision = %#v, candidates = %#v", snapshot.Decision, snapshot.Candidates)
+		}
+		committed, err := api.Approve(ctx, proposalID, "user-1", serviceTime().Add(3*time.Hour))
+		if err != nil || committed.BaseRevision != snapshot.Revision || committed.NewRevision != snapshot.Revision+1 {
+			t.Fatalf("approve relocated candidate = %#v, %v", committed, err)
+		}
+	})
 }
 
 // TestWorkbenchSnapshotAcrossLifecycle 覆盖文档 §4 数据契约的三个关键状态：

@@ -12,7 +12,7 @@ import (
 
 func TestDerivedDocumentsAreRevisionScopedAndIdempotent(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	document := domain.DerivedDocument{
 		ProjectID: "book-1", Revision: 2, Kind: "story_context.v1", Key: "write-1",
@@ -35,13 +35,31 @@ func TestDerivedDocumentsAreRevisionScopedAndIdempotent(t *testing.T) {
 	if err != nil || len(documents) != 1 {
 		t.Fatalf("list derived documents = %#v, %v", documents, err)
 	}
+	// 按种类跨 Revision 列出（D48）：按写入时间排序，其他种类不混入。
+	later := domain.DerivedDocument{
+		ProjectID: "book-1", Revision: 3, Kind: "story_context.v1", Key: "write-2",
+		Content: json.RawMessage(`{"chapter":"chapter-2"}`), CreatedAt: now.Add(time.Hour),
+	}
+	other := domain.DerivedDocument{
+		ProjectID: "book-1", Revision: 3, Kind: domain.DerivedVerdictKind, Key: "review-1",
+		Content: json.RawMessage(`{"status":"pass"}`), CreatedAt: now.Add(2 * time.Hour),
+	}
+	for _, document := range []domain.DerivedDocument{later, other} {
+		if _, err := s.SaveDerivedDocument(ctx, document); err != nil {
+			t.Fatalf("save %s: %v", document.Key, err)
+		}
+	}
+	byKind, err := s.ListDerivedDocumentsByKind(ctx, "book-1", "story_context.v1")
+	if err != nil || len(byKind) != 2 || byKind[0].Revision != 2 || byKind[1].Revision != 3 || byKind[1].Key != "write-2" {
+		t.Fatalf("list by kind = %#v, %v", byKind, err)
+	}
 }
 
 // TestExecutionDerivedWriteIsFencedInsideTheTransaction 守护 D42 对证据类派生产出的围栏：
 // 审阅裁定只能由当前执行落盘，取消或被接替的执行写入被拒且不留痕。
 func TestExecutionDerivedWriteIsFencedInsideTheTransaction(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	start := operationTime()
 	verdict := domain.DerivedDocument{
 		ProjectID: "book-1", Revision: 1, Kind: domain.DerivedVerdictKind, Key: "review",

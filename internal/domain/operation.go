@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,22 +19,9 @@ const (
 	OperationRewriteChapter    OperationKind = "rewrite_chapter"
 	OperationRewriteAffected   OperationKind = "rewrite_affected"
 	OperationReviewRange       OperationKind = "review_range"
-	OperationUpdateProfile     OperationKind = "update_creator_profile"
-	OperationRebuildDerived    OperationKind = "rebuild_derived_data"
+	OperationGenerateAsset     OperationKind = "generate_asset"
+	OperationInspectAsset      OperationKind = "inspect_asset"
 )
-
-// RequiresCreationRun 把“影响故事内容的 AI Operation”收敛为一个领域判定；
-// 维护派生数据与跨作品 Profile 更新可以独立存在（D27）。
-func (k OperationKind) RequiresCreationRun() bool {
-	switch k {
-	case OperationInitializeProject, OperationDevelopPlan, OperationWriteChapter,
-		OperationRevisePlan, OperationReviseCanon, OperationRewriteChapter,
-		OperationRewriteAffected, OperationReviewRange:
-		return true
-	default:
-		return false
-	}
-}
 
 type OperationState string
 
@@ -47,6 +35,69 @@ const (
 	OperationCancelled        OperationState = "cancelled"
 	OperationStale            OperationState = "stale"
 )
+
+// FailureCode 给失败一个机器可判读的原因（D46）。result_unknown 表示外部结果不可知：
+// 任务已提交但拿不到结论，不自动重试；用户对账（Resume）或重提（Restart）都是显式决定。
+type FailureCode string
+
+const FailureResultUnknown FailureCode = "result_unknown"
+
+var ErrResultUnknown = errors.New("external result is unknown")
+
+// FailureCodeFor 由失败原因推出失败码：只有结果未知需要打码。
+func FailureCodeFor(cause error) FailureCode {
+	if errors.Is(cause, ErrResultUnknown) {
+		return FailureResultUnknown
+	}
+	return ""
+}
+
+// 外部请求记录是工作区工件（D46）：提交前先落 RequestID，恢复按 ID 查询而不是重提；
+// 重启后继承前任记录，OperationID 不等于自身即视为用户已决定重提。
+const (
+	ExternalRequestKey       = "external.request"
+	ExternalRequestMediaType = "application/vnd.ainovel.external-request+json"
+)
+
+type ExternalRequestRecord struct {
+	OperationID string                  `json:"operation_id"`
+	Attempt     int                     `json:"attempt"`
+	RequestID   string                  `json:"request_id"`
+	SubmittedAt time.Time               `json:"submitted_at"`
+	Identity    ExternalRequestIdentity `json:"identity"`
+}
+
+// ExternalRequestIdentity binds a remote submission to the frozen inputs that produced it.
+// InputDigest includes the typed input's evidence basis; BaseRevision also protects inputs
+// read directly from the source snapshot. An inherited result may only be reused on equality.
+type ExternalRequestIdentity struct {
+	Target       AuthorityTarget `json:"target"`
+	Executor     string          `json:"executor"`
+	ConfigDigest string          `json:"config_digest"`
+	InputDigest  string          `json:"input_digest"`
+	BaseRevision Revision        `json:"base_revision"`
+}
+
+func ExternalIdentityFor(operation Operation) ExternalRequestIdentity {
+	return ExternalRequestIdentity{
+		Target: operation.Target, Executor: operation.Snapshot.Executor,
+		ConfigDigest: operation.Snapshot.ConfigDigest, InputDigest: operation.Snapshot.InputDigest,
+		BaseRevision: operation.Snapshot.BaseRevision,
+	}
+}
+
+func (r ExternalRequestRecord) Validate() error {
+	if strings.TrimSpace(r.OperationID) == "" || r.Attempt <= 0 || strings.TrimSpace(r.RequestID) == "" || r.SubmittedAt.IsZero() {
+		return fmt.Errorf("external request record requires operation, attempt, request id and time: %w", ErrInvalid)
+	}
+	if err := r.Identity.Target.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Identity.Executor) == "" || strings.TrimSpace(r.Identity.ConfigDigest) == "" || strings.TrimSpace(r.Identity.InputDigest) == "" || r.Identity.BaseRevision < InitialRevision {
+		return fmt.Errorf("external request requires its frozen execution identity: %w", ErrInvalid)
+	}
+	return nil
+}
 
 type ApprovalPolicy string
 
@@ -78,39 +129,24 @@ func StricterApproval(left, right ApprovalPolicy) ApprovalPolicy {
 	return left
 }
 
+// ExecutionSnapshot 是任务创建时冻结的执行边界（D45）：谁执行、基于哪个
+// Revision、什么输入、什么配置、什么审批策略。字段对执行族中立：LLM 的
+// ConfigDigest 是 Execution Profile 摘要，外部执行器是自身配置摘要。
 type ExecutionSnapshot struct {
-	ExecutionProfileDigest string         `json:"execution_profile_digest"`
-	BaseRevision           Revision       `json:"base_project_revision"`
-	CoreProtocolVersion    string         `json:"core_protocol_version"`
-	WorkerProfileVersion   string         `json:"worker_profile_version"`
-	ToolSchemaDigest       string         `json:"ordered_tool_schema_digest"`
-	PromptDigest           string         `json:"compiled_prompt_digest"`
-	PackSetDigest          string         `json:"pack_set_digest,omitempty"`
-	CreatorProfileRev      Revision       `json:"creator_profile_revision,omitempty"`
-	CreatorProfileDigest   string         `json:"creator_profile_digest,omitempty"`
-	ProjectOverlayRev      Revision       `json:"project_overlay_revision,omitempty"`
-	ModelConfigDigest      string         `json:"model_config_digest"`
-	ApprovalPolicy         ApprovalPolicy `json:"approval_policy"`
-	ApprovalPolicyDigest   string         `json:"approval_policy_digest"`
+	// Executor 是执行器身份 `族@版本[/路由]`：创建冻结、领取按相等过滤、执行前核对。
+	Executor       string         `json:"executor"`
+	BaseRevision   Revision       `json:"base_revision"`
+	InputDigest    string         `json:"input_digest"`
+	ConfigDigest   string         `json:"config_digest"`
+	ApprovalPolicy ApprovalPolicy `json:"approval_policy"`
 }
 
 func (s ExecutionSnapshot) Validate() error {
-	if s.BaseRevision < InitialRevision || s.CreatorProfileRev < InitialRevision || s.ProjectOverlayRev < InitialRevision {
-		return fmt.Errorf("snapshot revisions cannot be negative: %w", ErrInvalid)
+	if strings.TrimSpace(s.Executor) == "" || strings.TrimSpace(s.InputDigest) == "" || strings.TrimSpace(s.ConfigDigest) == "" {
+		return fmt.Errorf("snapshot executor, input digest and config digest are required: %w", ErrInvalid)
 	}
-	required := map[string]string{
-		"execution_profile_digest": s.ExecutionProfileDigest,
-		"core_protocol_version":    s.CoreProtocolVersion,
-		"worker_profile_version":   s.WorkerProfileVersion,
-		"tool_schema_digest":       s.ToolSchemaDigest,
-		"prompt_digest":            s.PromptDigest,
-		"model_config_digest":      s.ModelConfigDigest,
-		"approval_policy_digest":   s.ApprovalPolicyDigest,
-	}
-	for name, value := range required {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("snapshot %s is required: %w", name, ErrInvalid)
-		}
+	if s.BaseRevision < InitialRevision {
+		return fmt.Errorf("snapshot base revision cannot be negative: %w", ErrInvalid)
 	}
 	switch s.ApprovalPolicy {
 	case ApprovalAuto, ApprovalMilestone, ApprovalManual, ApprovalCustom:
@@ -120,31 +156,53 @@ func (s ExecutionSnapshot) Validate() error {
 	return nil
 }
 
+// ExecutionProfileRecord 是 LLM 执行族的不可变配置：Digest 是记录自身的内容
+// 摘要（Identity），Operation 以 Snapshot.ConfigDigest 引用它。
 type ExecutionProfileRecord struct {
-	Digest           string            `json:"digest"`
-	ProjectID        string            `json:"project_id"`
-	WorkerProfile    string            `json:"worker_profile"`
-	PromptDigest     string            `json:"prompt_digest"`
-	ToolSchemaDigest string            `json:"tool_schema_digest"`
-	Snapshot         ExecutionSnapshot `json:"snapshot"`
-	StablePrefix     string            `json:"stable_prefix"`
-	DynamicTail      string            `json:"dynamic_tail"`
-	Tools            json.RawMessage   `json:"tools"`
-	Sources          json.RawMessage   `json:"sources"`
-	CreatedAt        time.Time         `json:"created_at"`
+	Digest              string          `json:"digest"`
+	ProjectID           string          `json:"project_id"`
+	WorkerProfile       string          `json:"worker_profile"`
+	CoreProtocolVersion string          `json:"core_protocol_version"`
+	ModelConfigDigest   string          `json:"model_config_digest"`
+	PromptDigest        string          `json:"prompt_digest"`
+	ToolSchemaDigest    string          `json:"tool_schema_digest"`
+	StablePrefix        string          `json:"stable_prefix"`
+	DynamicTail         string          `json:"dynamic_tail"`
+	Tools               json.RawMessage `json:"tools"`
+	Sources             json.RawMessage `json:"sources"`
+	CreatedAt           time.Time       `json:"created_at"`
+}
+
+// Identity 是记录除 Digest 与 CreatedAt 外全部字段的内容摘要。
+func (r ExecutionProfileRecord) Identity() (string, error) {
+	r.Digest, r.CreatedAt = "", time.Time{}
+	return DigestJSON(r)
 }
 
 func (r ExecutionProfileRecord) Validate() error {
-	if strings.TrimSpace(r.Digest) == "" || r.Digest != r.Snapshot.ExecutionProfileDigest ||
-		strings.TrimSpace(r.ProjectID) == "" || strings.TrimSpace(r.WorkerProfile) == "" ||
-		r.PromptDigest != r.Snapshot.PromptDigest || r.ToolSchemaDigest != r.Snapshot.ToolSchemaDigest ||
-		strings.TrimSpace(r.StablePrefix) == "" || strings.TrimSpace(r.DynamicTail) == "" || r.CreatedAt.IsZero() {
-		return fmt.Errorf("execution profile record is inconsistent: %w", ErrInvalid)
+	for name, value := range map[string]string{
+		"project": r.ProjectID, "worker profile": r.WorkerProfile, "core protocol version": r.CoreProtocolVersion,
+		"model config digest": r.ModelConfigDigest, "prompt digest": r.PromptDigest, "tool schema digest": r.ToolSchemaDigest,
+		"stable prefix": r.StablePrefix, "dynamic tail": r.DynamicTail,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("execution profile %s is required: %w", name, ErrInvalid)
+		}
 	}
 	if len(r.Tools) == 0 || !json.Valid(r.Tools) || len(r.Sources) == 0 || !json.Valid(r.Sources) {
 		return fmt.Errorf("execution profile tools and sources must be valid JSON: %w", ErrInvalid)
 	}
-	return r.Snapshot.Validate()
+	if r.CreatedAt.IsZero() {
+		return fmt.Errorf("execution profile creation time is required: %w", ErrInvalid)
+	}
+	identity, err := r.Identity()
+	if err != nil {
+		return err
+	}
+	if r.Digest != identity {
+		return fmt.Errorf("execution profile digest is not its content identity: %w", ErrInvalid)
+	}
+	return nil
 }
 
 type Operation struct {
@@ -163,6 +221,7 @@ type Operation struct {
 	Snapshot         ExecutionSnapshot `json:"execution_snapshot"`
 	Input            json.RawMessage   `json:"input"`
 	Error            string            `json:"error,omitempty"`
+	FailureCode      FailureCode       `json:"failure_code,omitempty"`
 	LeaseOwner       string            `json:"lease_owner,omitempty"`
 	LeaseUntil       *time.Time        `json:"lease_until,omitempty"`
 	CreatedAt        time.Time         `json:"created_at"`
@@ -173,12 +232,8 @@ func (o Operation) Validate() error {
 	if strings.TrimSpace(o.ID) == "" {
 		return fmt.Errorf("operation id is required: %w", ErrInvalid)
 	}
-	switch o.Kind {
-	case OperationInitializeProject, OperationDevelopPlan, OperationWriteChapter,
-		OperationRevisePlan, OperationReviseCanon, OperationRewriteChapter, OperationRewriteAffected,
-		OperationReviewRange, OperationUpdateProfile, OperationRebuildDerived:
-	default:
-		return fmt.Errorf("unknown operation kind %q: %w", o.Kind, ErrInvalid)
+	if _, err := DecodeTaskInput(o.Kind, o.Input); err != nil {
+		return err
 	}
 	if err := o.Target.Validate(); err != nil {
 		return err
@@ -202,11 +257,20 @@ func (o Operation) Validate() error {
 	if o.Attempt < 0 {
 		return fmt.Errorf("operation attempt cannot be negative: %w", ErrInvalid)
 	}
+	switch o.FailureCode {
+	case "":
+	case FailureResultUnknown:
+		if o.State != OperationFailed {
+			return fmt.Errorf("failure code %q requires the failed state: %w", o.FailureCode, ErrInvalid)
+		}
+	default:
+		return fmt.Errorf("unknown failure code %q: %w", o.FailureCode, ErrInvalid)
+	}
 	if err := o.Snapshot.Validate(); err != nil {
 		return err
 	}
-	if len(o.Input) == 0 || !json.Valid(o.Input) {
-		return fmt.Errorf("operation input must be valid JSON: %w", ErrInvalid)
+	if o.Snapshot.InputDigest != Digest(o.Input) {
+		return fmt.Errorf("snapshot input digest does not match operation input: %w", ErrInvalid)
 	}
 	if o.CreatedAt.IsZero() || o.UpdatedAt.IsZero() || o.UpdatedAt.Before(o.CreatedAt) {
 		return fmt.Errorf("operation timestamps are invalid: %w", ErrInvalid)

@@ -20,7 +20,9 @@ type Service struct {
 	changes    *change.Engine
 	prompts    *prompt.Registry
 	operations *operationengine.Engine
-	executor   operationengine.Executor
+	executors  ExecutorSet
+	// derivers 按目标种类登记推导器（D49）：小说是唯一的生产实现，测试在同包内直接赋值。
+	derivers map[domain.GoalKind]goalDeriver
 	// activity 是可选的实时活动通道（组合根注入，只依赖接口——页面设计 §4）：
 	// 易失投影，权威语义不经过它。
 	activity ActivityFeed
@@ -64,14 +66,48 @@ func New(authorityStore *store.Store) *Service {
 		store: authorityStore, changes: change.New(authorityStore),
 		prompts:    prompt.NewRegistry(authorityStore),
 		operations: operationengine.NewEngine(authorityStore),
+		derivers:   map[domain.GoalKind]goalDeriver{domain.GoalNovel: novelDeriver{}},
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
 
+// ExecutorSet is the static composition of the supported execution families.
+// Each operation freezes its executor identity; changing this set never reroutes old work.
+type ExecutorSet struct {
+	LLM      operationengine.Executor
+	External operationengine.Executor
+}
+
+func (e ExecutorSet) forFamily(family domain.ExecutorFamily) operationengine.Executor {
+	switch family {
+	case domain.ExecutorLLM:
+		return e.LLM
+	case domain.ExecutorExternal:
+		return e.External
+	}
+	return nil
+}
+
+func (e ExecutorSet) all() []operationengine.Executor {
+	var result []operationengine.Executor
+	for _, executor := range []operationengine.Executor{e.LLM, e.External} {
+		if executor != nil {
+			result = append(result, executor)
+		}
+	}
+	return result
+}
+
+// NewWithExecutor is the single LLM runtime convenience constructor.
 func NewWithExecutor(authorityStore *store.Store, executor operationengine.Executor) *Service {
+	return NewWithExecutors(authorityStore, ExecutorSet{LLM: executor})
+}
+
+func NewWithExecutors(authorityStore *store.Store, executors ExecutorSet, contracts ...operationengine.VerdictContract) *Service {
 	service := New(authorityStore)
-	service.executor = executor
-	if analyzer, ok := executor.(change.SemanticAnalyzer); ok {
+	service.operations = operationengine.NewEngine(authorityStore, contracts...)
+	service.executors = executors
+	if analyzer, ok := executors.LLM.(change.SemanticAnalyzer); ok {
 		service.changes = change.NewWithSemanticAnalyzer(authorityStore, analyzer)
 	}
 	return service
@@ -80,6 +116,7 @@ func NewWithExecutor(authorityStore *store.Store, executor operationengine.Execu
 type ProjectDraft struct {
 	Intent    domain.Intent          `json:"intent"`
 	Plan      []domain.PlanNode      `json:"plan"`
+	Entities  []domain.Entity        `json:"entities,omitempty"`
 	Canon     []domain.CanonFact     `json:"canon"`
 	Ownership []domain.OwnershipRule `json:"ownership"`
 	// Approval 是初始化事务写入权威的审批策略（§6.3）；留空表示 auto。
@@ -96,17 +133,44 @@ type CreateProjectCommand struct {
 }
 
 type ProjectSnapshot struct {
-	ID         string                     `json:"id"`
-	Revision   domain.Revision            `json:"revision"`
-	Intent     domain.Intent              `json:"intent"`
-	Plan       []domain.PlanNode          `json:"plan"`
-	Canon      []domain.CanonFact         `json:"canon"`
-	Manuscript []domain.ManuscriptChapter `json:"manuscript"`
-	Ownership  []domain.OwnershipRule     `json:"ownership"`
-	Directives []domain.Directive         `json:"directives,omitempty"`
-	Approval   domain.ApprovalPolicy      `json:"approval,omitempty"`
-	Overlay    []string                   `json:"overlay,omitempty"`
-	Assets     *domain.ProjectAssetRefs   `json:"assets,omitempty"`
+	ID       string             `json:"id"`
+	Revision domain.Revision    `json:"revision"`
+	Intent   domain.Intent      `json:"intent"`
+	Plan     []domain.PlanNode  `json:"plan"`
+	Entities []domain.Entity    `json:"entities,omitempty"`
+	Canon    []domain.CanonFact `json:"canon"`
+	// CanonRecorded 是按历史来源记录重建的最近入账版本；状态转移到后章不会抹除旧章记录。
+	CanonRecorded map[string]domain.Revision `json:"-"`
+	Manuscript    []domain.ManuscriptChapter `json:"manuscript"`
+	Ownership     []domain.OwnershipRule     `json:"ownership"`
+	Directives    []domain.Directive         `json:"directives,omitempty"`
+	Attachments   []domain.Attachment        `json:"attachments,omitempty"`
+	// Adjudications 是全部用户裁决记录（含撤回，D43）；有效性由证据层按基线判定。
+	Adjudications []domain.Adjudication    `json:"adjudications,omitempty"`
+	Approval      domain.ApprovalPolicy    `json:"approval,omitempty"`
+	Overlay       []string                 `json:"overlay,omitempty"`
+	Assets        *domain.ProjectAssetRefs `json:"assets,omitempty"`
+	// Index 是快照内每份文档的最后变化 revision 与结构依赖，供证据基线构造与失效判定（D48）。
+	Index DocumentIndex `json:"-"`
+}
+
+type DocumentIndex map[string]DocumentEntry
+
+type DocumentEntry struct {
+	Ref          domain.DocumentRef
+	Revision     domain.Revision
+	Dependencies []domain.DocumentRef
+}
+
+func (index DocumentIndex) add(document domain.DocumentVersion) error {
+	dependencies, err := domain.DocumentDependencies(document.Document, document.Content)
+	if err != nil {
+		return fmt.Errorf("index %s: %w", document.Document.Key(), err)
+	}
+	index[document.Document.Key()] = DocumentEntry{
+		Ref: document.Document, Revision: document.Revision, Dependencies: dependencies,
+	}
+	return nil
 }
 
 // ListProjects 列举作品库中的全部作品。
@@ -147,7 +211,7 @@ func (s *Service) Project(ctx context.Context, projectID string, revision domain
 			return ProjectSnapshot{}, err
 		}
 	}
-	result := ProjectSnapshot{ID: projectID, Revision: revision}
+	result := ProjectSnapshot{ID: projectID, Revision: revision, Index: DocumentIndex{}}
 	intent, err := s.store.GetDocument(ctx, target, domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}, revision)
 	if err != nil {
 		return ProjectSnapshot{}, err
@@ -155,36 +219,51 @@ func (s *Service) Project(ctx context.Context, projectID string, revision domain
 	if err := json.Unmarshal(intent.Content, &result.Intent); err != nil {
 		return ProjectSnapshot{}, fmt.Errorf("decode project intent: %w", err)
 	}
-	if result.Plan, err = loadDocuments[domain.PlanNode](ctx, s.store, target, domain.DocumentPlan, revision); err != nil {
+	if err := result.Index.add(intent); err != nil {
 		return ProjectSnapshot{}, err
 	}
-	if result.Canon, err = loadDocuments[domain.CanonFact](ctx, s.store, target, domain.DocumentCanon, revision); err != nil {
+	if result.Plan, err = loadIndexedDocuments[domain.PlanNode](ctx, s.store, target, domain.DocumentPlan, revision, result.Index); err != nil {
 		return ProjectSnapshot{}, err
 	}
-	if result.Manuscript, err = loadDocuments[domain.ManuscriptChapter](ctx, s.store, target, domain.DocumentManuscript, revision); err != nil {
+	if result.Entities, err = loadIndexedDocuments[domain.Entity](ctx, s.store, target, domain.DocumentEntity, revision, result.Index); err != nil {
 		return ProjectSnapshot{}, err
 	}
-	if result.Ownership, err = loadDocuments[domain.OwnershipRule](ctx, s.store, target, domain.DocumentOwnership, revision); err != nil {
+	if result.Canon, err = loadIndexedDocuments[domain.CanonFact](ctx, s.store, target, domain.DocumentCanon, revision, result.Index); err != nil {
 		return ProjectSnapshot{}, err
 	}
-	if result.Directives, err = loadDocuments[domain.Directive](ctx, s.store, target, domain.DocumentDirective, revision); err != nil {
+	if result.CanonRecorded, err = s.canonRecorded(ctx, target, revision); err != nil {
 		return ProjectSnapshot{}, err
 	}
-	settings, err := loadDocuments[domain.ApprovalSetting](ctx, s.store, target, domain.DocumentApproval, revision)
+	if result.Manuscript, err = loadIndexedDocuments[domain.ManuscriptChapter](ctx, s.store, target, domain.DocumentManuscript, revision, result.Index); err != nil {
+		return ProjectSnapshot{}, err
+	}
+	if result.Ownership, err = loadIndexedDocuments[domain.OwnershipRule](ctx, s.store, target, domain.DocumentOwnership, revision, result.Index); err != nil {
+		return ProjectSnapshot{}, err
+	}
+	if result.Directives, err = loadIndexedDocuments[domain.Directive](ctx, s.store, target, domain.DocumentDirective, revision, result.Index); err != nil {
+		return ProjectSnapshot{}, err
+	}
+	if result.Attachments, err = loadIndexedDocuments[domain.Attachment](ctx, s.store, target, domain.DocumentAttachment, revision, result.Index); err != nil {
+		return ProjectSnapshot{}, err
+	}
+	if result.Adjudications, err = loadIndexedDocuments[domain.Adjudication](ctx, s.store, target, domain.DocumentAdjudication, revision, result.Index); err != nil {
+		return ProjectSnapshot{}, err
+	}
+	settings, err := loadIndexedDocuments[domain.ApprovalSetting](ctx, s.store, target, domain.DocumentApproval, revision, result.Index)
 	if err != nil {
 		return ProjectSnapshot{}, err
 	}
 	if len(settings) > 0 {
 		result.Approval = settings[0].Policy
 	}
-	overlays, err := loadDocuments[domain.ProjectOverlay](ctx, s.store, target, domain.DocumentOverlay, revision)
+	overlays, err := loadIndexedDocuments[domain.ProjectOverlay](ctx, s.store, target, domain.DocumentOverlay, revision, result.Index)
 	if err != nil {
 		return ProjectSnapshot{}, err
 	}
 	if len(overlays) > 0 {
 		result.Overlay = overlays[0].Rules
 	}
-	assets, err := loadDocuments[domain.ProjectAssetRefs](ctx, s.store, target, domain.DocumentAssets, revision)
+	assets, err := loadIndexedDocuments[domain.ProjectAssetRefs](ctx, s.store, target, domain.DocumentAssets, revision, result.Index)
 	if err != nil {
 		return ProjectSnapshot{}, err
 	}
@@ -228,6 +307,11 @@ func projectDraftPatches(draft ProjectDraft) ([]domain.Patch, error) {
 			return nil, err
 		}
 	}
+	for _, entity := range draft.Entities {
+		if err := appendPut(domain.DocumentRef{Kind: domain.DocumentEntity, ID: entity.ID}, entity); err != nil {
+			return nil, err
+		}
+	}
 	for _, fact := range draft.Canon {
 		if err := appendPut(domain.DocumentRef{Kind: domain.DocumentCanon, ID: fact.ID}, fact); err != nil {
 			return nil, err
@@ -254,6 +338,18 @@ func loadDocuments[T any](
 	kind domain.DocumentKind,
 	revision domain.Revision,
 ) ([]T, error) {
+	return loadIndexedDocuments[T](ctx, authorityStore, target, kind, revision, nil)
+}
+
+// loadIndexedDocuments 解码一类文档并把版本与依赖登记进 index（nil 表示不登记）。
+func loadIndexedDocuments[T any](
+	ctx context.Context,
+	authorityStore *store.Store,
+	target domain.AuthorityTarget,
+	kind domain.DocumentKind,
+	revision domain.Revision,
+	index DocumentIndex,
+) ([]T, error) {
 	documents, err := authorityStore.ListDocuments(ctx, target, kind, revision)
 	if err != nil {
 		return nil, err
@@ -263,6 +359,11 @@ func loadDocuments[T any](
 		var value T
 		if err := json.Unmarshal(document.Content, &value); err != nil {
 			return nil, fmt.Errorf("decode %s document %q: %w", kind, document.Document.ID, err)
+		}
+		if index != nil {
+			if err := index.add(document); err != nil {
+				return nil, err
+			}
 		}
 		values = append(values, value)
 	}

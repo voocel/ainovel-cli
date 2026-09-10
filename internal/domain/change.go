@@ -16,13 +16,16 @@ type DocumentKind string
 const (
 	DocumentIntent         DocumentKind = "intent"
 	DocumentPlan           DocumentKind = "plan"
+	DocumentEntity         DocumentKind = "entity"
 	DocumentCanon          DocumentKind = "canon"
 	DocumentManuscript     DocumentKind = "manuscript"
+	DocumentAttachment     DocumentKind = "attachment"
 	DocumentOwnership      DocumentKind = "ownership"
 	DocumentApproval       DocumentKind = "approval"
 	DocumentOverlay        DocumentKind = "overlay"
 	DocumentAssets         DocumentKind = "assets"
 	DocumentDirective      DocumentKind = "directive"
+	DocumentAdjudication   DocumentKind = "adjudication"
 	DocumentCreatorProfile DocumentKind = "creator_profile"
 	DocumentPack           DocumentKind = "pack"
 )
@@ -33,12 +36,8 @@ type DocumentRef struct {
 }
 
 func (r DocumentRef) Validate() error {
-	switch r.Kind {
-	case DocumentIntent, DocumentPlan, DocumentCanon, DocumentManuscript,
-		DocumentOwnership, DocumentApproval, DocumentOverlay, DocumentAssets,
-		DocumentDirective, DocumentCreatorProfile, DocumentPack:
-	default:
-		return fmt.Errorf("unknown document kind %q: %w", r.Kind, ErrInvalid)
+	if _, err := DocumentType(r.Kind); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.ID) == "" {
 		return fmt.Errorf("document id is required: %w", ErrInvalid)

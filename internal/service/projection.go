@@ -14,17 +14,20 @@ import (
 )
 
 type ProjectProjection struct {
-	ProjectID    string                     `json:"project_id"`
-	BaseRevision domain.Revision            `json:"base_revision"`
-	Intent       domain.Intent              `json:"intent"`
-	Plan         []domain.PlanNode          `json:"plan"`
-	Canon        []domain.CanonFact         `json:"canon"`
-	Manuscript   []domain.ManuscriptChapter `json:"manuscript"`
-	Ownership    []domain.OwnershipRule     `json:"ownership"`
-	Directives   []domain.Directive         `json:"directives,omitempty"`
-	Approval     domain.ApprovalPolicy      `json:"approval,omitempty"`
-	Overlay      []string                   `json:"overlay,omitempty"`
-	Assets       *domain.ProjectAssetRefs   `json:"assets,omitempty"`
+	ProjectID    string            `json:"project_id"`
+	BaseRevision domain.Revision   `json:"base_revision"`
+	Intent       domain.Intent     `json:"intent"`
+	Plan         []domain.PlanNode `json:"plan"`
+	Entities     []domain.Entity   `json:"entities,omitempty"`
+	// 附件只携带本作品库内的不可变引用；投影不是包含媒体文件的备份包。
+	Attachments []domain.Attachment        `json:"attachments,omitempty"`
+	Canon       []domain.CanonFact         `json:"canon"`
+	Manuscript  []domain.ManuscriptChapter `json:"manuscript"`
+	Ownership   []domain.OwnershipRule     `json:"ownership"`
+	Directives  []domain.Directive         `json:"directives,omitempty"`
+	Approval    domain.ApprovalPolicy      `json:"approval,omitempty"`
+	Overlay     []string                   `json:"overlay,omitempty"`
+	Assets      *domain.ProjectAssetRefs   `json:"assets,omitempty"`
 }
 
 func (s *Service) ExportProject(ctx context.Context, projectID string, revision domain.Revision) (ProjectProjection, error) {
@@ -34,7 +37,7 @@ func (s *Service) ExportProject(ctx context.Context, projectID string, revision 
 	}
 	return ProjectProjection{
 		ProjectID: project.ID, BaseRevision: project.Revision,
-		Intent: project.Intent, Plan: project.Plan, Canon: project.Canon,
+		Intent: project.Intent, Plan: project.Plan, Entities: project.Entities, Attachments: project.Attachments, Canon: project.Canon,
 		Manuscript: project.Manuscript, Ownership: project.Ownership, Directives: project.Directives,
 		Approval: project.Approval, Overlay: project.Overlay, Assets: project.Assets,
 	}, nil
@@ -66,6 +69,9 @@ func (s *Service) ImportNewProject(
 	projection ProjectProjection,
 	createdAt time.Time,
 ) (domain.Proposal, error) {
+	if err := s.validateProjectionArtifacts(ctx, projection); err != nil {
+		return domain.Proposal{}, err
+	}
 	approval := projection.Approval
 	if approval == "" {
 		approval = domain.ApprovalAuto
@@ -94,6 +100,9 @@ func (s *Service) importProject(
 ) (domain.Proposal, error) {
 	if strings.TrimSpace(projection.ProjectID) == "" || projection.BaseRevision <= domain.InitialRevision {
 		return domain.Proposal{}, fmt.Errorf("project projection identity and base revision are required: %w", domain.ErrInvalid)
+	}
+	if err := s.validateProjectionArtifacts(ctx, projection); err != nil {
+		return domain.Proposal{}, err
 	}
 	base, err := s.Project(ctx, projection.ProjectID, projection.BaseRevision)
 	if err != nil {
@@ -156,6 +165,22 @@ func (s *Service) importProject(
 	return s.changes.Prepare(ctx, proposal)
 }
 
+func (s *Service) validateProjectionArtifacts(ctx context.Context, projection ProjectProjection) error {
+	for _, attachment := range projection.Attachments {
+		if err := attachment.Validate(); err != nil {
+			return err
+		}
+		artifact, err := s.store.GetArtifact(ctx, attachment.Artifact.ID)
+		if err != nil {
+			return fmt.Errorf("attachment %q requires artifact %q in this project library; projection import does not transfer media files: %w", attachment.ID, attachment.Artifact.ID, err)
+		}
+		if artifact.ProjectID != projection.ProjectID || artifact.Digest != attachment.Artifact.Digest {
+			return fmt.Errorf("attachment %q does not match an artifact in this project library: %w", attachment.ID, domain.ErrInvalid)
+		}
+	}
+	return nil
+}
+
 func normalizeProjectedCanon(current projectionDocument, inCurrent bool, desired projectionDocument) (projectionDocument, error) {
 	var fact domain.CanonFact
 	if err := json.Unmarshal(desired.content, &fact); err != nil {
@@ -198,7 +223,7 @@ type projectionDocument struct {
 func snapshotDocuments(project ProjectSnapshot) (map[string]projectionDocument, error) {
 	return projectionDocuments(ProjectProjection{
 		ProjectID: project.ID, BaseRevision: project.Revision,
-		Intent: project.Intent, Plan: project.Plan, Canon: project.Canon,
+		Intent: project.Intent, Plan: project.Plan, Entities: project.Entities, Attachments: project.Attachments, Canon: project.Canon,
 		Manuscript: project.Manuscript, Ownership: project.Ownership, Directives: project.Directives,
 		Approval: project.Approval, Overlay: project.Overlay, Assets: project.Assets,
 	})
@@ -222,6 +247,16 @@ func projectionDocuments(projection ProjectProjection) (map[string]projectionDoc
 	}
 	for _, node := range projection.Plan {
 		if err := add(domain.DocumentRef{Kind: domain.DocumentPlan, ID: node.ID}, node); err != nil {
+			return nil, err
+		}
+	}
+	for _, entity := range projection.Entities {
+		if err := add(domain.DocumentRef{Kind: domain.DocumentEntity, ID: entity.ID}, entity); err != nil {
+			return nil, err
+		}
+	}
+	for _, attachment := range projection.Attachments {
+		if err := add(domain.DocumentRef{Kind: domain.DocumentAttachment, ID: attachment.ID}, attachment); err != nil {
 			return nil, err
 		}
 	}

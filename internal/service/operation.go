@@ -18,18 +18,21 @@ import (
 )
 
 type StartOperationCommand struct {
-	OperationID         string
-	ProjectID           string
-	Kind                domain.OperationKind
+	OperationID string
+	ProjectID   string
+	Kind        domain.OperationKind
+	Priority    int
+	DependsOn   []string
+	Input       json.RawMessage
+	// LLM 执行族的编译输入：Worker、资产引用、协议版本与模型配置摘要。
 	WorkerProfileID     string
-	Priority            int
-	DependsOn           []string
-	Input               json.RawMessage
 	Packs               []PackRef
 	CreatorProfiles     []CreatorProfileRef
 	CoreProtocolVersion string
 	ModelConfigDigest   string
-	ApprovalPolicy      domain.ApprovalPolicy
+	// ConfigDigest 是外部执行族的自身配置摘要，冻结进快照（D45）。
+	ConfigDigest   string
+	ApprovalPolicy domain.ApprovalPolicy
 	// RunID 非空时 Operation 归属该 CreationRun（§6.3）：血统事件与策略版本
 	// 由存储层在创建事务内一并落盘。
 	RunID     string
@@ -38,6 +41,7 @@ type StartOperationCommand struct {
 
 type RestartOperationCommand struct {
 	FromOperationID     string
+	ConfigDigest        string
 	OperationID         string
 	WorkerProfileID     string
 	Packs               []PackRef
@@ -51,24 +55,77 @@ type RestartOperationCommand struct {
 	CreatedAt time.Time
 }
 
+// StartOperation 冻结执行快照并入队（D45）：按种类的执行族取身份与配置——
+// LLM 族编译 Execution Profile，外部族透传自身配置摘要并绑定已装配的执行器。
 func (s *Service) StartOperation(ctx context.Context, command StartOperationCommand) (domain.Operation, error) {
-	compiled, err := s.compileExecutionProfile(ctx, executionProfileCommand{
-		ProjectID: command.ProjectID, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
-		Input: command.Input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
-		CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest,
-		ApprovalPolicy: command.ApprovalPolicy, CreatedAt: command.CreatedAt,
-	})
+	spec, err := domain.KindSpec(command.Kind)
 	if err != nil {
 		return domain.Operation{}, err
 	}
+	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: command.ProjectID}
+	revision, err := s.store.CurrentRevision(ctx, target)
+	if err != nil {
+		return domain.Operation{}, err
+	}
+	policy, err := s.resolveApprovalPolicy(ctx, target, revision, command.ApprovalPolicy)
+	if err != nil {
+		return domain.Operation{}, err
+	}
+	snapshot := domain.ExecutionSnapshot{
+		BaseRevision: revision, InputDigest: domain.Digest(command.Input), ApprovalPolicy: policy,
+	}
+	switch spec.Executor {
+	case domain.ExecutorLLM:
+		compiled, err := s.compileExecutionProfile(ctx, executionProfileCommand{
+			ProjectID: command.ProjectID, Revision: revision, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
+			Input: command.Input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
+			CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest,
+			CreatedAt: command.CreatedAt,
+		})
+		if err != nil {
+			return domain.Operation{}, err
+		}
+		snapshot.Executor, snapshot.ConfigDigest = prompt.ExecutorIdentity(compiled.ModelConfigDigest), compiled.ProfileDigest
+	case domain.ExecutorExternal:
+		if s.executors.External == nil || strings.TrimSpace(command.ConfigDigest) == "" {
+			return domain.Operation{}, fmt.Errorf("%s requires a configured executor and its config digest: %w", command.Kind, domain.ErrInvalid)
+		}
+		snapshot.Executor, snapshot.ConfigDigest = s.executors.External.Identity(), command.ConfigDigest
+	}
 	return s.store.CreateOperation(ctx, domain.Operation{
-		ID: command.OperationID, Kind: command.Kind,
-		Target:    domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: command.ProjectID},
+		ID: command.OperationID, Kind: command.Kind, Target: target,
 		DependsOn: command.DependsOn, Priority: command.Priority, State: domain.OperationQueued,
 		RunID:    command.RunID,
-		Snapshot: compiled.Snapshot, Input: append(json.RawMessage(nil), command.Input...),
+		Snapshot: snapshot, Input: append(json.RawMessage(nil), command.Input...),
 		CreatedAt: command.CreatedAt, UpdatedAt: command.CreatedAt,
 	})
+}
+
+// resolveApprovalPolicy 解析启动时刻的审批策略：未显式指定时取当前 Revision 的
+// 权威设置（§6.3），快照记录它作为历史最低约束；custom 需要显式契约。
+func (s *Service) resolveApprovalPolicy(
+	ctx context.Context,
+	target domain.AuthorityTarget,
+	revision domain.Revision,
+	requested domain.ApprovalPolicy,
+) (domain.ApprovalPolicy, error) {
+	policy := requested
+	if policy == "" {
+		policy = domain.ApprovalAuto
+		if revision > domain.InitialRevision {
+			settings, err := loadDocuments[domain.ApprovalSetting](ctx, s.store, target, domain.DocumentApproval, revision)
+			if err != nil {
+				return "", err
+			}
+			if len(settings) > 0 {
+				policy = settings[0].Policy
+			}
+		}
+	}
+	if policy == domain.ApprovalCustom {
+		return "", fmt.Errorf("custom approval policy requires a policy contract, which this command did not provide: %w", domain.ErrInvalid)
+	}
+	return policy, nil
 }
 
 func (s *Service) RestartOperation(ctx context.Context, command RestartOperationCommand) (domain.Operation, error) {
@@ -98,55 +155,67 @@ func (s *Service) RestartOperation(ctx context.Context, command RestartOperation
 			previous.ID, domain.ErrInvalid,
 		)
 	}
-	workerProfileID := command.WorkerProfileID
-	if workerProfileID == "" {
-		separator := strings.LastIndex(previous.Snapshot.WorkerProfileVersion, "@")
-		if separator <= 0 {
-			return domain.Operation{}, fmt.Errorf("previous worker profile %q is invalid: %w", previous.Snapshot.WorkerProfileVersion, domain.ErrInvalid)
-		}
-		workerProfileID = previous.Snapshot.WorkerProfileVersion[:separator]
-	}
-	coreVersion := command.CoreProtocolVersion
-	if coreVersion == "" {
-		coreVersion = previous.Snapshot.CoreProtocolVersion
-	}
-	modelDigest := command.ModelConfigDigest
-	if modelDigest == "" {
-		if s.executor == nil {
-			modelDigest = previous.Snapshot.ModelConfigDigest
-		} else {
-			modelDigest = s.executor.ModelConfigDigest()
-		}
-	}
 	approval := command.ApprovalPolicy
 	if approval == "" {
 		approval = previous.Snapshot.ApprovalPolicy
 	}
-	packs, profiles := command.Packs, command.CreatorProfiles
-	if packs == nil || profiles == nil {
-		oldSources, err := s.prompts.Sources(ctx, previous.Snapshot.ExecutionProfileDigest)
+	successor := StartOperationCommand{
+		OperationID: command.OperationID, ProjectID: previous.Target.ID, Kind: previous.Kind,
+		Priority: previous.Priority, DependsOn: previous.DependsOn,
+		Input: append(json.RawMessage(nil), previous.Input...), ApprovalPolicy: approval,
+		RunID: runID, CreatedAt: command.CreatedAt,
+	}
+	if len(command.Input) != 0 {
+		successor.Input = append(json.RawMessage(nil), command.Input...)
+	}
+	spec, err := domain.KindSpec(previous.Kind)
+	if err != nil {
+		return domain.Operation{}, err
+	}
+	switch spec.Executor {
+	case domain.ExecutorLLM:
+		// 沿用前任冻结的 Execution Profile 作为默认编译输入；资产引用按记录的
+		// 来源恢复，显式传入的才替换。
+		compiled, err := s.prompts.Load(ctx, previous.Snapshot.ConfigDigest)
 		if err != nil {
 			return domain.Operation{}, err
 		}
-		if packs == nil {
-			packs, err = packRefsFromSources(oldSources)
-			if err != nil {
-				return domain.Operation{}, err
-			}
+		successor.WorkerProfileID = prompt.WorkerID(compiled.WorkerProfile)
+		successor.CoreProtocolVersion, successor.ModelConfigDigest = compiled.CoreProtocolVersion, compiled.ModelConfigDigest
+		if s.executors.LLM != nil {
+			successor.ModelConfigDigest = ""
 		}
-		if profiles == nil {
-			profiles, err = creatorProfileRefsFromSources(oldSources)
-			if err != nil {
-				return domain.Operation{}, err
-			}
+		successor.Packs, err = packRefsFromSources(compiled.Sources)
+		if err != nil {
+			return domain.Operation{}, err
 		}
-	}
-	input := previous.Input
-	if len(command.Input) != 0 {
-		input = command.Input
+		successor.CreatorProfiles, err = creatorProfileRefsFromSources(compiled.Sources)
+		if err != nil {
+			return domain.Operation{}, err
+		}
+		if command.WorkerProfileID != "" {
+			successor.WorkerProfileID = command.WorkerProfileID
+		}
+		if command.CoreProtocolVersion != "" {
+			successor.CoreProtocolVersion = command.CoreProtocolVersion
+		}
+		if command.ModelConfigDigest != "" {
+			successor.ModelConfigDigest = command.ModelConfigDigest
+		}
+		if command.Packs != nil {
+			successor.Packs = command.Packs
+		}
+		if command.CreatorProfiles != nil {
+			successor.CreatorProfiles = command.CreatorProfiles
+		}
+	case domain.ExecutorExternal:
+		successor.ConfigDigest = previous.Snapshot.ConfigDigest
+		if command.ConfigDigest != "" {
+			successor.ConfigDigest = command.ConfigDigest
+		}
 	}
 	if existing, err := s.store.GetOperation(ctx, command.OperationID); err == nil {
-		if err := validateRestartTarget(existing, previous, input, workerProfileID, coreVersion, modelDigest, approval, runID); err != nil {
+		if err := s.validateRestartTarget(ctx, existing, previous, successor); err != nil {
 			return domain.Operation{}, err
 		}
 		if err := s.store.CopyWorkspaceArtifacts(ctx, previous.ID, existing.ID, command.CreatedAt); err != nil {
@@ -156,13 +225,7 @@ func (s *Service) RestartOperation(ctx context.Context, command RestartOperation
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return domain.Operation{}, err
 	}
-	restarted, err := s.StartOperation(ctx, StartOperationCommand{
-		OperationID: command.OperationID, ProjectID: previous.Target.ID, Kind: previous.Kind,
-		WorkerProfileID: workerProfileID, Priority: previous.Priority, DependsOn: previous.DependsOn,
-		Input: append(json.RawMessage(nil), input...), Packs: packs, CreatorProfiles: profiles,
-		CoreProtocolVersion: coreVersion, ModelConfigDigest: modelDigest,
-		ApprovalPolicy: approval, RunID: runID, CreatedAt: command.CreatedAt,
-	})
+	restarted, err := s.StartOperation(ctx, successor)
 	if err != nil {
 		return domain.Operation{}, err
 	}
@@ -172,21 +235,31 @@ func (s *Service) RestartOperation(ctx context.Context, command RestartOperation
 	return restarted, nil
 }
 
-func validateRestartTarget(
+// validateRestartTarget 校验同 ID 的既有 Operation 就是本次重启请求（幂等）。
+func (s *Service) validateRestartTarget(
+	ctx context.Context,
 	existing, previous domain.Operation,
-	input json.RawMessage,
-	workerProfileID, coreVersion, modelDigest string,
-	approval domain.ApprovalPolicy,
-	runID string,
+	successor StartOperationCommand,
 ) error {
-	workerVersion := existing.Snapshot.WorkerProfileVersion
-	separator := strings.LastIndex(workerVersion, "@")
 	if existing.State != domain.OperationQueued || existing.Target != previous.Target || existing.Kind != previous.Kind ||
-		existing.Priority != previous.Priority || !bytes.Equal(existing.Input, input) ||
-		separator <= 0 || workerVersion[:separator] != workerProfileID ||
-		existing.Snapshot.CoreProtocolVersion != coreVersion || existing.Snapshot.ApprovalPolicy != approval ||
-		(modelDigest != "" && existing.Snapshot.ModelConfigDigest != modelDigest) ||
-		existing.RunID != runID || !slices.Equal(existing.DependsOn, previous.DependsOn) {
+		existing.Priority != previous.Priority || !bytes.Equal(existing.Input, successor.Input) ||
+		existing.Snapshot.ApprovalPolicy != successor.ApprovalPolicy ||
+		existing.RunID != successor.RunID || !slices.Equal(existing.DependsOn, previous.DependsOn) {
+		return fmt.Errorf("operation %q is not the requested restart target: %w", existing.ID, store.ErrIdempotencyConflict)
+	}
+	if successor.ConfigDigest != "" {
+		if existing.Snapshot.ConfigDigest != successor.ConfigDigest {
+			return fmt.Errorf("operation %q is not the requested restart target: %w", existing.ID, store.ErrIdempotencyConflict)
+		}
+		return nil
+	}
+	compiled, err := s.prompts.Load(ctx, existing.Snapshot.ConfigDigest)
+	if err != nil {
+		return err
+	}
+	if prompt.WorkerID(compiled.WorkerProfile) != successor.WorkerProfileID ||
+		compiled.CoreProtocolVersion != successor.CoreProtocolVersion ||
+		(successor.ModelConfigDigest != "" && compiled.ModelConfigDigest != successor.ModelConfigDigest) {
 		return fmt.Errorf("operation %q is not the requested restart target: %w", existing.ID, store.ErrIdempotencyConflict)
 	}
 	return nil
@@ -226,6 +299,7 @@ func creatorProfileRefsFromSources(sources []prompt.Source) ([]CreatorProfileRef
 
 type executionProfileCommand struct {
 	ProjectID           string
+	Revision            domain.Revision
 	Kind                domain.OperationKind
 	WorkerProfileID     string
 	Input               json.RawMessage
@@ -233,14 +307,14 @@ type executionProfileCommand struct {
 	CreatorProfiles     []CreatorProfileRef
 	CoreProtocolVersion string
 	ModelConfigDigest   string
-	ApprovalPolicy      domain.ApprovalPolicy
 	CreatedAt           time.Time
 }
 
 func (s *Service) compileExecutionProfile(ctx context.Context, command executionProfileCommand) (prompt.Compiled, error) {
+	// 模型配置摘要以已装配的 LLM Runtime 为准（可选接口，同 SemanticAnalyzer 的断言模式）。
 	modelConfigDigest := command.ModelConfigDigest
-	if s.executor != nil {
-		runtimeDigest := s.executor.ModelConfigDigest()
+	if runtime, ok := s.executors.LLM.(interface{ ModelConfigDigest() string }); ok {
+		runtimeDigest := runtime.ModelConfigDigest()
 		if modelConfigDigest == "" {
 			modelConfigDigest = runtimeDigest
 		} else if modelConfigDigest != runtimeDigest {
@@ -251,28 +325,7 @@ func (s *Service) compileExecutionProfile(ctx context.Context, command execution
 		return prompt.Compiled{}, fmt.Errorf("model config digest is required: %w", domain.ErrInvalid)
 	}
 	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: command.ProjectID}
-	revision, err := s.store.CurrentRevision(ctx, target)
-	if err != nil {
-		return prompt.Compiled{}, err
-	}
-	// 审批策略权威在 Project 文档（§6.3）：未显式指定时从当前 Revision 解析，
-	// 快照记录启动时刻的策略作为历史最低约束。
-	approvalPolicy := command.ApprovalPolicy
-	if approvalPolicy == "" {
-		approvalPolicy = domain.ApprovalAuto
-		if revision > domain.InitialRevision {
-			settings, err := loadDocuments[domain.ApprovalSetting](ctx, s.store, target, domain.DocumentApproval, revision)
-			if err != nil {
-				return prompt.Compiled{}, err
-			}
-			if len(settings) > 0 {
-				approvalPolicy = settings[0].Policy
-			}
-		}
-	}
-	if approvalPolicy == domain.ApprovalCustom {
-		return prompt.Compiled{}, fmt.Errorf("custom approval policy requires a policy contract, which this command did not provide: %w", domain.ErrInvalid)
-	}
+	revision := command.Revision
 	contextKey, err := derive.ContextKey(command.Kind, command.Input)
 	if err != nil {
 		return prompt.Compiled{}, err
@@ -303,8 +356,8 @@ func (s *Service) compileExecutionProfile(ctx context.Context, command execution
 		intent, ownership = project.Intent, project.Ownership
 		contextValue, err := derive.BuildStoryContext(derive.ProjectContent{
 			ID: project.ID, Revision: project.Revision, Intent: project.Intent,
-			Plan: project.Plan, Canon: project.Canon, Manuscript: project.Manuscript,
-			Ownership: project.Ownership,
+			Plan: project.Plan, Entities: project.Entities, Canon: project.Canon,
+			Manuscript: project.Manuscript, Ownership: project.Ownership,
 		}, command.Kind, command.Input)
 		if err != nil {
 			return prompt.Compiled{}, err
@@ -384,14 +437,17 @@ func (s *Service) compileExecutionProfile(ctx context.Context, command execution
 		}
 		creatorProfiles[i] = profile
 	}
+	task, err := promptTask(command.Input)
+	if err != nil {
+		return prompt.Compiled{}, err
+	}
 	return s.prompts.Reload(ctx, prompt.CompileRequest{
 		ProjectID: command.ProjectID, CoreProtocolVersion: command.CoreProtocolVersion,
 		Worker: worker, Packs: packs, CreatorProfiles: creatorProfiles,
 		Intent: intent, Ownership: ownership, OverlayRules: overlayRules,
-		StoryContext: storyContext, Task: command.Input,
+		StoryContext: storyContext, Task: task,
 		BaseRevision: revision, ProjectOverlayRevision: revision,
-		ModelConfigDigest: modelConfigDigest, ApprovalPolicy: approvalPolicy,
-		ApprovalPolicyDigest: domain.Digest([]byte(approvalPolicy)),
+		ModelConfigDigest: modelConfigDigest,
 	}, command.CreatedAt)
 }
 
@@ -401,10 +457,7 @@ func (s *Service) RunNextOperation(
 	leaseDuration time.Duration,
 	now time.Time,
 ) (operationengine.RunResult, error) {
-	if s.executor == nil {
-		return operationengine.RunResult{}, fmt.Errorf("operation executor is not configured: %w", domain.ErrInvalid)
-	}
-	return s.operations.RunNext(ctx, s.executor, workerID, leaseDuration, now)
+	return s.operations.RunNextWithExecutors(ctx, s.executors.all(), workerID, leaseDuration, now)
 }
 
 func (s *Service) RunOperation(
@@ -413,10 +466,16 @@ func (s *Service) RunOperation(
 	leaseDuration time.Duration,
 	now time.Time,
 ) (operationengine.RunResult, error) {
-	if s.executor == nil {
-		return operationengine.RunResult{}, fmt.Errorf("operation executor is not configured: %w", domain.ErrInvalid)
+	operation, err := s.store.GetOperation(ctx, operationID)
+	if err != nil {
+		return operationengine.RunResult{}, err
 	}
-	return s.operations.Run(ctx, s.executor, operationID, workerID, leaseDuration, now)
+	for _, executor := range s.executors.all() {
+		if executor.Identity() == operation.Snapshot.Executor {
+			return s.operations.Run(ctx, executor, operationID, workerID, leaseDuration, now)
+		}
+	}
+	return operationengine.RunResult{}, fmt.Errorf("executor %q is not configured: %w", operation.Snapshot.Executor, domain.ErrInvalid)
 }
 
 func (s *Service) PauseOperation(ctx context.Context, id string, at time.Time) (domain.Operation, error) {
@@ -547,4 +606,14 @@ func (s *Service) OperationToolIssues(ctx context.Context, id string) ([]ToolIss
 		})
 	}
 	return issues, nil
+}
+
+// promptTask 去掉任务输入里的证据基线：基线是内核判定有效性的依据，不是给模型的指令。
+func promptTask(input json.RawMessage) (json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return nil, fmt.Errorf("decode task input: %w", err)
+	}
+	delete(fields, domain.BasisField)
+	return json.Marshal(fields)
 }

@@ -100,6 +100,36 @@ const (
 	CanonForeshadow   CanonFactKind = "foreshadow"
 )
 
+// Entity 是独立权威节点（D35）：角色、地点、物品、组织。Canon 事实的主体引用
+// 实体 ID，实体缺失即结构冲突；实体本身不承载事实。
+type EntityKind string
+
+const (
+	EntityCharacter    EntityKind = "character"
+	EntityLocation     EntityKind = "location"
+	EntityItem         EntityKind = "item"
+	EntityOrganization EntityKind = "organization"
+)
+
+type Entity struct {
+	ID      string     `json:"id"`
+	Kind    EntityKind `json:"kind"`
+	Name    string     `json:"name"`
+	Aliases []string   `json:"aliases,omitempty"`
+}
+
+func (v Entity) Validate() error {
+	if strings.TrimSpace(v.ID) == "" || strings.TrimSpace(v.Name) == "" {
+		return fmt.Errorf("entity id and name are required: %w", ErrInvalid)
+	}
+	switch v.Kind {
+	case EntityCharacter, EntityLocation, EntityItem, EntityOrganization:
+	default:
+		return fmt.Errorf("unknown entity kind %q: %w", v.Kind, ErrInvalid)
+	}
+	return validateDistinctStrings("entity aliases", v.Aliases)
+}
+
 type CanonFact struct {
 	ID              string          `json:"id"`
 	Kind            CanonFactKind   `json:"kind"`
@@ -108,8 +138,21 @@ type CanonFact struct {
 	PreviousValue   json.RawMessage `json:"old_value,omitempty"`
 	Value           json.RawMessage `json:"new_value"`
 	SourceChapterID string          `json:"source_chapter_id,omitempty"`
-	DependsOn       []DocumentRef   `json:"depends_on,omitempty"`
+	// EffectiveChapterID 是状态类事实在故事中的生效章节（D41）：插叙、回忆才与来源章
+	// 不同，缺省即来源章；事件按来源章只追加，不用它。
+	EffectiveChapterID string        `json:"effective_chapter_id,omitempty"`
+	DependsOn          []DocumentRef `json:"depends_on,omitempty"`
 }
+
+// EffectiveChapter 是事实在故事中的生效章节，缺省为来源章；两者都空表示规划期事实。
+func (v CanonFact) EffectiveChapter() string {
+	if v.EffectiveChapterID != "" {
+		return v.EffectiveChapterID
+	}
+	return v.SourceChapterID
+}
+
+func (v CanonFact) IsEvent() bool { return v.Kind == CanonEvent }
 
 func (v CanonFact) Validate() error {
 	if strings.TrimSpace(v.ID) == "" || strings.TrimSpace(v.SubjectID) == "" || strings.TrimSpace(v.Predicate) == "" {
@@ -139,8 +182,10 @@ func (v CanonFact) Validate() error {
 	if len(v.Value) == 0 || !json.Valid(v.Value) {
 		return fmt.Errorf("canon new_value must be valid JSON: %w", ErrInvalid)
 	}
-	if v.SourceChapterID != "" && strings.TrimSpace(v.SourceChapterID) == "" {
-		return fmt.Errorf("canon source_chapter_id cannot be blank: %w", ErrInvalid)
+	for _, id := range []string{v.SourceChapterID, v.EffectiveChapterID} {
+		if id != "" && strings.TrimSpace(id) == "" {
+			return fmt.Errorf("canon chapter references cannot be blank: %w", ErrInvalid)
+		}
 	}
 	return validateDocumentRefs(v.DependsOn)
 }
@@ -168,11 +213,14 @@ type ManuscriptBlock struct {
 	Text string `json:"text"`
 }
 
+// ManuscriptChapter 记录章级作者（D34）：用户写的章默认锁定，AI 不得冒认用户
+// 身份；DependsOn 是故事依赖（D40），由宿主在提交时按本章 Canon Delta 的实体写入。
 type ManuscriptChapter struct {
 	ID         string            `json:"id"`
 	PlanNodeID string            `json:"plan_node_id"`
 	Number     int               `json:"number"`
 	Title      string            `json:"title"`
+	Author     AuthorKind        `json:"author"`
 	Blocks     []ManuscriptBlock `json:"blocks"`
 	DependsOn  []DocumentRef     `json:"depends_on,omitempty"`
 }
@@ -180,6 +228,11 @@ type ManuscriptChapter struct {
 func (v ManuscriptChapter) Validate() error {
 	if strings.TrimSpace(v.ID) == "" || strings.TrimSpace(v.PlanNodeID) == "" {
 		return fmt.Errorf("chapter id and plan_node_id are required: %w", ErrInvalid)
+	}
+	switch v.Author {
+	case AuthorUser, AuthorAI, AuthorExtension:
+	default:
+		return fmt.Errorf("chapter author must be user, ai or extension, got %q: %w", v.Author, ErrInvalid)
 	}
 	if v.Number <= 0 || strings.TrimSpace(v.Title) == "" || len(v.Blocks) == 0 {
 		return fmt.Errorf("chapter number, title and blocks are required: %w", ErrInvalid)
@@ -349,21 +402,55 @@ func ValidatePlanChapterTarget(base []PlanNode, patches []Patch, expected int) e
 }
 
 // PlanChapterTargetForOperation 解析滚动规划 Operation 请求的章节数；
-// 非规划类或未声明数量的 Operation 不受数量不变量约束（ok=false）。
+// 非规划类 Operation 不受数量不变量约束（ok=false）。
 func PlanChapterTargetForOperation(operation Operation) (int, bool, error) {
-	if operation.Kind != OperationDevelopPlan && operation.Kind != OperationRevisePlan {
+	switch operation.Kind {
+	case OperationDevelopPlan:
+		input, err := TaskInputAs[DevelopPlanInput](operation)
+		return input.RequestedChapters, err == nil, err
+	case OperationRevisePlan:
+		input, err := TaskInputAs[RevisePlanInput](operation)
+		return input.RequestedChapters, err == nil, err
+	default:
 		return 0, false, nil
 	}
-	var input struct {
-		RequestedChapters int `json:"requested_chapters"`
+}
+
+// BindChapterDependencies 由宿主写入章节的故事依赖（D40）：本章 Canon Delta 的
+// 主体实体。模型自行声明的 depends_on 被覆盖，依赖只来自可验证的提交内容。
+func BindChapterDependencies(patches []Patch) ([]Patch, error) {
+	subjects := make(map[string][]DocumentRef)
+	for _, patch := range patches {
+		if patch.Document.Kind != DocumentCanon || patch.Operation != PatchPut {
+			continue
+		}
+		var fact CanonFact
+		if err := DecodeStrict(patch.Content, &fact); err != nil {
+			return nil, fmt.Errorf("decode canon delta %q: %w", patch.Document.ID, err)
+		}
+		if fact.SourceChapterID != "" {
+			subjects[fact.SourceChapterID] = append(subjects[fact.SourceChapterID], DocumentRef{Kind: DocumentEntity, ID: fact.SubjectID})
+		}
 	}
-	if err := json.Unmarshal(operation.Input, &input); err != nil {
-		return 0, false, fmt.Errorf("decode plan operation input: %w", err)
+	bound := slices.Clone(patches)
+	for i, patch := range bound {
+		if patch.Document.Kind != DocumentManuscript || patch.Operation != PatchPut {
+			continue
+		}
+		var chapter ManuscriptChapter
+		if err := DecodeStrict(patch.Content, &chapter); err != nil {
+			return nil, fmt.Errorf("decode chapter %q: %w", patch.Document.ID, err)
+		}
+		dependencies := subjects[chapter.ID]
+		slices.SortFunc(dependencies, func(a, b DocumentRef) int { return strings.Compare(a.Key(), b.Key()) })
+		chapter.DependsOn = slices.CompactFunc(dependencies, func(a, b DocumentRef) bool { return a.Key() == b.Key() })
+		content, err := json.Marshal(chapter)
+		if err != nil {
+			return nil, fmt.Errorf("encode chapter %q: %w", patch.Document.ID, err)
+		}
+		bound[i].Content = content
 	}
-	if input.RequestedChapters == 0 {
-		return 0, false, nil
-	}
-	return input.RequestedChapters, true, nil
+	return bound, nil
 }
 
 type CreatorProfile struct {
@@ -512,158 +599,6 @@ func (v PackManifest) Validate() error {
 		}
 	}
 	return nil
-}
-
-func ValidateDocumentContent(ref DocumentRef, content json.RawMessage) error {
-	if err := ref.Validate(); err != nil {
-		return err
-	}
-	switch ref.Kind {
-	case DocumentIntent:
-		value, err := decodeStrict[Intent](content)
-		if err != nil {
-			return fmt.Errorf("decode intent: %w", err)
-		}
-		return value.Validate()
-	case DocumentPlan:
-		value, err := decodeStrict[PlanNode](content)
-		if err != nil {
-			return fmt.Errorf("decode plan node: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("plan node id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentCanon:
-		value, err := decodeStrict[CanonFact](content)
-		if err != nil {
-			return fmt.Errorf("decode canon fact: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("canon fact id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentManuscript:
-		value, err := decodeStrict[ManuscriptChapter](content)
-		if err != nil {
-			return fmt.Errorf("decode manuscript: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("chapter id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentOwnership:
-		value, err := decodeStrict[OwnershipRule](content)
-		if err != nil {
-			return fmt.Errorf("decode ownership: %w", err)
-		}
-		if value.Target.Key() != ref.ID {
-			return fmt.Errorf("ownership target %q does not match document id %q: %w", value.Target.Key(), ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentApproval:
-		value, err := decodeStrict[ApprovalSetting](content)
-		if err != nil {
-			return fmt.Errorf("decode approval setting: %w", err)
-		}
-		if ref.ID != "root" {
-			return fmt.Errorf("approval document id must be root: %w", ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentOverlay:
-		value, err := decodeStrict[ProjectOverlay](content)
-		if err != nil {
-			return fmt.Errorf("decode project overlay: %w", err)
-		}
-		if ref.ID != "root" {
-			return fmt.Errorf("overlay document id must be root: %w", ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentAssets:
-		value, err := decodeStrict[ProjectAssetRefs](content)
-		if err != nil {
-			return fmt.Errorf("decode project asset refs: %w", err)
-		}
-		if ref.ID != "root" {
-			return fmt.Errorf("assets document id must be root: %w", ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentDirective:
-		value, err := decodeStrict[Directive](content)
-		if err != nil {
-			return fmt.Errorf("decode directive: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("directive id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentCreatorProfile:
-		value, err := decodeStrict[CreatorProfile](content)
-		if err != nil {
-			return fmt.Errorf("decode creator profile: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("profile id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	case DocumentPack:
-		value, err := decodeStrict[PackManifest](content)
-		if err != nil {
-			return fmt.Errorf("decode pack manifest: %w", err)
-		}
-		if value.ID != ref.ID {
-			return fmt.Errorf("pack id %q does not match document id %q: %w", value.ID, ref.ID, ErrInvalid)
-		}
-		return value.Validate()
-	default:
-		return fmt.Errorf("unsupported document kind %q: %w", ref.Kind, ErrInvalid)
-	}
-}
-
-func DocumentDependencies(ref DocumentRef, content json.RawMessage) ([]DocumentRef, error) {
-	if err := ValidateDocumentContent(ref, content); err != nil {
-		return nil, err
-	}
-	var dependencies []DocumentRef
-	switch ref.Kind {
-	case DocumentPlan:
-		value, err := decodeStrict[PlanNode](content)
-		if err != nil {
-			return nil, err
-		}
-		dependencies = append(dependencies, value.DependsOn...)
-		if value.ParentID != "" {
-			dependencies = append(dependencies, DocumentRef{Kind: DocumentPlan, ID: value.ParentID})
-		}
-	case DocumentCanon:
-		value, err := decodeStrict[CanonFact](content)
-		if err != nil {
-			return nil, err
-		}
-		dependencies = append(dependencies, value.DependsOn...)
-	case DocumentManuscript:
-		value, err := decodeStrict[ManuscriptChapter](content)
-		if err != nil {
-			return nil, err
-		}
-		dependencies = append(dependencies, value.DependsOn...)
-		dependencies = append(dependencies, DocumentRef{Kind: DocumentPlan, ID: value.PlanNodeID})
-	case DocumentOwnership:
-		value, err := decodeStrict[OwnershipRule](content)
-		if err != nil {
-			return nil, err
-		}
-		dependencies = append(dependencies, value.Target)
-	}
-	slices.SortFunc(dependencies, func(a, b DocumentRef) int { return strings.Compare(a.Key(), b.Key()) })
-	dependencies = slices.CompactFunc(dependencies, func(a, b DocumentRef) bool { return a.Key() == b.Key() })
-	return dependencies, nil
-}
-
-func decodeStrict[T any](content json.RawMessage) (T, error) {
-	var value T
-	err := DecodeStrict(content, &value)
-	return value, err
 }
 
 func validateDocumentRefs(refs []DocumentRef) error {

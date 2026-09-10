@@ -83,7 +83,7 @@ func (s *Store) CreateCreationRun(ctx context.Context, run domain.CreationRun) (
 			if err != nil {
 				return domain.CreationRun{}, err
 			}
-			if stored.ID != run.ID || stored.ProjectID != run.ProjectID || stored.Goal != run.Goal ||
+			if stored.ID != run.ID || stored.ProjectID != run.ProjectID || !stored.Goal.Equal(run.Goal) ||
 				stored.Strategy != run.Strategy || stored.Preset != run.Preset {
 				return domain.CreationRun{}, fmt.Errorf("creation run %q: %w", run.ID, ErrIdempotencyConflict)
 			}

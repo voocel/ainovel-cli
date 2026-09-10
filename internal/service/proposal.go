@@ -76,7 +76,7 @@ func (s *Service) ResolveProposal(ctx context.Context, command ResolveProposalCo
 		result.Proposal = &rejected
 		return result, nil
 	}
-	if strategy == change.ResolutionRewriteAffected && command.ModelConfigDigest == "" && s.executor == nil {
+	if strategy == change.ResolutionRewriteAffected && command.ModelConfigDigest == "" && s.executors.LLM == nil {
 		return ResolveProposalResult{}, fmt.Errorf("affected rewrite requires a configured runtime or model config digest: %w", domain.ErrInvalid)
 	}
 	if strategy == change.ResolutionRewriteAffected && strings.TrimSpace(command.RunID) == "" {
@@ -119,12 +119,7 @@ func (s *Service) ResolveProposal(ctx context.Context, command ResolveProposalCo
 	if coreVersion == "" {
 		coreVersion = "core-v1"
 	}
-	input, err := json.Marshal(struct {
-		ChapterIDs           []string        `json:"chapter_ids"`
-		BaseRevision         domain.Revision `json:"base_revision"`
-		ResolutionProposalID string          `json:"resolution_proposal_id"`
-		Reason               string          `json:"reason"`
-	}{
+	input, err := json.Marshal(domain.RewriteAffectedInput{
 		ChapterIDs: option.ChapterIDs, BaseRevision: committed.NewRevision,
 		ResolutionProposalID: proposal.ID, Reason: option.Explanation,
 	})
@@ -157,13 +152,8 @@ func validateResolutionOperation(
 		operation.RunID != runID {
 		return fmt.Errorf("operation %q is not the requested semantic resolution: %w", operation.ID, store.ErrIdempotencyConflict)
 	}
-	var input struct {
-		ChapterIDs           []string        `json:"chapter_ids"`
-		BaseRevision         domain.Revision `json:"base_revision"`
-		ResolutionProposalID string          `json:"resolution_proposal_id"`
-		Reason               string          `json:"reason"`
-	}
-	if err := json.Unmarshal(operation.Input, &input); err != nil || input.ResolutionProposalID != proposalID ||
+	input, err := domain.TaskInputAs[domain.RewriteAffectedInput](operation)
+	if err != nil || input.ResolutionProposalID != proposalID ||
 		input.BaseRevision != baseRevision || !slices.Equal(input.ChapterIDs, chapterIDs) {
 		return fmt.Errorf("operation %q is not the requested semantic resolution: %w", operation.ID, store.ErrIdempotencyConflict)
 	}
@@ -207,11 +197,7 @@ func (s *Service) Approve(ctx context.Context, proposalID, userID string, at tim
 	case domain.ApprovalRejected:
 		return domain.ChangeSet{}, fmt.Errorf("proposal %q was rejected: %w", proposal.ID, store.ErrStateConflict)
 	case domain.ApprovalPending:
-		var approved domain.Proposal
-		approved, err = change.Decide(proposal, domain.ApprovalApproved, domain.Author{Kind: domain.AuthorUser, ID: userID}, at)
-		if err == nil {
-			committed, err = s.changes.Commit(ctx, approved)
-		}
+		committed, err = s.commitPending(ctx, proposal, userID, at)
 	}
 	if err != nil {
 		return domain.ChangeSet{}, err
@@ -222,6 +208,44 @@ func (s *Service) Approve(ctx context.Context, proposalID, userID string, at tim
 		}
 	}
 	return committed, nil
+}
+
+// commitPending 由用户批准并提交待裁决提案：任务提案先按 D51 重定位到当前 Revision，
+// 不能重定位的原样返回 ErrRevisionConflict，由用户按工作台指引重写。
+func (s *Service) commitPending(ctx context.Context, proposal domain.Proposal, userID string, at time.Time) (domain.ChangeSet, error) {
+	relocated, moved, err := s.relocateProposal(ctx, proposal)
+	if err != nil {
+		return domain.ChangeSet{}, err
+	}
+	if moved {
+		if err := s.store.RelocateProposal(ctx, relocated, 0, at); err != nil {
+			return domain.ChangeSet{}, err
+		}
+		proposal = relocated
+	}
+	approved, err := change.Decide(proposal, domain.ApprovalApproved, domain.Author{Kind: domain.AuthorUser, ID: userID}, at)
+	if err != nil {
+		return domain.ChangeSet{}, err
+	}
+	return s.changes.Commit(ctx, approved)
+}
+
+// relocateProposal 按所属任务的基线重定位提案（D51），不落库；用户直接发起的提案
+// 没有任务基线，基线落后即冲突。
+func (s *Service) relocateProposal(ctx context.Context, proposal domain.Proposal) (domain.Proposal, bool, error) {
+	var basis domain.EvidenceBasis
+	if proposal.OperationID != "" {
+		operation, err := s.store.GetOperation(ctx, proposal.OperationID)
+		if err != nil {
+			return domain.Proposal{}, false, err
+		}
+		if basis, err = domain.OperationBasis(operation); err != nil {
+			return domain.Proposal{}, false, err
+		}
+	} else {
+		return proposal, false, nil
+	}
+	return s.changes.Relocate(ctx, proposal, basis)
 }
 
 func (s *Service) Reject(ctx context.Context, proposalID, userID, reason string, at time.Time) (domain.Proposal, error) {
@@ -281,11 +305,8 @@ func (s *Service) rejectionDirective(
 		return nil
 	}
 	scope := domain.DirectiveScopeProject
-	var input struct {
-		ChapterPlanID string `json:"chapter_plan_id"`
-	}
-	if json.Unmarshal(operation.Input, &input) == nil && input.ChapterPlanID != "" {
-		scope = domain.DirectiveScopePlanNode(input.ChapterPlanID)
+	if planID := chapterPlanIDOf(operation); planID != "" {
+		scope = domain.DirectiveScopePlanNode(planID)
 	}
 	_, err := s.AddDirective(ctx, AddDirectiveCommand{
 		ProjectID: rejected.Target.ID, ChangeID: rejected.ID + ":directive", UserID: userID,
@@ -293,6 +314,22 @@ func (s *Service) rejectionDirective(
 		Reason: "否决候选 " + rejected.ID + " 的理由", CreatedAt: at,
 	})
 	return err
+}
+
+// chapterPlanIDOf 取章节任务对应的 Plan 节点；非章节任务为空。
+func chapterPlanIDOf(operation domain.Operation) string {
+	input, err := domain.DecodeTaskInput(operation.Kind, operation.Input)
+	if err != nil {
+		return ""
+	}
+	switch input := input.(type) {
+	case *domain.WriteChapterInput:
+		return input.ChapterPlanID
+	case *domain.RewriteChapterInput:
+		return input.ChapterPlanID
+	default:
+		return ""
+	}
 }
 
 func (s *Service) finishApprovedOperation(ctx context.Context, operationID string, at time.Time) error {

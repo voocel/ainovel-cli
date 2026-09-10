@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -21,9 +22,56 @@ const (
 	RunCancelled   CreationRunState = "cancelled"
 )
 
+// GoalKind 标记目标的种类（D49）：内核只持有 Kind 与 Payload，什么算完成、下一步
+// 做什么由应用编排层按种类的推导器决定。
+type GoalKind string
+
+const GoalNovel GoalKind = "novel"
+
 type CreationRunGoal struct {
+	Kind    GoalKind        `json:"kind"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func (g CreationRunGoal) Validate() error {
+	if strings.TrimSpace(string(g.Kind)) == "" || len(g.Payload) == 0 || !json.Valid(g.Payload) {
+		return fmt.Errorf("creation run goal requires a kind and a JSON payload: %w", ErrInvalid)
+	}
+	return nil
+}
+
+func (g CreationRunGoal) Equal(other CreationRunGoal) bool {
+	return g.Kind == other.Kind && bytes.Equal(g.Payload, other.Payload)
+}
+
+// NovelGoal 是小说目标的载荷：一句话前提与目标章数。
+type NovelGoal struct {
 	Premise        string `json:"premise"`
 	TargetChapters int    `json:"target_chapters"`
+}
+
+func (g NovelGoal) Validate() error {
+	if strings.TrimSpace(g.Premise) == "" || g.TargetChapters <= 0 {
+		return fmt.Errorf("creation run premise and positive target chapters are required: %w", ErrInvalid)
+	}
+	return nil
+}
+
+// Goal 封装为运行目标；载荷只有字符串与整数，编码不会失败。
+func (g NovelGoal) Goal() CreationRunGoal {
+	payload, _ := json.Marshal(g)
+	return CreationRunGoal{Kind: GoalNovel, Payload: payload}
+}
+
+func DecodeNovelGoal(goal CreationRunGoal) (NovelGoal, error) {
+	if goal.Kind != GoalNovel {
+		return NovelGoal{}, fmt.Errorf("goal kind %q is not a novel goal: %w", goal.Kind, ErrInvalid)
+	}
+	var novel NovelGoal
+	if err := DecodeStrict(goal.Payload, &novel); err != nil {
+		return NovelGoal{}, fmt.Errorf("decode novel goal: %w", err)
+	}
+	return novel, novel.Validate()
 }
 
 type ReviewCadence string
@@ -84,13 +132,6 @@ func (p CreationRunPreset) Validate() error {
 	default:
 		return fmt.Errorf("unknown preset approval policy %q: %w", p.Approval, ErrInvalid)
 	}
-}
-
-func (g CreationRunGoal) Validate() error {
-	if strings.TrimSpace(g.Premise) == "" || g.TargetChapters <= 0 {
-		return fmt.Errorf("creation run premise and positive target chapters are required: %w", ErrInvalid)
-	}
-	return nil
 }
 
 type CreationRun struct {

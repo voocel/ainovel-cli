@@ -51,7 +51,7 @@ type QuickWriteResult struct {
 // 建立 Project 与 Run 后，全部推进都由创作协调器驱动。等待与失败都会落在 Run 上，
 // 再次执行同一命令即从落点继续。
 func (s *Service) QuickWrite(ctx context.Context, command QuickWriteCommand) (QuickWriteResult, error) {
-	if s.executor == nil {
+	if s.executors.LLM == nil {
 		return QuickWriteResult{}, fmt.Errorf("quick write requires a configured model: %w", domain.ErrInvalid)
 	}
 	if strings.TrimSpace(command.ProjectID) == "" || strings.TrimSpace(command.UserID) == "" ||
@@ -79,7 +79,82 @@ func (s *Service) QuickWrite(ctx context.Context, command QuickWriteCommand) (Qu
 	if err != nil {
 		return result, err
 	}
-	return s.driveCreationRun(ctx, run, command, result)
+	outcome, err := s.driveCreationRun(ctx, run, command)
+	result = attachRun(outcome.run, result)
+	result.WaitingOperationID = outcome.waiting
+	if err != nil {
+		return result, err
+	}
+	return s.finishQuickResult(ctx, outcome, result)
+}
+
+func attachRun(run domain.CreationRun, result QuickWriteResult) QuickWriteResult {
+	result.RunID, result.RunState, result.RunReason = run.ID, run.State, run.StateReason
+	return result
+}
+
+// finishQuickResult 把驱动落点投影成 quick 结果：目标章数内每章的状态与来源 Operation。
+func (s *Service) finishQuickResult(
+	ctx context.Context,
+	outcome driveOutcome,
+	result QuickWriteResult,
+) (QuickWriteResult, error) {
+	run, project := outcome.run, outcome.project
+	goal, err := domain.DecodeNovelGoal(run.Goal)
+	if err != nil {
+		return result, err
+	}
+	result.Revision = project.Revision
+	plans := chapterPlansInOrder(project.Plan)
+	if len(plans) > goal.TargetChapters {
+		plans = plans[:goal.TargetChapters]
+	}
+	written := manuscriptsByPlanNode(project.Manuscript)
+	result.Chapters = result.Chapters[:0]
+	for index, plan := range plans {
+		chapter, ok := written[plan.ID]
+		if !ok {
+			operation, found, err := s.latestChainOperation(
+				ctx, runQuickID(run.ID, "chapter", plan.ID),
+			)
+			if err != nil {
+				return result, err
+			}
+			if !found {
+				continue
+			}
+			result.Chapters = append(result.Chapters, QuickChapterResult{
+				ID: plan.ID, PlanNodeID: plan.ID, Number: index + 1,
+				Title: plan.Title, OperationID: operation.ID, State: operation.State,
+			})
+			continue
+		}
+		version, err := s.store.GetDocument(ctx,
+			domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: run.ProjectID},
+			domain.DocumentRef{Kind: domain.DocumentManuscript, ID: chapter.ID}, project.Revision,
+		)
+		if err != nil {
+			return result, err
+		}
+		changeSet, err := s.store.GetChangeSet(ctx, version.ChangeSetID)
+		if err != nil {
+			return result, err
+		}
+		operationID := changeSet.OperationID
+		state := domain.OperationSucceeded
+		if operationID != "" {
+			operation, err := s.store.GetOperation(ctx, operationID)
+			if err != nil {
+				return result, err
+			}
+			state = operation.State
+		}
+		result.Chapters = append(result.Chapters, QuickChapterResult{
+			ID: plan.ID, PlanNodeID: plan.ID, Number: index + 1,
+			Title: plan.Title, OperationID: operationID, State: state,
+		})
+	}
+	return result, nil
 }
 
 // ensureQuickProject 建立或对账作品：首次调用在初始化事务里把 Intent 与审批
@@ -164,20 +239,24 @@ func (s *Service) ensureCreationRun(
 	command QuickWriteCommand,
 	projectApproval domain.ApprovalPolicy,
 ) (domain.CreationRun, error) {
-	goal := domain.CreationRunGoal{Premise: command.Premise, TargetChapters: command.Chapters}
+	goal := domain.NovelGoal{Premise: command.Premise, TargetChapters: command.Chapters}
 	approval := projectApproval
 	if approval == "" {
 		approval = domain.ApprovalAuto
 	}
 	active, err := s.store.ActiveCreationRun(ctx, command.ProjectID)
 	if err == nil {
-		if active.Goal.Premise != goal.Premise {
+		current, err := domain.DecodeNovelGoal(active.Goal)
+		if err != nil {
+			return domain.CreationRun{}, err
+		}
+		if current.Premise != goal.Premise {
 			return domain.CreationRun{}, fmt.Errorf(
 				"project %q already has an active creation run with a different premise: %w",
 				command.ProjectID, store.ErrIdempotencyConflict)
 		}
-		if active.Goal != goal {
-			if active, err = s.store.UpdateCreationRunGoal(ctx, active.ID, goal, command.CreatedAt); err != nil {
+		if current != goal {
+			if active, err = s.store.UpdateCreationRunGoal(ctx, active.ID, goal.Goal(), command.CreatedAt); err != nil {
 				return domain.CreationRun{}, err
 			}
 		}
@@ -201,7 +280,7 @@ func (s *Service) ensureCreationRun(
 	}
 	return s.StartCreationRun(ctx, StartCreationRunCommand{
 		RunID: fmt.Sprintf("run:%s:%d", command.ProjectID, count+1), ProjectID: command.ProjectID,
-		Goal: goal, Strategy: strategy, Preset: preset, CreatedAt: command.CreatedAt,
+		Goal: goal.Goal(), Strategy: strategy, Preset: preset, CreatedAt: command.CreatedAt,
 	})
 }
 

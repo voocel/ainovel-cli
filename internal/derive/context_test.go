@@ -35,17 +35,21 @@ func TestWriteContextMeetsMinimumWritingContract(t *testing.T) {
 			{ID: "chapter-plan-2", Kind: domain.PlanChapter, ParentID: "arc-1", Order: 2, Title: "第二章", Summary: "夜宿荒村"},
 			{ID: "chapter-plan-3", Kind: domain.PlanChapter, ParentID: "arc-1", Order: 3, Title: "第三章", Summary: "抵达河边", DependsOn: []domain.DocumentRef{relevant}},
 		},
+		Entities: []domain.Entity{
+			{ID: "hero", Kind: domain.EntityCharacter, Name: "主角"},
+			{ID: "villain", Kind: domain.EntityCharacter, Name: "反派"},
+		},
 		Canon: []domain.CanonFact{
 			{ID: locked.ID, Kind: domain.CanonWorldRule, SubjectID: "hero", Predicate: "rule.bottom_line", Value: json.RawMessage(`"不伤无辜"`)},
 			{ID: relevant.ID, Kind: domain.CanonState, SubjectID: "hero", Predicate: "state.location", Value: json.RawMessage(`"河边"`)},
 			{ID: "villain-location", Kind: domain.CanonState, SubjectID: "villain", Predicate: "state.location", Value: json.RawMessage(`"京城"`)},
 		},
 		Manuscript: []domain.ManuscriptChapter{
-			{ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "第一章", Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "更早正文只留索引"}}},
-			{ID: "chapter-2", PlanNodeID: "chapter-plan-2", Number: 2, Title: "第二章", Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "上一章结尾必须可见"}}},
+			{ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "第一章", Author: domain.AuthorAI, Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "更早正文只留索引"}}},
+			{ID: "chapter-2", PlanNodeID: "chapter-plan-2", Number: 2, Title: "第二章", Author: domain.AuthorAI, Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "上一章结尾必须可见"}}},
 		},
 		Ownership: []domain.OwnershipRule{{Target: locked, Control: domain.ControlLocked}},
-	}, domain.OperationWriteChapter, json.RawMessage(`{"chapter_plan_id":"chapter-plan-3"}`))
+	}, domain.OperationWriteChapter, json.RawMessage(`{"chapter_plan_id":"chapter-plan-3","chapter_number":3}`))
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 
 const operationColumns = `
 	id, kind, target_kind, target_id, target_scope, priority, state,
-	attempt, execution_snapshot, input, error, lease_owner, lease_until_unix_ms,
+	attempt, execution_snapshot, input, error, failure_code, lease_owner, lease_until_unix_ms,
 	created_at_unix_ms, updated_at_unix_ms, run_id, run_policy_version`
 
 // MaxOperationAttempts 是 lease 过期后自动重排的尝试上限。达到上限的 Operation
@@ -28,7 +28,9 @@ func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation)
 	if operation.State != domain.OperationQueued {
 		return domain.Operation{}, fmt.Errorf("new operation must be queued: %w", domain.ErrInvalid)
 	}
-	if operation.Kind.RequiresCreationRun() && strings.TrimSpace(operation.RunID) == "" {
+	if spec, err := domain.KindSpec(operation.Kind); err != nil {
+		return domain.Operation{}, err
+	} else if spec.RequiresRun && strings.TrimSpace(operation.RunID) == "" {
 		return domain.Operation{}, fmt.Errorf("%s operation requires a creation run: %w", operation.Kind, domain.ErrInvalid)
 	}
 	if operation.RunPolicyVersion != 0 {
@@ -98,12 +100,12 @@ func (s *Store) CreateOperation(ctx context.Context, operation domain.Operation)
 		INSERT INTO operations (
 			id, content_digest, kind, target_kind, target_id, target_scope,
 			priority, state, attempt, execution_snapshot, input, error,
-			created_at_unix_ms, updated_at_unix_ms, model_config_digest, run_id, run_policy_version
+			created_at_unix_ms, updated_at_unix_ms, executor, run_id, run_policy_version
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		operation.ID, digest, operation.Kind, operation.Target.Kind, operation.Target.ID, operation.Target.Scope,
 		operation.Priority, operation.State, operation.Attempt, snapshot, []byte(operation.Input), operation.Error,
-		operation.CreatedAt.UnixMilli(), operation.UpdatedAt.UnixMilli(), operation.Snapshot.ModelConfigDigest,
+		operation.CreatedAt.UnixMilli(), operation.UpdatedAt.UnixMilli(), operation.Snapshot.Executor,
 		operation.RunID, operation.RunPolicyVersion)
 	if err != nil {
 		return domain.Operation{}, fmt.Errorf("insert operation: %w", err)
@@ -163,39 +165,62 @@ func (s *Store) GetOperation(ctx context.Context, id string) (domain.Operation, 
 }
 
 func (s *Store) ClaimNextOperation(ctx context.Context, workerID string, leaseDuration time.Duration, now time.Time) (domain.Operation, error) {
-	return s.claimOperation(ctx, "", workerID, "", leaseDuration, now)
+	return s.claimOperation(ctx, "", workerID, nil, leaseDuration, now)
 }
 
-func (s *Store) ClaimNextOperationForModel(
+// ClaimNextOperationForExecutor 只领取按该执行器身份冻结的任务（D45）。
+func (s *Store) ClaimNextOperationForExecutor(
 	ctx context.Context,
-	workerID, modelConfigDigest string,
+	workerID, executor string,
 	leaseDuration time.Duration,
 	now time.Time,
 ) (domain.Operation, error) {
-	if strings.TrimSpace(modelConfigDigest) == "" {
-		return domain.Operation{}, fmt.Errorf("model config digest is required: %w", domain.ErrInvalid)
+	if strings.TrimSpace(executor) == "" {
+		return domain.Operation{}, fmt.Errorf("executor identity is required: %w", domain.ErrInvalid)
 	}
-	return s.claimOperation(ctx, "", workerID, modelConfigDigest, leaseDuration, now)
+	return s.claimOperation(ctx, "", workerID, []string{executor}, leaseDuration, now)
 }
 
-func (s *Store) ClaimOperationForModel(
+func (s *Store) ClaimOperationForExecutor(
 	ctx context.Context,
-	id, workerID, modelConfigDigest string,
+	id, workerID, executor string,
 	leaseDuration time.Duration,
 	now time.Time,
 ) (domain.Operation, error) {
-	if strings.TrimSpace(id) == "" || strings.TrimSpace(modelConfigDigest) == "" {
-		return domain.Operation{}, fmt.Errorf("operation and model config digest are required: %w", domain.ErrInvalid)
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(executor) == "" {
+		return domain.Operation{}, fmt.Errorf("operation and executor identity are required: %w", domain.ErrInvalid)
 	}
-	return s.claimOperation(ctx, id, workerID, modelConfigDigest, leaseDuration, now)
+	return s.claimOperation(ctx, id, workerID, []string{executor}, leaseDuration, now)
+}
+
+// ClaimNextOperationForExecutors preserves queue priority across the configured executors.
+func (s *Store) ClaimNextOperationForExecutors(ctx context.Context, workerID string, executors []string, leaseDuration time.Duration, now time.Time) (domain.Operation, error) {
+	if len(executors) == 0 {
+		return domain.Operation{}, fmt.Errorf("executor identities are required: %w", domain.ErrInvalid)
+	}
+	for _, executor := range executors {
+		if strings.TrimSpace(executor) == "" {
+			return domain.Operation{}, fmt.Errorf("executor identity is required: %w", domain.ErrInvalid)
+		}
+	}
+	return s.claimOperation(ctx, "", workerID, executors, leaseDuration, now)
 }
 
 func (s *Store) claimOperation(
 	ctx context.Context,
-	id, workerID, modelConfigDigest string,
+	id, workerID string,
+	executors []string,
 	leaseDuration time.Duration,
 	now time.Time,
 ) (domain.Operation, error) {
+	executorFilter := ""
+	if executors != nil {
+		encoded, err := json.Marshal(executors)
+		if err != nil {
+			return domain.Operation{}, err
+		}
+		executorFilter = string(encoded)
+	}
 	if strings.TrimSpace(workerID) == "" || leaseDuration <= 0 || now.IsZero() {
 		return domain.Operation{}, fmt.Errorf("worker, positive lease duration and time are required: %w", domain.ErrInvalid)
 	}
@@ -211,7 +236,7 @@ func (s *Store) claimOperation(
 			SELECT candidate.id FROM operations candidate
 			WHERE candidate.state = ?
 				AND (? = '' OR candidate.id = ?)
-				AND (? = '' OR candidate.model_config_digest = ?)
+				AND (? = '' OR candidate.executor IN (SELECT value FROM json_each(?)))
 				AND NOT EXISTS (
 					SELECT 1
 					FROM operation_dependencies edge
@@ -225,7 +250,7 @@ func (s *Store) claimOperation(
 		SET state = ?, attempt = attempt + 1, lease_owner = ?, lease_until_unix_ms = ?, updated_at_unix_ms = ?, error = ''
 		WHERE id = (SELECT id FROM next) AND state = ?
 		RETURNING `+operationColumns,
-		domain.OperationQueued, id, id, modelConfigDigest, modelConfigDigest, domain.OperationSucceeded,
+		domain.OperationQueued, id, id, executorFilter, executorFilter, domain.OperationSucceeded,
 		domain.OperationRunning, workerID, leaseUntil.UnixMilli(), now.UnixMilli(), domain.OperationQueued)
 	operation, err := scanOperation(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -341,7 +366,7 @@ func (s *Store) RenewOperationLease(ctx context.Context, id, workerID string, le
 // TransitionOperation 是用户控制入口（暂停、恢复、取消、裁决）：只按状态机校验，
 // 不受执行归属限制——取消永远赢过在途执行，之后的收尾会被 ConcludeOperation 拒绝。
 func (s *Store) TransitionOperation(ctx context.Context, id string, from, to domain.OperationState, message string, now time.Time) (domain.Operation, error) {
-	return s.transitionOperation(ctx, id, from, to, message, now, 0)
+	return s.transitionOperation(ctx, id, from, to, message, "", now, 0)
 }
 
 // ConcludeOperation 是执行实例的收尾入口：只有持有当前 attempt 的执行者才能把
@@ -351,7 +376,16 @@ func (s *Store) ConcludeOperation(ctx context.Context, id string, attempt int, t
 	if attempt <= 0 {
 		return domain.Operation{}, fmt.Errorf("execution attempt is required: %w", domain.ErrInvalid)
 	}
-	return s.transitionOperation(ctx, id, domain.OperationRunning, to, message, now, attempt)
+	return s.transitionOperation(ctx, id, domain.OperationRunning, to, message, "", now, attempt)
+}
+
+// FailOperation 是带失败码的收尾（D46）：围栏同 ConcludeOperation，失败码随下一次
+// 状态变化（用户重排或取消）清空。
+func (s *Store) FailOperation(ctx context.Context, id string, attempt int, code domain.FailureCode, message string, now time.Time) (domain.Operation, error) {
+	if attempt <= 0 {
+		return domain.Operation{}, fmt.Errorf("execution attempt is required: %w", domain.ErrInvalid)
+	}
+	return s.transitionOperation(ctx, id, domain.OperationRunning, domain.OperationFailed, message, code, now, attempt)
 }
 
 // AssertActiveAttempt 是执行侧在准备提案前的快速自检；受保护写入的真正围栏在各自事务内
@@ -375,8 +409,8 @@ func assertActiveAttempt(ctx context.Context, query rowQuerier, id string, attem
 	return nil
 }
 
-// transitionOperation 的 attempt 为 0 时不做执行归属围栏。
-func (s *Store) transitionOperation(ctx context.Context, id string, from, to domain.OperationState, message string, now time.Time, attempt int) (domain.Operation, error) {
+// transitionOperation 的 attempt 为 0 时不做执行归属围栏；code 只在转入 failed 时有意义。
+func (s *Store) transitionOperation(ctx context.Context, id string, from, to domain.OperationState, message string, code domain.FailureCode, now time.Time, attempt int) (domain.Operation, error) {
 	if strings.TrimSpace(id) == "" || now.IsZero() {
 		return domain.Operation{}, fmt.Errorf("operation id and time are required: %w", domain.ErrInvalid)
 	}
@@ -391,10 +425,10 @@ func (s *Store) transitionOperation(ctx context.Context, id string, from, to dom
 
 	row := tx.QueryRowContext(ctx, `
 		UPDATE operations
-		SET state = ?, error = ?, lease_owner = NULL, lease_until_unix_ms = NULL, updated_at_unix_ms = ?
+		SET state = ?, error = ?, failure_code = ?, lease_owner = NULL, lease_until_unix_ms = NULL, updated_at_unix_ms = ?
 		WHERE id = ? AND state = ? AND (? = 0 OR attempt = ?)
 		RETURNING `+operationColumns,
-		to, message, now.UnixMilli(), id, from, attempt, attempt)
+		to, message, code, now.UnixMilli(), id, from, attempt, attempt)
 	operation, err := scanOperation(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Operation{}, ErrStateConflict
@@ -406,7 +440,7 @@ func (s *Store) transitionOperation(ctx context.Context, id string, from, to dom
 	if err != nil {
 		return domain.Operation{}, err
 	}
-	payload, err := json.Marshal(map[string]any{"from": from, "to": to, "message": message})
+	payload, err := json.Marshal(map[string]any{"from": from, "to": to, "message": message, "failure_code": code})
 	if err != nil {
 		return domain.Operation{}, fmt.Errorf("encode operation transition event: %w", err)
 	}
@@ -475,7 +509,7 @@ func (s *Store) RecoverExpiredOperations(ctx context.Context, now time.Time) ([]
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE operations
-			SET state = ?, error = ?, lease_owner = NULL, lease_until_unix_ms = NULL, updated_at_unix_ms = ?
+			SET state = ?, error = ?, failure_code = '', lease_owner = NULL, lease_until_unix_ms = NULL, updated_at_unix_ms = ?
 			WHERE id = ? AND state = ? AND lease_until_unix_ms < ?`,
 			recovered, message, now.UnixMilli(), id, domain.OperationRunning, now.UnixMilli())
 		if err != nil {
@@ -853,7 +887,7 @@ func scanOperation(scanner rowScanner) (domain.Operation, error) {
 	var createdAt, updatedAt int64
 	err := scanner.Scan(
 		&operation.ID, &operation.Kind, &operation.Target.Kind, &operation.Target.ID, &operation.Target.Scope,
-		&operation.Priority, &operation.State, &operation.Attempt, &snapshot, &input, &operation.Error,
+		&operation.Priority, &operation.State, &operation.Attempt, &snapshot, &input, &operation.Error, &operation.FailureCode,
 		&leaseOwner, &leaseUntil, &createdAt, &updatedAt, &operation.RunID, &operation.RunPolicyVersion,
 	)
 	if err != nil {

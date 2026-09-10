@@ -25,7 +25,7 @@ func TestValidateDocumentContentRequiresStableID(t *testing.T) {
 
 func TestManuscriptRejectsDuplicateBlockID(t *testing.T) {
 	chapter := ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: AuthorAI,
 		Blocks: []ManuscriptBlock{{ID: "p-1", Text: "第一段"}, {ID: "p-1", Text: "第二段"}},
 	}
 	if err := chapter.Validate(); !errors.Is(err, ErrInvalid) {

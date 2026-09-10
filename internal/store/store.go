@@ -13,6 +13,8 @@ import (
 
 type Store struct {
 	db *sql.DB
+	// artifactRoot 归属单个数据库，避免相邻数据库的 GC 互删对象。
+	artifactRoot string
 }
 
 // rowQuerier / execQuerier 让同一段读写逻辑既能跑在 *sql.DB 上，也能跑在调用方事务里。
@@ -54,6 +56,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("resolve artifact database path: %w", err)
+	}
+	s.artifactRoot = resolved + ".artifacts"
 	if err := s.ensureSchema(ctx); err != nil {
 		db.Close()
 		return nil, err

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,5 +129,38 @@ func TestProjectDirectiveCommands(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].Status != domain.DirectiveRetired {
 		t.Fatalf("listed = %#v", listed)
+	}
+}
+
+func TestProjectAdjudicationCommands(t *testing.T) {
+	ctx := context.Background()
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	api := service.New(authorityStore)
+	if _, err := api.CreateProject(ctx, service.CreateProjectCommand{
+		ProjectID: "book-1", ChangeID: "create-book-1", UserID: "user-1", Reason: "创建作品",
+		Draft: service.ProjectDraft{Intent: domain.Intent{Premise: "凡人修仙"}}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	var output, errorsOutput bytes.Buffer
+	if err := Run(ctx, api, []string{"project", "adjudication", "list", "--project", "book-1"}, &output, &errorsOutput); err != nil {
+		t.Fatalf("adjudication list: %v", err)
+	}
+	if strings.TrimSpace(output.String()) != "[]" {
+		t.Fatalf("empty list output = %q", output.String())
+	}
+	if err := Run(ctx, api, []string{
+		"project", "adjudication", "add", "--project", "book-1", "--reason", "接受", "--finding", "review/0",
+	}, &output, &errorsOutput); err == nil {
+		t.Fatal("adjudication add without --user must fail")
+	}
+	if err := Run(ctx, api, []string{
+		"project", "adjudication", "add", "--project", "book-1", "--user", "user-1", "--reason", "接受", "--finding", "review/0",
+	}, &output, &errorsOutput); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("adjudication add for an unknown verdict err = %v", err)
 	}
 }

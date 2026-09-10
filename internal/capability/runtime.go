@@ -7,6 +7,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/activity"
+	"github.com/voocel/ainovel-cli/internal/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/workspace"
@@ -22,6 +23,7 @@ var (
 type Runtime struct {
 	model       agentcore.ChatModel
 	store       runtimeStore
+	prompts     *prompt.Registry
 	workspace   *workspace.Service
 	now         func() time.Time
 	modelDigest string
@@ -41,6 +43,7 @@ func (r *Runtime) SetActivitySink(sink ActivitySink) { r.activity = sink }
 type runtimeStore interface {
 	GetDocument(context.Context, domain.AuthorityTarget, domain.DocumentRef, domain.Revision) (domain.DocumentVersion, error)
 	ListPlanNodes(context.Context, domain.AuthorityTarget, domain.Revision) ([]domain.PlanNode, error)
+	ListDocuments(context.Context, domain.AuthorityTarget, domain.DocumentKind, domain.Revision) ([]domain.DocumentVersion, error)
 	GetWorkspaceArtifact(context.Context, string, string) (domain.WorkspaceArtifact, error)
 	ListWorkspaceArtifacts(context.Context, string) ([]domain.WorkspaceArtifact, error)
 	PutWorkspaceArtifact(context.Context, domain.WorkspaceArtifact, int64, int) (domain.WorkspaceArtifact, error)
@@ -50,11 +53,16 @@ type runtimeStore interface {
 
 func NewRuntime(model agentcore.ChatModel, modelDigest string, authorityStore *store.Store) *Runtime {
 	return &Runtime{
-		model: model, store: authorityStore,
+		model: model, store: authorityStore, prompts: prompt.NewRegistry(authorityStore),
 		workspace:   workspace.New(authorityStore),
 		now:         func() time.Time { return time.Now().UTC() },
 		modelDigest: modelDigest,
 	}
+}
+
+// Identity 是本 Runtime 的执行器身份（D45）：只领取并执行按它冻结的任务。
+func (r *Runtime) Identity() string {
+	return prompt.ExecutorIdentity(r.modelDigest)
 }
 
 func (r *Runtime) ModelConfigDigest() string {

@@ -44,14 +44,14 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 		OperationID: "write-1", ProjectID: project.ID,
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, project.ID, now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "deepseek-chat-config",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start first operation: %v", err)
 	}
-	if first.Snapshot.ExecutionProfileDigest == "" {
+	if first.Snapshot.ConfigDigest == "" {
 		t.Fatal("operation did not freeze an execution profile")
 	}
 
@@ -63,7 +63,7 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 		OperationID: "write-2", ProjectID: project.ID,
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, project.ID, now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []CreatorProfileRef{{ID: "user-1", Scope: "global"}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "deepseek-chat-config",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
@@ -71,7 +71,7 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start second operation: %v", err)
 	}
-	if second.Snapshot.ExecutionProfileDigest == first.Snapshot.ExecutionProfileDigest {
+	if second.Snapshot.ConfigDigest == first.Snapshot.ConfigDigest {
 		t.Fatal("new profile did not affect the new operation")
 	}
 	derived, err := service.DerivedDocuments(ctx, project.ID, project.Revision)
@@ -82,10 +82,10 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get first operation: %v", err)
 	}
-	if storedFirst.Snapshot.ExecutionProfileDigest != first.Snapshot.ExecutionProfileDigest {
+	if storedFirst.Snapshot.ConfigDigest != first.Snapshot.ConfigDigest {
 		t.Fatal("later profile change mutated a running operation snapshot")
 	}
-	promptText, sources, err := service.Prompt(ctx, first.Snapshot.ExecutionProfileDigest)
+	promptText, sources, err := service.Prompt(ctx, first.Snapshot.ConfigDigest)
 	if err != nil {
 		t.Fatalf("show prompt: %v", err)
 	}
@@ -170,14 +170,14 @@ func TestPackDirectoryUpdateOnlyAffectsNewOperations(t *testing.T) {
 		OperationID: "write-with-pack-v1", ProjectID: "book-1",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-1", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), Packs: []PackRef{{ID: installed.Manifest.ID}},
+		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`), Packs: []PackRef{{ID: installed.Manifest.ID}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start first operation: %v", err)
 	}
-	firstPrompt, _, err := service.Prompt(ctx, first.Snapshot.ExecutionProfileDigest)
+	firstPrompt, _, err := service.Prompt(ctx, first.Snapshot.ConfigDigest)
 	if err != nil || !strings.Contains(firstPrompt, "多用短句") {
 		t.Fatalf("first prompt = %q, %v", firstPrompt, err)
 	}
@@ -192,7 +192,7 @@ func TestPackDirectoryUpdateOnlyAffectsNewOperations(t *testing.T) {
 	if installed.Revision != 2 {
 		t.Fatalf("pack revision = %d, want 2", installed.Revision)
 	}
-	stillFrozen, _, err := service.Prompt(ctx, first.Snapshot.ExecutionProfileDigest)
+	stillFrozen, _, err := service.Prompt(ctx, first.Snapshot.ConfigDigest)
 	if err != nil || !strings.Contains(stillFrozen, "多用短句") || strings.Contains(stillFrozen, "潜台词") {
 		t.Fatalf("old operation prompt changed: %q, %v", stillFrozen, err)
 	}
@@ -200,14 +200,14 @@ func TestPackDirectoryUpdateOnlyAffectsNewOperations(t *testing.T) {
 		OperationID: "write-with-pack-v2", ProjectID: "book-1",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-1", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), Packs: []PackRef{{ID: installed.Manifest.ID}},
+		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`), Packs: []PackRef{{ID: installed.Manifest.ID}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start second operation: %v", err)
 	}
-	secondPrompt, _, err := service.Prompt(ctx, second.Snapshot.ExecutionProfileDigest)
+	secondPrompt, _, err := service.Prompt(ctx, second.Snapshot.ConfigDigest)
 	if err != nil || !strings.Contains(secondPrompt, "多用留白和潜台词") {
 		t.Fatalf("second prompt = %q, %v", secondPrompt, err)
 	}
@@ -267,14 +267,14 @@ func TestProjectAssetsAndOverlayAutoAssembleIntoOperations(t *testing.T) {
 		OperationID: "write-auto-assemble", ProjectID: "book-assets",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-assets", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(5 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start operation without asset params: %v", err)
 	}
-	text, _, err := service.Prompt(ctx, operation.Snapshot.ExecutionProfileDigest)
+	text, _, err := service.Prompt(ctx, operation.Snapshot.ConfigDigest)
 	if err != nil {
 		t.Fatalf("read compiled prompt: %v", err)
 	}
@@ -295,14 +295,14 @@ func TestProjectAssetsAndOverlayAutoAssembleIntoOperations(t *testing.T) {
 		OperationID: "write-after-upgrade", ProjectID: "book-assets",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-assets", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(7 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start pinned operation: %v", err)
 	}
-	pinnedPrompt, _, err := service.Prompt(ctx, pinned.Snapshot.ExecutionProfileDigest)
+	pinnedPrompt, _, err := service.Prompt(ctx, pinned.Snapshot.ConfigDigest)
 	if err != nil || !strings.Contains(pinnedPrompt, "多用短句") || strings.Contains(pinnedPrompt, "潜台词表达情绪的新版") {
 		t.Fatalf("pinned prompt drifted: %q, %v", pinnedPrompt, err)
 	}
@@ -339,7 +339,7 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 		OperationID: "book-2-before-confirm", ProjectID: "book-2",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-2", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []CreatorProfileRef{{ID: "user-1", Scope: "global"}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
@@ -347,7 +347,7 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start before confirmation: %v", err)
 	}
-	beforePrompt, _, err := service.Prompt(ctx, before.Snapshot.ExecutionProfileDigest)
+	beforePrompt, _, err := service.Prompt(ctx, before.Snapshot.ConfigDigest)
 	if err != nil {
 		t.Fatalf("show before prompt: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 		OperationID: "book-2-after-confirm", ProjectID: "book-2",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-2", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []CreatorProfileRef{{ID: "user-1", Scope: "global"}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
@@ -372,7 +372,7 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start after confirmation: %v", err)
 	}
-	afterPrompt, _, err := service.Prompt(ctx, after.Snapshot.ExecutionProfileDigest)
+	afterPrompt, _, err := service.Prompt(ctx, after.Snapshot.ConfigDigest)
 	if err != nil || !strings.Contains(afterPrompt, "用动作和潜台词表达情绪") {
 		t.Fatalf("confirmed preference missing from second book: %q, %v", afterPrompt, err)
 	}
@@ -394,7 +394,7 @@ func TestLearnsPreferenceCandidateFromUserManuscriptEditsBeforeConfirmation(t *t
 		t.Fatalf("export revision 1: %v", err)
 	}
 	projection.Manuscript = []domain.ManuscriptChapter{{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: domain.AuthorUser,
 		Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "他感到非常悲伤，于是哭了。"}},
 	}}
 	proposal, err := api.ImportProject(ctx, "add-manuscript", "user-1", "加入正文", projection, now.Add(time.Minute))
@@ -449,9 +449,11 @@ func TestLearnsPreferenceCandidateFromUserManuscriptEditsBeforeConfirmation(t *t
 
 type preferenceTestExecutor struct{}
 
+func (preferenceTestExecutor) Identity() string { return prompt.ExecutorIdentity("model") }
+
 func (preferenceTestExecutor) ModelConfigDigest() string { return "model" }
 
-func (preferenceTestExecutor) Execute(context.Context, domain.Operation, prompt.Compiled) (domain.OperationOutcome, error) {
+func (preferenceTestExecutor) Execute(context.Context, domain.Operation) (domain.OperationOutcome, error) {
 	return domain.OperationOutcome{}, errors.New("story execution is not used in preference test")
 }
 
@@ -504,7 +506,7 @@ func TestSemanticConflictResolutionCreatesOneAtomicAffectedRewrite(t *testing.T)
 		t.Fatalf("export project: %v", err)
 	}
 	projection.Manuscript = append(projection.Manuscript, domain.ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "第一章",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "第一章", Author: domain.AuthorUser,
 		Blocks: []domain.ManuscriptBlock{{ID: "block-1", Text: "他在山门前放下了刀。"}},
 	})
 	manuscriptProposal, err := api.ImportProject(
@@ -617,7 +619,7 @@ func TestOperationLifecycleKeepsExplicitState(t *testing.T) {
 		OperationID: "write-lifecycle", ProjectID: "book-lifecycle",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-lifecycle", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
@@ -657,15 +659,15 @@ func TestRestartOperationFreezesNewSnapshotAndSeedsWorkspace(t *testing.T) {
 		OperationID: "write-before-restart", ProjectID: "book-restart",
 		RunID: ensureServiceTestRun(t, ctx, authorityStore, "book-restart", now),
 		Kind:  domain.OperationWriteChapter, WorkerProfileID: "writer.compose",
-		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
 		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start operation: %v", err)
 	}
-	running, err := authorityStore.ClaimOperationForModel(
-		ctx, started.ID, "worker-1", "model", time.Minute, now.Add(2*time.Minute),
+	running, err := authorityStore.ClaimOperationForExecutor(
+		ctx, started.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now.Add(2*time.Minute),
 	)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
@@ -702,7 +704,7 @@ func TestRestartOperationFreezesNewSnapshotAndSeedsWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("idempotent restart: %v", err)
 	}
-	fresh := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","directives":[{"id":"d-1"}]}`)
+	fresh := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1,"directives":[{"id":"d-1","scope":"project","text":"多写雨","status":"active"}]}`)
 	if _, err := api.RestartOperation(ctx, RestartOperationCommand{
 		FromOperationID: running.ID, OperationID: restarted.ID, Input: fresh, CreatedAt: now.Add(6 * time.Minute),
 	}); !errors.Is(err, store.ErrIdempotencyConflict) {
@@ -737,10 +739,10 @@ func TestReloadPromptAppliesCreatorProfileWithoutCreatingOperation(t *testing.T)
 	}
 	result, err := api.ReloadPrompt(ctx, ReloadPromptCommand{
 		ProjectID: "book-prompt", Kind: domain.OperationWriteChapter,
-		WorkerProfileID: "writer.compose", Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
+		WorkerProfileID: "writer.compose", Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []CreatorProfileRef{{ID: "user-1", Scope: "global"}},
 		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: domain.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
+		CreatedAt: now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("reload prompt: %v", err)
@@ -765,6 +767,7 @@ func testProjectDraft() ProjectDraft {
 			{ID: "chapter-plan-1", Kind: domain.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达山门"},
 			{ID: "ending-beat", Kind: domain.PlanBeat, ParentID: "chapter-plan-1", Title: "结局锚点", Summary: "守住本心"},
 		},
+		Entities: []domain.Entity{{ID: "hero", Kind: domain.EntityCharacter, Name: "主角"}},
 		Canon: []domain.CanonFact{{
 			ID: bottomLine.ID, Kind: domain.CanonWorldRule, SubjectID: "hero", Predicate: "rule.bottom_line", Value: json.RawMessage(`"绝不滥杀"`),
 		}},
@@ -804,7 +807,7 @@ func ensureServiceTestRun(
 	}
 	run := domain.CreationRun{
 		ID: "run:" + projectID, ProjectID: projectID,
-		Goal: domain.CreationRunGoal{Premise: "测试创作", TargetChapters: 3},
+		Goal: domain.NovelGoal{Premise: "测试创作", TargetChapters: 3}.Goal(),
 		Strategy: domain.CreationRunStrategy{
 			PlanWindowChapters: 3, ReviewCadence: domain.ReviewPerPlanWindow, AutoRepairBudget: 3,
 		},

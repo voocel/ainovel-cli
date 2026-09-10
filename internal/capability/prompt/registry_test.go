@@ -60,7 +60,8 @@ func TestReloadPersistsImmutableExecutionProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load old profile after reopen: %v", err)
 	}
-	if loaded.Snapshot.ExecutionProfileDigest != first.ProfileDigest || loaded.PromptDigest != first.PromptDigest {
+	if loaded.ProfileDigest != first.ProfileDigest || loaded.PromptDigest != first.PromptDigest ||
+		loaded.WorkerProfile != first.WorkerProfile || loaded.ModelConfigDigest != first.ModelConfigDigest {
 		t.Fatalf("loaded profile = %#v", loaded)
 	}
 }

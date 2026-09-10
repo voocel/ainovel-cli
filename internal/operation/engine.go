@@ -9,17 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/change"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
+// Executor 是执行器契约（D45）：Identity 是冻结进快照、领取时过滤的身份；
+// Execute 按快照自行加载配置并产出统一的 OperationOutcome（D30）。
 type Executor interface {
-	ModelConfigDigest() string
-	// Execute 产出统一的 OperationOutcome（D30）：需要改变 Authority 时携带
-	// Proposal，审阅/校验类携带 Verdict；审阅通过不制造空 Patch。
-	Execute(context.Context, domain.Operation, prompt.Compiled) (domain.OperationOutcome, error)
+	Identity() string
+	Execute(context.Context, domain.Operation) (domain.OperationOutcome, error)
 }
 
 // SemanticComplianceAnalyzer 由 capability 层实现：对 AI 正文做独立于创作
@@ -35,9 +34,9 @@ type SemanticComplianceAnalyzer interface {
 }
 
 type Engine struct {
-	store   *store.Store
-	changes *change.Engine
-	prompts *prompt.Registry
+	store    *store.Store
+	changes  *change.Engine
+	verdicts map[domain.OperationKind]VerdictValidator
 }
 
 var errLeaseLost = errors.New("operation lease renewal failed")
@@ -47,13 +46,48 @@ type RunResult struct {
 	Proposal  domain.Proposal   `json:"proposal,omitempty"`
 	ChangeSet *domain.ChangeSet `json:"change_set,omitempty"`
 	Verdict   json.RawMessage   `json:"verdict,omitempty"`
+	Artifacts []domain.Artifact `json:"artifacts,omitempty"`
 }
 
-func NewEngine(authorityStore *store.Store) *Engine {
-	return &Engine{
-		store: authorityStore, changes: change.New(authorityStore),
-		prompts: prompt.NewRegistry(authorityStore),
+func NewEngine(authorityStore *store.Store, contracts ...VerdictContract) *Engine {
+	e := &Engine{store: authorityStore, changes: change.New(authorityStore), verdicts: make(map[domain.OperationKind]VerdictValidator)}
+	e.verdicts[domain.OperationReviewRange] = e.validateReviewEvidence
+	for _, contract := range contracts {
+		if _, err := domain.KindSpec(contract.Kind); err != nil {
+			panic(err)
+		}
+		if _, exists := e.verdicts[contract.Kind]; exists || contract.Validate == nil {
+			panic("invalid or duplicate evidence contract: " + string(contract.Kind))
+		}
+		e.verdicts[contract.Kind] = contract.Validate
 	}
+	return e
+}
+
+// RunNextWithExecutors 在所有已装配执行器之间按同一队列优先级原子领取，
+// 再把任务交给其冻结身份对应的执行器。
+func (e *Engine) RunNextWithExecutors(ctx context.Context, executors []Executor, workerID string, leaseDuration time.Duration, now time.Time) (RunResult, error) {
+	byID := make(map[string]Executor, len(executors))
+	identities := make([]string, 0, len(executors))
+	for _, executor := range executors {
+		if executor == nil || strings.TrimSpace(executor.Identity()) == "" {
+			return RunResult{}, fmt.Errorf("executor identity is required: %w", domain.ErrInvalid)
+		}
+		id := executor.Identity()
+		if _, exists := byID[id]; exists {
+			return RunResult{}, fmt.Errorf("duplicate executor identity %q: %w", id, domain.ErrInvalid)
+		}
+		byID[id] = executor
+		identities = append(identities, id)
+	}
+	if len(identities) == 0 {
+		return RunResult{}, fmt.Errorf("operation executor is required: %w", domain.ErrInvalid)
+	}
+	op, err := e.store.ClaimNextOperationForExecutors(ctx, workerID, identities, leaseDuration, now)
+	if err != nil {
+		return RunResult{}, err
+	}
+	return e.runClaimed(ctx, byID[op.Snapshot.Executor], op, workerID, leaseDuration, now)
 }
 
 func (e *Engine) RunNext(
@@ -66,7 +100,7 @@ func (e *Engine) RunNext(
 	if executor == nil {
 		return RunResult{}, fmt.Errorf("operation executor is required: %w", domain.ErrInvalid)
 	}
-	operation, err := e.store.ClaimNextOperationForModel(ctx, workerID, executor.ModelConfigDigest(), leaseDuration, now)
+	operation, err := e.store.ClaimNextOperationForExecutor(ctx, workerID, executor.Identity(), leaseDuration, now)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -83,9 +117,7 @@ func (e *Engine) Run(
 	if executor == nil {
 		return RunResult{}, fmt.Errorf("operation executor is required: %w", domain.ErrInvalid)
 	}
-	operation, err := e.store.ClaimOperationForModel(
-		ctx, operationID, workerID, executor.ModelConfigDigest(), leaseDuration, now,
-	)
+	operation, err := e.store.ClaimOperationForExecutor(ctx, operationID, workerID, executor.Identity(), leaseDuration, now)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -102,7 +134,7 @@ func (e *Engine) runClaimed(
 ) (RunResult, error) {
 	storedProposal, err := e.store.GetProposalByOperation(ctx, operation.ID)
 	if err == nil {
-		return e.finalize(ctx, operation, storedProposal, now)
+		return e.finalize(ctx, executor, workerID, leaseDuration, operation, storedProposal, now)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return e.fail(ctx, operation, err, now)
@@ -115,14 +147,10 @@ func (e *Engine) runClaimed(
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return e.fail(ctx, operation, err, now)
 	}
-	compiled, err := e.prompts.Load(ctx, operation.Snapshot.ExecutionProfileDigest)
-	if err != nil {
-		return e.fail(ctx, operation, err, now)
-	}
 	var outcome domain.OperationOutcome
 	err = e.withLease(ctx, operation, workerID, leaseDuration, func(callContext context.Context) error {
 		var executeErr error
-		outcome, executeErr = executor.Execute(callContext, operation, compiled)
+		outcome, executeErr = executor.Execute(callContext, operation)
 		return executeErr
 	})
 	if err != nil {
@@ -130,6 +158,32 @@ func (e *Engine) runClaimed(
 	}
 	if err := outcome.Validate(); err != nil {
 		return e.fail(ctx, operation, err, now)
+	}
+	// 工件元数据先于提案落盘（D47）：附件校验才查得到；对象与元数据都幂等，
+	// 重入不为仅工件的产出加捷径。
+	for _, artifact := range outcome.Artifacts {
+		required, err := domain.OperationBasis(operation)
+		if err != nil {
+			return e.fail(ctx, operation, err, now)
+		}
+		if !artifact.Basis.Covers(required) {
+			return e.fail(ctx, operation, fmt.Errorf("artifact %q omits task evidence: %w", artifact.ID, domain.ErrInvalid), now)
+		}
+		if err := e.verifyBasis(ctx, operation, artifact.Basis); err != nil {
+			return e.fail(ctx, operation, fmt.Errorf("artifact %q: %w", artifact.ID, err), now)
+		}
+	}
+	if len(outcome.Artifacts) > 0 {
+		if err := e.store.SaveExecutionArtifacts(ctx, outcome.Artifacts, operation.ID, operation.Attempt); err != nil {
+			return e.fail(ctx, operation, err, now)
+		}
+	}
+	if outcome.Proposal == nil && len(outcome.Verdict) == 0 {
+		succeeded, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationSucceeded, "", now)
+		if err != nil {
+			return RunResult{}, err
+		}
+		return RunResult{Operation: succeeded, Artifacts: outcome.Artifacts}, nil
 	}
 	if outcome.Proposal == nil {
 		return e.finalizeVerdict(ctx, operation, outcome.Verdict, now)
@@ -141,7 +195,14 @@ func (e *Engine) runClaimed(
 			proposal.OperationID, operation.ID, domain.ErrInvalid,
 		), now)
 	}
+	if proposal.Target != operation.Target || proposal.BaseRevision != operation.Snapshot.BaseRevision {
+		return e.fail(ctx, operation, fmt.Errorf("proposal does not belong to the frozen operation target and revision: %w", domain.ErrInvalid), now)
+	}
 	if err := proposal.Validate(); err != nil {
+		return e.fail(ctx, operation, err, now)
+	}
+	// 故事依赖由宿主写入（D40）：执行器声明的 depends_on 不作数。
+	if proposal.Patches, err = domain.BindChapterDependencies(proposal.Patches); err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
 	if len(proposal.Impact.Semantic) != 0 || len(proposal.Impact.Compliance) != 0 {
@@ -150,51 +211,55 @@ func (e *Engine) runClaimed(
 	if err := e.validatePlanTarget(ctx, operation, proposal); err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
+	// 提案重定位（D51）：基线落后但中间只有用户专属变化且任务基线仍成立时搬到当前
+	// Revision，让在途约束有机会参与合规分析；否则任务失效，后继继承工作区。
+	if proposal, _, err = e.relocate(ctx, operation, proposal); errors.Is(err, store.ErrRevisionConflict) {
+		result, err := e.stale(ctx, operation, err, now)
+		result.Artifacts = outcome.Artifacts
+		return result, err
+	} else if err != nil {
+		return e.fail(ctx, operation, err, now)
+	}
 	constraints, err := e.semanticConstraints(ctx, operation, proposal)
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
 	if shouldAnalyzeSemanticCompliance(operation, proposal, constraints) {
-		report := domain.SemanticComplianceReport{}
-		analyzer, ok := executor.(SemanticComplianceAnalyzer)
-		if !ok {
-			report = unavailableComplianceReport(constraints, "configured executor does not provide independent semantic compliance analysis")
-		} else {
-			err = e.withLease(ctx, operation, workerID, leaseDuration, func(callContext context.Context) error {
-				var analyzeErr error
-				report, analyzeErr = analyzer.AnalyzeSemanticCompliance(callContext, operation, proposal, constraints)
-				return analyzeErr
-			})
-			if errors.Is(err, errLeaseLost) {
-				return e.fail(ctx, operation, err, now)
-			}
-			if err != nil {
-				report = unavailableComplianceReport(constraints, err.Error())
-			} else if err := report.Validate(); err != nil {
-				return e.fail(ctx, operation, err, now)
-			}
-		}
-		compliance, err := json.Marshal(report)
+		proposal.Impact.Compliance, err = e.analyzeCompliance(ctx, executor, workerID, leaseDuration, operation, proposal, constraints)
 		if err != nil {
-			return e.fail(ctx, operation, fmt.Errorf("encode semantic compliance report: %w", err), now)
+			return e.fail(ctx, operation, err, now)
 		}
-		proposal.Impact.Compliance = compliance
 	}
-	if err := e.store.AssertActiveAttempt(ctx, operation.ID, operation.Attempt); err != nil {
-		return RunResult{}, err
+	prepared, err := e.changes.PrepareExecution(ctx, proposal, operation.Attempt)
+	if errors.Is(err, store.ErrRevisionConflict) {
+		result, err := e.stale(ctx, operation, err, now)
+		result.Artifacts = outcome.Artifacts
+		return result, err
 	}
-	prepared, err := e.changes.Prepare(ctx, proposal)
 	if err != nil {
-		if errors.Is(err, store.ErrRevisionConflict) {
-			stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, err.Error(), now)
-			if transitionErr != nil {
-				return RunResult{}, errors.Join(err, transitionErr)
-			}
-			return RunResult{Operation: stale}, err
-		}
 		return e.fail(ctx, operation, err, now)
 	}
-	return e.finalize(ctx, operation, prepared, now)
+	result, err := e.finalize(ctx, executor, workerID, leaseDuration, operation, prepared, now)
+	result.Artifacts = outcome.Artifacts
+	return result, err
+}
+
+// relocate 按任务基线重定位提案（D51）；不落库。
+func (e *Engine) relocate(ctx context.Context, operation domain.Operation, proposal domain.Proposal) (domain.Proposal, bool, error) {
+	basis, err := domain.OperationBasis(operation)
+	if err != nil {
+		return domain.Proposal{}, false, err
+	}
+	return e.changes.Relocate(ctx, proposal, basis)
+}
+
+// stale 收尾为 stale（§5.5）：基线无法重定位，由后继继承工作区重做。
+func (e *Engine) stale(ctx context.Context, operation domain.Operation, cause error, now time.Time) (RunResult, error) {
+	stale, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, cause.Error(), now)
+	if err != nil {
+		return RunResult{}, errors.Join(cause, err)
+	}
+	return RunResult{Operation: stale}, cause
 }
 
 // validatePlanTarget 把滚动规划请求的数量变成提交边界不变量：模型可以自由
@@ -215,15 +280,17 @@ func (e *Engine) validatePlanTarget(
 	return domain.ValidatePlanChapterTarget(base, proposal.Patches, expected)
 }
 
-// finalizeVerdict 收尾无 Proposal 的 Operation（D30）：裁定绑定启动快照的
-// Revision（§6.4），基线漂移即失效转 stale；落盘为派生文档后成功收尾。
+// finalizeVerdict 收尾无 Proposal 的 Operation（D30）：裁定绑定启动快照的 Revision
+// （§6.4），有效性按基线判定（D48）——基线在当前 Revision 不再成立即转 stale，
+// 不相干的变化不作废裁定；落盘为派生文档后成功收尾。
 func (e *Engine) finalizeVerdict(
 	ctx context.Context,
 	operation domain.Operation,
-	verdict json.RawMessage,
+	payload json.RawMessage,
 	now time.Time,
 ) (RunResult, error) {
-	if err := e.validateReviewVerdict(ctx, operation, verdict); err != nil {
+	basis, err := e.ValidateEvidence(ctx, operation, payload)
+	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
 	currentRevision, err := e.store.CurrentRevision(ctx, operation.Target)
@@ -232,21 +299,15 @@ func (e *Engine) finalizeVerdict(
 	} else if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	if currentRevision != operation.Snapshot.BaseRevision {
-		cause := fmt.Errorf(
-			"verdict base revision %d, current revision %d: %w",
-			operation.Snapshot.BaseRevision, currentRevision, store.ErrRevisionConflict,
-		)
-		stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, cause.Error(), now)
-		if transitionErr != nil {
-			return RunResult{}, errors.Join(cause, transitionErr)
-		}
-		return RunResult{Operation: stale}, cause
+	if err := e.changes.VerifyBasis(ctx, operation.Target, basis, currentRevision); errors.Is(err, change.ErrBasisMismatch) {
+		return e.stale(ctx, operation, fmt.Errorf("%w: %w", store.ErrRevisionConflict, err), now)
+	} else if err != nil {
+		return e.fail(ctx, operation, err, now)
 	}
 	if _, err := e.store.SaveExecutionDerivedDocument(ctx, domain.DerivedDocument{
 		ProjectID: operation.Target.ID, Revision: operation.Snapshot.BaseRevision,
 		Kind: domain.DerivedVerdictKind, Key: operation.ID,
-		Content: verdict, CreatedAt: now,
+		Content: payload, CreatedAt: now,
 	}, operation.ID, operation.Attempt); err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
@@ -254,42 +315,7 @@ func (e *Engine) finalizeVerdict(
 	if err != nil {
 		return RunResult{}, err
 	}
-	return RunResult{Operation: succeeded, Verdict: verdict}, nil
-}
-
-func (e *Engine) validateReviewVerdict(
-	ctx context.Context,
-	operation domain.Operation,
-	payload json.RawMessage,
-) error {
-	if operation.Kind != domain.OperationReviewRange {
-		return fmt.Errorf("%s operation cannot produce a verdict: %w", operation.Kind, domain.ErrInvalid)
-	}
-	var verdict domain.ReviewVerdict
-	if err := domain.DecodeStrict(payload, &verdict); err != nil {
-		return fmt.Errorf("decode review verdict: %w", err)
-	}
-	if err := domain.ValidateReviewVerdictForOperation(operation, verdict); err != nil {
-		return err
-	}
-	artifact, err := e.store.GetWorkspaceArtifact(ctx, operation.ID, verdict.ReviewKey)
-	if err != nil {
-		return fmt.Errorf("read review artifact %q: %w", verdict.ReviewKey, err)
-	}
-	if artifact.MediaType != domain.ReviewArtifactMediaType {
-		return fmt.Errorf("workspace artifact %q is not a review record: %w", verdict.ReviewKey, domain.ErrInvalid)
-	}
-	var findings []domain.ReviewFinding
-	if err := domain.DecodeStrict(artifact.Content, &findings); err != nil {
-		return fmt.Errorf("decode review artifact %q: %w", verdict.ReviewKey, err)
-	}
-	if findings == nil {
-		return fmt.Errorf("review artifact %q must contain a findings array: %w", verdict.ReviewKey, domain.ErrInvalid)
-	}
-	if !slices.Equal(findings, verdict.Findings) {
-		return fmt.Errorf("verdict findings do not match review artifact %q: %w", verdict.ReviewKey, domain.ErrInvalid)
-	}
-	return nil
+	return RunResult{Operation: succeeded, Verdict: payload}, nil
 }
 
 func (e *Engine) withLease(
@@ -344,6 +370,9 @@ func (e *Engine) withLease(
 
 func (e *Engine) finalize(
 	ctx context.Context,
+	executor Executor,
+	workerID string,
+	leaseDuration time.Duration,
 	operation domain.Operation,
 	prepared domain.Proposal,
 	now time.Time,
@@ -365,22 +394,21 @@ func (e *Engine) finalize(
 	if prepared.ApprovalState == domain.ApprovalRejected {
 		return e.fail(ctx, operation, fmt.Errorf("proposal %q was rejected", prepared.ID), now)
 	}
-	currentRevision, err := e.store.CurrentRevision(ctx, operation.Target)
-	if errors.Is(err, store.ErrNotFound) {
-		currentRevision = domain.InitialRevision
-	} else if err != nil {
+	// 基线漂移按 D51 重定位：只有用户专属变化时搬到当前 Revision 继续裁决，否则 stale。
+	relocated, moved, err := e.relocate(ctx, operation, prepared)
+	if errors.Is(err, store.ErrRevisionConflict) {
+		result, err := e.stale(ctx, operation, err, now)
+		result.Proposal = prepared
+		return result, err
+	}
+	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	if currentRevision != prepared.BaseRevision {
-		cause := fmt.Errorf(
-			"proposal base revision %d, current revision %d: %w",
-			prepared.BaseRevision, currentRevision, store.ErrRevisionConflict,
-		)
-		stale, transitionErr := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationStale, cause.Error(), now)
-		if transitionErr != nil {
-			return RunResult{}, errors.Join(cause, transitionErr)
+	if moved {
+		if err := e.store.RelocateProposal(ctx, relocated, operation.Attempt, now); err != nil {
+			return e.fail(ctx, operation, err, now)
 		}
-		return RunResult{Operation: stale, Proposal: prepared}, cause
+		prepared, result.Proposal = relocated, relocated
 	}
 	policy, err := e.effectiveApprovalPolicy(ctx, operation, prepared.BaseRevision)
 	if err != nil {
@@ -398,6 +426,34 @@ func (e *Engine) finalize(
 		}
 		result.Operation = awaiting
 		return result, nil
+	}
+	// 恢复或重定位不能把旧约束下的 pass 用在新约束上。需要时只重做独立检查，
+	// 保留已经生成的候选内容；检查不可用仍沿既有规则等待用户裁决。
+	constraints, err := e.semanticConstraints(ctx, operation, prepared)
+	if err != nil {
+		return e.fail(ctx, operation, err, now)
+	}
+	if len(constraints) > 0 {
+		basis, err := complianceBasisDigest(prepared, constraints)
+		if err != nil {
+			return e.fail(ctx, operation, err, now)
+		}
+		var existing domain.SemanticComplianceReport
+		if len(prepared.Impact.Compliance) > 0 {
+			if err := json.Unmarshal(prepared.Impact.Compliance, &existing); err != nil {
+				return e.fail(ctx, operation, err, now)
+			}
+		}
+		if existing.BasisDigest != basis {
+			prepared.Impact.Compliance, err = e.analyzeCompliance(ctx, executor, workerID, leaseDuration, operation, prepared, constraints)
+			if err != nil {
+				return e.fail(ctx, operation, err, now)
+			}
+			if err := e.store.RelocateProposal(ctx, prepared, operation.Attempt, now); err != nil {
+				return e.fail(ctx, operation, err, now)
+			}
+			result.Proposal = prepared
+		}
 	}
 	if reason, err := e.semanticApprovalReason(ctx, operation, prepared); err != nil {
 		return e.fail(ctx, operation, err, now)
@@ -427,6 +483,12 @@ func (e *Engine) finalize(
 		}
 		result.Operation = awaiting
 		return result, nil
+	}
+	if errors.Is(err, store.ErrRevisionConflict) {
+		// 重定位与提交之间又有提交：任务失效而非失败，后继继承工作区。
+		result, err := e.stale(ctx, operation, err, now)
+		result.Proposal = prepared
+		return result, err
 	}
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
@@ -619,10 +681,28 @@ func (e *Engine) semanticApprovalReason(
 	if err := report.Validate(); err != nil {
 		return "", err
 	}
+	basis, err := complianceBasisDigest(proposal, constraints)
+	if err != nil {
+		return "", err
+	}
+	if report.BasisDigest != basis {
+		return "semantic compliance evidence does not cover the candidate and current constraints", nil
+	}
 	if report.Status != domain.SemanticCompliancePass {
 		return fmt.Sprintf("semantic compliance is %s; user approval is required", report.Status), nil
 	}
 	return "", nil
+}
+
+func complianceBasisDigest(proposal domain.Proposal, constraints []domain.OwnershipRule) (string, error) {
+	payload, err := json.Marshal(struct {
+		Patches     []domain.Patch         `json:"patches"`
+		Constraints []domain.OwnershipRule `json:"constraints"`
+	}{proposal.Patches, constraints})
+	if err != nil {
+		return "", fmt.Errorf("encode compliance basis: %w", err)
+	}
+	return domain.Digest(payload), nil
 }
 
 // milestoneProposal 判定变化的重大性。例行推进——章节正文与随章提交的 Canon
@@ -662,10 +742,47 @@ func milestoneProposal(proposal domain.Proposal) bool {
 	return false
 }
 
+// fail 收尾失败并按原因打码（D46）：结果未知不是普通失败，用户对账或重提前不会自动重试。
 func (e *Engine) fail(ctx context.Context, operation domain.Operation, cause error, now time.Time) (RunResult, error) {
-	failed, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, domain.OperationFailed, cause.Error(), now)
+	failed, err := e.store.FailOperation(ctx, operation.ID, operation.Attempt, domain.FailureCodeFor(cause), cause.Error(), now)
 	if err != nil {
 		return RunResult{}, errors.Join(cause, err)
 	}
 	return RunResult{Operation: failed}, cause
+}
+
+// verifyBasis 核对证据基线在启动快照上属实（D48）：文档 revision、要求作用域摘要与
+// 工件摘要都必须与 BaseRevision 上的状态一致，不实的基线是执行器的无效产出。
+func (e *Engine) verifyBasis(ctx context.Context, operation domain.Operation, basis domain.EvidenceBasis) error {
+	err := e.changes.VerifyBasis(ctx, operation.Target, basis, operation.Snapshot.BaseRevision)
+	if errors.Is(err, change.ErrBasisMismatch) {
+		return fmt.Errorf("%w: %w", domain.ErrInvalid, err)
+	}
+	return err
+}
+
+// analyzeCompliance 只允许宿主声明报告的适用范围；分析失败沿既有合规规则显式等待裁决。
+func (e *Engine) analyzeCompliance(ctx context.Context, executor Executor, workerID string, leaseDuration time.Duration, operation domain.Operation, proposal domain.Proposal, constraints []domain.OwnershipRule) (json.RawMessage, error) {
+	report := unavailableComplianceReport(constraints, "configured executor does not provide independent semantic compliance analysis")
+	if analyzer, ok := executor.(SemanticComplianceAnalyzer); ok {
+		err := e.withLease(ctx, operation, workerID, leaseDuration, func(callContext context.Context) error {
+			var analyzeErr error
+			report, analyzeErr = analyzer.AnalyzeSemanticCompliance(callContext, operation, proposal, constraints)
+			return analyzeErr
+		})
+		if errors.Is(err, errLeaseLost) {
+			return nil, err
+		}
+		if err != nil {
+			report = unavailableComplianceReport(constraints, err.Error())
+		} else if err := report.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	basis, err := complianceBasisDigest(proposal, constraints)
+	if err != nil {
+		return nil, err
+	}
+	report.BasisDigest = basis
+	return json.Marshal(report)
 }

@@ -13,7 +13,7 @@ import (
 
 // StoryContextKind 是上下文的显式 schema 版本：结构演进时必须升版，
 // 旧 Execution Profile 仍按其记录的版本解释，不做静默兼容。
-const StoryContextKind = "story_context.v1"
+const StoryContextKind = "story_context.v2"
 
 func ContextKey(kind domain.OperationKind, task json.RawMessage) (string, error) {
 	if kind == "" || len(task) == 0 || !json.Valid(task) {
@@ -40,6 +40,7 @@ type ProjectContent struct {
 	Revision   domain.Revision
 	Intent     domain.Intent
 	Plan       []domain.PlanNode
+	Entities   []domain.Entity
 	Canon      []domain.CanonFact
 	Manuscript []domain.ManuscriptChapter
 	Ownership  []domain.OwnershipRule
@@ -89,6 +90,11 @@ func BuildStoryContext(content ProjectContent, kind domain.OperationKind, task j
 	}
 	for _, node := range content.Plan {
 		if err := addValue(domain.DocumentRef{Kind: domain.DocumentPlan, ID: node.ID}, node); err != nil {
+			return StoryContext{}, err
+		}
+	}
+	for _, entity := range content.Entities {
+		if err := addValue(domain.DocumentRef{Kind: domain.DocumentEntity, ID: entity.ID}, entity); err != nil {
 			return StoryContext{}, err
 		}
 	}
@@ -147,89 +153,56 @@ func BuildStoryContext(content ProjectContent, kind domain.OperationKind, task j
 		return nil
 	}
 
-	switch kind {
-	case domain.OperationInitializeProject, domain.OperationDevelopPlan,
-		domain.OperationRevisePlan, domain.OperationReviseCanon:
+	input, err := domain.DecodeTaskInput(kind, task)
+	if err != nil {
+		return StoryContext{}, err
+	}
+	switch input := input.(type) {
+	case *domain.InitializeProjectInput, *domain.DevelopPlanInput, *domain.RevisePlanInput:
 		for _, document := range documents {
 			if document.Ref.Kind != domain.DocumentManuscript {
 				selected[document.Ref.Key()] = document
 			}
 		}
-	case domain.OperationWriteChapter:
-		var input struct {
-			ChapterPlanID string `json:"chapter_plan_id"`
+	case *domain.ReviseCanonInput:
+		// 事实核验（D41）：全部结构文档加被核验章节的正文，事实要对着正文逐条核对。
+		for _, document := range documents {
+			if document.Ref.Kind != domain.DocumentManuscript {
+				selected[document.Ref.Key()] = document
+			}
 		}
-		if err := json.Unmarshal(task, &input); err != nil {
-			return StoryContext{}, fmt.Errorf("decode write context task: %w", err)
+		if err := include(domain.DocumentRef{Kind: domain.DocumentManuscript, ID: input.ChapterID}); err != nil {
+			return StoryContext{}, err
 		}
-		if strings.TrimSpace(input.ChapterPlanID) == "" {
-			return StoryContext{}, fmt.Errorf("write context requires chapter_plan_id: %w", domain.ErrInvalid)
-		}
+	case *domain.WriteChapterInput:
 		if err := include(domain.DocumentRef{Kind: domain.DocumentPlan, ID: input.ChapterPlanID}); err != nil {
 			return StoryContext{}, err
 		}
 		if err := writingBaseline(input.ChapterPlanID); err != nil {
 			return StoryContext{}, err
 		}
-	case domain.OperationRewriteChapter:
-		var input struct {
-			ChapterID string `json:"chapter_id"`
-		}
-		if err := json.Unmarshal(task, &input); err != nil {
-			return StoryContext{}, fmt.Errorf("decode rewrite context task: %w", err)
-		}
-		if strings.TrimSpace(input.ChapterID) == "" {
-			return StoryContext{}, fmt.Errorf("rewrite context requires chapter_id: %w", domain.ErrInvalid)
-		}
+	case *domain.RewriteChapterInput:
 		if err := include(domain.DocumentRef{Kind: domain.DocumentManuscript, ID: input.ChapterID}); err != nil {
 			return StoryContext{}, err
 		}
-		planID := ""
-		for _, chapter := range content.Manuscript {
-			if chapter.ID == input.ChapterID {
-				planID = chapter.PlanNodeID
-			}
-		}
-		if err := writingBaseline(planID); err != nil {
+		if err := writingBaseline(input.ChapterPlanID); err != nil {
 			return StoryContext{}, err
 		}
-	case domain.OperationRewriteAffected:
-		var input struct {
-			ChapterIDs []string `json:"chapter_ids"`
-		}
-		if err := json.Unmarshal(task, &input); err != nil {
-			return StoryContext{}, fmt.Errorf("decode affected rewrite context task: %w", err)
-		}
-		if len(input.ChapterIDs) == 0 {
-			return StoryContext{}, fmt.Errorf("affected rewrite context requires chapter_ids: %w", domain.ErrInvalid)
-		}
-		seen := make(map[string]struct{}, len(input.ChapterIDs))
+	case *domain.RewriteAffectedInput:
 		for _, id := range input.ChapterIDs {
-			if strings.TrimSpace(id) == "" {
-				return StoryContext{}, fmt.Errorf("affected rewrite chapter id is required: %w", domain.ErrInvalid)
-			}
-			if _, exists := seen[id]; exists {
-				return StoryContext{}, fmt.Errorf("duplicate affected rewrite chapter %q: %w", id, domain.ErrInvalid)
-			}
-			seen[id] = struct{}{}
 			if err := include(domain.DocumentRef{Kind: domain.DocumentManuscript, ID: id}); err != nil {
 				return StoryContext{}, err
 			}
 		}
-	case domain.OperationReviewRange:
-		var input struct {
-			Range struct {
-				ChapterIDs []string `json:"chapter_ids"`
-			} `json:"range"`
-		}
-		if err := json.Unmarshal(task, &input); err != nil {
-			return StoryContext{}, fmt.Errorf("decode review context task: %w", err)
-		}
-		if len(input.Range.ChapterIDs) == 0 {
-			return StoryContext{}, fmt.Errorf("review context requires range.chapter_ids: %w", domain.ErrInvalid)
-		}
-		for _, id := range input.Range.ChapterIDs {
+	case *domain.ReviewRangeInput:
+		for _, id := range input.ChapterIDs {
 			if err := include(domain.DocumentRef{Kind: domain.DocumentManuscript, ID: id}); err != nil {
+				return StoryContext{}, err
+			}
+		}
+		canonScope := domain.ReviewCanonScope(content.Manuscript, input.ChapterIDs)
+		for _, ref := range domain.CanonScopeRefs(content.Canon, content.Manuscript, canonScope) {
+			if err := include(ref); err != nil {
 				return StoryContext{}, err
 			}
 		}

@@ -35,7 +35,7 @@ var allowedImports = map[string][]string{
 	"capability/pack":   {"domain"},
 	"capability/prompt": {"domain", "store"},
 	"capability":        {"activity", "domain", "store", "change", "capability/prompt", "workspace"},
-	"operation":         {"domain", "store", "change", "capability/prompt"},
+	"operation":         {"domain", "store", "change"},
 	"service":           {"activity", "domain", "store", "change", "derive", "operation", "capability/pack", "capability/prompt"},
 	"entry/app":         {},
 	"entry/headless":    {"domain", "service"},

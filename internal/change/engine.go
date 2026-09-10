@@ -37,14 +37,21 @@ func NewWithSemanticAnalyzer(authorityStore *store.Store, analyzer SemanticAnaly
 }
 
 func (e *Engine) Prepare(ctx context.Context, proposal domain.Proposal) (domain.Proposal, error) {
-	return e.prepare(ctx, proposal, false)
+	return e.prepare(ctx, proposal, false, 0)
+}
+
+func (e *Engine) PrepareExecution(ctx context.Context, proposal domain.Proposal, attempt int) (domain.Proposal, error) {
+	if attempt <= 0 {
+		return domain.Proposal{}, fmt.Errorf("execution proposal requires an attempt: %w", domain.ErrInvalid)
+	}
+	return e.prepare(ctx, proposal, false, attempt)
 }
 
 func (e *Engine) PrepareWithSemantic(ctx context.Context, proposal domain.Proposal) (domain.Proposal, error) {
-	return e.prepare(ctx, proposal, true)
+	return e.prepare(ctx, proposal, true, 0)
 }
 
-func (e *Engine) prepare(ctx context.Context, proposal domain.Proposal, analyzeSemantic bool) (domain.Proposal, error) {
+func (e *Engine) prepare(ctx context.Context, proposal domain.Proposal, analyzeSemantic bool, attempt int) (domain.Proposal, error) {
 	if proposal.ApprovalState != domain.ApprovalPending || proposal.DecidedBy != nil || proposal.DecidedAt != nil {
 		return domain.Proposal{}, fmt.Errorf("prepare requires a pending proposal: %w", ErrInvalidState)
 	}
@@ -82,6 +89,9 @@ func (e *Engine) prepare(ctx context.Context, proposal domain.Proposal, analyzeS
 			return domain.Proposal{}, err
 		}
 		proposal.Impact.Semantic = append(json.RawMessage(nil), semantic...)
+	}
+	if attempt > 0 {
+		return e.store.SaveExecutionProposal(ctx, proposal, attempt)
 	}
 	return e.store.SaveProposal(ctx, proposal)
 }
@@ -207,6 +217,14 @@ func (e *Engine) PrepareRevert(
 	for _, key := range keys {
 		currentDocument, inCurrent := currentState[key]
 		targetDocument, inTarget := targetState[key]
+		ref := currentDocument.Document
+		if !inCurrent {
+			ref = targetDocument.Document
+		}
+		// 只追加文档（裁决）不随回滚变化：历史记录不是可回退的内容。
+		if spec, _ := domain.DocumentType(ref.Kind); spec.AppendOnly {
+			continue
+		}
 		switch {
 		case !inTarget:
 			patches = append(patches, domain.Patch{Document: currentDocument.Document, Operation: domain.PatchDelete})
@@ -289,10 +307,19 @@ func (e *Engine) validateAndAnalyze(ctx context.Context, change domain.Proposal)
 	if err := validateCanonContinuity(baseState, change.Patches); err != nil {
 		return StructuralImpact{}, nil, err
 	}
-	if err := validateAICanonDelta(change); err != nil {
+	if err := validateChapterAuthors(change); err != nil {
+		return StructuralImpact{}, nil, err
+	}
+	if err := validateAppendOnly(baseState, change.Patches); err != nil {
+		return StructuralImpact{}, nil, err
+	}
+	if err := e.validateAttachments(ctx, change); err != nil {
 		return StructuralImpact{}, nil, err
 	}
 	if err := validateProjectedState(change.Target, projected); err != nil {
+		return StructuralImpact{}, nil, err
+	}
+	if err := validateAICanon(baseState, projected, change); err != nil {
 		return StructuralImpact{}, nil, err
 	}
 	impact, err := buildStructuralImpact(projected, direct)
@@ -300,6 +327,31 @@ func (e *Engine) validateAndAnalyze(ctx context.Context, change domain.Proposal)
 		return StructuralImpact{}, nil, err
 	}
 	return impact, baseState, nil
+}
+
+// validateAttachments 要求附件引用的工件已发布、属于本作品且摘要一致（D47）：
+// 权威只能指向不可变内容。
+func (e *Engine) validateAttachments(ctx context.Context, change domain.Proposal) error {
+	for _, patch := range change.Patches {
+		if patch.Document.Kind != domain.DocumentAttachment || patch.Operation != domain.PatchPut {
+			continue
+		}
+		var attachment domain.Attachment
+		if err := json.Unmarshal(patch.Content, &attachment); err != nil {
+			return fmt.Errorf("decode attachment %q: %w", patch.Document.ID, err)
+		}
+		artifact, err := e.store.GetArtifact(ctx, attachment.Artifact.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("attachment %q references unpublished artifact %q: %w", attachment.ID, attachment.Artifact.ID, ErrStructuralConflict)
+		}
+		if err != nil {
+			return err
+		}
+		if artifact.ProjectID != change.Target.ID || artifact.Digest != attachment.Artifact.Digest {
+			return fmt.Errorf("attachment %q artifact %q does not match the published object: %w", attachment.ID, attachment.Artifact.ID, ErrStructuralConflict)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) currentRevision(ctx context.Context, target domain.AuthorityTarget) (domain.Revision, error) {
@@ -315,7 +367,7 @@ func (e *Engine) loadState(ctx context.Context, target domain.AuthorityTarget, a
 	if at == domain.InitialRevision {
 		return state, nil
 	}
-	for _, kind := range allowedDocumentKinds(target.Kind) {
+	for _, kind := range domain.DocumentKindsFor(target.Kind) {
 		documents, err := e.store.ListDocuments(ctx, target, kind, at)
 		if err != nil {
 			return nil, err
@@ -332,7 +384,7 @@ func (e *Engine) loadState(ctx context.Context, target domain.AuthorityTarget, a
 
 func validateTargetDocuments(target domain.AuthorityTarget, patches []domain.Patch) error {
 	allowed := make(map[domain.DocumentKind]struct{})
-	for _, kind := range allowedDocumentKinds(target.Kind) {
+	for _, kind := range domain.DocumentKindsFor(target.Kind) {
 		allowed[kind] = struct{}{}
 	}
 	for _, patch := range patches {
@@ -341,23 +393,6 @@ func validateTargetDocuments(target domain.AuthorityTarget, patches []domain.Pat
 		}
 	}
 	return nil
-}
-
-func allowedDocumentKinds(kind domain.AuthorityKind) []domain.DocumentKind {
-	switch kind {
-	case domain.AuthorityProject:
-		return []domain.DocumentKind{
-			domain.DocumentIntent, domain.DocumentPlan, domain.DocumentCanon,
-			domain.DocumentManuscript, domain.DocumentOwnership, domain.DocumentApproval,
-			domain.DocumentOverlay, domain.DocumentAssets, domain.DocumentDirective,
-		}
-	case domain.AuthorityProfile:
-		return []domain.DocumentKind{domain.DocumentCreatorProfile}
-	case domain.AuthorityPack:
-		return []domain.DocumentKind{domain.DocumentPack}
-	default:
-		return nil
-	}
 }
 
 func validateProjectedState(target domain.AuthorityTarget, state documentState) error {
@@ -369,10 +404,6 @@ func validateProjectedState(target domain.AuthorityTarget, state documentState) 
 	manuscriptIDs := make(map[string]struct{})
 	for _, document := range state {
 		switch document.Document.Kind {
-		case domain.DocumentIntent:
-			if document.Document.ID != "root" {
-				return fmt.Errorf("project intent document id must be root: %w", ErrStructuralConflict)
-			}
 		case domain.DocumentPlan:
 			var node domain.PlanNode
 			if err := json.Unmarshal(document.Content, &node); err != nil {
@@ -416,9 +447,9 @@ func validateProjectedState(target domain.AuthorityTarget, state documentState) 
 			if err := json.Unmarshal(document.Content, &fact); err != nil {
 				return fmt.Errorf("decode canon %q: %w", document.Document.ID, err)
 			}
-			if fact.SourceChapterID != "" {
-				if _, ok := manuscriptIDs[fact.SourceChapterID]; !ok {
-					return fmt.Errorf("canon %q references missing source chapter %q: %w", fact.ID, fact.SourceChapterID, ErrStructuralConflict)
+			for _, chapterID := range []string{fact.SourceChapterID, fact.EffectiveChapterID} {
+				if _, ok := manuscriptIDs[chapterID]; chapterID != "" && !ok {
+					return fmt.Errorf("canon %q references missing chapter %q: %w", fact.ID, chapterID, ErrStructuralConflict)
 				}
 			}
 		}
@@ -472,7 +503,14 @@ func validateCanonContinuity(base documentState, patches []domain.Patch) error {
 	return nil
 }
 
-func validateAICanonDelta(change domain.Proposal) error {
+// validateAICanon 落实 AI/扩展提案的 Canon 规则（§4.4 D41）：
+//  1. 带正文的提案里，每条事实 put 的来源章必须是本提案的正文之一；
+//  2. 每个正文 put 至少一条来源事实，且必须重申报 base 中全部来源于该章的事实（put 或 delete）；
+//  3. 带正文的提案只能改动来源章在本提案正文集合内的事件——事件跨章只追加；
+//  4. 状态类事实更新的生效位置不得早于现值——插叙不覆盖当前状态，应记录为事件。
+//
+// 用户提案不受此限，由用户为内容背书。
+func validateAICanon(base, projected documentState, change domain.Proposal) error {
 	if change.Author.Kind != domain.AuthorAI && change.Author.Kind != domain.AuthorExtension {
 		return nil
 	}
@@ -482,25 +520,117 @@ func validateAICanonDelta(change domain.Proposal) error {
 			chapters[patch.Document.ID] = struct{}{}
 		}
 	}
-	if len(chapters) == 0 {
-		return nil
+	numbers, err := chapterNumbers(projected)
+	if err != nil {
+		return err
 	}
 	covered := make(map[string]struct{})
+	touched := make(map[string]struct{})
 	for _, patch := range change.Patches {
-		if patch.Document.Kind != domain.DocumentCanon || patch.Operation != domain.PatchPut {
+		if patch.Document.Kind != domain.DocumentCanon {
 			continue
 		}
-		var fact domain.CanonFact
-		if err := json.Unmarshal(patch.Content, &fact); err != nil {
-			return fmt.Errorf("decode writer canon delta %q: %w", patch.Document.ID, err)
+		touched[patch.Document.Key()] = struct{}{}
+		var previous *domain.CanonFact
+		if document, exists := base[patch.Document.Key()]; exists {
+			previous = new(domain.CanonFact)
+			if err := json.Unmarshal(document.Content, previous); err != nil {
+				return fmt.Errorf("decode previous canon %q: %w", patch.Document.ID, err)
+			}
+			if _, own := chapters[previous.SourceChapterID]; len(chapters) > 0 && previous.IsEvent() && !own {
+				return fmt.Errorf("event %q belongs to chapter %q outside this proposal; events are append-only across chapters: %w",
+					previous.ID, previous.SourceChapterID, ErrStructuralConflict)
+			}
 		}
-		if _, ok := chapters[fact.SourceChapterID]; ok {
-			covered[fact.SourceChapterID] = struct{}{}
+		if patch.Operation != domain.PatchPut {
+			continue
+		}
+		var next domain.CanonFact
+		if err := json.Unmarshal(patch.Content, &next); err != nil {
+			return fmt.Errorf("decode canon %q: %w", patch.Document.ID, err)
+		}
+		if _, own := chapters[next.SourceChapterID]; len(chapters) > 0 && !own {
+			return fmt.Errorf("canon %q must be sourced from a chapter in the same proposal: %w", next.ID, ErrStructuralConflict)
+		}
+		covered[next.SourceChapterID] = struct{}{}
+		if previous != nil && !next.IsEvent() && numbers[next.EffectiveChapter()] < numbers[previous.EffectiveChapter()] {
+			return fmt.Errorf("canon %q cannot move its effective position back from %q to %q; record flashbacks as events: %w",
+				next.ID, previous.EffectiveChapter(), next.EffectiveChapter(), ErrStructuralConflict)
 		}
 	}
 	for chapterID := range chapters {
 		if _, ok := covered[chapterID]; !ok {
 			return fmt.Errorf("AI manuscript %q requires a Canon Delta in the same Proposal: %w", chapterID, ErrStructuralConflict)
+		}
+	}
+	for key, document := range base {
+		if document.Document.Kind != domain.DocumentCanon {
+			continue
+		}
+		var fact domain.CanonFact
+		if err := json.Unmarshal(document.Content, &fact); err != nil {
+			return fmt.Errorf("decode canon %q: %w", document.Document.ID, err)
+		}
+		if _, rewritten := chapters[fact.SourceChapterID]; rewritten {
+			if _, ok := touched[key]; !ok {
+				return fmt.Errorf("rewritten chapter %q must redeclare canon %q (confirm, update or delete): %w",
+					fact.SourceChapterID, fact.ID, ErrStructuralConflict)
+			}
+		}
+	}
+	return nil
+}
+
+// chapterNumbers 取投影状态里各正文的章号：故事内位置按它比较。
+func chapterNumbers(state documentState) (map[string]int, error) {
+	numbers := make(map[string]int)
+	for _, document := range state {
+		if document.Document.Kind != domain.DocumentManuscript {
+			continue
+		}
+		var chapter domain.ManuscriptChapter
+		if err := json.Unmarshal(document.Content, &chapter); err != nil {
+			return nil, fmt.Errorf("decode chapter %q: %w", document.Document.ID, err)
+		}
+		numbers[chapter.ID] = chapter.Number
+	}
+	return numbers, nil
+}
+
+// validateChapterAuthors 落实 D34：AI 与扩展提交的章节必须署自己的名，不得冒认
+// 用户或他方；用户提交（含导入、回滚）可以携带任何作者，由用户为内容背书。
+func validateChapterAuthors(change domain.Proposal) error {
+	if change.Author.Kind != domain.AuthorAI && change.Author.Kind != domain.AuthorExtension {
+		return nil
+	}
+	for _, patch := range change.Patches {
+		if patch.Document.Kind != domain.DocumentManuscript || patch.Operation != domain.PatchPut {
+			continue
+		}
+		var chapter domain.ManuscriptChapter
+		if err := json.Unmarshal(patch.Content, &chapter); err != nil {
+			return fmt.Errorf("decode chapter author %q: %w", patch.Document.ID, err)
+		}
+		if chapter.Author != change.Author.Kind {
+			return fmt.Errorf("chapter %q author %s does not match proposal author %s: %w",
+				chapter.ID, chapter.Author, change.Author.Kind, ErrStructuralConflict)
+		}
+	}
+	return nil
+}
+
+// validateAppendOnly 落实只追加文档（D43 裁决）：不得覆盖已存在的记录，也不得删除。
+func validateAppendOnly(base documentState, patches []domain.Patch) error {
+	for _, patch := range patches {
+		spec, err := domain.DocumentType(patch.Document.Kind)
+		if err != nil {
+			return err
+		}
+		if !spec.AppendOnly {
+			continue
+		}
+		if _, exists := base[patch.Document.Key()]; exists || patch.Operation == domain.PatchDelete {
+			return fmt.Errorf("%s is append-only: %w", patch.Document.Key(), ErrStructuralConflict)
 		}
 	}
 	return nil
@@ -670,14 +800,14 @@ func authorize(change domain.Proposal, base documentState) error {
 		}
 	}
 	for _, patch := range change.Patches {
-		// D25/D31/D33：所有权、审批策略、Project Overlay、资产固定引用与 Directive 都是
-		// 创作边界，AI 可以提出 Proposal，但任何作者的变更都必须由用户裁决。
-		switch patch.Document.Kind {
-		case domain.DocumentOwnership, domain.DocumentApproval, domain.DocumentOverlay,
-			domain.DocumentAssets, domain.DocumentDirective:
-			if decider.Kind != domain.AuthorUser {
-				return fmt.Errorf("creative boundary changes require user approval: %w", ErrUnauthorized)
-			}
+		// D25/D31/D33：用户专属文档是创作边界，AI 可以提出 Proposal，但任何作者的
+		// 变更都必须由用户裁决。
+		spec, err := domain.DocumentType(patch.Document.Kind)
+		if err != nil {
+			return err
+		}
+		if spec.UserOnly && decider.Kind != domain.AuthorUser {
+			return fmt.Errorf("creative boundary changes require user approval: %w", ErrUnauthorized)
 		}
 		control, err := controlLevel(base, patch.Document)
 		if err != nil {
@@ -727,10 +857,21 @@ func compliancePasses(compliance json.RawMessage) error {
 	return nil
 }
 
+// controlLevel 取文档的控制级别：有 Ownership 规则以规则为准；没有规则时，用户
+// 亲笔的章节默认 locked（D34），其余 open。
 func controlLevel(state documentState, ref domain.DocumentRef) (domain.ControlLevel, error) {
 	ownershipRef := domain.DocumentRef{Kind: domain.DocumentOwnership, ID: ref.Key()}
 	document, ok := state[ownershipRef.Key()]
 	if !ok {
+		if base, exists := state[ref.Key()]; exists && ref.Kind == domain.DocumentManuscript {
+			var chapter domain.ManuscriptChapter
+			if err := json.Unmarshal(base.Content, &chapter); err != nil {
+				return "", fmt.Errorf("decode chapter author for %q: %w", ref.Key(), err)
+			}
+			if chapter.Author == domain.AuthorUser {
+				return domain.ControlLocked, nil
+			}
+		}
 		return domain.ControlOpen, nil
 	}
 	var rule domain.OwnershipRule

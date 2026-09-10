@@ -3,11 +3,11 @@ package operation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/change"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -43,24 +43,12 @@ func TestRunNextRecoversCommittedProposalWithoutExecutingAgain(t *testing.T) {
 		t.Fatalf("commit seed: %v", err)
 	}
 
-	worker, err := prompt.BuiltinWorkerProfile("writer.compose")
-	if err != nil {
-		t.Fatalf("load writer capability: %v", err)
-	}
-	compiled, err := prompt.NewRegistry(authorityStore).Reload(ctx, prompt.CompileRequest{
-		ProjectID: "book-1", CoreProtocolVersion: "core-v1", Worker: worker,
-		Intent: domain.Intent{Premise: "凡人修仙"}, StoryContext: json.RawMessage(`{"revision":1}`),
-		Task: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), BaseRevision: 1, ProjectOverlayRevision: 1,
-		ModelConfigDigest: "model", ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-	}, now)
-	if err != nil {
-		t.Fatalf("compile execution profile: %v", err)
-	}
+	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	operation := domain.Operation{
 		ID: "write-1", Kind: domain.OperationWriteChapter, Target: target,
 		State: domain.OperationQueued, RunID: createEngineTestRun(t, ctx, authorityStore, target.ID, now),
-		Snapshot: compiled.Snapshot,
-		Input:    json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+		Snapshot: engineSnapshot(input, 1, domain.ApprovalAuto),
+		Input:    input, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
@@ -116,9 +104,9 @@ type neverExecutor struct {
 	called bool
 }
 
-func (e *neverExecutor) ModelConfigDigest() string { return "model" }
+func (e *neverExecutor) Identity() string { return testExecutor }
 
-func (e *neverExecutor) Execute(context.Context, domain.Operation, prompt.Compiled) (domain.OperationOutcome, error) {
+func (e *neverExecutor) Execute(context.Context, domain.Operation) (domain.OperationOutcome, error) {
 	e.called = true
 	panic("executor must not run when the operation proposal is already committed")
 }
@@ -144,29 +132,12 @@ func TestAutoApprovalRequiresIndependentSemanticComplianceForConstrainedStory(t 
 			defer authorityStore.Close()
 			target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-constraints"}
 			seedConstrainedProject(t, ctx, authorityStore, target, now)
-			worker, err := prompt.BuiltinWorkerProfile("writer.compose")
-			if err != nil {
-				t.Fatalf("load writer capability: %v", err)
-			}
-			compiled, err := prompt.NewRegistry(authorityStore).Reload(ctx, prompt.CompileRequest{
-				ProjectID: target.ID, CoreProtocolVersion: "core-v1", Worker: worker,
-				Intent: domain.Intent{Premise: "凡人守住底线"},
-				Ownership: []domain.OwnershipRule{{
-					Target: domain.DocumentRef{Kind: domain.DocumentCanon, ID: "hero-bottom-line"}, Control: domain.ControlLocked,
-				}},
-				StoryContext: json.RawMessage(`{"revision":1}`),
-				Task:         json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
-				BaseRevision: 1, ProjectOverlayRevision: 1, ModelConfigDigest: "model",
-				ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
-			}, now)
-			if err != nil {
-				t.Fatalf("compile: %v", err)
-			}
+			input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 			operation := domain.Operation{
 				ID: "write-constrained", Kind: domain.OperationWriteChapter, Target: target,
 				State: domain.OperationQueued,
-				RunID: createEngineTestRun(t, ctx, authorityStore, target.ID, now), Snapshot: compiled.Snapshot,
-				Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+				RunID: createEngineTestRun(t, ctx, authorityStore, target.ID, now), Snapshot: engineSnapshot(input, 1, domain.ApprovalAuto),
+				Input: input, CreatedAt: now, UpdatedAt: now,
 			}
 			if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 				t.Fatalf("create operation: %v", err)
@@ -220,7 +191,7 @@ func TestMilestoneProposalClassification(t *testing.T) {
 
 	// 例行推进：章节正文与随章 Canon Delta 不构成 milestone，否则中间档塌缩为 manual。
 	chapterContent, err := json.Marshal(domain.ManuscriptChapter{
-		ID: "chapter-2", PlanNodeID: "chapter-plan-2", Number: 2, Title: "第二章",
+		ID: "chapter-2", PlanNodeID: "chapter-plan-2", Number: 2, Title: "第二章", Author: domain.AuthorAI,
 		Blocks: []domain.ManuscriptBlock{{ID: "p-1", Text: "旅程继续。"}},
 	})
 	if err != nil {
@@ -263,23 +234,19 @@ func TestLongCallRenewsOperationLease(t *testing.T) {
 	defer authorityStore.Close()
 	now := time.Now().UTC()
 	lease := 300 * time.Millisecond
+	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	operation := domain.Operation{
 		ID: "long-call", Kind: domain.OperationWriteChapter,
-		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
-		State:  domain.OperationQueued,
-		RunID:  createEngineTestRun(t, ctx, authorityStore, "book-1", now),
-		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 1,
-			CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.compose@1",
-			ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-			ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "manual",
-		},
-		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`), CreatedAt: now, UpdatedAt: now,
+		Target:   domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
+		State:    domain.OperationQueued,
+		RunID:    createEngineTestRun(t, ctx, authorityStore, "book-1", now),
+		Snapshot: engineSnapshot(input, 1, domain.ApprovalManual),
+		Input:    input, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	operation, err = authorityStore.ClaimNextOperationForModel(ctx, "worker-1", "model", lease, now)
+	operation, err = authorityStore.ClaimNextOperationForExecutor(ctx, "worker-1", testExecutor, lease, now)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
@@ -298,20 +265,31 @@ func TestLongCallRenewsOperationLease(t *testing.T) {
 	}
 }
 
+// 引擎不再加载 Execution Profile（D45）：执行器按快照自行取配置，这里的
+// ConfigDigest 无需对应任何记录。
+const testExecutor = "test.executor@1"
+
+func engineSnapshot(input json.RawMessage, base domain.Revision, policy domain.ApprovalPolicy) domain.ExecutionSnapshot {
+	return domain.ExecutionSnapshot{
+		Executor: testExecutor, BaseRevision: base, InputDigest: domain.Digest(input),
+		ConfigDigest: "profile", ApprovalPolicy: policy,
+	}
+}
+
 type manuscriptExecutor struct{}
 
-func (manuscriptExecutor) ModelConfigDigest() string { return "model" }
+func (manuscriptExecutor) Identity() string { return testExecutor }
 
-func (manuscriptExecutor) Execute(_ context.Context, operation domain.Operation, _ prompt.Compiled) (domain.OperationOutcome, error) {
+func (manuscriptExecutor) Execute(_ context.Context, operation domain.Operation) (domain.OperationOutcome, error) {
 	chapter, err := json.Marshal(domain.ManuscriptChapter{
-		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门",
+		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: domain.AuthorAI,
 		Blocks: []domain.ManuscriptBlock{{ID: "chapter-1-block-1", Text: "他在山门前作出选择。"}},
 	})
 	if err != nil {
 		return domain.OperationOutcome{}, err
 	}
 	canon, err := json.Marshal(domain.CanonFact{
-		ID: "chapter-1-outcome", Kind: domain.CanonEvent, SubjectID: "chapter-1",
+		ID: "chapter-1-outcome", Kind: domain.CanonEvent, SubjectID: "hero",
 		Predicate: "event.chapter_outcome", Value: json.RawMessage(`"通过山门选择"`), SourceChapterID: "chapter-1",
 	})
 	if err != nil {
@@ -355,6 +333,7 @@ func seedConstrainedProject(
 		{domain.DocumentRef{Kind: domain.DocumentPlan, ID: "volume-1"}, domain.PlanNode{ID: "volume-1", Kind: domain.PlanVolume, Title: "入道", Summary: "进入山门"}},
 		{domain.DocumentRef{Kind: domain.DocumentPlan, ID: "arc-1"}, domain.PlanNode{ID: "arc-1", Kind: domain.PlanArc, ParentID: "volume-1", Title: "山门", Summary: "接受考验"}},
 		{domain.DocumentRef{Kind: domain.DocumentPlan, ID: "chapter-plan-1"}, domain.PlanNode{ID: "chapter-plan-1", Kind: domain.PlanChapter, ParentID: "arc-1", Title: "第一章", Summary: "抵达山门"}},
+		{domain.DocumentRef{Kind: domain.DocumentEntity, ID: "hero"}, domain.Entity{ID: "hero", Kind: domain.EntityCharacter, Name: "主角"}},
 		{domain.DocumentRef{Kind: domain.DocumentCanon, ID: "hero-bottom-line"}, domain.CanonFact{ID: "hero-bottom-line", Kind: domain.CanonWorldRule, SubjectID: "hero", Predicate: "rule.bottom_line", Value: json.RawMessage(`"不伤无辜"`)}},
 		{domain.DocumentRef{Kind: domain.DocumentOwnership, ID: "canon:hero-bottom-line"}, domain.OwnershipRule{Target: domain.DocumentRef{Kind: domain.DocumentCanon, ID: "hero-bottom-line"}, Control: domain.ControlLocked}},
 	}
@@ -393,7 +372,7 @@ func createEngineTestRun(
 	t.Helper()
 	run := domain.CreationRun{
 		ID: "run:" + projectID, ProjectID: projectID,
-		Goal: domain.CreationRunGoal{Premise: "测试创作", TargetChapters: 3},
+		Goal: domain.NovelGoal{Premise: "测试创作", TargetChapters: 3}.Goal(),
 		Strategy: domain.CreationRunStrategy{
 			PlanWindowChapters: 3, ReviewCadence: domain.ReviewPerPlanWindow, AutoRepairBudget: 3,
 		},
@@ -406,4 +385,295 @@ func createEngineTestRun(
 		t.Fatalf("create operation test run: %v", err)
 	}
 	return run.ID
+}
+
+// artifactExecutor 只产出工件：先发布对象，再交元数据；crashAfterPublish 让首次
+// 执行在对象落盘后、元数据提交前失败，模拟崩溃窗口。
+type artifactExecutor struct {
+	store             *store.Store
+	crashAfterPublish bool
+	calls             int
+	basis             domain.EvidenceBasis
+}
+
+func (artifactExecutor) Identity() string { return testExecutor }
+
+func (e *artifactExecutor) Execute(_ context.Context, operation domain.Operation) (domain.OperationOutcome, error) {
+	e.calls++
+	writer, err := e.store.NewArtifactWriter(operation.ID, operation.Attempt)
+	if err != nil {
+		return domain.OperationOutcome{}, err
+	}
+	writer.Write([]byte("封面"))
+	digest, size, err := writer.Publish()
+	if err != nil {
+		return domain.OperationOutcome{}, err
+	}
+	if e.crashAfterPublish && e.calls == 1 {
+		return domain.OperationOutcome{}, errors.New("crashed after publishing the object")
+	}
+	basis := e.basis
+	if basis.Equal(domain.EvidenceBasis{}) {
+		basis, err = domain.OperationBasis(operation)
+		if err != nil {
+			return domain.OperationOutcome{}, err
+		}
+	}
+	return domain.OperationOutcome{Artifacts: []domain.Artifact{{
+		ID: domain.ArtifactID(operation.ID, "cover"), ProjectID: operation.Target.ID, Digest: digest, MediaType: "image/png",
+		Size: size, Basis: basis, OperationID: operation.ID, Attempt: operation.Attempt, CreatedAt: operation.CreatedAt,
+	}}}, nil
+}
+
+// TestArtifactWithUntruthfulBasisFails 守护 D48：产出声明的基线必须在启动快照上
+// 属实，引用不存在的文档即失败，不落元数据。
+func TestArtifactWithUntruthfulBasisFails(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	operation := createAssetOperation(t, ctx, authorityStore, now)
+	executor := &artifactExecutor{store: authorityStore, basis: domain.EvidenceBasis{
+		Documents: []domain.DocumentBasis{{Ref: domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}, Revision: 1}, {Ref: domain.DocumentRef{Kind: domain.DocumentEntity, ID: "missing"}, Revision: 1}},
+	}}
+	result, err := NewEngine(authorityStore).RunNext(ctx, executor, "worker-1", time.Minute, now.Add(time.Minute))
+	if !errors.Is(err, domain.ErrInvalid) || result.Operation.State != domain.OperationFailed {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if _, err := authorityStore.GetArtifact(ctx, domain.ArtifactID(operation.ID, "cover")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("artifact metadata must not persist, got %v", err)
+	}
+}
+
+func createAssetOperation(t *testing.T, ctx context.Context, authorityStore *store.Store, now time.Time) domain.Operation {
+	t.Helper()
+	intent, _ := json.Marshal(domain.Intent{Premise: "封面生成"})
+	commitUserChange(t, ctx, authorityStore, domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}, "seed-asset", now, domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}, Operation: domain.PatchPut, Content: intent})
+	input := json.RawMessage(`{"target":{"kind":"intent","id":"root"},"role":"cover","basis":{"documents":[{"ref":{"kind":"intent","id":"root"},"revision":1}]}}`)
+	operation, err := authorityStore.CreateOperation(ctx, domain.Operation{
+		ID: "asset-1", Kind: domain.OperationGenerateAsset,
+		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
+		State:  domain.OperationQueued, RunID: createEngineTestRun(t, ctx, authorityStore, "book-1", now),
+		Snapshot: engineSnapshot(input, 1, domain.ApprovalAuto),
+		Input:    input, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create asset operation: %v", err)
+	}
+	return operation
+}
+
+func TestArtifactOnlyOutcomeConcludesSucceeded(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	operation := createAssetOperation(t, ctx, authorityStore, now)
+	executor := &artifactExecutor{store: authorityStore}
+	result, err := NewEngine(authorityStore).RunNext(ctx, executor, "worker-1", time.Minute, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Operation.State != domain.OperationSucceeded || len(result.Artifacts) != 1 || result.Proposal.ID != "" {
+		t.Fatalf("result = %#v", result)
+	}
+	stored, err := authorityStore.GetArtifact(ctx, domain.ArtifactID(operation.ID, "cover"))
+	if err != nil || stored.Attempt != 1 || stored.Digest != result.Artifacts[0].Digest {
+		t.Fatalf("stored artifact = %#v, %v", stored, err)
+	}
+	if content, err := authorityStore.ReadArtifact(stored.Digest); err != nil || string(content) != "封面" {
+		t.Fatalf("object = %q, %v", content, err)
+	}
+}
+
+func TestCrashAfterArtifactPublishBeforeMetadataCommitRecoversByReexecution(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	operation := createAssetOperation(t, ctx, authorityStore, now)
+	executor := &artifactExecutor{store: authorityStore, crashAfterPublish: true}
+	engine := NewEngine(authorityStore)
+	if result, err := engine.RunNext(ctx, executor, "worker-1", time.Minute, now.Add(time.Minute)); err == nil || result.Operation.State != domain.OperationFailed {
+		t.Fatalf("first run = %#v, %v; want failed after crash", result, err)
+	}
+	if _, err := authorityStore.GetArtifact(ctx, domain.ArtifactID(operation.ID, "cover")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("metadata must not exist after crash: %v", err)
+	}
+	if _, err := authorityStore.TransitionOperation(ctx, operation.ID, domain.OperationFailed, domain.OperationQueued, "resume", now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	result, err := engine.RunNext(ctx, executor, "worker-1", time.Minute, now.Add(3*time.Minute))
+	if err != nil || result.Operation.State != domain.OperationSucceeded || executor.calls != 2 {
+		t.Fatalf("second run = %#v, %v, calls = %d", result, err, executor.calls)
+	}
+	stored, err := authorityStore.GetArtifact(ctx, domain.ArtifactID(operation.ID, "cover"))
+	if err != nil || stored.Attempt != 2 {
+		t.Fatalf("stored artifact = %#v, %v", stored, err)
+	}
+	// 同内容重发布落到同一对象：崩溃不留下第二份副本。
+	if content, err := authorityStore.ReadArtifact(stored.Digest); err != nil || string(content) != "封面" {
+		t.Fatalf("object = %q, %v", content, err)
+	}
+}
+
+// commitUserChange 以用户身份在当前 Revision 上提交补丁，返回新 Revision。
+func commitUserChange(t *testing.T, ctx context.Context, authorityStore *store.Store, target domain.AuthorityTarget, id string, now time.Time, patches ...domain.Patch) domain.Revision {
+	t.Helper()
+	engine := change.New(authorityStore)
+	current, err := authorityStore.CurrentRevision(ctx, target)
+	if errors.Is(err, store.ErrNotFound) {
+		current = domain.InitialRevision
+	} else if err != nil {
+		t.Fatalf("current revision: %v", err)
+	}
+	proposal, err := engine.Prepare(ctx, domain.Proposal{
+		ID: id, Target: target, BaseRevision: current, Author: domain.Author{Kind: domain.AuthorUser, ID: "user-1"},
+		Reason: id, Patches: patches, ApprovalState: domain.ApprovalPending, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("prepare %s: %v", id, err)
+	}
+	proposal, err = change.Decide(proposal, domain.ApprovalApproved, domain.Author{Kind: domain.AuthorUser, ID: "user-1"}, now)
+	if err != nil {
+		t.Fatalf("approve %s: %v", id, err)
+	}
+	committed, err := engine.Commit(ctx, proposal)
+	if err != nil {
+		t.Fatalf("commit %s: %v", id, err)
+	}
+	return committed.NewRevision
+}
+
+func lockPatch(t *testing.T, ref domain.DocumentRef) domain.Patch {
+	t.Helper()
+	content, err := json.Marshal(domain.OwnershipRule{Target: ref, Control: domain.ControlLocked})
+	if err != nil {
+		t.Fatalf("marshal ownership: %v", err)
+	}
+	return domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentOwnership, ID: ref.Key()}, Operation: domain.PatchPut, Content: content}
+}
+
+// TestFinalizeRelocatesControlOnlyDrift：提案已落盘、收尾前用户锁定了不相干设定，
+// 提案按 D51 重定位到当前 Revision 提交；任务不作废，启动快照保持原值。
+func TestFinalizeRelocatesControlOnlyDrift(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"}
+	intent, _ := json.Marshal(domain.Intent{Premise: "凡人修仙"})
+	commitUserChange(t, ctx, authorityStore, target, "seed", now, domain.Patch{
+		Document: domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}, Operation: domain.PatchPut, Content: intent,
+	})
+	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
+	operation := domain.Operation{
+		ID: "write-1", Kind: domain.OperationWriteChapter, Target: target,
+		State: domain.OperationQueued, RunID: createEngineTestRun(t, ctx, authorityStore, target.ID, now),
+		Snapshot: engineSnapshot(input, 1, domain.ApprovalAuto),
+		Input:    input, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	running, err := authorityStore.ClaimNextOperation(ctx, "worker-before-crash", time.Minute, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	planContent, _ := json.Marshal(domain.PlanNode{ID: "vol-1", Kind: domain.PlanVolume, Title: "第一卷", Summary: "凡人踏入修行"})
+	if _, err := change.New(authorityStore).Prepare(ctx, domain.Proposal{
+		ID: running.ID + "-proposal", OperationID: running.ID, Target: target, BaseRevision: 1,
+		Author: domain.Author{Kind: domain.AuthorAI, ID: "writer.compose@1"}, Reason: "agent candidate",
+		Patches:       []domain.Patch{{Document: domain.DocumentRef{Kind: domain.DocumentPlan, ID: "vol-1"}, Operation: domain.PatchPut, Content: planContent}},
+		ApprovalState: domain.ApprovalPending, CreatedAt: now.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("prepare operation proposal: %v", err)
+	}
+	// 等待收尾期间用户锁定 Intent：用户专属变化，Revision 2。
+	commitUserChange(t, ctx, authorityStore, target, "lock-intent", now.Add(3*time.Second), lockPatch(t, domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}))
+	if _, err := authorityStore.RecoverExpiredOperations(ctx, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("recover crashed operation: %v", err)
+	}
+	executor := &neverExecutor{}
+	result, err := NewEngine(authorityStore).RunNext(ctx, executor, "worker-after-crash", time.Minute, now.Add(3*time.Minute))
+	if err != nil || executor.called {
+		t.Fatalf("resume: %v, executed again = %v", err, executor.called)
+	}
+	if result.Operation.State != domain.OperationSucceeded || result.ChangeSet == nil ||
+		result.ChangeSet.BaseRevision != 2 || result.ChangeSet.NewRevision != 3 || result.Operation.Snapshot.BaseRevision != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	stored, err := authorityStore.GetProposalByOperation(ctx, running.ID)
+	if err != nil || stored.BaseRevision != 2 || stored.ApprovalState != domain.ApprovalApproved {
+		t.Fatalf("stored proposal = %#v, %v", stored, err)
+	}
+}
+
+// driftingExecutor 在执行期间锁定设定（可重定位），又在合规分析期间改动实体（不可重定位）。
+type driftingExecutor struct {
+	passingManuscriptExecutor
+	t      *testing.T
+	store  *store.Store
+	target domain.AuthorityTarget
+	now    time.Time
+}
+
+func (e *driftingExecutor) Execute(ctx context.Context, operation domain.Operation) (domain.OperationOutcome, error) {
+	commitUserChange(e.t, ctx, e.store, e.target, "lock-intent", e.now, lockPatch(e.t, domain.DocumentRef{Kind: domain.DocumentIntent, ID: "root"}))
+	return e.passingManuscriptExecutor.Execute(ctx, operation)
+}
+
+func (e *driftingExecutor) AnalyzeSemanticCompliance(
+	ctx context.Context,
+	operation domain.Operation,
+	proposal domain.Proposal,
+	constraints []domain.OwnershipRule,
+) (domain.SemanticComplianceReport, error) {
+	hero, _ := json.Marshal(domain.Entity{ID: "hero", Kind: domain.EntityCharacter, Name: "主角二号"})
+	commitUserChange(e.t, ctx, e.store, e.target, "rename-hero", e.now, domain.Patch{
+		Document: domain.DocumentRef{Kind: domain.DocumentEntity, ID: "hero"}, Operation: domain.PatchPut, Content: hero,
+	})
+	return e.passingManuscriptExecutor.AnalyzeSemanticCompliance(ctx, operation, proposal, constraints)
+}
+
+// TestCommitConflictAfterRelocationGoesStale：重定位之后、落库之前又有内容提交，
+// 任务转 stale（后继继承工作区）而不是 failed。
+func TestCommitConflictAfterRelocationGoesStale(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	target := domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-constraints"}
+	seedConstrainedProject(t, ctx, authorityStore, target, now)
+	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
+	if _, err := authorityStore.CreateOperation(ctx, domain.Operation{
+		ID: "write-constrained", Kind: domain.OperationWriteChapter, Target: target, State: domain.OperationQueued,
+		RunID: createEngineTestRun(t, ctx, authorityStore, target.ID, now), Snapshot: engineSnapshot(input, 1, domain.ApprovalAuto),
+		Input: input, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	executor := &driftingExecutor{t: t, store: authorityStore, target: target, now: now.Add(time.Second)}
+	result, err := NewEngine(authorityStore).RunNext(ctx, executor, "worker-1", time.Minute, now.Add(time.Minute))
+	if !errors.Is(err, store.ErrRevisionConflict) || result.Operation.State != domain.OperationStale {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if revision, err := authorityStore.CurrentRevision(ctx, target); err != nil || revision != 3 {
+		t.Fatalf("revision = %d, %v; the stale task must not commit", revision, err)
+	}
 }

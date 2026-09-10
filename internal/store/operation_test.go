@@ -13,7 +13,7 @@ import (
 )
 
 func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	createdAt := operationTime()
 	low := testOperation("low", 1, createdAt)
@@ -105,7 +105,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 }
 
 func TestExpiredLeaseIsExplicitlyRecovered(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	operation := testOperation("write-1", 1, now)
@@ -143,7 +143,7 @@ func TestExpiredLeaseIsExplicitlyRecovered(t *testing.T) {
 }
 
 func TestCreateOperationAndEventAreIdempotent(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	operation := testOperation("write-1", 1, now)
@@ -186,7 +186,7 @@ func TestCreateOperationAndEventAreIdempotent(t *testing.T) {
 }
 
 func TestConcurrentClaimHasSingleWinner(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	if _, err := s.CreateOperation(ctx, testOperation("write-1", 1, now)); err != nil {
@@ -226,7 +226,7 @@ func TestConcurrentClaimHasSingleWinner(t *testing.T) {
 }
 
 func TestOperationDependenciesGateQueueClaims(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	parent := testOperation("develop-plan", 1, now)
@@ -259,7 +259,7 @@ func TestOperationDependenciesGateQueueClaims(t *testing.T) {
 }
 
 func TestCreateOperationRejectsMissingDependencyAtomically(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	operation := testOperation("write-chapter", 1, operationTime())
 	operation.DependsOn = []string{"missing-plan"}
@@ -271,20 +271,20 @@ func TestCreateOperationRejectsMissingDependencyAtomically(t *testing.T) {
 	}
 }
 
-func TestClaimNextOperationFiltersFrozenModelConfig(t *testing.T) {
-	s := openTestStore(t)
+func TestClaimNextOperationFiltersByExecutorIdentity(t *testing.T) {
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	matching := testOperation("matching", 1, now)
-	other := testOperation("other-model", 100, now)
-	other.Snapshot.ModelConfigDigest = "other-model"
+	other := testOperation("other-executor", 100, now)
+	other.Snapshot.Executor = "external.test@1"
 	if _, err := s.CreateOperation(ctx, matching); err != nil {
 		t.Fatalf("create matching operation: %v", err)
 	}
 	if _, err := s.CreateOperation(ctx, other); err != nil {
 		t.Fatalf("create other operation: %v", err)
 	}
-	claimed, err := s.ClaimNextOperationForModel(ctx, "worker-1", "model", time.Minute, now.Add(time.Second))
+	claimed, err := s.ClaimNextOperationForExecutor(ctx, "worker-1", testExecutor, time.Minute, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("claim matching operation: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestClaimNextOperationFiltersFrozenModelConfig(t *testing.T) {
 }
 
 func TestClaimOperationByIDAndReprioritize(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	low := testOperation("low", 1, now)
@@ -312,20 +312,20 @@ func TestClaimOperationByIDAndReprioritize(t *testing.T) {
 	if updated.Priority != 20 {
 		t.Fatalf("priority = %d, want 20", updated.Priority)
 	}
-	claimed, err := s.ClaimOperationForModel(ctx, high.ID, "worker-1", "model", time.Minute, now.Add(3*time.Second))
+	claimed, err := s.ClaimOperationForExecutor(ctx, high.ID, "worker-1", testExecutor, time.Minute, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("claim exact operation: %v", err)
 	}
 	if claimed.ID != high.ID {
 		t.Fatalf("claimed %q, want %q", claimed.ID, high.ID)
 	}
-	if _, err := s.ClaimOperationForModel(ctx, high.ID, "worker-2", "model", time.Minute, now.Add(4*time.Second)); !errors.Is(err, ErrStateConflict) {
+	if _, err := s.ClaimOperationForExecutor(ctx, high.ID, "worker-2", testExecutor, time.Minute, now.Add(4*time.Second)); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("second exact claim error = %v, want ErrStateConflict", err)
 	}
 }
 
 func TestExpiredLeaseFailsOperationAtAttemptLimit(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	operation := testOperation("write-1", 1, now)
@@ -372,7 +372,7 @@ func TestExpiredLeaseFailsOperationAtAttemptLimit(t *testing.T) {
 }
 
 func TestClaimReportsDependenciesThatCannotSucceed(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	now := operationTime()
 	parent := testOperation("develop-plan", 1, now)
@@ -402,8 +402,8 @@ func TestClaimReportsDependenciesThatCannotSucceed(t *testing.T) {
 	if !strings.Contains(err.Error(), child.ID) || !strings.Contains(err.Error(), parent.ID) {
 		t.Fatalf("blocked error %q must name both the blocked operation and its dependency", err)
 	}
-	if _, err := s.ClaimOperationForModel(
-		ctx, child.ID, "worker-1", "model", time.Minute, now.Add(5*time.Second),
+	if _, err := s.ClaimOperationForExecutor(
+		ctx, child.ID, "worker-1", testExecutor, time.Minute, now.Add(5*time.Second),
 	); !errors.Is(err, ErrDependencyBlocked) {
 		t.Fatalf("claim child by id = %v, want ErrDependencyBlocked", err)
 	}
@@ -423,20 +423,37 @@ func TestClaimReportsDependenciesThatCannotSucceed(t *testing.T) {
 	}
 }
 
+const testExecutor = "llm.agent@1/model"
+
 func testOperation(id string, priority int, createdAt time.Time) domain.Operation {
+	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	return domain.Operation{
-		ID: id, Kind: domain.OperationRebuildDerived,
+		ID: id, Kind: domain.OperationWriteChapter, RunID: "run:book-1",
 		Target:   domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "book-1"},
 		Priority: priority, State: domain.OperationQueued,
 		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "execution-profile",
-			BaseRevision:           1, CoreProtocolVersion: "core-v1", WorkerProfileVersion: "writer.compose-v1",
-			ToolSchemaDigest: "tools", PromptDigest: "prompt", ModelConfigDigest: "model",
-			ApprovalPolicy: domain.ApprovalManual, ApprovalPolicyDigest: "approval",
+			Executor: testExecutor, BaseRevision: 1, InputDigest: domain.Digest(input),
+			ConfigDigest: "execution-profile", ApprovalPolicy: domain.ApprovalManual,
 		},
-		Input:     json.RawMessage(`{"chapter_id":"chapter-1"}`),
-		CreatedAt: createdAt, UpdatedAt: createdAt,
+		Input: input, CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
+}
+
+// openOperationStore 打开测试库并为 book-1 建好归属 Run：每种 Operation 都必须归属唯一 CreationRun（D27）。
+func openOperationStore(t *testing.T) *Store {
+	t.Helper()
+	s := openTestStore(t)
+	now := operationTime()
+	if _, err := s.CreateCreationRun(context.Background(), domain.CreationRun{
+		ID: "run:book-1", ProjectID: "book-1",
+		Goal:     domain.NovelGoal{Premise: "测试创作", TargetChapters: 3}.Goal(),
+		Strategy: domain.CreationRunStrategy{PlanWindowChapters: 3, ReviewCadence: domain.ReviewPerPlanWindow, AutoRepairBudget: 3},
+		Preset:   domain.CreationRunPreset{Source: "test", Digest: "test-preset", Approval: domain.ApprovalAuto},
+		State:    domain.RunRunning, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create test run: %v", err)
+	}
+	return s
 }
 
 func operationTime() time.Time {
@@ -447,7 +464,7 @@ func operationTime() time.Time {
 // 旧执行实例既不能再写工作区，也不能把后继尝试的状态改成自己的结局；
 // 用户取消先于收尾时，收尾必须被拒绝而不是覆盖取消。
 func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
-	s := openTestStore(t)
+	s := openOperationStore(t)
 	ctx := context.Background()
 	start := operationTime()
 	if _, err := s.CreateOperation(ctx, testOperation("op", 1, start)); err != nil {
@@ -475,8 +492,17 @@ func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
 	if err := s.AssertActiveAttempt(ctx, "op", first.Attempt); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("stale attempt assertion error = %v, want ErrStateConflict", err)
 	}
+	if err := s.SaveExecutionArtifacts(ctx, []domain.Artifact{{
+		ID: "op/late", ProjectID: "book-1", Digest: "unused", MediaType: "text/plain",
+		OperationID: "op", Attempt: first.Attempt, CreatedAt: start,
+	}}, "op", first.Attempt); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale artifact save error = %v, want ErrStateConflict", err)
+	}
 	if _, err := s.ConcludeOperation(ctx, "op", first.Attempt, domain.OperationFailed, "stale worker", start.Add(4*time.Minute)); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("stale conclude error = %v, want ErrStateConflict", err)
+	}
+	if _, err := s.FailOperation(ctx, "op", first.Attempt, domain.FailureResultUnknown, "stale worker", start.Add(4*time.Minute)); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale coded failure error = %v, want ErrStateConflict", err)
 	}
 	if err := s.AssertActiveAttempt(ctx, "op", second.Attempt); err != nil {
 		t.Fatalf("active attempt must pass: %v", err)
@@ -501,5 +527,61 @@ func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
 	}
 	if _, err := s.ConcludeOperation(ctx, claimed.ID, claimed.Attempt, domain.OperationSucceeded, "", start.Add(8*time.Minute)); !errors.Is(err, ErrStateConflict) {
 		t.Fatalf("conclude after cancel error = %v, want ErrStateConflict", err)
+	}
+}
+
+// TestFailOperationRecordsCodeUntilNextTransition 守护 D46：失败码随失败落盘，
+// 用户重排后清空——结果未知只标记一次，不在后继状态上残留。
+func TestFailOperationRecordsCodeUntilNextTransition(t *testing.T) {
+	s := openOperationStore(t)
+	ctx := context.Background()
+	start := operationTime()
+	if _, err := s.CreateOperation(ctx, testOperation("op", 1, start)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	claimed, err := s.ClaimNextOperation(ctx, "worker-1", time.Minute, start)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	failed, err := s.FailOperation(ctx, "op", claimed.Attempt, domain.FailureResultUnknown, "result unknown", start.Add(time.Minute))
+	if err != nil || failed.State != domain.OperationFailed || failed.FailureCode != domain.FailureResultUnknown || failed.Error != "result unknown" {
+		t.Fatalf("failed = %#v, %v", failed, err)
+	}
+	if stored, err := s.GetOperation(ctx, "op"); err != nil || stored.FailureCode != domain.FailureResultUnknown {
+		t.Fatalf("stored = %#v, %v", stored, err)
+	}
+	requeued, err := s.TransitionOperation(ctx, "op", domain.OperationFailed, domain.OperationQueued, "resumed by user", start.Add(2*time.Minute))
+	if err != nil || requeued.State != domain.OperationQueued || requeued.FailureCode != "" {
+		t.Fatalf("requeued = %#v, %v", requeued, err)
+	}
+	if _, err := s.FailOperation(ctx, "op", 0, domain.FailureResultUnknown, "no attempt", start.Add(3*time.Minute)); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("attempt-less failure err = %v", err)
+	}
+}
+
+func TestClaimNextOperationAcrossExecutorsPreservesPriority(t *testing.T) {
+	s := openOperationStore(t)
+	ctx := context.Background()
+	now := operationTime()
+	for _, spec := range []struct {
+		id, executor string
+		priority     int
+	}{
+		{"llm", "llm@1", 1}, {"external", "external@1", 10}, {"unconfigured", "other@1", 100},
+	} {
+		operation := testOperation(spec.id, spec.priority, now)
+		operation.Snapshot.Executor = spec.executor
+		if _, err := s.CreateOperation(ctx, operation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{"external", "llm"} {
+		operation, err := s.ClaimNextOperationForExecutors(ctx, "worker", []string{"llm@1", "external@1"}, time.Minute, now.Add(time.Second))
+		if err != nil || operation.ID != want {
+			t.Fatalf("claim=%s err=%v want=%s", operation.ID, err, want)
+		}
+	}
+	if _, err := s.ClaimNextOperationForExecutors(ctx, "worker", []string{"llm@1", "external@1"}, time.Minute, now.Add(time.Second)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unconfigured executor must remain unclaimed: %v", err)
 	}
 }

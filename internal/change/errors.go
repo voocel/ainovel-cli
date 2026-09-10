@@ -7,4 +7,5 @@ var (
 	ErrStructuralConflict  = errors.New("structural story conflict")
 	ErrInvalidState        = errors.New("invalid change state")
 	ErrSemanticUnavailable = errors.New("semantic analysis is unavailable")
+	ErrBasisMismatch       = errors.New("evidence basis no longer holds")
 )

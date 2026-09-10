@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,11 +107,12 @@ func (b *workbenchState) presentDecision(decision *decisionState) {
 	b.input.Blur()
 }
 
-// promptState 是工作台的单值输入态：调整目标章数、自动修订预算或提出创作要求。
+// promptState 是工作台的单值输入态：调整目标章数、自动修订预算、提出创作要求或接受审阅发现。
 type promptState struct {
-	purpose string // "target" | "budget" | "directive"
+	purpose string // "target" | "budget" | "directive" | "adjudicate"
 	label   string
 	scope   string // directive 的作用域，按大纲选中行决定
+	finding string // adjudicate 要接受的发现 ID
 	input   textinput.Model
 }
 
@@ -463,6 +465,16 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				bench.prompt, bench.err = nil, ""
 				return m, m.addDirectiveCmd(scope, text)
 			}
+			if bench.prompt.purpose == "adjudicate" {
+				reason := strings.TrimSpace(bench.prompt.input.Value())
+				if reason == "" {
+					bench.notice = "写下接受这条发现的理由后回车，Esc 取消"
+					return m, nil
+				}
+				finding := bench.prompt.finding
+				bench.prompt, bench.err = nil, ""
+				return m, m.adjudicateCmd(finding, reason)
+			}
 			value, err := strconv.Atoi(strings.TrimSpace(bench.prompt.input.Value()))
 			if err != nil || value <= 0 {
 				bench.err = "请输入一个正整数"
@@ -615,8 +627,26 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.bench.prompt.scope = scope
 			return m, nil
 		}
+	case "a":
+		if finding, ok := m.firstBlockingFinding(); ok {
+			m = m.openPrompt("adjudicate", "接受发现「"+truncate(finding.Note, 40)+"」的理由", "")
+			m.bench.prompt.finding = finding.ID
+			return m, nil
+		}
+		bench.notice = "选中的章节没有待处理的阻塞发现"
 	}
 	return m, nil
+}
+
+// firstBlockingFinding 取选中章节第一条尚未被接受的阻塞发现（D43 的 a 键一次只裁一条）。
+func (m model) firstBlockingFinding() (service.WorkbenchFinding, bool) {
+	chapterID := m.selectedChapterID()
+	for _, finding := range m.bench.snap.Findings {
+		if chapterID != "" && finding.ChapterID == chapterID && finding.Severity == domain.FindingBlocking {
+			return finding, true
+		}
+	}
+	return service.WorkbenchFinding{}, false
 }
 
 // directiveScope 按大纲选中行定要求的作用域（§4.9）：章行只管该章，卷/弧行
@@ -850,9 +880,27 @@ func (m model) addDirectiveCmd(scope, text string) tea.Cmd {
 	}
 }
 
+// adjudicateCmd 把"接受当前版本"入账为用户裁决（D43）：裁定生效形态随之改变，
+// 续写时不再因这条发现重写。
+func (m model) adjudicateCmd(finding, reason string) tea.Cmd {
+	api, ctx, user := m.api, m.ctx, m.deps.UserID
+	gen, projectID := m.bench.gen, m.bench.projectID
+	return func() tea.Msg {
+		now := time.Now().UTC()
+		_, err := api.AddAdjudication(ctx, service.AddAdjudicationCommand{
+			ProjectID: projectID, ChangeID: service.NewID("adjudication", now), UserID: user,
+			Finding: finding, Reason: reason, CreatedAt: now,
+		})
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: "已接受这条发现：续写时不再为它重写；相关内容再变化时裁决自动失效"}
+	}
+}
+
+// currentTarget 取当前目标章数：小说目标优先，其余回退到 Intent。
 func (m model) currentTarget() int {
 	if m.bench.hasRun() {
-		return m.bench.run().Goal.TargetChapters
+		if goal, err := domain.DecodeNovelGoal(m.bench.run().Goal); err == nil {
+			return goal.TargetChapters
+		}
 	}
 	return m.bench.snap.Intent.TargetChapters
 }
@@ -923,10 +971,7 @@ func (m model) continueRunWith(chapters int) (tea.Model, tea.Cmd) {
 		return m, m.refreshBenchCmd()
 	}
 	if chapters <= 0 {
-		chapters = bench.snap.Intent.TargetChapters
-		if bench.hasRun() {
-			chapters = bench.run().Goal.TargetChapters
-		}
+		chapters = m.currentTarget()
 		if chapters <= 0 {
 			chapters = max(1, len(bench.snap.Manuscript))
 		}
@@ -1556,7 +1601,11 @@ func (m model) viewDetailPane(width int) string {
 		if chapterID == "" || fact.SourceChapterID != chapterID {
 			continue
 		}
-		facts = append(facts, truncate(string(fact.Value), width-3))
+		label := truncate(string(fact.Value), width-3)
+		if slices.Contains(bench.snap.PendingCanon, fact.ID) {
+			label = styleWarn.Render("待核验 ") + truncate(string(fact.Value), width-8)
+		}
+		facts = append(facts, label)
 	}
 	if len(facts) > 0 {
 		view.WriteString("\n" + styleTitle.Render("已确认事实") + "\n")
@@ -1577,7 +1626,11 @@ func (m model) viewDetailPane(width int) string {
 		if findings == 0 {
 			view.WriteString("\n" + styleTitle.Render("审阅发现") + "\n")
 		}
-		view.WriteString(styleHint.Render("· ") + truncate(finding.Note, width-3) + "\n")
+		marker := "· "
+		if finding.Severity == domain.FindingBlocking {
+			marker = "! "
+		}
+		view.WriteString(styleHint.Render(marker) + truncate(finding.Note, width-3) + "\n")
 		findings++
 	}
 
@@ -1731,7 +1784,7 @@ func (m model) viewStatusBar() string {
 	bench := m.bench
 	input := bench.input
 	input.Placeholder = m.inputPlaceholder()
-	hint := "c 续写 · g 目标 · i 提要求 · p 暂停 · x 取消 · d 诊断 · Esc 首页"
+	hint := "c 续写 · g 目标 · i 提要求 · a 接受发现 · p 暂停 · x 取消 · d 诊断 · Esc 首页"
 	if m.multiPane() {
 		hint = "Tab 栏焦点 · " + hint
 	} else {

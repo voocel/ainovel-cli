@@ -17,22 +17,19 @@ import (
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
 // verdict_submit 的审阅/校验类以结构化 Verdict 收尾，其余以 Proposal 收尾。
-func (r *Runtime) Execute(
-	ctx context.Context,
-	operation domain.Operation,
-	compiled prompt.Compiled,
-) (domain.OperationOutcome, error) {
+func (r *Runtime) Execute(ctx context.Context, operation domain.Operation) (domain.OperationOutcome, error) {
 	if r.model == nil {
 		return domain.OperationOutcome{}, fmt.Errorf("capability model is required: %w", domain.ErrInvalid)
 	}
 	if operation.State != domain.OperationRunning {
 		return domain.OperationOutcome{}, fmt.Errorf("operation %q is %s: %w", operation.ID, operation.State, store.ErrStateConflict)
 	}
-	if operation.Snapshot.ModelConfigDigest != r.modelDigest {
-		return domain.OperationOutcome{}, fmt.Errorf("operation model config does not match capability runtime: %w", store.ErrStateConflict)
+	if operation.Snapshot.Executor != r.Identity() {
+		return domain.OperationOutcome{}, fmt.Errorf("operation executor %q does not match runtime %q: %w", operation.Snapshot.Executor, r.Identity(), store.ErrStateConflict)
 	}
-	if operation.Snapshot.ExecutionProfileDigest != compiled.ProfileDigest || operation.Snapshot != compiled.Snapshot {
-		return domain.OperationOutcome{}, fmt.Errorf("operation execution profile does not match compiled profile: %w", store.ErrStateConflict)
+	compiled, err := r.prompts.Load(ctx, operation.Snapshot.ConfigDigest)
+	if err != nil {
+		return domain.OperationOutcome{}, err
 	}
 	wantsVerdict := false
 	for _, definition := range compiled.Tools {
@@ -44,7 +41,7 @@ func (r *Runtime) Execute(
 	var submissionMu sync.Mutex
 	var submitted *domain.Proposal
 	var verdict *domain.ReviewVerdict
-	tools, err := r.toolsFor(operation, compiled.Tools, func(proposal domain.Proposal) (domain.Proposal, error) {
+	tools, err := r.toolsFor(operation, compiled, func(proposal domain.Proposal) (domain.Proposal, error) {
 		submissionMu.Lock()
 		defer submissionMu.Unlock()
 		if submitted != nil {
@@ -80,10 +77,7 @@ func (r *Runtime) Execute(
 	if err != nil {
 		return domain.OperationOutcome{}, err
 	}
-	cacheKey, err := prompt.CacheKey(
-		operation.Target.ID, operation.Snapshot.WorkerProfileVersion,
-		operation.Snapshot.ExecutionProfileDigest, operation.ID,
-	)
+	cacheKey, err := prompt.CacheKey(operation.Target.ID, compiled.WorkerProfile, compiled.ProfileDigest, operation.ID)
 	if err != nil {
 		return domain.OperationOutcome{}, err
 	}

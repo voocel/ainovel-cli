@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
@@ -163,7 +164,36 @@ func testCompileRequest(t *testing.T) CompileRequest {
 		StoryContext: json.RawMessage(`{"chapter":1,"facts":["hero-origin"]}`),
 		Task:         json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
 		BaseRevision: 4, ProjectOverlayRevision: 4,
-		ModelConfigDigest: "model-config", ApprovalPolicy: domain.ApprovalManual,
-		ApprovalPolicyDigest: "approval-policy",
+		ModelConfigDigest: "model-config",
+	}
+}
+
+func TestProfileDigestIsContentAddressed(t *testing.T) {
+	compiled, err := Compile(testCompileRequest(t))
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	record, err := compiled.record(time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	identity, err := record.Identity()
+	if err != nil || identity != compiled.ProfileDigest || record.Digest != identity {
+		t.Fatalf("profile digest %q, record identity %q, %v", compiled.ProfileDigest, identity, err)
+	}
+	if err := record.Validate(); err != nil {
+		t.Fatalf("record validate: %v", err)
+	}
+	changed := testCompileRequest(t)
+	changed.ModelConfigDigest = "other-model"
+	other, err := Compile(changed)
+	if err != nil {
+		t.Fatalf("compile other model: %v", err)
+	}
+	if other.ProfileDigest == compiled.ProfileDigest || other.PromptDigest != compiled.PromptDigest {
+		t.Fatal("model config must change the profile identity without touching the prompt cache identity")
+	}
+	if ExecutorIdentity("m") != "llm.agent@1/m" {
+		t.Fatalf("executor identity = %q", ExecutorIdentity("m"))
 	}
 }

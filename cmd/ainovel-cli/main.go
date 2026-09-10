@@ -70,7 +70,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if *headlessMode {
 		switch commands[0] {
-		case "quick", "creation", "project", "proposal", "operation", "prompt", "pack", "profile", "help":
+		case "quick", "creation", "project", "proposal", "operation", "prompt", "pack", "profile", "artifact", "help":
 		default:
 			return fmt.Errorf("未知命令 %q", commands[0])
 		}

@@ -15,7 +15,7 @@ func TestCreationRunSingleActivePerProject(t *testing.T) {
 	now := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC)
 	first := domain.CreationRun{
 		ID: "run:book:1", ProjectID: "book",
-		Goal:     domain.CreationRunGoal{Premise: "一句话", TargetChapters: 3},
+		Goal:     domain.NovelGoal{Premise: "一句话", TargetChapters: 3}.Goal(),
 		Strategy: testRunStrategy(), Preset: testRunPreset(), State: domain.RunRunning,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -33,7 +33,7 @@ func TestCreationRunSingleActivePerProject(t *testing.T) {
 		t.Fatalf("idempotent replay = %#v, %v", replayed, err)
 	}
 	changed := first
-	changed.Goal.TargetChapters = 9
+	changed.Goal = domain.NovelGoal{Premise: "一句话", TargetChapters: 9}.Goal()
 	if _, err := s.CreateCreationRun(ctx, changed); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("same id with different goal must conflict, got %v", err)
 	}
@@ -86,7 +86,7 @@ func TestCreateOperationBindsRunLineageTransactionally(t *testing.T) {
 	now := time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC)
 	run := domain.CreationRun{
 		ID: "run:lineage:1", ProjectID: "lineage",
-		Goal:     domain.CreationRunGoal{Premise: "一句话", TargetChapters: 3},
+		Goal:     domain.NovelGoal{Premise: "一句话", TargetChapters: 3}.Goal(),
 		Strategy: testRunStrategy(), Preset: testRunPreset(), State: domain.RunRunning,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -95,7 +95,7 @@ func TestCreateOperationBindsRunLineageTransactionally(t *testing.T) {
 	}
 	// 目标更新推进策略版本：created(1) + goal_updated(2)。
 	if _, err := s.UpdateCreationRunGoal(ctx, run.ID,
-		domain.CreationRunGoal{Premise: "一句话", TargetChapters: 5}, now.Add(time.Minute)); err != nil {
+		domain.NovelGoal{Premise: "一句话", TargetChapters: 5}.Goal(), now.Add(time.Minute)); err != nil {
 		t.Fatalf("update goal: %v", err)
 	}
 	strategy := run.Strategy
@@ -108,11 +108,10 @@ func TestCreateOperationBindsRunLineageTransactionally(t *testing.T) {
 		Target: domain.AuthorityTarget{Kind: domain.AuthorityProject, ID: "lineage"},
 		State:  domain.OperationQueued, RunID: run.ID,
 		Snapshot: domain.ExecutionSnapshot{
-			ExecutionProfileDigest: "profile", BaseRevision: 1, CoreProtocolVersion: "core-v1",
-			WorkerProfileVersion: "architect.design@1", ToolSchemaDigest: "tools", PromptDigest: "prompt",
-			ModelConfigDigest: "model", ApprovalPolicy: domain.ApprovalAuto, ApprovalPolicyDigest: "auto",
+			Executor: testExecutor, BaseRevision: 1, ConfigDigest: "profile", ApprovalPolicy: domain.ApprovalAuto,
+			InputDigest: domain.Digest([]byte(`{"intent":"一句话","target_chapters":5,"requested_chapters":3}`)),
 		},
-		Input: []byte(`{"intent":"一句话"}`), CreatedAt: now.Add(2 * time.Minute), UpdatedAt: now.Add(2 * time.Minute),
+		Input: []byte(`{"intent":"一句话","target_chapters":5,"requested_chapters":3}`), CreatedAt: now.Add(2 * time.Minute), UpdatedAt: now.Add(2 * time.Minute),
 	}
 	created, err := s.CreateOperation(ctx, operation)
 	if err != nil {

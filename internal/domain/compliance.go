@@ -28,6 +28,8 @@ type SemanticComplianceFinding struct {
 type SemanticComplianceReport struct {
 	Status   SemanticComplianceStatus    `json:"status"`
 	Findings []SemanticComplianceFinding `json:"findings"`
+	// BasisDigest 由宿主绑定候选补丁与实际检查的约束；模型不决定证据适用范围。
+	BasisDigest string `json:"basis_digest,omitempty"`
 }
 
 func (r SemanticComplianceReport) Validate() error {

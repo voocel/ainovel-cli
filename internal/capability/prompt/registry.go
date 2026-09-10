@@ -55,22 +55,11 @@ func (r *Registry) Reload(ctx context.Context, request CompileRequest, createdAt
 	if err != nil {
 		return Compiled{}, err
 	}
-	tools, err := json.Marshal(compiled.Tools)
+	record, err := compiled.record(createdAt)
 	if err != nil {
-		return Compiled{}, fmt.Errorf("encode compiled tools: %w", err)
+		return Compiled{}, err
 	}
-	sources, err := json.Marshal(compiled.Sources)
-	if err != nil {
-		return Compiled{}, fmt.Errorf("encode prompt sources: %w", err)
-	}
-	_, err = r.store.SaveExecutionProfile(ctx, domain.ExecutionProfileRecord{
-		Digest: compiled.ProfileDigest, ProjectID: request.ProjectID,
-		WorkerProfile: request.Worker.ID + "@" + request.Worker.Version,
-		PromptDigest:  compiled.PromptDigest, ToolSchemaDigest: compiled.ToolSchemaDigest,
-		Snapshot: compiled.Snapshot, StablePrefix: compiled.StablePrefix, DynamicTail: compiled.DynamicTail,
-		Tools: tools, Sources: sources, CreatedAt: createdAt,
-	})
-	if err != nil {
+	if _, err := r.store.SaveExecutionProfile(ctx, record); err != nil {
 		return Compiled{}, err
 	}
 	return compiled, nil
@@ -90,10 +79,11 @@ func (r *Registry) Load(ctx context.Context, digest string) (Compiled, error) {
 		return Compiled{}, fmt.Errorf("decode prompt sources: %w", err)
 	}
 	return Compiled{
+		ProjectID: record.ProjectID, WorkerProfile: record.WorkerProfile,
+		CoreProtocolVersion: record.CoreProtocolVersion, ModelConfigDigest: record.ModelConfigDigest,
 		StablePrefix: record.StablePrefix, DynamicTail: record.DynamicTail,
 		Tools: tools, Sources: sources, PromptDigest: record.PromptDigest,
 		ToolSchemaDigest: record.ToolSchemaDigest, ProfileDigest: record.Digest,
-		Snapshot: record.Snapshot,
 	}, nil
 }
 
@@ -181,14 +171,9 @@ func (r *Registry) Lint(ctx context.Context, digest string) ([]Diagnostic, error
 	if err != nil {
 		return nil, err
 	}
-	separator := strings.LastIndex(compiled.Snapshot.WorkerProfileVersion, "@")
-	if separator <= 0 {
-		return nil, fmt.Errorf("execution profile worker version %q is invalid: %w", compiled.Snapshot.WorkerProfileVersion, domain.ErrInvalid)
-	}
-	workerID := compiled.Snapshot.WorkerProfileVersion[:separator]
-	worker, err := BuiltinWorkerProfile(workerID)
-	if err != nil || worker.ID+"@"+worker.Version != compiled.Snapshot.WorkerProfileVersion {
-		return nil, fmt.Errorf("worker profile %q is unavailable: %w", compiled.Snapshot.WorkerProfileVersion, domain.ErrInvalid)
+	worker, err := BuiltinWorkerProfile(WorkerID(compiled.WorkerProfile))
+	if err != nil || worker.ID+"@"+worker.Version != compiled.WorkerProfile {
+		return nil, fmt.Errorf("worker profile %q is unavailable: %w", compiled.WorkerProfile, domain.ErrInvalid)
 	}
 	return lintSources(worker, compiled.Sources), nil
 }
@@ -248,6 +233,14 @@ func lintSources(worker WorkerProfile, sources []Source) []Diagnostic {
 		return strings.Compare(a.Code+":"+a.Message, b.Code+":"+b.Message)
 	})
 	return diagnostics
+}
+
+// WorkerID 从 `id@version` 形式的 Worker Profile 标识取出 ID；形状不符返回原串。
+func WorkerID(workerProfile string) string {
+	if separator := strings.LastIndex(workerProfile, "@"); separator > 0 {
+		return workerProfile[:separator]
+	}
+	return workerProfile
 }
 
 func sourceKey(source Source) string {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -67,7 +68,7 @@ func TestCompletionContractRejectsExtraPlanChapters(t *testing.T) {
 			{ID: "manuscript-2", PlanNodeID: "chapter-2", Number: 2, Title: "第二章", Blocks: []domain.ManuscriptBlock{{ID: "block-2", Text: "正文"}}},
 		},
 	}
-	goal := domain.CreationRunGoal{Premise: "一章故事", TargetChapters: 1}
+	goal := domain.NovelGoal{Premise: "一章故事", TargetChapters: 1}
 	if unmet := completionUnmet(project, goal); !strings.Contains(unmet, "蓝图有 2 章") {
 		t.Fatalf("completion mismatch = %q", unmet)
 	}
@@ -231,8 +232,8 @@ func TestQuickWriteRejectedChapterIsRewrittenBySuccessor(t *testing.T) {
 }
 
 func TestQuickWriteMidRunTighteningMigratesInFlightWork(t *testing.T) {
-	// S9：全自动写作中途用户锁定设定，基线推进使在途章节失效；
-	// 后继继承血统在新边界下续写，整轮创作不中止、不换命令入口。
+	// S9 + D51：全自动写作中途用户锁定设定，在途章节的提案重定位到新基线、
+	// 在新边界下裁决；整轮创作不中止、不重跑模型、不换命令入口。
 	ctx := context.Background()
 	authorityStore := openServiceStore(t)
 	executor := &scriptedQuickExecutor{now: serviceTime()}
@@ -256,21 +257,21 @@ func TestQuickWriteMidRunTighteningMigratesInFlightWork(t *testing.T) {
 			t.Fatalf("mid-run lock: %v", err)
 		}
 	}
-	// 收紧立即生效：在途第 1 章失效，后继继承血统；因缺少语义合规证据，
-	// auto 保守升级为安全暂停等待裁决，而不是整轮失败。
+	// 收紧立即生效：在途第 1 章的提案重定位到锁定后的 Revision；因缺少语义合规
+	// 证据，auto 保守升级为安全暂停等待裁决，而不是整轮失败或作废重跑。
 	result, err := api.QuickWrite(ctx, command)
 	if err != nil {
 		t.Fatalf("quick write across mid-run tightening: %v", err)
 	}
-	successor := runQuickID(result.RunID, "chapter", "chapter-plan-1") + ":r2"
-	if result.RunState != domain.RunWaitingUser || executor.calls != 3 ||
-		result.WaitingOperationID != successor {
+	chapterOne := runQuickID(result.RunID, "chapter", "chapter-plan-1")
+	if result.RunState != domain.RunWaitingUser || executor.calls != 2 ||
+		result.WaitingOperationID != chapterOne {
 		t.Fatalf("result = %#v, executor calls = %d", result, executor.calls)
 	}
 
 	// 用户裁决后同一入口继续：第 2 章同样在锁定约束下暂停，逐稿放行直至完成。
 	for _, proposalID := range []string{
-		successor + "-proposal",
+		chapterOne + "-proposal",
 		runQuickID(result.RunID, "chapter", "chapter-plan-2") + "-proposal",
 	} {
 		command.CreatedAt = command.CreatedAt.Add(time.Hour)
@@ -282,8 +283,8 @@ func TestQuickWriteMidRunTighteningMigratesInFlightWork(t *testing.T) {
 			t.Fatalf("resume after approving %s: %v", proposalID, err)
 		}
 	}
-	if result.RunState != domain.RunCompleted || result.Revision != 5 || executor.calls != 5 ||
-		result.Chapters[0].OperationID != successor {
+	if result.RunState != domain.RunCompleted || result.Revision != 5 || executor.calls != 4 ||
+		result.Chapters[0].OperationID != chapterOne {
 		t.Fatalf("final = %#v, executor calls = %d", result, executor.calls)
 	}
 }
@@ -340,7 +341,7 @@ func TestQuickWriteExtendsGoalWithRollingPlan(t *testing.T) {
 
 func TestQuickWriteApprovalTighteningMidRunTakesEffectImmediately(t *testing.T) {
 	// S9 的调严审批半边：auto 起书，第 1 章执行期间用户把策略调成 manual；
-	// 在途章失效，后继按权威新策略等待裁决（D23 收紧立即生效），同一入口继续。
+	// 在途章的提案重定位后按权威新策略等待裁决（D23 收紧立即生效），同一入口继续。
 	ctx := context.Background()
 	executor := &scriptedQuickExecutor{now: serviceTime()}
 	api := newQuickTestService(t, executor)
@@ -364,12 +365,12 @@ func TestQuickWriteApprovalTighteningMidRunTakesEffectImmediately(t *testing.T) 
 	if err != nil {
 		t.Fatalf("quick write across approval tightening: %v", err)
 	}
-	successor := runQuickID(result.RunID, "chapter", "chapter-plan-1") + ":r2"
-	if result.RunState != domain.RunWaitingUser || result.WaitingOperationID != successor || executor.calls != 3 {
+	chapterOne := runQuickID(result.RunID, "chapter", "chapter-plan-1")
+	if result.RunState != domain.RunWaitingUser || result.WaitingOperationID != chapterOne || executor.calls != 2 {
 		t.Fatalf("result = %#v, executor calls = %d", result, executor.calls)
 	}
 	for _, proposalID := range []string{
-		successor + "-proposal",
+		chapterOne + "-proposal",
 		runQuickID(result.RunID, "chapter", "chapter-plan-2") + "-proposal",
 	} {
 		command.CreatedAt = command.CreatedAt.Add(time.Hour)
@@ -381,7 +382,7 @@ func TestQuickWriteApprovalTighteningMidRunTakesEffectImmediately(t *testing.T) 
 			t.Fatalf("resume after approving %s: %v", proposalID, err)
 		}
 	}
-	if result.RunState != domain.RunCompleted || result.Revision != 5 || executor.calls != 5 {
+	if result.RunState != domain.RunCompleted || result.Revision != 5 || executor.calls != 4 {
 		t.Fatalf("final = %#v, executor calls = %d", result, executor.calls)
 	}
 }
@@ -624,13 +625,11 @@ func newQuickTestService(t *testing.T, executor *scriptedQuickExecutor) *Service
 	return api
 }
 
+func (e *scriptedQuickExecutor) Identity() string { return prompt.ExecutorIdentity("model") }
+
 func (e *scriptedQuickExecutor) ModelConfigDigest() string { return "model" }
 
-func (e *scriptedQuickExecutor) Execute(
-	ctx context.Context,
-	operation domain.Operation,
-	_ prompt.Compiled,
-) (domain.OperationOutcome, error) {
+func (e *scriptedQuickExecutor) Execute(ctx context.Context, operation domain.Operation) (domain.OperationOutcome, error) {
 	e.calls++
 	if e.onExecute != nil {
 		e.onExecute(operation)
@@ -638,12 +637,18 @@ func (e *scriptedQuickExecutor) Execute(
 	var patches []domain.Patch
 	switch operation.Kind {
 	case domain.OperationDevelopPlan:
-		var input struct {
-			RequestedChapters int `json:"requested_chapters"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
+		input, err := domain.TaskInputAs[domain.DevelopPlanInput](operation)
+		if err != nil {
 			return domain.OperationOutcome{}, err
 		}
+		// 规划提案同时登记主角实体：随章 Canon Delta 的主体必须是已登记实体（D35）。
+		hero, err := json.Marshal(domain.Entity{ID: "hero", Kind: domain.EntityCharacter, Name: "邮差"})
+		if err != nil {
+			return domain.OperationOutcome{}, err
+		}
+		patches = append(patches, domain.Patch{
+			Document: domain.DocumentRef{Kind: domain.DocumentEntity, ID: "hero"}, Operation: domain.PatchPut, Content: hero,
+		})
 		values := []domain.PlanNode{
 			{ID: "volume-1", Kind: domain.PlanVolume, Order: 1, Title: "余信", Summary: "完成亡者留下的托付"},
 			{ID: "arc-1", Kind: domain.PlanArc, ParentID: "volume-1", Order: 1, Title: "启程", Summary: "邮差追索身份与收信人"},
@@ -666,11 +671,8 @@ func (e *scriptedQuickExecutor) Execute(
 			})
 		}
 	case domain.OperationRevisePlan:
-		var input struct {
-			ExistingChapters  int `json:"existing_chapters"`
-			RequestedChapters int `json:"requested_chapters"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
+		input, err := domain.TaskInputAs[domain.RevisePlanInput](operation)
+		if err != nil {
 			return domain.OperationOutcome{}, err
 		}
 		for number := input.ExistingChapters + 1; number <= input.RequestedChapters; number++ {
@@ -689,16 +691,13 @@ func (e *scriptedQuickExecutor) Execute(
 			})
 		}
 	case domain.OperationWriteChapter:
-		var input struct {
-			ChapterPlanID string `json:"chapter_plan_id"`
-			ChapterNumber int    `json:"chapter_number"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
+		input, err := domain.TaskInputAs[domain.WriteChapterInput](operation)
+		if err != nil {
 			return domain.OperationOutcome{}, err
 		}
 		chapter := domain.ManuscriptChapter{
 			ID: "chapter-" + input.ChapterPlanID, PlanNodeID: input.ChapterPlanID,
-			Number: input.ChapterNumber, Title: fmt.Sprintf("第%d章", input.ChapterNumber),
+			Number: input.ChapterNumber, Title: fmt.Sprintf("第%d章", input.ChapterNumber), Author: domain.AuthorAI,
 			Blocks: []domain.ManuscriptBlock{{
 				ID:   fmt.Sprintf("chapter-%d-block-1", input.ChapterNumber),
 				Text: fmt.Sprintf("第%d章正文", input.ChapterNumber),
@@ -709,7 +708,7 @@ func (e *scriptedQuickExecutor) Execute(
 			return domain.OperationOutcome{}, err
 		}
 		fact := domain.CanonFact{
-			ID: chapter.ID + "-outcome", Kind: domain.CanonEvent, SubjectID: chapter.ID,
+			ID: chapter.ID + "-outcome", Kind: domain.CanonEvent, SubjectID: "hero",
 			Predicate: "event.chapter_outcome", Value: json.RawMessage(fmt.Sprintf("%q", chapter.Title)),
 			SourceChapterID: chapter.ID,
 		}
@@ -722,19 +721,13 @@ func (e *scriptedQuickExecutor) Execute(
 			{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: fact.ID}, Operation: domain.PatchPut, Content: canon},
 		}
 	case domain.OperationReviewRange:
-		var input struct {
-			Range struct {
-				ChapterIDs []string `json:"chapter_ids"`
-			} `json:"range"`
-			VerifyIntent bool               `json:"verify_intent"`
-			Directives   []domain.Directive `json:"directives"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
+		input, err := domain.TaskInputAs[domain.ReviewRangeInput](operation)
+		if err != nil {
 			return domain.OperationOutcome{}, err
 		}
 		verdict := domain.ReviewVerdict{
 			Status: domain.ReviewPass, Revision: operation.Snapshot.BaseRevision,
-			ChapterIDs: input.Range.ChapterIDs, ReviewKey: "scripted-review",
+			ChapterIDs: input.ChapterIDs, ReviewKey: "scripted-review", Basis: input.Basis,
 			Findings: []domain.ReviewFinding{},
 		}
 		if input.VerifyIntent {
@@ -748,11 +741,12 @@ func (e *scriptedQuickExecutor) Execute(
 				verdict.Status = domain.ReviewBlocked
 				verdict.Findings = append(verdict.Findings, domain.ReviewFinding{
 					ChapterID: e.blockChapter, Severity: domain.FindingBlocking, Note: "按要求补上结尾钩子：" + directive.Text,
+					DirectiveID: directive.ID,
 				})
 			}
 			verdict.Directives = append(verdict.Directives, check)
 		}
-		if e.blockRemaining > 0 && slices.Contains(input.Range.ChapterIDs, e.blockChapter) {
+		if e.blockRemaining > 0 && slices.Contains(input.ChapterIDs, e.blockChapter) {
 			e.blockRemaining--
 			verdict.Status = domain.ReviewBlocked
 			verdict.Findings = append(verdict.Findings, domain.ReviewFinding{
@@ -761,7 +755,7 @@ func (e *scriptedQuickExecutor) Execute(
 		}
 		if e.passNote != "" && verdict.Status == domain.ReviewPass {
 			verdict.Findings = append(verdict.Findings, domain.ReviewFinding{
-				ChapterID: input.Range.ChapterIDs[0], Severity: domain.FindingNote, Note: e.passNote,
+				ChapterID: input.ChapterIDs[0], Severity: domain.FindingNote, Note: e.passNote,
 			})
 		}
 		findings, err := json.Marshal(verdict.Findings)
@@ -781,24 +775,16 @@ func (e *scriptedQuickExecutor) Execute(
 		}
 		return domain.OperationOutcome{Verdict: payload}, nil
 	case domain.OperationRewriteChapter:
-		var input struct {
-			ChapterID string   `json:"chapter_id"`
-			Findings  []string `json:"findings"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
+		input, err := domain.TaskInputAs[domain.RewriteChapterInput](operation)
+		if err != nil {
 			return domain.OperationOutcome{}, err
 		}
-		planID := strings.TrimPrefix(input.ChapterID, "chapter-")
-		var number int
-		if _, err := fmt.Sscanf(planID, "chapter-plan-%d", &number); err != nil {
-			return domain.OperationOutcome{}, fmt.Errorf("unexpected rewrite target %q: %w", input.ChapterID, err)
-		}
 		chapter := domain.ManuscriptChapter{
-			ID: input.ChapterID, PlanNodeID: planID,
-			Number: number, Title: fmt.Sprintf("第%d章", number),
+			ID: input.ChapterID, PlanNodeID: input.ChapterPlanID,
+			Number: input.ChapterNumber, Title: fmt.Sprintf("第%d章", input.ChapterNumber), Author: domain.AuthorAI,
 			Blocks: []domain.ManuscriptBlock{{
-				ID:   fmt.Sprintf("chapter-%d-block-1", number),
-				Text: fmt.Sprintf("第%d章正文（按审阅意见重写：%s）", number, strings.Join(input.Findings, "；")),
+				ID:   fmt.Sprintf("chapter-%d-block-1", input.ChapterNumber),
+				Text: fmt.Sprintf("第%d章正文（按审阅意见重写：%s）", input.ChapterNumber, strings.Join(input.Findings, "；")),
 			}},
 		}
 		content, err := json.Marshal(chapter)
@@ -811,7 +797,7 @@ func (e *scriptedQuickExecutor) Execute(
 		round := e.rewrites[chapter.ID]
 		e.rewrites[chapter.ID] = round + 1
 		fact := domain.CanonFact{
-			ID: chapter.ID + "-outcome", Kind: domain.CanonEvent, SubjectID: chapter.ID,
+			ID: chapter.ID + "-outcome", Kind: domain.CanonEvent, SubjectID: "hero",
 			Predicate:       "event.chapter_outcome",
 			PreviousValue:   json.RawMessage(fmt.Sprintf("%q", chapter.Title+strings.Repeat("（重写）", round))),
 			Value:           json.RawMessage(fmt.Sprintf("%q", chapter.Title+strings.Repeat("（重写）", round+1))),
@@ -825,14 +811,376 @@ func (e *scriptedQuickExecutor) Execute(
 			{Document: domain.DocumentRef{Kind: domain.DocumentManuscript, ID: chapter.ID}, Operation: domain.PatchPut, Content: content},
 			{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: fact.ID}, Operation: domain.PatchPut, Content: canon},
 		}
+	case domain.OperationReviseCanon:
+		input, err := domain.TaskInputAs[domain.ReviseCanonInput](operation)
+		if err != nil {
+			return domain.OperationOutcome{}, err
+		}
+		// 待核验事实原样确认；未入账的章补记一条。
+		for _, id := range input.FactIDs {
+			stored, err := e.authorityStore.GetDocument(ctx, operation.Target, domain.DocumentRef{Kind: domain.DocumentCanon, ID: id}, operation.Snapshot.BaseRevision)
+			if err != nil {
+				return domain.OperationOutcome{}, err
+			}
+			var fact domain.CanonFact
+			if err := json.Unmarshal(stored.Content, &fact); err != nil {
+				return domain.OperationOutcome{}, err
+			}
+			fact.PreviousValue = fact.Value
+			content, err := json.Marshal(fact)
+			if err != nil {
+				return domain.OperationOutcome{}, err
+			}
+			patches = append(patches, domain.Patch{Document: stored.Document, Operation: domain.PatchPut, Content: content})
+		}
+		if len(input.FactIDs) == 0 {
+			content, err := json.Marshal(domain.CanonFact{
+				ID: input.ChapterID + "-outcome", Kind: domain.CanonEvent, SubjectID: "hero",
+				Predicate: "event.chapter_outcome", Value: json.RawMessage(`"补账"`), SourceChapterID: input.ChapterID,
+			})
+			if err != nil {
+				return domain.OperationOutcome{}, err
+			}
+			patches = append(patches, domain.Patch{Document: domain.DocumentRef{Kind: domain.DocumentCanon, ID: input.ChapterID + "-outcome"}, Operation: domain.PatchPut, Content: content})
+		}
 	default:
 		return domain.OperationOutcome{}, fmt.Errorf("unexpected operation kind %s", operation.Kind)
 	}
 	return domain.OperationOutcome{Proposal: &domain.Proposal{
 		ID: operation.ID + "-proposal", OperationID: operation.ID, Target: operation.Target,
 		BaseRevision: operation.Snapshot.BaseRevision,
-		Author:       domain.Author{Kind: domain.AuthorAI, ID: operation.Snapshot.WorkerProfileVersion},
+		Author:       domain.Author{Kind: domain.AuthorAI, ID: "scripted.writer@1"},
 		Reason:       "quick write candidate", Patches: patches,
 		ApprovalState: domain.ApprovalPending, CreatedAt: e.now.Add(time.Duration(e.calls) * time.Second),
 	}}, nil
+}
+
+func TestQuickWriteUnrelatedDirectiveKeepsWindowVerdictValid(t *testing.T) {
+	// D48：审阅证据按基线失效，不按整本 Revision。扩窗时用户对第 5 章提要求，
+	// 1–3 章的阶段审阅证据仍然有效、不重审；对第 2 章提要求则必须重审。
+	ctx := context.Background()
+	run := func(projectID, scope string) (QuickWriteResult, *scriptedQuickExecutor) {
+		t.Helper()
+		executor := &scriptedQuickExecutor{now: serviceTime()}
+		api := newQuickTestService(t, executor)
+		command := QuickWriteCommand{
+			ProjectID: projectID, UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+			Chapters: 5, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+		}
+		executor.onExecute = func(operation domain.Operation) {
+			if operation.ID != runQuickID("run:"+projectID+":1", "plan", "extend", "3") {
+				return
+			}
+			if _, err := api.AddDirective(ctx, AddDirectiveCommand{
+				ProjectID: projectID, ChangeID: "mid-run-directive", UserID: "user-1", DirectiveID: "late",
+				Scope: scope, Text: "结尾要有告别场景", Reason: "扩窗时提出要求",
+				CreatedAt: command.CreatedAt.Add(30 * time.Minute),
+			}); err != nil {
+				t.Fatalf("mid-run directive: %v", err)
+			}
+		}
+		result, err := api.QuickWrite(ctx, command)
+		if err != nil {
+			t.Fatalf("quick write %s: %v", projectID, err)
+		}
+		return result, executor
+	}
+	reviewed := func(executor *scriptedQuickExecutor, runID string, revision domain.Revision) bool {
+		t.Helper()
+		_, err := executor.authorityStore.GetOperation(ctx, reviewOperationID(runID, revision))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("read review operation: %v", err)
+		}
+		return err == nil
+	}
+	// 规划 1 + 三章 3 + 阶段审阅 1 + 扩窗（提案重定位，D51）1 + 两章 2 + 终审 1 = 9 次；
+	// 要求提交后（Revision 6）没有新的阶段审阅。
+	unrelated, executor := run("late-directive-book", "from_chapter:5")
+	if unrelated.RunState != domain.RunCompleted || unrelated.Revision != 9 || executor.calls != 9 ||
+		reviewed(executor, unrelated.RunID, 6) {
+		t.Fatalf("unrelated directive result = %#v, executor calls = %d", unrelated, executor.calls)
+	}
+	// 覆盖第 2 章的要求改变了窗口裁定的作用域基线：扩窗失效、重审一次再扩，共 11 次。
+	related, executor := run("early-directive-book", "chapter_range:2-2")
+	if related.RunState != domain.RunCompleted || related.Revision != 9 || executor.calls != 11 ||
+		!reviewed(executor, related.RunID, 6) {
+		t.Fatalf("related directive result = %#v, executor calls = %d", related, executor.calls)
+	}
+}
+
+// TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock 是 D43 的闭环：预算用尽
+// 等待用户 → 用户接受阻塞发现 → 续跑不重写即完成；撤回后阻塞恢复，新一轮按意见重写。
+func TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock(t *testing.T) {
+	ctx := context.Background()
+	executor := &scriptedQuickExecutor{
+		now: serviceTime(), blockChapter: "chapter-chapter-plan-2", blockRemaining: 3,
+	}
+	api := newQuickTestService(t, executor)
+	command := QuickWriteCommand{
+		ProjectID: "accept-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+		Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+	}
+	result, err := api.QuickWrite(ctx, command)
+	if err != nil || result.RunState != domain.RunWaitingUser || executor.calls != 8 {
+		t.Fatalf("result = %#v, calls = %d, err = %v", result, executor.calls, err)
+	}
+	snapshot, err := api.WorkbenchSnapshot(ctx, command.ProjectID)
+	if err != nil || len(snapshot.Findings) != 1 || snapshot.Findings[0].Severity != domain.FindingBlocking {
+		t.Fatalf("findings before adjudication = %#v, %v", snapshot.Findings, err)
+	}
+	accept := AddAdjudicationCommand{
+		ProjectID: command.ProjectID, ChangeID: "accept-1", UserID: "user-1",
+		Finding: snapshot.Findings[0].ID, Reason: "仓促的告别也是一种风格", CreatedAt: serviceTime().Add(time.Minute),
+	}
+	accepted, err := api.AddAdjudication(ctx, accept)
+	if err != nil || accepted.Adjudication.Finding != accept.Finding || accepted.Adjudication.Basis.Equal(domain.EvidenceBasis{}) {
+		t.Fatalf("accepted = %#v, %v", accepted, err)
+	}
+	accept.CreatedAt = serviceTime().Add(2 * time.Minute)
+	if again, err := api.AddAdjudication(ctx, accept); err != nil || again.Revision != accepted.Revision {
+		t.Fatalf("retry must be idempotent: %#v, %v", again, err)
+	}
+	if snapshot, err = api.WorkbenchSnapshot(ctx, command.ProjectID); err != nil ||
+		len(snapshot.Findings) != 0 || len(snapshot.Adjudications) != 1 {
+		t.Fatalf("snapshot after adjudication = findings %#v, adjudications %#v, %v", snapshot.Findings, snapshot.Adjudications, err)
+	}
+	resume := command
+	resume.CreatedAt = serviceTime().Add(3 * time.Minute)
+	if result, err = api.QuickWrite(ctx, resume); err != nil || result.RunState != domain.RunCompleted || executor.calls != 8 {
+		t.Fatalf("resume after adjudication = %#v, calls = %d, err = %v", result, executor.calls, err)
+	}
+	if _, err := api.WithdrawAdjudication(ctx, WithdrawAdjudicationCommand{
+		ProjectID: command.ProjectID, ChangeID: "withdraw-1", UserID: "user-1",
+		AdjudicationID: "accept-1", Reason: "还是改一下", CreatedAt: serviceTime().Add(4 * time.Minute),
+	}); err != nil {
+		t.Fatalf("withdraw: %v", err)
+	}
+	if _, err := api.WithdrawAdjudication(ctx, WithdrawAdjudicationCommand{
+		ProjectID: command.ProjectID, ChangeID: "withdraw-2", UserID: "user-1",
+		AdjudicationID: "accept-1", Reason: "再撤一次", CreatedAt: serviceTime().Add(5 * time.Minute),
+	}); !errors.Is(err, store.ErrStateConflict) {
+		t.Fatalf("second withdraw err = %v", err)
+	}
+	if snapshot, err = api.WorkbenchSnapshot(ctx, command.ProjectID); err != nil ||
+		len(snapshot.Findings) != 1 || len(snapshot.Adjudications) != 0 {
+		t.Fatalf("snapshot after withdrawal = findings %#v, adjudications %#v, %v", snapshot.Findings, snapshot.Adjudications, err)
+	}
+	// 新一轮续写：阻塞恢复，按意见重写 1 + 终审通过 1。
+	resume.CreatedAt = serviceTime().Add(6 * time.Minute)
+	if result, err = api.QuickWrite(ctx, resume); err != nil || result.RunState != domain.RunCompleted ||
+		result.RunID != "run:accept-book:2" || executor.calls != 10 {
+		t.Fatalf("rerun after withdrawal = %#v, calls = %d, err = %v", result, executor.calls, err)
+	}
+}
+
+// TestAdjudicationExpiresWhenChapterChanges：裁决绑定被接受的基线（D43/D48），
+// 用户改了该章正文，裁决与裁定一起失效。
+func TestAdjudicationExpiresWhenChapterChanges(t *testing.T) {
+	ctx := context.Background()
+	executor := &scriptedQuickExecutor{
+		now: serviceTime(), blockChapter: "chapter-chapter-plan-2", blockRemaining: 3,
+	}
+	api := newQuickTestService(t, executor)
+	command := QuickWriteCommand{
+		ProjectID: "expire-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+		Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+	}
+	if result, err := api.QuickWrite(ctx, command); err != nil || result.RunState != domain.RunWaitingUser {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	snapshot, err := api.WorkbenchSnapshot(ctx, command.ProjectID)
+	if err != nil || len(snapshot.Findings) != 1 {
+		t.Fatalf("findings = %#v, %v", snapshot.Findings, err)
+	}
+	if _, err := api.AddAdjudication(ctx, AddAdjudicationCommand{
+		ProjectID: command.ProjectID, ChangeID: "accept-1", UserID: "user-1",
+		Finding: snapshot.Findings[0].ID, Reason: "接受", CreatedAt: serviceTime().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	projection, err := api.ExportProject(ctx, command.ProjectID, 0)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	for index := range projection.Manuscript {
+		if projection.Manuscript[index].ID == "chapter-chapter-plan-2" {
+			projection.Manuscript[index].Blocks[0].Text += "（用户手工润色）"
+		}
+	}
+	proposal, err := api.ImportProject(ctx, "edit-chapter-2", "user-1", "手工润色", projection, serviceTime().Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := api.Approve(ctx, proposal.ID, "user-1", serviceTime().Add(3*time.Minute)); err != nil {
+		t.Fatalf("approve import: %v", err)
+	}
+	project, err := api.Project(ctx, command.ProjectID, 0)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if len(project.Adjudications) != 1 {
+		t.Fatalf("adjudication records = %#v", project.Adjudications)
+	}
+	valid, err := api.validAdjudications(ctx, project)
+	if err != nil || len(valid) != 0 {
+		t.Fatalf("valid adjudications after chapter edit = %#v, %v", valid, err)
+	}
+	if snapshot, err = api.WorkbenchSnapshot(ctx, command.ProjectID); err != nil || len(snapshot.Adjudications) != 0 {
+		t.Fatalf("workbench adjudications after edit = %#v, %v", snapshot.Adjudications, err)
+	}
+}
+
+// TestQuickWriteDisjointDirectiveMidRunRelocatesInFlightChapter 是 S12 的重定位半边（D51）：
+// 写第 2 章时用户给第 5 章提要求，第 2 章的提案重定位后照常提交，没有后继、不重跑模型；
+// 要求按当前快照进入第 5 章的任务输入。
+func TestQuickWriteDisjointDirectiveMidRunRelocatesInFlightChapter(t *testing.T) {
+	ctx := context.Background()
+	executor := &scriptedQuickExecutor{now: serviceTime()}
+	api := newQuickTestService(t, executor)
+	command := QuickWriteCommand{
+		ProjectID: "disjoint-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+		Chapters: 5, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+	}
+	executor.onExecute = func(operation domain.Operation) {
+		if operation.ID != runQuickID("run:disjoint-book:1", "chapter", "chapter-plan-2") {
+			return
+		}
+		if _, err := api.AddDirective(ctx, AddDirectiveCommand{
+			ProjectID: "disjoint-book", ChangeID: "late-farewell", UserID: "user-1", DirectiveID: "farewell",
+			Scope: "from_chapter:5", Text: "结尾要有告别场景", Reason: "写作中途提出要求",
+			CreatedAt: command.CreatedAt.Add(30 * time.Minute),
+		}); err != nil {
+			t.Fatalf("mid-run directive: %v", err)
+		}
+	}
+	result, err := api.QuickWrite(ctx, command)
+	if err != nil {
+		t.Fatalf("quick write: %v", err)
+	}
+	// 规划 1 + 三章 3 + 阶段审阅 1 + 扩窗 1 + 两章 2 + 终审 1 = 9 次，第 2 章没有后继。
+	if result.RunState != domain.RunCompleted || result.Revision != 9 || executor.calls != 9 {
+		t.Fatalf("result = %#v, executor calls = %d", result, executor.calls)
+	}
+	chapterTwo := runQuickID(result.RunID, "chapter", "chapter-plan-2")
+	if _, err := executor.authorityStore.GetOperation(ctx, chapterTwo+":r2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("chapter 2 must not need a successor, got %v", err)
+	}
+	proposal, err := api.ProposalForOperation(ctx, chapterTwo)
+	if err != nil || proposal.BaseRevision != 4 || proposal.ApprovalState != domain.ApprovalApproved {
+		t.Fatalf("relocated chapter 2 proposal = %#v, %v", proposal, err)
+	}
+	operation, err := executor.authorityStore.GetOperation(ctx, runQuickID(result.RunID, "chapter", "chapter-plan-5"))
+	if err != nil {
+		t.Fatalf("read chapter 5 operation: %v", err)
+	}
+	input, err := domain.TaskInputAs[domain.WriteChapterInput](operation)
+	if err != nil || len(input.Directives) != 1 || input.Directives[0].ID != "farewell" {
+		t.Fatalf("chapter 5 input = %#v, %v", input, err)
+	}
+}
+
+// TestQuickWriteDriftDuringReviewFollowsBasis：审阅期间的漂移按裁定基线判定（D48/D51）——
+// 锁定设定不作废裁定，覆盖范围内章节的要求才使审阅失效并重审。
+func TestQuickWriteDriftDuringReviewFollowsBasis(t *testing.T) {
+	ctx := context.Background()
+	run := func(projectID string, drift func(api *Service, at time.Time)) (QuickWriteResult, *scriptedQuickExecutor) {
+		t.Helper()
+		executor := &scriptedQuickExecutor{now: serviceTime()}
+		api := newQuickTestService(t, executor)
+		command := QuickWriteCommand{
+			ProjectID: projectID, UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+			Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+		}
+		executor.onExecute = func(operation domain.Operation) {
+			if operation.ID == reviewOperationID("run:"+projectID+":1", 4) {
+				drift(api, command.CreatedAt.Add(30*time.Minute))
+			}
+		}
+		result, err := api.QuickWrite(ctx, command)
+		if err != nil {
+			t.Fatalf("quick write %s: %v", projectID, err)
+		}
+		return result, executor
+	}
+	// 规划 1 + 两章 2 + 终审 1 = 4 次：审阅期间锁定设定，裁定照常生效。
+	locked, executor := run("locked-review-book", func(api *Service, at time.Time) {
+		if _, err := api.SetOwnership(ctx, SetOwnershipCommand{
+			ProjectID: "locked-review-book", ChangeID: "review-lock", UserID: "user-1",
+			Target: domain.DocumentRef{Kind: domain.DocumentPlan, ID: "arc-1"}, Control: domain.ControlLocked,
+			Reason: "审阅中途锁定", CreatedAt: at,
+		}); err != nil {
+			t.Fatalf("lock during review: %v", err)
+		}
+	})
+	if locked.RunState != domain.RunCompleted || executor.calls != 4 {
+		t.Fatalf("locked result = %#v, executor calls = %d", locked, executor.calls)
+	}
+	// 覆盖第 1 章起的要求改变了裁定的作用域基线：审阅失效、重审一次，共 5 次。
+	related, executor := run("related-review-book", func(api *Service, at time.Time) {
+		if _, err := api.AddDirective(ctx, AddDirectiveCommand{
+			ProjectID: "related-review-book", ChangeID: "review-hook", UserID: "user-1", DirectiveID: "hook",
+			Scope: "from_chapter:1", Text: "每章结尾留钩子", Reason: "审阅中途提出要求", CreatedAt: at,
+		}); err != nil {
+			t.Fatalf("directive during review: %v", err)
+		}
+	})
+	if related.RunState != domain.RunCompleted || executor.calls != 5 {
+		t.Fatalf("related result = %#v, executor calls = %d", related, executor.calls)
+	}
+	stale, err := executor.authorityStore.GetOperation(ctx, reviewOperationID(related.RunID, 4))
+	if err != nil || stale.State != domain.OperationStale {
+		t.Fatalf("first review = %#v, %v; want stale", stale, err)
+	}
+}
+
+// TestQuickWriteUserEditedChapterIsVerifiedBeforeNextWrite 是 D41 第 3 条的闭环：用户改了
+// 第 1 章正文后再续写，先核验第 1 章的来源事实，再重审、扩窗、写第 4 章；核验后缺口消失。
+func TestQuickWriteUserEditedChapterIsVerifiedBeforeNextWrite(t *testing.T) {
+	ctx := context.Background()
+	executor := &scriptedQuickExecutor{now: serviceTime()}
+	api := newQuickTestService(t, executor)
+	command := QuickWriteCommand{
+		ProjectID: "edited-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+		Chapters: 3, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: serviceTime(),
+	}
+	result, err := api.QuickWrite(ctx, command)
+	if err != nil || result.RunState != domain.RunCompleted || result.Revision != 5 || executor.calls != 5 {
+		t.Fatalf("first run = %#v, calls = %d, err = %v", result, executor.calls, err)
+	}
+	projection, err := api.ExportProject(ctx, command.ProjectID, 0)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	for index := range projection.Manuscript {
+		if projection.Manuscript[index].ID == "chapter-chapter-plan-1" {
+			projection.Manuscript[index].Blocks[0].Text += "（用户改写了开头）"
+		}
+	}
+	proposal, err := api.ImportProject(ctx, "edit-chapter-1", "user-1", "手工润色", projection, serviceTime().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := api.Approve(ctx, proposal.ID, "user-1", serviceTime().Add(time.Hour+time.Minute)); err != nil {
+		t.Fatalf("approve import: %v", err)
+	}
+	snapshot, err := api.WorkbenchSnapshot(ctx, command.ProjectID)
+	if err != nil || len(snapshot.PendingCanon) != 1 || snapshot.PendingCanon[0] != "chapter-chapter-plan-1-outcome" {
+		t.Fatalf("pending canon after edit = %#v, %v", snapshot.PendingCanon, err)
+	}
+	// 续写到 4 章：核验 1 + 重审（旧终审因第 1 章变化失效）1 + 扩窗 1 + 第 4 章 1 + 终审 1 = 10 次。
+	command.Chapters, command.CreatedAt = 4, serviceTime().Add(2*time.Hour)
+	if result, err = api.QuickWrite(ctx, command); err != nil || result.RunState != domain.RunCompleted || executor.calls != 10 {
+		t.Fatalf("second run = %#v, calls = %d, err = %v", result, executor.calls, err)
+	}
+	verify, err := executor.authorityStore.GetOperation(ctx, runQuickID(result.RunID, "canon", "chapter-chapter-plan-1", "r6"))
+	if err != nil || verify.State != domain.OperationSucceeded {
+		t.Fatalf("canon verification = %#v, %v", verify, err)
+	}
+	project, err := api.Project(ctx, command.ProjectID, 0)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if gaps := canonGaps(project); len(gaps) != 0 {
+		t.Fatalf("gaps after verification = %#v", gaps)
+	}
 }

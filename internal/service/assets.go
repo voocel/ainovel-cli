@@ -56,7 +56,7 @@ type LearnPreferenceCommand struct {
 }
 
 func (s *Service) LearnPreference(ctx context.Context, command LearnPreferenceCommand) (store.PreferenceCandidateRecord, error) {
-	analyzer, ok := s.executor.(preferenceAnalyzer)
+	analyzer, ok := s.executors.LLM.(preferenceAnalyzer)
 	if !ok {
 		return store.PreferenceCandidateRecord{}, fmt.Errorf("configured runtime does not provide preference analysis: %w", domain.ErrInvalid)
 	}

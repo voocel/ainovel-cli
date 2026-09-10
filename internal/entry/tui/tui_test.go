@@ -467,7 +467,7 @@ func TestWorkbenchThreePaneOutlineDetailAndCandidateReading(t *testing.T) {
 			ID: "f1", Kind: domain.CanonState, SubjectID: "hero", Predicate: "state.mood",
 			Value: []byte(`"平静"`), SourceChapterID: "chapter-1",
 		}},
-		Findings: []domain.ReviewFinding{{ChapterID: "chapter-1", Severity: domain.FindingNote, Note: "伏笔呼应完整"}},
+		Findings: []service.WorkbenchFinding{{ID: "review/0", ReviewFinding: domain.ReviewFinding{ChapterID: "chapter-1", Severity: domain.FindingNote, Note: "伏笔呼应完整"}}},
 		Run:      &run,
 	}
 	// 快照刷新会把光标锚定在第一个章行（此处直接注入快照，手动对齐）。

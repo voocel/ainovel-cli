@@ -35,6 +35,80 @@ func (r *Runtime) validateSubmissionArtifact(
 		if _, err := r.store.GetWorkspaceArtifact(ctx, operation.ID, reviewKey); err != nil {
 			return fmt.Errorf("read submitted workspace review: %w", err)
 		}
+	case domain.OperationReviseCanon:
+		return validateCanonRevision(operation, patches)
+	}
+	return nil
+}
+
+// validateCanonRevision 是事实核验任务的提交门（D41）：只允许 canon 补丁，每条 put 的
+// 来源章是任务章节，任务列出的待核验事实全部被确认（put）或删除，且该章至少留一条事实。
+func validateCanonRevision(operation domain.Operation, patches []domain.Patch) error {
+	input, err := domain.TaskInputAs[domain.ReviseCanonInput](operation)
+	if err != nil {
+		return err
+	}
+	touched := make(map[string]struct{}, len(patches))
+	declared := 0
+	for _, patch := range patches {
+		if patch.Document.Kind != domain.DocumentCanon {
+			return fmt.Errorf("canon revision may only change canon facts, got %s: %w", patch.Document.Key(), domain.ErrInvalid)
+		}
+		touched[patch.Document.ID] = struct{}{}
+		if patch.Operation != domain.PatchPut {
+			continue
+		}
+		var fact domain.CanonFact
+		if err := decodeToolArgs(patch.Content, &fact); err != nil {
+			return fmt.Errorf("decode canon %q: %w", patch.Document.ID, err)
+		}
+		if fact.SourceChapterID != input.ChapterID {
+			return fmt.Errorf("canon %q must be sourced from chapter %q: %w", fact.ID, input.ChapterID, domain.ErrInvalid)
+		}
+		declared++
+	}
+	for _, id := range input.FactIDs {
+		if _, ok := touched[id]; !ok {
+			return fmt.Errorf("canon %q is pending verification and must be confirmed, updated or deleted: %w", id, domain.ErrInvalid)
+		}
+	}
+	if declared == 0 {
+		return fmt.Errorf("chapter %q needs at least one canon fact: %w", input.ChapterID, domain.ErrInvalid)
+	}
+	return nil
+}
+
+// validateChapterCanon 在工具边界执行 D41 的来源归属与重申报：每条新事实的来源章必须是
+// 本次提交的正文，提交的每章必须重申报 base 上来源于它的全部事实（put 或 delete）。
+func validateChapterCanon(base []domain.DocumentVersion, patches []domain.Patch, chapters map[string]struct{}) error {
+	touched := make(map[string]struct{}, len(patches))
+	for _, patch := range patches {
+		if patch.Document.Kind != domain.DocumentCanon {
+			continue
+		}
+		touched[patch.Document.ID] = struct{}{}
+		if patch.Operation != domain.PatchPut {
+			continue
+		}
+		var fact domain.CanonFact
+		if err := decodeToolArgs(patch.Content, &fact); err != nil {
+			return fmt.Errorf("decode proposed Canon Delta: %w", err)
+		}
+		if _, ok := chapters[fact.SourceChapterID]; !ok {
+			return fmt.Errorf("canon %q must be sourced from a submitted chapter: %w", fact.ID, domain.ErrInvalid)
+		}
+	}
+	for _, document := range base {
+		var fact domain.CanonFact
+		if err := json.Unmarshal(document.Content, &fact); err != nil {
+			return fmt.Errorf("decode canon %q: %w", document.Document.ID, err)
+		}
+		if _, rewritten := chapters[fact.SourceChapterID]; !rewritten {
+			continue
+		}
+		if _, ok := touched[fact.ID]; !ok {
+			return fmt.Errorf("chapter %q must redeclare canon %q (confirm, update or delete): %w", fact.SourceChapterID, fact.ID, domain.ErrInvalid)
+		}
 	}
 	return nil
 }
@@ -67,45 +141,18 @@ func (r *Runtime) validateWorkspaceChapters(
 	seenChapters := make(map[string]struct{}, len(workspaceKeys))
 	var expectedPlanID string
 	expectedChapters := make(map[string]struct{})
-	var task struct {
-		Directives []domain.Directive `json:"directives"`
+	task, err := domain.DecodeTaskInput(operation.Kind, operation.Input)
+	if err != nil {
+		return err
 	}
-	if err := json.Unmarshal(operation.Input, &task); err != nil {
-		return fmt.Errorf("decode operation directives: %w", err)
-	}
-	switch operation.Kind {
-	case domain.OperationWriteChapter:
-		var input struct {
-			ChapterPlanID string `json:"chapter_plan_id"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
-			return fmt.Errorf("decode write operation input: %w", err)
-		}
+	directives := domain.TaskDirectives(task)
+	switch input := task.(type) {
+	case *domain.WriteChapterInput:
 		expectedPlanID = input.ChapterPlanID
-	case domain.OperationRewriteChapter:
-		var input struct {
-			ChapterID    string          `json:"chapter_id"`
-			BaseRevision domain.Revision `json:"base_revision"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
-			return fmt.Errorf("decode rewrite operation input: %w", err)
-		}
-		if input.ChapterID == "" || input.BaseRevision != operation.Snapshot.BaseRevision {
-			return fmt.Errorf("rewrite operation input does not match its execution snapshot: %w", domain.ErrInvalid)
-		}
+	case *domain.RewriteChapterInput:
 		expectedChapters[input.ChapterID] = struct{}{}
-	case domain.OperationRewriteAffected:
-		var input struct {
-			ChapterIDs           []string        `json:"chapter_ids"`
-			BaseRevision         domain.Revision `json:"base_revision"`
-			ResolutionProposalID string          `json:"resolution_proposal_id"`
-			Reason               string          `json:"reason"`
-		}
-		if err := json.Unmarshal(operation.Input, &input); err != nil {
-			return fmt.Errorf("decode affected rewrite operation input: %w", err)
-		}
-		if len(input.ChapterIDs) == 0 || input.BaseRevision != operation.Snapshot.BaseRevision ||
-			input.ResolutionProposalID == "" || input.Reason == "" {
+	case *domain.RewriteAffectedInput:
+		if input.BaseRevision != operation.Snapshot.BaseRevision {
 			return fmt.Errorf("affected rewrite operation input does not match its execution snapshot: %w", domain.ErrInvalid)
 		}
 		for _, chapterID := range input.ChapterIDs {
@@ -135,7 +182,7 @@ func (r *Runtime) validateWorkspaceChapters(
 			return fmt.Errorf("duplicate submitted workspace chapter %q: %w", workspaceChapter.ID, domain.ErrInvalid)
 		}
 		seenChapters[workspaceChapter.ID] = struct{}{}
-		if err := checkDirectiveWordCounts(task.Directives, workspaceChapter); err != nil {
+		if err := checkDirectiveWordCounts(directives, workspaceChapter); err != nil {
 			return err
 		}
 		if expectedPlanID != "" && workspaceChapter.PlanNodeID != expectedPlanID {
@@ -198,7 +245,13 @@ func (r *Runtime) validateWorkspaceChapters(
 			return fmt.Errorf("writer proposal includes unverified manuscript %q: %w", chapterID, domain.ErrInvalid)
 		}
 	}
-	return nil
+	var base []domain.DocumentVersion
+	if operation.Snapshot.BaseRevision > domain.InitialRevision {
+		if base, err = r.store.ListDocuments(ctx, operation.Target, domain.DocumentCanon, operation.Snapshot.BaseRevision); err != nil {
+			return err
+		}
+	}
+	return validateChapterCanon(base, patches, seenChapters)
 }
 
 // checkDirectiveWordCounts 是量化要求的确定性校验（§4.9 / S13）：字数按各 block

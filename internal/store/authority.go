@@ -264,6 +264,7 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string) error {
 	}{
 		{`DELETE FROM operation_events WHERE operation_id IN (` + operationScope + `)`, []any{domain.AuthorityProject, projectID}},
 		{`DELETE FROM operation_artifacts WHERE operation_id IN (` + operationScope + `)`, []any{domain.AuthorityProject, projectID}},
+		{`DELETE FROM artifacts WHERE project_id = ?`, []any{projectID}},
 		{`DELETE FROM operation_dependencies WHERE operation_id IN (` + operationScope + `) OR dependency_id IN (` + operationScope + `)`,
 			[]any{domain.AuthorityProject, projectID, domain.AuthorityProject, projectID}},
 		{`DELETE FROM proposals WHERE target_kind = ? AND target_id = ?`, []any{domain.AuthorityProject, projectID}},

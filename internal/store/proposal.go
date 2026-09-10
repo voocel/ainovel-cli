@@ -6,11 +6,37 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 func (s *Store) SaveProposal(ctx context.Context, proposal domain.Proposal) (domain.Proposal, error) {
+	return s.saveProposal(ctx, s.db, proposal)
+}
+
+// SaveExecutionProposal 将候选提案的落盘纳入同一个 attempt 围栏，避免旧执行
+// 在检查归属之后失去租约，仍写出可被后继恢复采纳的提案。
+func (s *Store) SaveExecutionProposal(ctx context.Context, proposal domain.Proposal, attempt int) (domain.Proposal, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Proposal{}, err
+	}
+	defer tx.Rollback()
+	if err := assertActiveAttempt(ctx, tx, proposal.OperationID, attempt); err != nil {
+		return domain.Proposal{}, err
+	}
+	saved, err := s.saveProposal(ctx, tx, proposal)
+	if err != nil {
+		return domain.Proposal{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.Proposal{}, err
+	}
+	return saved, nil
+}
+
+func (s *Store) saveProposal(ctx context.Context, query execQuerier, proposal domain.Proposal) (domain.Proposal, error) {
 	if err := proposal.Validate(); err != nil {
 		return domain.Proposal{}, err
 	}
@@ -22,7 +48,7 @@ func (s *Store) SaveProposal(ctx context.Context, proposal domain.Proposal) (dom
 		return domain.Proposal{}, err
 	}
 
-	result, err := s.db.ExecContext(ctx, `
+	result, err := query.ExecContext(ctx, `
 		INSERT INTO proposals (
 			id, content_digest, payload, state, target_kind, target_id, target_scope,
 			base_revision, created_at_unix_ms, updated_at_unix_ms, operation_id
@@ -42,7 +68,7 @@ func (s *Store) SaveProposal(ctx context.Context, proposal domain.Proposal) (dom
 		return proposal, nil
 	}
 
-	stored, storedDigest, err := s.getProposal(ctx, s.db, proposal.ID)
+	stored, storedDigest, err := s.getProposal(ctx, query, proposal.ID)
 	if err != nil {
 		return domain.Proposal{}, err
 	}
@@ -53,6 +79,53 @@ func (s *Store) SaveProposal(ctx context.Context, proposal domain.Proposal) (dom
 		return domain.Proposal{}, fmt.Errorf("proposal %q is %s: %w", proposal.ID, stored.ApprovalState, ErrStateConflict)
 	}
 	return stored, nil
+}
+
+// RelocateProposal 把待裁决提案的基线搬到新 Revision（D51）：只改 pending 行的载荷、
+// 摘要与基线；attempt 为正时在同一事务内确认它仍是当前执行（D42）。
+func (s *Store) RelocateProposal(ctx context.Context, proposal domain.Proposal, attempt int, now time.Time) error {
+	if err := proposal.Validate(); err != nil {
+		return err
+	}
+	if proposal.ApprovalState != domain.ApprovalPending || now.IsZero() {
+		return fmt.Errorf("relocation requires a pending proposal and a time: %w", domain.ErrInvalid)
+	}
+	payload, digest, err := encodeProposal(proposal)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin proposal relocation: %w", err)
+	}
+	defer tx.Rollback()
+	stored, _, err := s.getProposal(ctx, tx, proposal.ID)
+	if err != nil {
+		return err
+	}
+	if stored.ApprovalState != domain.ApprovalPending {
+		return fmt.Errorf("proposal %q is %s: %w", proposal.ID, stored.ApprovalState, ErrStateConflict)
+	}
+	if attempt > 0 {
+		if err := assertActiveAttempt(ctx, tx, proposal.OperationID, attempt); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE proposals
+		SET payload = ?, content_digest = ?, base_revision = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND state = ?`,
+		payload, digest, proposal.BaseRevision, now.UnixMilli(), proposal.ID, domain.ApprovalPending)
+	if err != nil {
+		return fmt.Errorf("relocate proposal: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("proposal %q relocation raced: %w", proposal.ID, ErrStateConflict)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit proposal relocation: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) GetProposal(ctx context.Context, id string) (domain.Proposal, error) {

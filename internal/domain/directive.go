@@ -105,8 +105,8 @@ func (v Directive) Validate() error {
 
 // DirectiveTarget 是作用域匹配的对象：章号与该章 Plan 节点及其祖先。
 type DirectiveTarget struct {
-	ChapterNumber int
-	PlanNodeIDs   []string
+	ChapterNumber int      `json:"chapter_number,omitempty"`
+	PlanNodeIDs   []string `json:"plan_node_ids,omitempty"`
 }
 
 // Covers 报告作用域是否命中目标；不看 status，调用方自行过滤。

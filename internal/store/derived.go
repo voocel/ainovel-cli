@@ -120,11 +120,27 @@ func (s *Store) ListDerivedDocuments(
 	if strings.TrimSpace(projectID) == "" || revision <= domain.InitialRevision {
 		return nil, fmt.Errorf("derived project and revision are required: %w", domain.ErrInvalid)
 	}
+	return s.listDerivedDocuments(ctx, `WHERE project_id = ? AND revision = ? ORDER BY kind, cache_key`, projectID, revision)
+}
+
+// ListDerivedDocumentsByKind 跨 Revision 列出一类派生文档（D48）：证据的有效性由
+// 调用方按基线判定，按写入时间排序便于选"最新"。
+func (s *Store) ListDerivedDocumentsByKind(
+	ctx context.Context,
+	projectID string,
+	kind string,
+) ([]domain.DerivedDocument, error) {
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(kind) == "" {
+		return nil, fmt.Errorf("derived project and kind are required: %w", domain.ErrInvalid)
+	}
+	return s.listDerivedDocuments(ctx,
+		`WHERE project_id = ? AND kind = ? ORDER BY created_at_unix_ms, revision, cache_key`, projectID, kind)
+}
+
+func (s *Store) listDerivedDocuments(ctx context.Context, clause string, args ...any) ([]domain.DerivedDocument, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT kind, cache_key, content, content_digest, created_at_unix_ms
-		FROM derived_documents
-		WHERE project_id = ? AND revision = ?
-		ORDER BY kind, cache_key`, projectID, revision)
+		SELECT project_id, revision, kind, cache_key, content, content_digest, created_at_unix_ms
+		FROM derived_documents `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list derived documents: %w", err)
 	}
@@ -134,10 +150,10 @@ func (s *Store) ListDerivedDocuments(
 		var document domain.DerivedDocument
 		var content []byte
 		var createdAt int64
-		if err := rows.Scan(&document.Kind, &document.Key, &content, &document.Digest, &createdAt); err != nil {
+		if err := rows.Scan(&document.ProjectID, &document.Revision, &document.Kind, &document.Key,
+			&content, &document.Digest, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan derived document: %w", err)
 		}
-		document.ProjectID, document.Revision = projectID, revision
 		document.Content = append([]byte(nil), content...)
 		document.CreatedAt = time.UnixMilli(createdAt).UTC()
 		if domain.Digest(document.Content) != document.Digest {
