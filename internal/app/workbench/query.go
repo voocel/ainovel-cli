@@ -98,6 +98,11 @@ func (s *Query) WorkbenchSnapshot(ctx context.Context, projectID string) (Workbe
 	if err != nil {
 		return WorkbenchSnapshot{}, err
 	}
+	return s.snapshotFromProject(ctx, project)
+}
+
+func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snapshot) (WorkbenchSnapshot, error) {
+	projectID := project.ID
 	snapshot := WorkbenchSnapshot{
 		ProjectID: project.ID, Revision: project.Revision,
 		Intent: project.Intent, Approval: project.Approval, Ownership: project.Ownership,

@@ -146,7 +146,7 @@ func TestHomeLibraryOpensExistingProject(t *testing.T) {
 		{id: "book-1", premise: "旧作", target: 3, written: 1, state: "等你决定"},
 	}})
 	m = updated.(model)
-	m = pressTimes(t, m, tea.KeyTab, 6) // 章节数→自动化→完善设定→导入→配置→作品库
+	m = pressTimes(t, m, tea.KeyTab, focusLibrary) // 沿首页焦点顺序进入作品库
 	if m.home.focus != focusLibrary {
 		t.Fatalf("focus = %d, want library", m.home.focus)
 	}
@@ -410,7 +410,7 @@ func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T
 	}
 
 	m := newModel(ctx, deps)
-	m = pressTimes(t, m, tea.KeyTab, 4) // 章节数→自动化→完善设定→导入
+	m = pressTimes(t, m, tea.KeyTab, focusImport) // 沿首页焦点顺序进入导入
 	m, _ = press(t, m, tea.KeyEnter)
 	if m.home.mode != homeImport {
 		t.Fatalf("mode = %v, want import", m.home.mode)
@@ -435,8 +435,8 @@ func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T
 	}
 }
 
-func TestWorkbenchThreePaneOutlineDetailAndCandidateReading(t *testing.T) {
-	// 页面设计 §2：宽屏三栏（大纲/主区/详情），窄屏降级单栏；
+func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
+	// 页面设计 §2：宽屏两栏（大纲/主区），窄屏降级单栏；
 	// §3 三层校正链：待确认章节读候选稿并明确标注。
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
@@ -476,11 +476,17 @@ func TestWorkbenchThreePaneOutlineDetailAndCandidateReading(t *testing.T) {
 	// 快照刷新会把光标锚定在第一个章行（此处直接注入快照，手动对齐）。
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0)
 	view := m.View()
-	for _, want := range []string{"大纲", "卷一", "● 1", "◐ 2", "详情", "创作意图"} {
+	for _, want := range []string{"大纲", "卷一", "● 1", "◐ 2", "详情"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("three-pane view missing %q", want)
 		}
 	}
+	m, _ = pressRune(t, m, '3')
+	if !strings.Contains(m.View(), "创作意图") {
+		t.Fatal("detail tab must show intent")
+	}
+	m, _ = pressRune(t, m, '1')
+	m.bench.pane = benchPaneOutline
 	// 选中第 2 章（待确认）回车 → 读候选稿并标注。
 	m, _ = press(t, m, tea.KeyDown)
 	m, _ = press(t, m, tea.KeyEnter)
@@ -489,8 +495,8 @@ func TestWorkbenchThreePaneOutlineDetailAndCandidateReading(t *testing.T) {
 	}
 	m, _ = press(t, m, tea.KeyEsc)
 	// 窄屏降级：单栏 Tab 视图仍在。
-	m.width = 90
-	if view := m.View(); !strings.Contains(view, "总览") {
+	m.width = 80
+	if view := m.View(); !strings.Contains(view, "目录") {
 		t.Fatal("narrow view should fall back to tabbed single pane")
 	}
 }
@@ -656,6 +662,7 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	}
 	updated, _ := m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
+	m.bench.tab = benchTabActivity
 	wheel(60, true)
 	if m.bench.feedOffset != 1 {
 		t.Fatalf("wheel over main must page feed history: offset=%d", m.bench.feedOffset)
@@ -665,9 +672,9 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 		t.Fatalf("wheel down must resume follow: offset=%d", m.bench.feedOffset)
 	}
 	// 单栏降级：点击标签行第二个标签切到正文视图。
-	m.width = 90
+	m.width = 80
 	m.bench.writing = false
-	click(8, 2)
+	click(4, 2)
 	if m.bench.view != 1 {
 		t.Fatalf("tab click must switch view, view=%d", m.bench.view)
 	}
@@ -852,7 +859,7 @@ func TestWorkbenchRendersStreamingProsePreview(t *testing.T) {
 	}
 }
 
-func TestActivityShowsThinkingSummaryAndErrorReason(t *testing.T) {
+func TestActivityShowsThinkingExcerptAndErrorReason(t *testing.T) {
 	// M3：错误行随行给出原因摘要（完整诊断按 d 下钻）；Provider 提供思考文本时
 	// 构思行展示尾部摘要，否则只报"构思中……"。
 	deps, api := newTestDeps(t, true)
@@ -877,7 +884,7 @@ func TestActivityShowsThinkingSummaryAndErrorReason(t *testing.T) {
 	m = updated.(model)
 	view := m.View()
 	for _, want := range []string{
-		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "构思中 · 需要回到第三章补一处伏笔",
+		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "构思中", "需要回到第三章补一处伏笔",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
@@ -969,6 +976,7 @@ func TestActivityFeedScrollPausesFollowAndResumes(t *testing.T) {
 	m = updated.(model)
 
 	m, _ = press(t, m, tea.KeyTab) // 焦点到主区
+	m.bench.tab = benchTabActivity
 	m = pressTimes(t, m, tea.KeyUp, 3)
 	if m.bench.feedOffset != 3 {
 		t.Fatalf("feed offset after scrolling up = %d", m.bench.feedOffset)
@@ -1002,7 +1010,7 @@ func TestDecisionFailureRestoresCardFromSnapshot(t *testing.T) {
 		gen: m.bench.gen, continueAfter: true, err: errors.New("approve proposal: state conflict"),
 	})
 	m = updated.(model)
-	if m.bench.err == "" || cmd == nil {
+	if m.bench.err == "" || (cmd == nil && !m.bench.refresh.pending) {
 		t.Fatalf("failure must surface error and refresh: err=%q cmd=%v", m.bench.err, cmd)
 	}
 	snap := workbench.WorkbenchSnapshot{
@@ -1018,7 +1026,7 @@ func TestDecisionFailureRestoresCardFromSnapshot(t *testing.T) {
 
 func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	// 长书大纲按视口窗口化：光标在远处章节时窗口随之滚动（截断指示可见）；
-	// Tab 在三栏形态下轮换栏焦点，主区焦点 ↑/↓ 翻段而不是换章。
+	// Tab 在两栏之间轮换焦点，主区焦点 ↑/↓ 滚动内容而不是换章。
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-long")
@@ -1036,7 +1044,7 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 		})
 	}
 	var blocks []domainmodel.ManuscriptBlock
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 30; i++ {
 		blocks = append(blocks, domainmodel.ManuscriptBlock{ID: fmt.Sprintf("b%d", i), Text: fmt.Sprintf("第25章第%d段", i)})
 	}
 	snap.Manuscript = []domainmodel.ManuscriptChapter{{ID: "ch-25", Number: 25, Title: "第25回", Blocks: blocks}}
@@ -1053,10 +1061,6 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	m, _ = press(t, m, tea.KeyDown)
 	if m.bench.cursor != 25 || m.bench.previewOffset != 1 {
 		t.Fatalf("main focus must page preview: cursor=%d offset=%d", m.bench.cursor, m.bench.previewOffset)
-	}
-	m, _ = press(t, m, tea.KeyTab)
-	if m.bench.pane != benchPaneDetail {
-		t.Fatalf("pane = %d, want detail", m.bench.pane)
 	}
 	m, _ = press(t, m, tea.KeyTab)
 	if m.bench.pane != benchPaneOutline {

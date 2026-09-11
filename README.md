@@ -91,7 +91,7 @@ internal/
 ├── infra/        SQLite、工作区、模型运行时、Prompt/Pack、活动和配置适配
 ├── entry/        TUI 与 headless 入口
 ├── bootstrap/    静态装配具名组件，不承载业务或转发方法
-└── arch/         包依赖与架构契约检查
+└── archtest/     包依赖与架构契约检查
 ```
 
 `domain/model` 同时承载通用协议与当前创作内容类型；这是创作应用的领域内核，不是纯通用媒体框架。`domain/change`、`domain/operation`、`domain/creation` 自己声明所需的持久化接口，由 `infra/store` 实现；推进驱动通过任务接口调用 `app/task` 装配的执行能力，不反向依赖应用包。新增功能按领域规则、应用用例、外部适配各自归属，具体边界以架构文档 §11–12 为准。

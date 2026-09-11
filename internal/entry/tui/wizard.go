@@ -136,31 +136,30 @@ func (m model) finishWizard(verified wizardVerifiedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) viewWizard() string {
-	var view strings.Builder
-	view.WriteString(splash(min(64, max(40, m.width-8))))
-	view.WriteString(styleTitle.Render("配置模型") + "\n")
-	view.WriteString(styleHint.Render("配置一次，之后直接开写。保存在 "+appconfig.ConfigPath(m.deps.ConfigDir)) + "\n\n")
+	width := m.entryWidth()
+	lines := []string{benchTheme.Muted.Render("配置一次，之后直接开始创作。"), ""}
 	for i, field := range wizardFields {
 		if i == m.wizard.step {
-			view.WriteString(marker(true, field.label) + "\n")
-			view.WriteString("  " + m.wizard.inputs[i].View() + "\n")
-			continue
-		}
-		line := marker(false, field.label)
-		if value := m.wizard.inputs[i].Value(); value != "" {
-			display := value
-			if field.secret {
-				display = strings.Repeat("*", len(value))
+			input := m.wizard.inputs[i]
+			input.Width = max(1, width-4)
+			input.SetCursor(input.Position())
+			lines = append(lines, benchTheme.Accent.Render("▎ "+field.label), "  "+input.View(), "")
+		} else {
+			value := m.wizard.inputs[i].Value()
+			if field.secret && value != "" {
+				value = "••••••••"
 			}
-			line += styleHint.Render("  " + display)
+			if value == "" {
+				value = "待填写"
+				if field.optional {
+					value = "可选"
+				}
+			}
+			lines = append(lines, benchTheme.Muted.Render(truncate("  "+field.label+" · "+value, width)))
 		}
-		view.WriteString(line + "\n")
 	}
-	view.WriteString("\n")
 	if m.wizard.verifying {
-		view.WriteString(styleWarn.Render("正在验证连通，请稍候…") + "\n")
+		lines = append(lines, benchTheme.Accent.Render("正在验证模型连接…"))
 	}
-	view.WriteString(errLine(m.wizard.err))
-	view.WriteString(styleHint.Render("回车 下一步 · Esc 上一步"))
-	return centerScreen(m.width, m.height, view.String())
+	return m.entryPage("连接创作模型", lines, m.wizard.err, "Enter 下一项 / 验证连接 · Esc 上一步")
 }

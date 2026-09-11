@@ -246,3 +246,43 @@ func TestAppendProseTrimsAtRuneBoundary(t *testing.T) {
 		t.Fatal("trim must keep rune boundary")
 	}
 }
+
+func TestThinkingPreservesBoundedOriginalTailAndResetsBetweenTasks(t *testing.T) {
+	hub := NewHub()
+	think := toolEvent(Thinking, "")
+	// Preserve meaningful multiline text beyond the short auxiliary note limit.
+	think.Text = strings.Repeat("先检查人物动机。\n", 40)
+	hub.Publish(think)
+	snapshot, _ := hub.Snapshot("book-1")
+	if !snapshot.Thinking || snapshot.ThinkingNote != think.Text {
+		t.Fatal("thinking fragment was summarized or truncated to the auxiliary note limit")
+	}
+	boundary := strings.Repeat("思", maxThinkingSize-1) + "😀"
+	think.OperationID, think.Text = "op-2", boundary
+	hub.Publish(think)
+	snapshot, _ = hub.Snapshot("book-1")
+	if snapshot.ThinkingNote != boundary {
+		t.Fatal("exact rune boundary was not preserved")
+	}
+	think.Text = "\n收束伏笔"
+	hub.Publish(think)
+	snapshot, _ = hub.Snapshot("book-1")
+	combined := []rune(boundary + think.Text)
+	want := string(combined[len(combined)-maxThinkingSize:])
+	if !utf8.ValidString(snapshot.ThinkingNote) || snapshot.ThinkingNote != want {
+		t.Fatal("thinking buffer must retain the exact UTF-8 tail at its independent limit")
+	}
+	think.Text = "" // A status-only update does not erase already supplied text.
+	hub.Publish(think)
+	snapshot, _ = hub.Snapshot("book-1")
+	if snapshot.ThinkingNote != want {
+		t.Fatal("status-only thinking event erased the fragment")
+	}
+	next := toolEvent(ToolStart, "workspace_list")
+	next.OperationID = "op-3"
+	hub.Publish(next)
+	snapshot, _ = hub.Snapshot("book-1")
+	if snapshot.Thinking || snapshot.ThinkingNote != "" {
+		t.Fatal("new task retained the previous thinking fragment")
+	}
+}

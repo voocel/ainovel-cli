@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,24 +30,30 @@ const (
 	focusChapters
 	focusApproval
 	focusRefine
+	focusStart
 	focusImport
 	focusConfig
+	focusSearch
 	focusLibrary
 )
 
 type homeState struct {
-	premise   textinput.Model
-	chapters  int
-	approval  domainmodel.ApprovalPolicy
-	focus     int
-	mode      homeMode
-	form      []textinput.Model
-	formStep  int
-	importIn  textinput.Model
-	importing bool
-	library   []libraryEntry
-	cursor    int
-	loaded    bool
+	search          textinput.Model
+	searching       bool
+	chapterInput    textinput.Model
+	editingChapters bool
+	premise         textinput.Model
+	chapters        int
+	approval        domainmodel.ApprovalPolicy
+	focus           int
+	mode            homeMode
+	form            []textinput.Model
+	formStep        int
+	importIn        textinput.Model
+	importing       bool
+	library         []libraryEntry
+	cursor          int
+	loaded          bool
 	// lastOpened 是上次打开的作品：作品库加载后预选它，回车即恢复落点。
 	lastOpened string
 	// confirmDelete 是待二次确认删除的作品 ID：再按 d 执行，按其他键取消。
@@ -93,35 +100,24 @@ var formFields = []struct{ label, placeholder string }{
 func newHomeState() homeState {
 	premise := newInput("一句话说想写什么，回车开写")
 	premise.Focus()
-	return homeState{premise: premise, chapters: 3, approval: domainmodel.ApprovalAuto}
+	return homeState{premise: premise, chapters: 3, approval: domainmodel.ApprovalAuto, search: newInput("搜索作品标题或 ID"), chapterInput: newInput("目标章数")}
 }
 
 // loadLibraryCmd 读取作品库：每本书的目标、进度与运行状态。
 func (m model) loadLibraryCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	return func() tea.Msg {
-		records, err := api.Projects.ListProjects(ctx)
+		records, err := api.Workbench.Library(ctx)
 		if err != nil {
 			return libraryLoadedMsg{err: err}
 		}
 		entries := make([]libraryEntry, 0, len(records))
 		for _, record := range records {
-			entry := libraryEntry{id: record.ID, state: "空闲"}
-			snapshot, err := api.Projects.Project(ctx, record.ID, domainmodel.InitialRevision)
-			if err != nil {
-				return libraryLoadedMsg{err: err}
+			state := "空闲"
+			if record.State != "" {
+				state = runStateLabel(record.State)
 			}
-			entry.premise = snapshot.Intent.Premise
-			entry.target = snapshot.Intent.TargetChapters
-			entry.written = len(snapshot.Manuscript)
-			run, hasRun, err := api.Runs.LatestCreationRun(ctx, record.ID)
-			if err != nil {
-				return libraryLoadedMsg{err: err}
-			}
-			if hasRun {
-				entry.state = runStateLabel(run.State)
-			}
-			entries = append(entries, entry)
+			entries = append(entries, libraryEntry{id: record.ID, premise: record.Premise, target: record.Target, written: record.Written, state: state})
 		}
 		return libraryLoadedMsg{entries: entries}
 	}
@@ -134,15 +130,25 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.home.err = message.err.Error()
 			return m, nil
 		}
-		m.home.library, m.home.loaded, m.home.err = message.entries, true, ""
-		if m.home.cursor >= len(message.entries) {
-			m.home.cursor = 0
+		selected := m.home.lastOpened
+		first := !m.home.loaded
+		if m.home.loaded && m.home.cursor < len(m.home.library) {
+			selected = m.home.library[m.home.cursor].id
 		}
-		// 预选上次打开的作品：回车即回到它的工作台。
-		for i, entry := range message.entries {
-			if entry.id == m.home.lastOpened {
-				m.home.cursor, m.home.focus = i, focusLibrary
-				m.home.premise.Blur()
+		m.home.library, m.home.loaded, m.home.err = message.entries, true, ""
+		indices := m.libraryIndices()
+		m.home.cursor = 0
+		if len(indices) > 0 {
+			m.home.cursor = indices[0]
+		}
+		for _, i := range indices {
+			if message.entries[i].id == selected {
+				m.home.cursor = i
+				// A late library response must not steal a new story already being typed.
+				if first && !m.home.searching && m.home.focus == focusPremise && m.home.premise.Value() == "" {
+					m.home.focus = focusLibrary
+					m.home.premise.Blur()
+				}
 				break
 			}
 		}
@@ -178,6 +184,8 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 			reason: "导入的草案等你批准", proposal: message.proposal, hasProposal: true,
 		})
 		return m, tea.Batch(m.refreshBenchCmd(), watch)
+	case tea.MouseMsg:
+		return m.handleHomeMouse(message)
 	case tea.KeyMsg:
 		switch m.home.mode {
 		case homeForm:
@@ -192,8 +200,14 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) handleHomeKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	home := &m.home
+	if home.searching || home.editingChapters {
+		return m.handleHomeInline(key)
+	}
+	if key.String() == "/" && home.focus != focusPremise {
+		return m.beginLibrarySearch()
+	}
 	// 作品库焦点下 d=删除选中作品（危险操作，二次确认）；其他任意键取消确认。
-	if home.focus == focusLibrary && len(home.library) > 0 && key.String() == "d" {
+	if home.focus == focusLibrary && len(m.libraryIndices()) > 0 && key.String() == "d" {
 		entry := home.library[home.cursor]
 		if home.confirmDelete == entry.id {
 			home.confirmDelete, home.notice = "", ""
@@ -213,13 +227,17 @@ func (m model) handleHomeKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.Type {
 	case tea.KeyEsc:
 		return m, tea.Quit
-	case tea.KeyTab:
+	case tea.KeyTab, tea.KeyShiftTab:
 		home.premise.Blur()
 		limit := focusLibrary
 		if len(home.library) > 0 {
 			limit = focusLibrary + 1
 		}
-		home.focus = (home.focus + 1) % limit
+		delta := 1
+		if key.Type == tea.KeyShiftTab {
+			delta = -1
+		}
+		home.focus = (home.focus + delta + limit) % limit
 		if home.focus == focusPremise {
 			home.premise.Focus()
 		}
@@ -227,9 +245,20 @@ func (m model) handleHomeKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		switch home.focus {
 		case focusLibrary:
-			if len(home.library) > 0 {
+			if len(m.libraryIndices()) > 0 {
 				return m.openProject(home.library[home.cursor].id)
 			}
+			return m, nil
+		case focusSearch:
+			return m.beginLibrarySearch()
+		case focusChapters:
+			home.editingChapters = true
+			home.chapterInput.SetValue(strconv.Itoa(home.chapters))
+			home.chapterInput.CursorEnd()
+			home.premise.Blur()
+			return m, home.chapterInput.Focus()
+		case focusApproval:
+			return m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
 		case focusRefine:
 			if strings.TrimSpace(home.premise.Value()) == "" {
 				home.err = "先用一句话说想写什么，再完善设定"
@@ -253,15 +282,9 @@ func (m model) handleHomeKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.createProject(nil)
-	case tea.KeyUp, tea.KeyDown:
-		if home.focus == focusLibrary && len(home.library) > 0 {
-			if key.Type == tea.KeyUp && home.cursor > 0 {
-				home.cursor--
-			}
-			if key.Type == tea.KeyDown && home.cursor < len(home.library)-1 {
-				home.cursor++
-			}
-			return m, nil
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+		if home.focus == focusLibrary {
+			return m.moveLibrary(key.Type), nil
 		}
 	case tea.KeyLeft, tea.KeyRight:
 		delta := 1
@@ -431,82 +454,36 @@ func (m model) viewHome() string {
 	case homeImport:
 		return m.viewHomeImport()
 	}
-	home := m.home
-	width := min(64, max(40, m.width-8))
-	var view strings.Builder
-	view.WriteString(splash(width))
-	view.WriteString(marker(home.focus == focusPremise, "创作要求") + "\n")
-	view.WriteString("  " + home.premise.View() + "\n\n")
-	view.WriteString(marker(home.focus == focusChapters, fmt.Sprintf("目标章数    %d", home.chapters)) +
-		styleHint.Render("  ←/→ 调整") + "\n")
-	view.WriteString(marker(home.focus == focusApproval, "自动化程度  "+approvalLabel(home.approval)) +
-		styleHint.Render("  ←/→ 切换，进入工作台后随时可调") + "\n")
-	view.WriteString(marker(home.focus == focusRefine, "完善创作设定") +
-		styleHint.Render("  受众 · 期待体验 · 必须/禁止 · 结局") + "\n")
-	view.WriteString(marker(home.focus == focusImport, "导入作品") + "\n")
-	view.WriteString(marker(home.focus == focusConfig, "配置模型") + "\n")
-	if len(home.library) > 0 {
-		view.WriteString("\n  " + styleTitle.Render("作品库") + "\n")
-		for i, entry := range home.library {
-			title := entry.premise
-			if title == "" {
-				title = entry.id
-			}
-			line := fmt.Sprintf("%s  %s %d/%d 章 · %s",
-				truncate(title, max(10, width-28)),
-				progressBar(entry.written, entry.target, 8), entry.written, entry.target,
-				stateBadge(entry.state))
-			view.WriteString(marker(home.focus == focusLibrary && i == home.cursor, line) + "\n")
-		}
-	} else if home.loaded {
-		view.WriteString("\n  " + styleHint.Render("作品库还是空的，写下第一句话开始吧。") + "\n")
-	}
-	if home.err != "" {
-		view.WriteString("\n  " + errLine(home.err))
-	} else if home.notice != "" {
-		view.WriteString("\n  " + noticeLine(home.notice))
-	}
-	hints := "回车 开写/打开 · Tab 切换焦点 · Esc 退出"
-	if home.focus == focusLibrary {
-		hints = "回车 打开 · d 删除 · Tab 切换焦点 · Esc 退出"
-	}
-	view.WriteString("\n  " + styleHint.Render(hints))
-	return centerScreen(m.width, m.height, view.String())
+	return m.homeFrame().text
 }
 
 func (m model) viewHomeForm() string {
-	home := m.home
-	var view strings.Builder
-	view.WriteString(header("完善创作设定"))
-	view.WriteString(styleHint.Render("创作要求  ") +
-		truncate(strings.TrimSpace(home.premise.Value()), max(10, m.width-12)) + "\n\n")
+	width := m.entryWidth()
+	lines := []string{benchTheme.Muted.Render(truncate(m.home.premise.Value(), width)), ""}
 	for i, field := range formFields {
-		if i == home.formStep {
-			view.WriteString(marker(true, field.label) + "\n")
-			view.WriteString("  " + home.form[i].View() + "\n")
-			continue
+		if i == m.home.formStep {
+			input := m.home.form[i]
+			input.Width = max(1, width-4)
+			input.SetCursor(input.Position())
+			lines = append(lines, benchTheme.Accent.Render("▎ "+field.label), "  "+input.View(), "")
+		} else {
+			value := strings.TrimSpace(m.home.form[i].Value())
+			if value == "" {
+				value = "可选"
+			}
+			lines = append(lines, benchTheme.Muted.Render(truncate("  "+field.label+" · "+value, width)))
 		}
-		line := marker(false, field.label)
-		if value := strings.TrimSpace(home.form[i].Value()); value != "" {
-			line += styleHint.Render("  " + value)
-		}
-		view.WriteString(line + "\n")
 	}
-	view.WriteString("\n")
-	view.WriteString(errLine(home.err))
-	view.WriteString(styleHint.Render("回车 下一步（最后一步开写）· Esc 上一步"))
-	return centerScreen(m.width, m.height, view.String())
+	return m.entryPage("完善创作设定", lines, m.home.err, "Enter 下一项 / 开始创作 · Esc 上一步")
 }
 
 func (m model) viewHomeImport() string {
-	home := m.home
-	var view strings.Builder
-	view.WriteString(header("导入作品"))
-	view.WriteString("  " + home.importIn.View() + "\n\n")
-	if home.importing {
-		view.WriteString(styleWarn.Render("正在导入…") + "\n")
+	input := m.home.importIn
+	input.Width = max(1, m.entryWidth()-4)
+	input.SetCursor(input.Position())
+	lines := []string{benchTheme.Muted.Render("从导出的作品文件继续创作。"), "", input.View(), ""}
+	if m.home.importing {
+		lines = append(lines, benchTheme.Accent.Render("正在导入…"))
 	}
-	view.WriteString(errLine(home.err))
-	view.WriteString(styleHint.Render("回车 导入 · Esc 返回"))
-	return centerScreen(m.width, m.height, view.String())
+	return m.entryPage("导入作品", lines, m.home.err, "Enter 导入 · Esc 返回")
 }

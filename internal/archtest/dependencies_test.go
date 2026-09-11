@@ -1,5 +1,5 @@
-// Package arch 只承载架构纪律的自动化断言，不含生产代码。
-package arch
+// Package archtest 只承载架构纪律的自动化断言，不含生产代码。
+package archtest
 
 import (
 	"errors"
@@ -22,7 +22,7 @@ const modulePath = "github.com/voocel/ainovel-cli"
 // 新增包必须在此显式登记，让"它可以依赖谁"成为一次明确的 review 决定，而不是随手
 // import 的既成事实。
 var allowedImports = map[string][]string{
-	"arch":                    {},
+	"archtest":                {},
 	"domain/model":            {},
 	"infra/activity":          {},
 	"infra/store":             {"domain/model"},

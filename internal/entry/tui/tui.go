@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
@@ -37,7 +39,7 @@ func Run(ctx context.Context, deps Deps) error {
 		return fmt.Errorf("TUI application is required: %w", domainmodel.ErrInvalid)
 	}
 	// AltScreen 全屏渲染是“进入应用”的关键：不开则界面内联在滚动缓冲区里，
-	// 看起来像普通输出。不开启鼠标捕获，保留终端原生滚动与复制（workbench §4）。
+	// 看起来像普通输出。鼠标捕获与键盘操作共同由下面的选项启用。
 	program := tea.NewProgram(
 		newModel(ctx, deps),
 		tea.WithContext(ctx), tea.WithInput(deps.Input), tea.WithOutput(deps.Output),
@@ -137,6 +139,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
+		if m.bench.reading {
+			m.bench.body.Width, m.bench.body.Height = max(1, m.width-4), max(1, m.height-1)
+			m.bench.body.SetContent(strings.Join(readingLines(m.bench.bodyText, m.bench.body.Width), "\n"))
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if message.Type == tea.KeyCtrlC {
@@ -166,14 +172,7 @@ func (m model) View() string {
 
 // truncate 按显示宽度截断一行文本，避免状态栏与列表溢出。
 func truncate(text string, limit int) string {
-	if limit <= 1 {
-		return text
-	}
-	runes := []rune(strings.ReplaceAll(text, "\n", " "))
-	if len(runes) <= limit {
-		return string(runes)
-	}
-	return string(runes[:limit-1]) + "…"
+	return ansi.Truncate(strings.ReplaceAll(text, "\n", " "), max(0, limit), "…")
 }
 
 func approvalLabel(policy domainmodel.ApprovalPolicy) string {

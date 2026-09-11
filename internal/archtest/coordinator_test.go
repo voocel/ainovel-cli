@@ -1,4 +1,4 @@
-package arch
+package archtest
 
 import (
 	"go/ast"

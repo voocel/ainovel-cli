@@ -25,7 +25,7 @@ const (
 	ProseStall Kind = "prose_stall"
 	// Text 是模型的说明性文字增量：折叠为辅助行，不进正文预览。
 	Text Kind = "text"
-	// Thinking 表示模型正在构思；内容本身不展示（不作产品承诺）。
+	// Thinking 表示模型正在构思；仅保留 Provider 明确提供的原文尾部供展开阅读。
 	Thinking Kind = "thinking"
 	Retry    Kind = "retry"
 )
@@ -49,6 +49,7 @@ type Event struct {
 // Bytes 是这次调用已接收的参数字节数（不是正文字数）——按条目归属，
 // 一条消息里多个调用各自计数，互不串行。
 type Entry struct {
+	ID          uint64 // Stable within the project stream, including after old entries are evicted.
 	OperationID string
 	Kind        Kind
 	Tool        string
@@ -87,6 +88,8 @@ type Snapshot struct {
 const (
 	maxEntries  = 64
 	maxNoteSize = 120
+	// 思考片段供展开阅读，独立于辅助行保留上限；单位为 rune，仅存于进程内。
+	maxThinkingSize = 4096
 	// maxProseBytes 是正文预览缓冲上界（≈8000 中文字，整章有裕量）；
 	// proseSlack 是摊还裁剪的松弛量：超过 max+slack 才裁回 max，避免每增量搬移。
 	maxProseBytes = 24 << 10
@@ -236,7 +239,7 @@ func (s *Snapshot) fold(event Event) {
 	case Thinking:
 		s.Thinking = true
 		if event.Text != "" {
-			s.ThinkingNote = tail(s.ThinkingNote+event.Text, maxNoteSize)
+			s.ThinkingNote = tail(s.ThinkingNote+event.Text, maxThinkingSize)
 		}
 	case Retry:
 		s.append(Entry{
@@ -286,6 +289,7 @@ func (s *Snapshot) lastOpen() int {
 }
 
 func (s *Snapshot) append(entry Entry) {
+	entry.ID = s.Seq + 1
 	s.Entries = append(s.Entries, entry)
 	if len(s.Entries) > maxEntries {
 		s.Entries = s.Entries[len(s.Entries)-maxEntries:]

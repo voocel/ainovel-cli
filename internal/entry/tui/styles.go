@@ -7,18 +7,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// 视觉层唯一定义处。色板沿用 v0 调优过的“暖调书卷气”双档值
-// （亮底稳定档 + 暗底提亮档），金色为品牌主色。
+// Shared widgets use the same semantic palette as the workbench.
 var (
-	colorAccent  = lipgloss.AdaptiveColor{Light: "#b8860b", Dark: "#e5b449"}
-	colorSubtle  = lipgloss.AdaptiveColor{Light: "#8a7e6b", Dark: "#8a8175"}
-	colorMuted   = lipgloss.AdaptiveColor{Light: "#7a7060", Dark: "#b8b09c"}
-	colorWarn    = lipgloss.AdaptiveColor{Light: "#b07530", Dark: "#e09b5a"}
-	colorDanger  = lipgloss.AdaptiveColor{Light: "#b5433a", Dark: "#e07060"}
-	colorSuccess = lipgloss.AdaptiveColor{Light: "#3d7a42", Dark: "#7ec488"}
+	colorAccent  = benchColors.Accent
+	colorSubtle  = benchColors.Muted
+	colorMuted   = benchColors.Muted
+	colorWarn    = benchColors.Warning
+	colorDanger  = benchColors.Error
+	colorSuccess = benchColors.Success
 
-	styleBrand  = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	styleTitle  = lipgloss.NewStyle().Bold(true)
+	styleTitle  = benchTheme.Title
 	styleHint   = lipgloss.NewStyle().Foreground(colorSubtle)
 	styleFocus  = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	styleErr    = lipgloss.NewStyle().Foreground(colorDanger)
@@ -32,8 +30,8 @@ var (
 			Padding(0, 1)
 
 	styleTabActive = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#1c1c1c"}).
-			Background(colorAccent).Padding(0, 1)
+			Foreground(benchColors.SelectedText).
+			Background(benchColors.SelectedBackground).Padding(0, 1)
 	styleTabIdle = lipgloss.NewStyle().Foreground(colorSubtle).Padding(0, 1)
 
 	styleSubtitle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
@@ -52,15 +50,6 @@ func newInput(placeholder string) textinput.Model {
 	return input
 }
 
-// header 是每页顶部的品牌行：◆ ainovel-cli · <上下文>。
-func header(context string) string {
-	line := styleBrand.Render("◆ ainovel-cli")
-	if context != "" {
-		line += styleHint.Render(" · ") + styleTitle.Render(context)
-	}
-	return line + "\n\n"
-}
-
 // marker 渲染行首焦点指示：聚焦行整体高亮。
 func marker(focused bool, text string) string {
 	if focused {
@@ -77,9 +66,8 @@ func progressBar(done, total, width int) string {
 	if done > total {
 		done = total
 	}
-	if width < total {
-		width = total
-	}
+	width = max(0, width)
+	done = max(0, done)
 	filled := done * width / total
 	bar := styleFocus.Render(strings.Repeat("▰", filled)) +
 		styleHint.Render(strings.Repeat("▱", width-filled))
@@ -129,32 +117,6 @@ func stateBadge(label string) string {
 	default:
 		return styleHint.Render(label)
 	}
-}
-
-// splash 渲染欢迎屏顶部的品牌区（v0 风格）：标题、副标题与波浪分隔线，
-// 在给定宽度内逐行居中。
-func splash(width int) string {
-	center := lipgloss.NewStyle().Width(width).Align(lipgloss.Center)
-	divider := strings.Repeat("~", min(44, max(10, width-8)))
-	return center.Render(styleBrand.Render("A I N O V E L")) + "\n" +
-		center.Render(styleSubtitle.Render("AI 小说创作引擎")) + "\n\n" +
-		center.Render(styleHint.Render(divider)) + "\n\n"
-}
-
-// centerScreen 把内容块整体放到屏幕正中。先把块内各行补齐到等宽（保持左对齐）
-// 再交给 Place——否则 Place 会逐行居中，表单就散架了。
-func centerScreen(width, height int, content string) string {
-	block := lipgloss.NewStyle().Width(lipgloss.Width(content)).Render(content)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
-}
-
-// pinBottom 把底栏钉在屏幕底部：全屏模式下内容顶部对齐、操作提示始终在最下方。
-func pinBottom(content, bottom string, height int) string {
-	pad := height - lipgloss.Height(content) - lipgloss.Height(bottom)
-	if pad < 1 {
-		pad = 1
-	}
-	return content + strings.Repeat("\n", pad) + bottom
 }
 
 func errLine(text string) string {
