@@ -63,6 +63,7 @@ type workbenchState struct {
 	body       viewport.Model
 	bodyText   string
 	writing    bool
+	exporting  bool
 	spin       int // 创作中动画帧，随轮询节拍推进
 	decision   *decisionState
 	prompt     *promptState
@@ -328,6 +329,18 @@ func clipDiagnostics(text string) string {
 func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 	bench := &m.bench
 	switch message := message.(type) {
+	case exportDoneMsg:
+		if message.gen != bench.gen {
+			return m, nil
+		}
+		bench.exporting = false
+		if message.err != nil {
+			bench.err = message.err.Error()
+			return m, nil
+		}
+		bench.err = ""
+		bench.notice = fmt.Sprintf("已导出 %d 章已确认正文 → %s", message.result.Chapters, message.result.Path)
+		return m, nil
 	case pollMsg:
 		if message.gen != bench.gen {
 			return m, nil
@@ -497,6 +510,9 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			bench.prompt = nil
 			return m, nil
 		case tea.KeyEnter:
+			if bench.prompt.purpose == "export" {
+				return m.submitExport()
+			}
 			if bench.prompt.purpose == "search" {
 				query := strings.TrimSpace(bench.prompt.input.Value())
 				if m.findChapter(query, false) {
@@ -668,6 +684,15 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "N":
 		m.findChapter(bench.search, true)
 		return m, nil
+	case "e":
+		if bench.exporting {
+			return m, nil
+		}
+		if len(bench.snap.Manuscript) == 0 {
+			bench.err = "暂无已确认正文，先批准稿件后再导出"
+			return m, nil
+		}
+		return m.openPrompt("export", "导出已确认正文 · 输入 .txt 或 .epub 文件路径", ""), nil
 	case "?":
 		return m.openBody(benchHelp), nil
 	case "i":

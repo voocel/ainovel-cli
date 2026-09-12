@@ -605,6 +605,13 @@ func runProject(ctx context.Context, api *bootstrap.App, args []string, stdout, 
 		flags := newFlags("project export", stderr)
 		projectID := flags.String("project", "", "Project ID")
 		revisionText := flags.String("revision", "0", "Revision；0 表示最新")
+		format := flags.String("format", "json", "json 工程投影，或 txt/epub 成品")
+		path := flags.String("file", "", "成品输出文件路径")
+		title := flags.String("title", "", "导出书名，默认创作意图")
+		author := flags.String("author", "", "作者署名")
+		from := flags.Int("from", 0, "起始章节号，0 为不限")
+		to := flags.Int("to", 0, "结束章节号，0 为不限")
+		overwrite := flags.Bool("overwrite", false, "替换已有导出文件")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -614,6 +621,16 @@ func runProject(ctx context.Context, api *bootstrap.App, args []string, stdout, 
 		revision, err := parseRevision(*revisionText)
 		if err != nil {
 			return err
+		}
+		if flags.NArg() != 0 {
+			return fmt.Errorf("project export 不接受位置参数")
+		}
+		if *format != "json" {
+			result, err := api.Novels.Export(ctx, novel.ExportCommand{ProjectID: *projectID, Revision: revision, Path: *path, Format: *format, Title: *title, Author: *author, From: *from, To: *to, Overwrite: *overwrite})
+			return writeResult(stdout, result, err)
+		}
+		if *path != "" || *title != "" || *author != "" || *from != 0 || *to != 0 || *overwrite {
+			return fmt.Errorf("成品参数需要 --format txt 或 --format epub；JSON 投影通过标准输出导出")
 		}
 		projection, err := api.Projects.ExportProject(ctx, *projectID, revision)
 		return writeResult(stdout, projection, err)

@@ -42,6 +42,7 @@ Esc       关闭输入或阅读 → 返回跟随 → 作品首页
 思考仅展示模型提供的原文尾部，不是对正文的可靠解释。
 / 输入章节号或标题定位；N 下一个匹配。
 PgUp/PgDn 翻页，Home/End 定位目录首尾。
+e 导出已确认正文，输入 .txt 或 .epub 文件路径。已有文件不会覆盖。
 终端原生选择复制通常需要按住 Shift（取决于终端设置）。`
 
 // A frame owns both rendered cells and hit targets. No separate mouse geometry
@@ -162,6 +163,9 @@ func (m model) benchDock() ([]string, []benchHit) {
 		lines = append(lines, " "+input.View())
 	} else {
 		actions := []benchAction{{"i", "i 提要求"}, {"t", "t 思考"}}
+		if len(b.snap.Manuscript) > 0 && !b.exporting {
+			actions = append(actions, benchAction{"e", "e 导出"})
+		}
 		if b.writing {
 			if b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
 				actions = append([]benchAction{{"p", "p 暂停推进"}}, actions...)

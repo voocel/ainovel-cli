@@ -48,6 +48,19 @@ go run ./cmd/ainovel-cli --headless quick write \
 
 成功输出只展示作品 revision 和章节进度，不暴露 Proposal/ChangeSet 内部术语。若模型、工具、约束检查或版本发生真实错误，命令会明确失败，已落盘 Operation 与 Workspace 可供检查和恢复。
 
+## 成品导出
+
+在作品工作台按 `e`（或点击“导出”），输入以 `.txt` 或 `.epub` 结尾的文件路径。导出只包含当前工作台版本的已确认正文，不包含候选稿、工作区草稿或流式预览；尚未写完也可导出已有章节。
+
+```sh
+ainovel-cli --headless project export --project book-1 --format txt --file ./book.txt
+ainovel-cli --headless project export --project book-1 --format epub --file ./book.epub --title "亡者来信" --author "作者"
+```
+
+TXT 使用 UTF-8 编码；EPUB 包含书名、署名（可选）、目录和按章号排列的正文。书名默认使用创作意图，可通过 `--title` 指定。`--revision` 可选历史版本，`--from` / `--to` 可选章节范围，保留原章号。输出目录须已存在，默认拒绝覆盖已有文件；命令行显式指定 `--overwrite` 才替换。写入成功后才发布文件，失败不会留下半成品或损坏旧文件。
+
+不指定 `--format` 时，`project export` 继续向标准输出导出 JSON 工程投影，用于编辑和重新导入。
+
 ## 详细创作入口（Headless 动作）
 
 以下动作均通过 `ainovel-cli --headless <动作>` 执行，与 TUI 调用同一组具名应用用例：
