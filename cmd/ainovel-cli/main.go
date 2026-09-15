@@ -135,11 +135,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 				return buildApplication(authorityStore, next, true)
 			},
 			Verify: func(ctx context.Context, next appconfig.Config) error {
-				return models.Verify(ctx, models.Config{
-					Provider: next.Provider, Model: next.Model,
-					APIKey: next.APIKey, BaseURL: next.BaseURL,
-					Timeout: 30 * time.Second,
-				})
+				mc, err := executionModelConfig(next)
+				if err != nil {
+					return err
+				}
+				mc.Timeout = 30 * time.Second
+				return models.Verify(ctx, mc)
 			},
 			Input:  os.Stdin,
 			Output: stdout,
@@ -159,9 +160,9 @@ func buildApplication(authorityStore *store.Store, config appconfig.Config, with
 	if !config.Configured() {
 		return bootstrap.New(authorityStore, bootstrap.Options{Version: version}), nil
 	}
-	modelConfig := models.Config{
-		Provider: config.Provider, Model: config.Model,
-		APIKey: config.APIKey, BaseURL: config.BaseURL,
+	modelConfig, err := executionModelConfig(config)
+	if err != nil {
+		return nil, err
 	}
 	modelDigest, err := modelConfig.Digest()
 	if err != nil {
@@ -208,4 +209,13 @@ func runDiagnostics(ctx context.Context, path string, args []string, stdout, std
 		return err
 	}
 	return closeErr
+}
+
+// Resolve the user-owned connection name before entering the protocol adapter.
+func executionModelConfig(config appconfig.Config) (models.Config, error) {
+	pc, err := config.ActiveProvider()
+	if err != nil {
+		return models.Config{}, err
+	}
+	return models.Config{Provider: pc.Type, API: pc.API, Model: config.Model, APIKey: pc.APIKey, BaseURL: pc.BaseURL}, nil
 }

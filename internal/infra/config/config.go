@@ -1,4 +1,4 @@
-// Package app 承载用户级应用配置：全局一份模型配置与默认数据位置。
+// Package config 承载用户级模型连接配置与默认数据位置。
 // 它不依赖任何内核包；服务装配始终发生在组合根（cmd/ainovel-cli）。
 package config
 
@@ -14,22 +14,101 @@ import (
 
 // Config 是用户级模型配置。作品数据与它无关：换模型不换书。
 type Config struct {
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	APIKey   string `json:"api_key,omitempty"`
-	BaseURL  string `json:"base_url,omitempty"`
+	Provider  string                    `json:"provider,omitempty"`
+	Model     string                    `json:"model,omitempty"`
+	APIKey    string                    `json:"api_key,omitempty"`
+	BaseURL   string                    `json:"base_url,omitempty"`
+	Providers map[string]ProviderConfig `json:"providers,omitempty"`
+}
+
+// ProviderConfig 将连接身份与底层协议分开，允许同一协议配置多个连接。
+type ProviderConfig struct {
+	Type    string   `json:"type,omitempty"`
+	API     string   `json:"api,omitempty"`
+	APIKey  string   `json:"api_key,omitempty"`
+	BaseURL string   `json:"base_url,omitempty"`
+	Models  []string `json:"models,omitempty"`
+}
+
+func (c Config) ActiveProvider() (ProviderConfig, error) {
+	pc, err := c.providerConfig()
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+	switch pc.Type {
+	case "openai", "anthropic", "gemini":
+	case "deepseek", "openrouter", "qwen", "glm", "grok", "minimax", "mimo", "ollama", "bedrock":
+		if pc.Type != c.Provider {
+			return ProviderConfig{}, fmt.Errorf("自定义连接协议只支持 openai、anthropic、gemini")
+		}
+	default:
+		return ProviderConfig{}, fmt.Errorf("不支持的协议类型 %q", pc.Type)
+	}
+	if pc.API != "" && pc.API != "chat" && pc.API != "responses" {
+		return ProviderConfig{}, fmt.Errorf("连接 %q 的 api 必须为 chat 或 responses", c.Provider)
+	}
+	if pc.API != "" && pc.Type != "openai" {
+		return ProviderConfig{}, fmt.Errorf("连接 %q 只有 openai 协议支持 api 选项", c.Provider)
+	}
+	return pc, nil
+}
+
+func (c Config) providerConfig() (ProviderConfig, error) {
+	pc := ProviderConfig{Type: c.Provider, APIKey: c.APIKey, BaseURL: c.BaseURL}
+	if c.Providers != nil {
+		var ok bool
+		pc, ok = c.Providers[c.Provider]
+		if !ok {
+			return ProviderConfig{}, fmt.Errorf("连接 %q 未配置", c.Provider)
+		}
+	}
+	if pc.Type == "" {
+		pc.Type = c.Provider
+	}
+	return pc, nil
+}
+
+// WithProvider 返回独立的连接映射，保留其他连接并将旧扁平配置迁入映射。
+func (c Config) WithProvider(name, model string, pc ProviderConfig) Config {
+	providers := make(map[string]ProviderConfig, len(c.Providers)+1)
+	for key, value := range c.Providers {
+		providers[key] = value
+	}
+	if c.Providers == nil && c.Provider != "" && c.Provider != name {
+		old := ProviderConfig{Type: c.Provider, APIKey: c.APIKey, BaseURL: c.BaseURL}
+		if c.Model != "" {
+			old.Models = []string{c.Model}
+		}
+		providers[c.Provider] = old
+	}
+	pc.Models = append([]string(nil), pc.Models...)
+	found := false
+	for _, item := range pc.Models {
+		if item == model {
+			found = true
+			break
+		}
+	}
+	if model != "" && !found {
+		pc.Models = append(pc.Models, model)
+	}
+	providers[name] = pc
+	c.Provider, c.Model, c.Providers = name, model, providers
+	c.APIKey, c.BaseURL = "", ""
+	return c
 }
 
 // Configured 报告是否具备发起真实创作的最低配置。
 func (c Config) Configured() bool {
-	return strings.TrimSpace(c.Provider) != "" && strings.TrimSpace(c.Model) != ""
+	return c.Validate() == nil
 }
 
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.Provider) == "" || strings.TrimSpace(c.Model) == "" {
 		return errors.New("provider 和 model 必须同时设置")
 	}
-	return nil
+	_, err := c.ActiveProvider()
+	return err
 }
 
 // DefaultDir 是配置与作品库的默认位置（~/.ainovel/v1）。v1 与 v0 的配置格式
@@ -68,6 +147,11 @@ func SaveConfig(dir string, config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
+	pc, err := config.ActiveProvider()
+	if err != nil {
+		return err
+	}
+	config = config.WithProvider(config.Provider, config.Model, pc)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create app config dir: %w", err)
 	}
@@ -75,7 +159,23 @@ func SaveConfig(dir string, config Config) error {
 	if err != nil {
 		return fmt.Errorf("encode app config: %w", err)
 	}
-	if err := os.WriteFile(ConfigPath(dir), payload, 0o600); err != nil {
+	file, err := os.CreateTemp(dir, ".config-*")
+	if err != nil {
+		return fmt.Errorf("create app config: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(payload); err != nil {
+		file.Close()
+		return fmt.Errorf("write app config: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("sync app config: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close app config: %w", err)
+	}
+	if err := os.Rename(file.Name(), ConfigPath(dir)); err != nil {
 		return fmt.Errorf("write app config: %w", err)
 	}
 	return nil
@@ -93,20 +193,43 @@ func ResolveConfig(dir string) (Config, error) {
 		APIKey:   os.Getenv("AINOVEL_API_KEY"),
 		BaseURL:  os.Getenv("AINOVEL_BASE_URL"),
 	}
-	if strings.TrimSpace(overrides.Provider) != "" {
+	providerType := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER_TYPE"))
+	api := strings.TrimSpace(os.Getenv("AINOVEL_API"))
+	if strings.TrimSpace(overrides.Provider) != "" && overrides.Provider != config.Provider {
+		// 切换连接不能继承原连接的密钥或地址。
+		if config.Providers == nil {
+			config.APIKey, config.BaseURL = "", ""
+		}
 		config.Provider = overrides.Provider
 	}
 	if strings.TrimSpace(overrides.Model) != "" {
 		config.Model = overrides.Model
 	}
-	if strings.TrimSpace(overrides.APIKey) != "" {
-		config.APIKey = overrides.APIKey
-	}
-	if strings.TrimSpace(overrides.BaseURL) != "" {
-		config.BaseURL = overrides.BaseURL
-	}
 	if (config.Provider == "") != (config.Model == "") {
 		return Config{}, errors.New("AINOVEL_PROVIDER 和 AINOVEL_MODEL 必须同时设置")
+	}
+	if config.Provider == "" {
+		return config, nil
+	}
+	pc, err := config.providerConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if strings.TrimSpace(overrides.APIKey) != "" {
+		pc.APIKey = overrides.APIKey
+	}
+	if strings.TrimSpace(overrides.BaseURL) != "" {
+		pc.BaseURL = overrides.BaseURL
+	}
+	if providerType != "" {
+		pc.Type = providerType
+	}
+	if api != "" {
+		pc.API = api
+	}
+	config = config.WithProvider(config.Provider, config.Model, pc)
+	if err := config.Validate(); err != nil {
+		return Config{}, err
 	}
 	return config, nil
 }

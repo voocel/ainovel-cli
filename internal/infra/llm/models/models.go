@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	Provider string
+	API      string
 	Model    string
 	APIKey   string
 	BaseURL  string
@@ -24,7 +25,13 @@ func New(config Config) (agentcore.ChatModel, error) {
 	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.Model) == "" {
 		return nil, fmt.Errorf("model provider and name are required: %w", model.ErrInvalid)
 	}
+	if config.API != "" && (config.Provider != "openai" || (config.API != "chat" && config.API != "responses")) {
+		return nil, fmt.Errorf("invalid API endpoint for provider %q", config.Provider)
+	}
 	options := make([]agentllm.ModelOption, 0, 4)
+	if config.API != "" {
+		options = append(options, agentllm.WithProviderExtra(map[string]any{"api": config.API}))
+	}
 	if config.APIKey != "" {
 		options = append(options, agentllm.WithAPIKey(config.APIKey))
 	}
@@ -62,12 +69,13 @@ func (config Config) Digest() (string, error) {
 	}
 	digest, err := model.DigestJSON(struct {
 		Provider string         `json:"provider"`
+		API      string         `json:"api,omitempty"`
 		Model    string         `json:"model"`
 		BaseURL  string         `json:"base_url,omitempty"`
 		Timeout  time.Duration  `json:"timeout,omitempty"`
 		Extra    map[string]any `json:"extra,omitempty"`
 	}{
-		Provider: config.Provider, Model: config.Model, BaseURL: config.BaseURL,
+		Provider: config.Provider, API: config.API, Model: config.Model, BaseURL: config.BaseURL,
 		Timeout: config.Timeout, Extra: config.Extra,
 	})
 	if err != nil {

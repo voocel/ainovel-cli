@@ -1,6 +1,13 @@
 {
-  "provider": "openrouter",
-  "model": "google/gemini-3.5-flash",
-  "api_key": "sk-or-v1-xxx",
-  "base_url": "https://openrouter.ai/api/v1"
+  "provider": "my-proxy",
+  "model": "your-model-id",
+  "providers": {
+    "my-proxy": {
+      "type": "openai",
+      "api": "chat",
+      "api_key": "your-api-key",
+      "base_url": "https://proxy.example.com/v1",
+      "models": ["your-model-id"]
+    }
+  }
 }

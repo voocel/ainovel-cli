@@ -22,3 +22,13 @@ func TestDigestTracksExecutionConfigWithoutLeakingAPIKey(t *testing.T) {
 		t.Fatal("model change did not change the config digest")
 	}
 }
+
+func TestEndpointChangesDigest(t *testing.T) {
+	c := Config{Provider: "openai", Model: "custom"}
+	chat, _ := c.Digest()
+	c.API = "responses"
+	responses, _ := c.Digest()
+	if chat == responses {
+		t.Fatal("endpoint change must invalidate execution configuration")
+	}
+}

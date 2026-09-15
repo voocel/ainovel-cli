@@ -71,21 +71,33 @@ func TestWizardVerifiesThenSavesConfigAndEntersHome(t *testing.T) {
 	if m.page != pageWizard {
 		t.Fatalf("page = %v, want wizard when unconfigured", m.page)
 	}
-	for _, value := range []string{"deepseek", "deepseek-chat", "sk-test"} {
+	m.wizard.provider = 6
+	m, _ = press(t, m, tea.KeyEnter)
+	m = typeText(t, m, "my-connection")
+	m, _ = press(t, m, tea.KeyEnter)
+	m, _ = press(t, m, tea.KeyRight)
+	m, _ = press(t, m, tea.KeyEnter)
+	for _, value := range []string{"deepseek-chat", "sk-test"} {
 		m = typeText(t, m, value)
 		m, _ = press(t, m, tea.KeyEnter)
 	}
-	m, cmd := press(t, m, tea.KeyEnter) // Base URL 可选，直接回车进入验证
+	m, _ = press(t, m, tea.KeyTab) // 跳过折叠的自定义地址
+	m, _ = press(t, m, tea.KeyTab) // 可选测试按钮
+	m, cmd := press(t, m, tea.KeyEnter)
 	if !m.wizard.verifying || cmd == nil {
 		t.Fatalf("wizard not verifying: %#v", m.wizard)
 	}
 	updated, _ := m.Update(findMsg[wizardVerifiedMsg](t, cmd))
 	m = updated.(model)
+	if m.page != pageWizard {
+		t.Fatal("test unexpectedly left wizard")
+	}
+	m, _ = press(t, m, tea.KeyEnter) // 保存不再测试
 	if !verified || m.page != pageHome {
 		t.Fatalf("page = %v verified=%v (err %q), want home after verify", m.page, verified, m.wizard.err)
 	}
 	saved, err := appconfig.LoadConfig(deps.ConfigDir)
-	if err != nil || saved.Provider != "deepseek" || saved.Model != "deepseek-chat" {
+	if err != nil || saved.Provider != "my-connection" || saved.Model != "deepseek-chat" {
 		t.Fatalf("saved config = %#v, %v", saved, err)
 	}
 }
@@ -95,10 +107,18 @@ func TestWizardVerifyFailureLeavesConfigUnsaved(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	deps.Verify = func(context.Context, appconfig.Config) error { return errors.New("api key invalid") }
 	m := newModel(context.Background(), deps)
-	for _, value := range []string{"bad-provider", "bad-model", "sk-test"} {
+	m.wizard.provider = 6
+	m, _ = press(t, m, tea.KeyEnter)
+	m = typeText(t, m, "my-connection")
+	m, _ = press(t, m, tea.KeyEnter)
+	m, _ = press(t, m, tea.KeyRight)
+	m, _ = press(t, m, tea.KeyEnter)
+	for _, value := range []string{"bad-model", "sk-test"} {
 		m = typeText(t, m, value)
 		m, _ = press(t, m, tea.KeyEnter)
 	}
+	m, _ = press(t, m, tea.KeyTab)
+	m, _ = press(t, m, tea.KeyTab)
 	m, cmd := press(t, m, tea.KeyEnter)
 	updated, _ := m.Update(findMsg[wizardVerifiedMsg](t, cmd))
 	m = updated.(model)

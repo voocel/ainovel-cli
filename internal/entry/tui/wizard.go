@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,18 +13,30 @@ import (
 )
 
 // 配置向导（workbench §4）：未配置模型时的启动落点，完成后进入首页。
-// 顺序是先验证连通、再落盘、再重建服务：坏配置永远不落盘，不会锁死启动。
+// 保存仅做本地校验与装配；连接测试独立、可选，不写入配置。
 type wizardState struct {
 	inputs    []textinput.Model
+	name      textinput.Model
+	source    appconfig.Config
+	original  string
+	endpoint  string
 	step      int
 	verifying bool
 	fromHome  bool
 	err       string
+	notice    string
+	choosing  bool
+	provider  int
+	custom    bool
+	advanced  bool
+	cancel    context.CancelFunc
+	request   *struct{ token byte }
 }
 
 type wizardVerifiedMsg struct {
-	config appconfig.Config
-	err    error
+	config  appconfig.Config
+	request *struct{ token byte }
+	err     error
 }
 
 var wizardFields = []struct {
@@ -33,13 +47,32 @@ var wizardFields = []struct {
 }{
 	{label: "Provider", placeholder: "openai / anthropic / deepseek / gemini / glm ...", secret: false},
 	{label: "模型", placeholder: "例如 deepseek-chat", secret: false},
-	{label: "API Key", placeholder: "sk-...", secret: true},
-	{label: "Base URL（可选）", placeholder: "自建或中转网关才需要，直接回车跳过", optional: true},
+	{label: "API Key", placeholder: "粘贴密钥；使用环境凭据可留空", secret: true, optional: true},
+	{label: "Base URL（可选）", placeholder: "默认官方地址；中转服务请填写", optional: true},
 }
 
 func newWizardState(initial appconfig.Config, initialErr string, fromHome bool) wizardState {
 	state := wizardState{inputs: make([]textinput.Model, len(wizardFields)), err: initialErr, fromHome: fromHome}
-	values := []string{initial.Provider, initial.Model, initial.APIKey, initial.BaseURL}
+	state.source = initial
+	state.original = initial.Provider
+	state.name = newInput("例如 my-proxy / 公司网关")
+	state.name.SetValue(initial.Provider)
+	pc, err := initial.ActiveProvider()
+	if err != nil {
+		pc = initial.Providers[initial.Provider]
+		if pc.Type == "" {
+			pc.Type = initial.Provider
+		}
+	}
+	if initial.Provider != "" && err == nil {
+		state.source = initial.WithProvider(initial.Provider, initial.Model, pc)
+	}
+	state.endpoint = pc.API
+	state.custom = pc.Type != initial.Provider
+	if err != nil && initial.Provider != "" {
+		state.custom = true
+	}
+	values := []string{pc.Type, initial.Model, pc.APIKey, pc.BaseURL}
 	for i, field := range wizardFields {
 		input := newInput(field.placeholder)
 		input.SetValue(values[i])
@@ -48,118 +81,356 @@ func newWizardState(initial appconfig.Config, initialErr string, fromHome bool) 
 		}
 		state.inputs[i] = input
 	}
-	state.inputs[0].Focus()
+	state.choosing = initial.Provider == ""
+	state.advanced = pc.BaseURL != ""
+	if !state.choosing {
+		state.step = 1
+	}
+	state.inputs[state.step].Focus()
 	return state
+}
+
+// Presets select the protocol only; model IDs remain user supplied so the UI
+// does not silently pin users to a model that their account may not support.
+var wizardProviders = []struct{ label, id string }{
+	{"OpenAI", "openai"}, {"Anthropic", "anthropic"},
+	{"DeepSeek", "deepseek"}, {"Gemini", "gemini"},
+	{"OpenRouter", "openrouter"}, {"OpenAI 兼容 / 中转服务", "openai"},
+	{"自定义连接", ""}, {"Ollama · 本地模型", "ollama"},
+	{"Qwen", "qwen"}, {"GLM", "glm"}, {"Grok", "grok"},
+	{"MiniMax", "minimax"}, {"MiMo", "mimo"},
+}
+
+func (w *wizardState) focus(step int) tea.Cmd {
+	for i := range w.inputs {
+		w.inputs[i].Blur()
+	}
+	w.name.Blur()
+	w.step = step
+	if step == 7 {
+		return w.name.Focus()
+	}
+	if step > 0 && step < len(w.inputs) {
+		return w.inputs[step].Focus()
+	}
+	return nil
+}
+
+func (m model) focusWizard(step int) (tea.Model, tea.Cmd) {
+	if step == 0 {
+		m.wizard.custom = true
+	}
+	if step == 3 {
+		m.wizard.advanced = true
+	}
+	cmd := m.wizard.focus(step)
+	return m, cmd
+}
+
+func (m model) chooseWizardProvider() (tea.Model, tea.Cmd) {
+	choice := m.wizardChoices()[m.wizard.provider]
+	if choice.saved {
+		initial := m.wizard.source
+		initial.Provider = choice.name
+		if pc, ok := initial.Providers[choice.name]; ok && choice.name != m.wizard.source.Provider {
+			initial.Model = ""
+			if len(pc.Models) > 0 {
+				initial.Model = pc.Models[0]
+			}
+		}
+		m.wizard = newWizardState(initial, "", m.wizard.fromHome)
+		return m.focusWizard(1)
+	}
+	for i := range m.wizard.inputs {
+		m.wizard.inputs[i].SetValue("")
+	}
+	protocol := choice.id
+	if protocol == "" {
+		protocol = "openai"
+	}
+	m.wizard.inputs[0].SetValue(protocol)
+	m.wizard.name.SetValue(choice.id)
+	m.wizard.original = ""
+	m.wizard.endpoint = ""
+	m.wizard.choosing = false
+	m.wizard.custom = choice.id == "" || m.wizard.provider == 5
+	m.wizard.advanced = m.wizard.provider == 5
+	if m.wizard.custom {
+		m.wizard.name.SetValue("")
+		return m.focusWizard(7)
+	}
+	return m.focusWizard(1)
+}
+
+type wizardChoice struct {
+	label, id, name string
+	saved           bool
+}
+
+func (m model) wizardChoices() []wizardChoice {
+	choices := make([]wizardChoice, 0, len(wizardProviders)+len(m.wizard.source.Providers))
+	for _, p := range wizardProviders {
+		choices = append(choices, wizardChoice{label: p.label, id: p.id})
+	}
+	names := make([]string, 0, len(m.wizard.source.Providers))
+	for name := range m.wizard.source.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		choices = append(choices, wizardChoice{label: "已保存 · " + name, name: name, saved: true})
+	}
+	return choices
 }
 
 func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 	if verified, ok := message.(wizardVerifiedMsg); ok {
+		if !m.wizard.verifying || verified.request != m.wizard.request {
+			return m, nil
+		}
 		return m.finishWizard(verified)
 	}
-	key, isKey := message.(tea.KeyMsg)
-	if !isKey || m.wizard.verifying {
+	if m.wizard.verifying {
+		if key, ok := message.(tea.KeyMsg); ok && key.Type == tea.KeyEsc {
+			m.wizard.cancel()
+			m.wizard.verifying = false
+			m.wizard.request = nil
+			m.wizard.err = "已取消验证，配置尚未保存"
+		}
 		return m, nil
 	}
-	switch key.Type {
-	case tea.KeyEsc:
-		if m.wizard.step == 0 {
-			if m.wizard.fromHome {
-				m.page = pageHome
-				return m, m.loadLibraryCmd()
+	if mouse, ok := message.(tea.MouseMsg); ok {
+		if mouse.Action != tea.MouseActionPress || mouse.Button != tea.MouseButtonLeft || m.width < 30 || m.height < 18 {
+			return m, nil
+		}
+		layout := m.wizardLayout()
+		for _, hit := range layout.hits {
+			if mouse.Y != hit.y || mouse.X < hit.x || mouse.X >= hit.x+hit.width {
+				continue
 			}
-			return m, tea.Quit
+			if m.wizard.choosing {
+				m.wizard.provider = hit.action
+				return m.chooseWizardProvider()
+			}
+			if hit.action >= 20 && hit.action < 23 {
+				m.wizard.inputs[0].SetValue(wizardProtocols[hit.action-20])
+				m.wizard.endpoint = ""
+				return m.focusWizard(0)
+			}
+			return m.activateWizard(hit.action)
 		}
-		m.wizard.inputs[m.wizard.step].Blur()
-		m.wizard.step--
-		m.wizard.inputs[m.wizard.step].Focus()
 		return m, nil
-	case tea.KeyEnter:
-		value := strings.TrimSpace(m.wizard.inputs[m.wizard.step].Value())
-		if value == "" && !wizardFields[m.wizard.step].optional {
-			m.wizard.err = wizardFields[m.wizard.step].label + " 不能为空"
-			return m, nil
-		}
-		m.wizard.err = ""
-		if m.wizard.step < len(m.wizard.inputs)-1 {
-			m.wizard.inputs[m.wizard.step].Blur()
-			m.wizard.step++
-			m.wizard.inputs[m.wizard.step].Focus()
-			return m, nil
-		}
-		config := appconfig.Config{
-			Provider: strings.TrimSpace(m.wizard.inputs[0].Value()),
-			Model:    strings.TrimSpace(m.wizard.inputs[1].Value()),
-			APIKey:   strings.TrimSpace(m.wizard.inputs[2].Value()),
-			BaseURL:  strings.TrimSpace(m.wizard.inputs[3].Value()),
-		}
-		m.wizard.verifying = true
-		return m, m.verifyConfigCmd(config)
 	}
-	var cmd tea.Cmd
-	m.wizard.inputs[m.wizard.step], cmd = m.wizard.inputs[m.wizard.step].Update(message)
-	return m, cmd
+	if key, ok := message.(tea.KeyMsg); ok {
+		m.wizard.notice = ""
+		if m.wizard.choosing {
+			switch key.Type {
+			case tea.KeyUp, tea.KeyShiftTab:
+				m.wizard.provider = (m.wizard.provider + len(m.wizardChoices()) - 1) % len(m.wizardChoices())
+			case tea.KeyDown, tea.KeyTab:
+				m.wizard.provider = (m.wizard.provider + 1) % len(m.wizardChoices())
+			case tea.KeyEnter:
+				return m.chooseWizardProvider()
+			case tea.KeyEsc:
+				if m.wizard.fromHome {
+					m.page = pageHome
+					return m, m.loadLibraryCmd()
+				}
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.wizard.step == 0 && (key.Type == tea.KeyLeft || key.Type == tea.KeyRight) {
+			delta := 1
+			if key.Type == tea.KeyLeft {
+				delta = -1
+			}
+			next := 0
+			for i, p := range wizardProtocols {
+				if p == m.wizard.inputs[0].Value() {
+					next = (i + delta + len(wizardProtocols)) % len(wizardProtocols)
+					break
+				}
+			}
+			m.wizard.inputs[0].SetValue(wizardProtocols[next])
+			m.wizard.endpoint = ""
+			return m, nil
+		}
+		switch key.Type {
+		case tea.KeyEsc:
+			m.wizard.choosing = true
+			return m, nil
+		case tea.KeyTab, tea.KeyDown:
+			return m.moveWizardFocus(1)
+		case tea.KeyShiftTab, tea.KeyUp:
+			return m.moveWizardFocus(-1)
+		case tea.KeyEnter:
+			if m.wizard.step >= 4 && m.wizard.step != 7 {
+				return m.activateWizard(m.wizard.step)
+			}
+			return m.moveWizardFocus(1)
+		}
+	}
+	if m.wizard.step == 7 {
+		var cmd tea.Cmd
+		m.wizard.name, cmd = m.wizard.name.Update(message)
+		return m, cmd
+	}
+	if m.wizard.step > 0 && m.wizard.step < len(m.wizard.inputs) {
+		var cmd tea.Cmd
+		m.wizard.inputs[m.wizard.step], cmd = m.wizard.inputs[m.wizard.step].Update(message)
+		return m, cmd
+	}
+	return m, nil
 }
 
-func (m model) verifyConfigCmd(config appconfig.Config) tea.Cmd {
-	verify, ctx := m.deps.Verify, m.ctx
-	return func() tea.Msg {
-		if verify == nil {
-			return wizardVerifiedMsg{config: config}
+func (m model) submitWizard() (tea.Model, tea.Cmd) { return m.runWizardAction(true) }
+
+func (m model) runWizardAction(test bool) (tea.Model, tea.Cmd) {
+	for i, field := range wizardFields {
+		if !field.optional && strings.TrimSpace(m.wizard.inputs[i].Value()) == "" {
+			m.wizard.err = "请填写" + field.label
+			return m.focusWizard(i)
 		}
-		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	}
+	name := strings.TrimSpace(m.wizard.name.Value())
+	if name == "" {
+		m.wizard.err = "请填写连接名称"
+		return m.focusWizard(7)
+	}
+	if _, exists := m.wizard.source.Providers[name]; exists && name != m.wizard.original {
+		m.wizard.err = "连接名称已存在，请从已保存连接中选择编辑"
+		return m.focusWizard(7)
+	}
+	pc := appconfig.ProviderConfig{
+		Type:    strings.ToLower(strings.TrimSpace(m.wizard.inputs[0].Value())),
+		APIKey:  strings.TrimSpace(m.wizard.inputs[2].Value()),
+		BaseURL: strings.TrimSpace(m.wizard.inputs[3].Value()),
+	}
+	if pc.Type == "openai" {
+		pc.API = m.wizard.endpoint
+	}
+	if previous, ok := m.wizard.source.Providers[m.wizard.original]; ok {
+		pc.Models = previous.Models
+	}
+	if pc.BaseURL != "" {
+		u, err := url.Parse(pc.BaseURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" {
+			m.wizard.err = "地址须为 http(s) URL，不能包含用户凭据或片段"
+			return m.focusWizard(3)
+		}
+	}
+	config := m.wizard.source.WithProvider(name, strings.TrimSpace(m.wizard.inputs[1].Value()), pc)
+	if err := config.Validate(); err != nil {
+		m.wizard.err = err.Error()
+		return m, nil
+	}
+	m.wizard.err = ""
+	m.wizard.notice = ""
+	if !test {
+		return m.saveWizard(config)
+	}
+	m.wizard.verifying = true
+	ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+	m.wizard.cancel = cancel
+	m.wizard.request = &struct{ token byte }{}
+	request, verify := m.wizard.request, m.deps.Verify
+	return m, func() tea.Msg {
 		defer cancel()
-		return wizardVerifiedMsg{config: config, err: verify(checkCtx, config)}
+		var err error
+		if verify != nil {
+			err = verify(ctx, config)
+		}
+		return wizardVerifiedMsg{config: config, request: request, err: err}
 	}
 }
 
-// finishWizard 在连通验证通过后落盘并重建带执行器的服务；任何一步失败都留在向导。
+// Test completion stays in the form and never persists configuration.
 func (m model) finishWizard(verified wizardVerifiedMsg) (tea.Model, tea.Cmd) {
 	m.wizard.verifying = false
 	if verified.err != nil {
-		m.wizard.err = "连不上模型，请检查配置：" + verified.err.Error()
+		m.wizard.err = "连不上模型：" + wizardError(verified.err, verified.config)
 		return m, nil
 	}
-	if err := appconfig.SaveConfig(m.deps.ConfigDir, verified.config); err != nil {
-		m.wizard.err = err.Error()
-		return m, nil
-	}
-	api, err := m.deps.Rebuild(verified.config)
+	m.wizard.notice = "连接测试通过 · 尚未保存"
+	return m.focusWizard(4)
+}
+
+func (m model) saveWizard(config appconfig.Config) (tea.Model, tea.Cmd) {
+	api, err := m.deps.Rebuild(config)
 	if err != nil {
-		m.wizard.err = err.Error()
+		m.wizard.err = wizardError(err, config)
+		return m, nil
+	}
+	if err := appconfig.SaveConfig(m.deps.ConfigDir, config); err != nil {
+		m.wizard.err = wizardError(err, config)
 		return m, nil
 	}
 	m.api = api
-	m.config = verified.config
+	m.config = config
 	m.page = pageHome
 	m.home = newHomeState()
 	return m, m.loadLibraryCmd()
 }
 
-func (m model) viewWizard() string {
-	width := m.entryWidth()
-	lines := []string{benchTheme.Muted.Render("配置一次，之后直接开始创作。"), ""}
-	for i, field := range wizardFields {
-		if i == m.wizard.step {
-			input := m.wizard.inputs[i]
-			input.Width = max(1, width-4)
-			input.SetCursor(input.Position())
-			lines = append(lines, benchTheme.Accent.Render("▎ "+field.label), "  "+input.View(), "")
-		} else {
-			value := m.wizard.inputs[i].Value()
-			if field.secret && value != "" {
-				value = "••••••••"
-			}
-			if value == "" {
-				value = "待填写"
-				if field.optional {
-					value = "可选"
-				}
-			}
-			lines = append(lines, benchTheme.Muted.Render(truncate("  "+field.label+" · "+value, width)))
+// Provider errors can echo request credentials. Never render the configured key.
+func wizardError(err error, config appconfig.Config) string {
+	text := err.Error()
+	pc, _ := config.ActiveProvider()
+	if pc.APIKey != "" {
+		text = strings.ReplaceAll(text, pc.APIKey, "[已隐藏]")
+	}
+	return text
+}
+
+// Focus order follows visible controls; collapsed fields never trap keyboard focus.
+func (m model) wizardControls() []int {
+	controls := []int{6, 7}
+	if m.wizard.custom {
+		controls = append(controls, 0)
+	}
+	controls = append(controls, 1, 2, 5)
+	if m.wizard.advanced {
+		controls = append(controls, 3)
+	}
+	if m.wizard.inputs[0].Value() == "openai" {
+		controls = append(controls, 8)
+	}
+	return append(controls, 4, 9)
+}
+
+func (m model) moveWizardFocus(delta int) (tea.Model, tea.Cmd) {
+	controls := m.wizardControls()
+	for i, control := range controls {
+		if control == m.wizard.step {
+			return m.focusWizard(controls[(i+delta+len(controls))%len(controls)])
 		}
 	}
-	if m.wizard.verifying {
-		lines = append(lines, benchTheme.Accent.Render("正在验证模型连接…"))
-	}
-	return m.entryPage("连接创作模型", lines, m.wizard.err, "Enter 下一项 / 验证连接 · Esc 上一步")
+	return m.focusWizard(controls[0])
 }
+
+func (m model) activateWizard(action int) (tea.Model, tea.Cmd) {
+	switch action {
+	case 8:
+		if m.wizard.endpoint == "responses" {
+			m.wizard.endpoint = "chat"
+		} else {
+			m.wizard.endpoint = "responses"
+		}
+		return m.focusWizard(8)
+	case 4:
+		return m.runWizardAction(false)
+	case 9:
+		return m.submitWizard()
+	case 5:
+		m.wizard.advanced = !m.wizard.advanced
+		return m.focusWizard(5)
+	case 6:
+		m.wizard.choosing = true
+		return m, nil
+	default:
+		return m.focusWizard(action)
+	}
+}
+
+var wizardProtocols = []string{"openai", "anthropic", "gemini"}

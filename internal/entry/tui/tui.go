@@ -28,7 +28,7 @@ type Deps struct {
 	ConfigError   string
 	// Rebuild 在配置向导完成后重建带执行器的服务。
 	Rebuild func(appconfig.Config) (*bootstrap.App, error)
-	// Verify 在落盘前验证配置可真实连通；nil 表示跳过（测试）。
+	// Verify 供可选的连接测试使用；保存不调用它。nil 仅用于测试。
 	Verify func(context.Context, appconfig.Config) error
 	Input  io.Reader
 	Output io.Writer
@@ -149,6 +149,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		if message.Type == tea.KeyCtrlC {
+			if m.page == pageWizard && m.wizard.cancel != nil {
+				m.wizard.cancel()
+			}
 			return m, tea.Quit
 		}
 	}
