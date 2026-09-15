@@ -28,7 +28,7 @@ v1 要把同一个创作内核交付成两种自然体验：
 - [长篇质量与上下文](v1-product-longform-quality.md)：分层记忆、相关事实、Context Builder 与审阅质量；
 - [创作资产与个性化](v1-product-creative-assets.md)：Project Overlay、Creator Profile 与 Novel Pack 的用户体验；
 - [作品库、导入与交付](v1-product-project-library-delivery.md)：作品管理、外部编辑、导入和 TXT/EPUB；
-- [模型配置、运行与运维](v1-product-runtime-operations.md)：Provider、模型、进度、用量、诊断、Headless 与发布。
+- [模型配置、运行与运维](v1-product-runtime-operations.md)：Provider、模型、进度、用量、诊断、Headless 与发布；诊断的实施细化见 [运行观测与问题诊断](v1-product-diagnostics.md)。
 
 全局 `P0/P1/P2` 只在本文件维护；专题文档只表达方向内的能力层次，避免形成第二份路线图。
 

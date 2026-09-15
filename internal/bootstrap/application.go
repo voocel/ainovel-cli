@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/app/decision"
+	"github.com/voocel/ainovel-cli/internal/app/diag"
 	"github.com/voocel/ainovel-cli/internal/app/evidence"
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	"github.com/voocel/ainovel-cli/internal/app/profile"
@@ -21,6 +22,7 @@ import (
 )
 
 type App struct {
+	Diag      *diag.Query
 	Projects  *project.Repository
 	Resources *resource.Catalog
 	Prompts   *profile.Compiler
@@ -34,6 +36,7 @@ type App struct {
 }
 
 type Options struct {
+	Version   string
 	Executors task.ExecutorSet
 	Contracts []operation.VerdictContract
 	Goals     map[model.GoalKind]creation.Goal
@@ -66,10 +69,20 @@ func New(s *store.Store, options Options) *App {
 	runs := creation.New(s, goals, now)
 	decisions := decision.New(s, changes, projects, tasks)
 	return &App{
+		Diag:     diag.New(s, options.Version, now),
 		Projects: projects, Resources: resources, Prompts: prompts,
 		Tasks: tasks, Runs: runs, Reviews: reviews, Decisions: decisions,
 		Novels:    novel.New(s, changes, projects, runs, tasks),
 		Workbench: workbench.New(s, projects, runs, reviews, decisions),
 		Evidence:  evidence.New(s, changes, engine),
 	}
+}
+
+// NewDiagnostics assembles only the read-only reporting use case.
+func NewDiagnostics(s *store.Store, version string, databaseIssue ...string) *App {
+	query := diag.New(s, version, nil)
+	if len(databaseIssue) > 0 {
+		query = query.WithDatabaseIssue(databaseIssue[0])
+	}
+	return &App{Diag: query}
 }

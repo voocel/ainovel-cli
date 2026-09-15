@@ -71,12 +71,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if *headlessMode {
 		switch commands[0] {
-		case "quick", "creation", "project", "proposal", "operation", "prompt", "pack", "profile", "artifact", "help":
+		case "quick", "creation", "project", "proposal", "operation", "prompt", "pack", "profile", "artifact", "diag", "help":
 		default:
 			return fmt.Errorf("未知命令 %q", commands[0])
 		}
 		if commands[0] == "help" {
 			return headless.Run(context.Background(), nil, commands, stdout, stderr)
+		}
+		if commands[0] == "diag" {
+			return runDiagnostics(context.Background(), *databasePath, commands, stdout, stderr)
 		}
 	}
 
@@ -113,7 +116,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		configError = err.Error()
-		api = bootstrap.New(authorityStore, bootstrap.Options{})
+		api = bootstrap.New(authorityStore, bootstrap.Options{Version: version})
 	}
 	configured := config.Configured() && configError == ""
 
@@ -154,7 +157,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 // （发布与订阅共用同一 Hub），Headless 保持零活动开销。
 func buildApplication(authorityStore *store.Store, config appconfig.Config, withActivity bool) (*bootstrap.App, error) {
 	if !config.Configured() {
-		return bootstrap.New(authorityStore, bootstrap.Options{}), nil
+		return bootstrap.New(authorityStore, bootstrap.Options{Version: version}), nil
 	}
 	modelConfig := models.Config{
 		Provider: config.Provider, Model: config.Model,
@@ -169,11 +172,40 @@ func buildApplication(authorityStore *store.Store, config appconfig.Config, with
 		return nil, err
 	}
 	runtime := capability.NewRuntime(model, modelDigest, authorityStore)
-	api := bootstrap.New(authorityStore, bootstrap.Options{Executors: task.ExecutorSet{LLM: runtime}})
+	api := bootstrap.New(authorityStore, bootstrap.Options{Version: version, Executors: task.ExecutorSet{LLM: runtime}})
 	if withActivity {
 		hub := activity.NewHub()
 		runtime.SetActivitySink(hub)
 		api.Workbench.AttachActivityFeed(hub)
 	}
 	return api, nil
+}
+
+// Diagnostic startup must work even when model configuration is broken. Opening
+// the authority read-only also prevents diagnosis from migrating or recovering it.
+func runDiagnostics(ctx context.Context, path string, args []string, stdout, stderr io.Writer) error {
+	if path == "" {
+		dir, err := appconfig.DefaultDir()
+		if err != nil {
+			fmt.Fprintf(stderr, "诊断数据库路径不可用：%v\n", err)
+			return headless.Run(ctx, bootstrap.NewDiagnostics(nil, version, "path_unavailable"), args, stdout, stderr)
+		}
+		path = appconfig.DataPath(dir)
+	}
+	s, err := store.OpenReadOnly(ctx, path)
+	if err != nil {
+		fmt.Fprintf(stderr, "诊断数据库不可用：%v\n", err)
+		code := "open_failed"
+		var openError *store.DiagnosticOpenError
+		if errors.As(err, &openError) {
+			code = openError.Code
+		}
+		return headless.Run(ctx, bootstrap.NewDiagnostics(nil, version, code), args, stdout, stderr)
+	}
+	err = headless.Run(ctx, bootstrap.NewDiagnostics(s, version), args, stdout, stderr)
+	closeErr := s.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }

@@ -2,7 +2,7 @@
 
 > 状态：Planned Product Direction
 >
-> 约束：遵循 [`../v1-architecture-plan.md`](../v1-architecture-plan.md) 的 Service 边界、Execution Profile 冻结、显式错误和持久化任务协议。
+> 约束：遵循 [`../v1-architecture-plan.md`](../v1-architecture-plan.md) 的应用用例边界、Execution Profile 冻结、显式错误和持久化任务协议。
 
 ## 1. 产品目标
 
@@ -40,6 +40,8 @@
 
 ## 5. 诊断与隐私
 
+具体设计、现有记录缺口、只读边界、分享白名单与实施验收见 [运行观测与问题诊断实施方案](v1-product-diagnostics.md)。首轮聚焦运行问题和用户反馈，内容质量体检后置。
+
 诊断分为：
 
 - 流程健康：停滞、重复失败、lease、等待原因和恢复位置；
@@ -57,7 +59,7 @@
 - 安装/更新：发布包带校验，版本升级先验证数据库兼容性；
 - 备份/恢复：以 SQLite Authority 和必要 Runtime 为明确边界，不复制临时 Derived 伪装成权威备份。
 
-所有入口调用同一 Service，不为 Headless 或容器建立简化状态机。
+所有入口调用同一组应用用例，不为 Headless 或容器建立简化状态机。
 
 ## 7. 能力层次
 

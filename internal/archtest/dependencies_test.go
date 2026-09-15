@@ -35,6 +35,7 @@ var allowedImports = map[string][]string{
 	"infra/capability":        {"infra/activity", "domain/model", "infra/store", "domain/change", "infra/capability/prompt", "infra/workspace"},
 	"domain/operation":        {"domain/model", "domain/change"},
 	"app/project":             {"domain/model", "infra/store", "domain/change"},
+	"app/diag":                {"domain/model", "infra/store"},
 	"app/resource":            {"domain/model", "infra/store", "domain/change", "app/project", "infra/capability/pack", "infra/capability/prompt"},
 	"app/profile":             {"domain/model", "infra/store", "app/project", "app/resource", "domain/derive", "infra/capability/prompt"},
 	"app/task":                {"domain/creation", "domain/model", "infra/store", "app/project", "app/resource", "app/profile", "domain/operation", "infra/capability/prompt"},
@@ -45,10 +46,10 @@ var allowedImports = map[string][]string{
 	"app/novel":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/project", "app/resource", "app/task"},
 	"app/decision":    {"domain/model", "infra/store", "domain/change", "app/project", "app/resource", "app/task"},
 	"app/workbench":   {"infra/activity", "domain/model", "infra/store", "domain/creation", "app/decision", "app/novel", "app/project"},
-	"bootstrap":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/decision", "app/evidence", "app/novel", "domain/operation", "app/profile", "app/project", "app/resource", "app/task", "app/workbench"},
+	"bootstrap":       {"app/diag", "domain/model", "infra/store", "domain/change", "domain/creation", "app/decision", "app/evidence", "app/novel", "domain/operation", "app/profile", "app/project", "app/resource", "app/task", "app/workbench"},
 	"infra/config":    {},
-	"entry/headless":  {"domain/model", "bootstrap", "domain/creation", "app/decision", "app/novel", "app/profile", "app/project", "app/resource", "app/task"},
-	"entry/tui":       {"infra/activity", "domain/model", "bootstrap", "app/decision", "app/novel", "app/project", "app/workbench", "infra/config", "entry/headless"},
+	"entry/headless":  {"app/diag", "domain/model", "bootstrap", "domain/creation", "app/decision", "app/novel", "app/profile", "app/project", "app/resource", "app/task"},
+	"entry/tui":       {"app/diag", "infra/activity", "domain/model", "bootstrap", "app/decision", "app/novel", "app/project", "app/workbench", "infra/config", "entry/headless"},
 }
 
 // Tests may open a real store for assembly; entry production code may not.

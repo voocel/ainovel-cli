@@ -259,6 +259,9 @@ func (m model) workbenchFrame() benchFrame {
 }
 
 func (m model) viewWorkbench() string {
+	if m.bench.diag != nil {
+		return m.viewDiagnostics()
+	}
 	if m.bench.reading {
 		body := fitBlock(m.bench.body.View(), max(1, m.width), max(1, m.height-1))
 		body = append(body, benchTheme.Muted.Render(fitLine("↑/↓ 滚动 · Esc 返回", m.width)))

@@ -139,6 +139,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
+		if m.bench.diag != nil {
+			m.layoutDiagnostics()
+		}
 		if m.bench.reading {
 			m.bench.body.Width, m.bench.body.Height = max(1, m.width-4), max(1, m.height-1)
 			m.bench.body.SetContent(strings.Join(readingLines(m.bench.bodyText, m.bench.body.Width), "\n"))

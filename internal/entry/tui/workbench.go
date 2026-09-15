@@ -59,6 +59,8 @@ type workbenchState struct {
 	// feedOffset 是活动流历史偏移：0=跟随最新（§2 自动滚动跟随），>0=用户上翻
 	// 暂停跟随；新活动到达时按增量补偿，窗口锚定不动，↓ 到底恢复跟随。
 	feedOffset int
+	diag       *diagnosticsState
+	diagEpoch  int
 	reading    bool
 	body       viewport.Model
 	bodyText   string
@@ -81,6 +83,9 @@ type workbenchState struct {
 
 // close 退订活动并释放本次工作台的作品与排版缓存；在途查询完成后自行释放旧 Reader。
 func (b *workbenchState) close() {
+	if b.diag != nil {
+		b.diag.cancel()
+	}
 	if b.activityOff != nil {
 		b.activityOff()
 	}
@@ -157,12 +162,6 @@ type runControlMsg struct {
 	err  error
 	next string // "continue" | "refresh"
 	note string
-}
-
-type diagnosticsMsg struct {
-	gen  int
-	text string
-	err  error
 }
 
 type pollMsg struct{ gen int }
@@ -247,83 +246,6 @@ func (m model) refreshBenchCmd() tea.Cmd {
 		snap, err := gate.reader.Snapshot(ctx)
 		return benchRefreshedMsg{gen: gen, snap: snap, err: err}
 	}
-}
-
-func (m model) loadDiagnosticsCmd() tea.Cmd {
-	api, ctx := m.api, m.ctx
-	gen, run := m.bench.gen, m.bench.run()
-	return func() tea.Msg {
-		events, err := api.Runs.CreationRunEvents(ctx, run.ID)
-		if err != nil {
-			return diagnosticsMsg{gen: gen, err: err}
-		}
-		var text strings.Builder
-		text.WriteString(fmt.Sprintf("运行诊断 · %s\n状态：%s", run.ID, runStateLabel(run.State)))
-		if run.StateReason != "" {
-			text.WriteString(" · " + run.StateReason)
-		}
-		text.WriteString("\n\n")
-		for _, event := range events {
-			text.WriteString(fmt.Sprintf("#%d %s @ %s\n", event.Sequence, event.Kind, event.CreatedAt.Format("01-02 15:04:05")))
-			if len(event.Payload) != 0 {
-				text.WriteString("  " + string(event.Payload) + "\n")
-			}
-		}
-		// 下钻各 Operation（M3 错误诊断）：run 事件只有编排流水，真实失败原因
-		// 在 Operation.Error 与 operation_events——失败理由里"可展开事件记录"的
-		// 承诺在这里兑现。
-		operations, err := api.Runs.RunOperations(ctx, run.ID)
-		if err != nil {
-			return diagnosticsMsg{gen: gen, err: err}
-		}
-		for _, operation := range operations {
-			text.WriteString(fmt.Sprintf("\n任务 %s · %s · %s\n", operation.ID, operation.Kind, operation.State))
-			if operation.Error != "" {
-				text.WriteString("  错误：" + operation.Error + "\n")
-			}
-			// 成功任务自纠过的工具报错也要可见：从已持久化消息确定性提取，
-			// 不然"曾经出错又纠回来"的过程在诊断里是黑箱。
-			issues, err := api.Tasks.OperationToolIssues(ctx, operation.ID)
-			if err != nil {
-				return diagnosticsMsg{gen: gen, err: err}
-			}
-			for _, issue := range issues {
-				label := issue.Tool
-				if label == "" {
-					label = "工具"
-				}
-				// 错误本体不截断：诊断页是可滚动阅读视图，错误必须完整可见。
-				text.WriteString(fmt.Sprintf("  工具报错 %s：%s\n", label, issue.Err))
-			}
-			if operation.State != domainmodel.OperationFailed {
-				continue
-			}
-			operationEvents, err := api.Tasks.OperationEvents(ctx, operation.ID)
-			if err != nil {
-				return diagnosticsMsg{gen: gen, err: err}
-			}
-			for _, operationEvent := range operationEvents {
-				// 全量消息记录是恢复语义且体量大，不进诊断面板。
-				if operationEvent.Kind == "agent.message_committed" {
-					continue
-				}
-				text.WriteString(fmt.Sprintf("  #%d %s %s\n",
-					operationEvent.Sequence, operationEvent.Kind, clipDiagnostics(string(operationEvent.Payload))))
-			}
-		}
-		return diagnosticsMsg{gen: gen, text: text.String()}
-	}
-}
-
-// clipDiagnostics 限制单条原始事件 payload 的呈现长度（任意 JSON 可能很大，
-// 完整内容始终在库里）；错误本体（Operation.Error、工具报错）不经此截断。
-func clipDiagnostics(text string) string {
-	const limit = 2000
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit]) + "…"
 }
 
 func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -459,14 +381,9 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshBenchCmd()
 	case diagnosticsMsg:
-		if message.gen != bench.gen {
-			return m, nil
-		}
-		if message.err != nil {
-			bench.err = message.err.Error()
-			return m, nil
-		}
-		return m.openBody(message.text), nil
+		return m.applyDiagnostics(message)
+	case diagnosticsSharedMsg:
+		return m.applyDiagnosticsShared(message)
 	case tea.MouseMsg:
 		return m.handleBenchMouse(message)
 	case tea.KeyMsg:
@@ -502,6 +419,9 @@ func (m model) handleQuickDone(message quickDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.bench.diag != nil {
+		return m.handleDiagnosticsKey(key)
+	}
 	bench := &m.bench
 	// 单值输入态（目标/预算/要求）优先。
 	if bench.prompt != nil {
@@ -719,10 +639,7 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "d":
-		if bench.hasRun() {
-			return m, m.loadDiagnosticsCmd()
-		}
-		return m, nil
+		return m.openDiagnostics()
 	}
 	if bench.writing {
 		return m, nil
@@ -858,6 +775,9 @@ func (m model) toggleFold(id string) string {
 // handleBenchMouse 鼠标热区（M3）：滚轮=指针所在栏的 ↑/↓ 语义；点击选章/
 // 折叠/切栏焦点；单栏点击标签行切视图；阅读态转发给正文视口。
 func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.bench.diag != nil {
+		return m.handleDiagnosticsMouse(mouse)
+	}
 	bench := &m.bench
 	if bench.reading {
 		var cmd tea.Cmd

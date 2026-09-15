@@ -46,6 +46,8 @@ func Run(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr 
 		return runProfile(ctx, api, args[1:], stdout, stderr)
 	case "artifact":
 		return runArtifact(ctx, api, args[1:], stdout, stderr)
+	case "diag":
+		return runDiag(ctx, api, args[1:], stdout, stderr)
 	case "help":
 		return writeHelp(stdout)
 	default:
@@ -1260,7 +1262,9 @@ func writeHelp(output io.Writer) error {
   prompt show|sources|diff|lint|reload
   pack install|export|eval
   profile save|show|learn|candidates|confirm
-  artifact list|gc`))
+  artifact list|gc
+  diag [--project ID] [--run ID] [--operation ID] [--after ID] [--event-after N]
+  diag export [--project ID] [--run ID] [--operation ID] --file diagnostics.json`))
 	return err
 }
 
