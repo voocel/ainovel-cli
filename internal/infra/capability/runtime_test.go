@@ -673,6 +673,13 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if len(events) != 2 || events[1].Kind != "semantic.compliance_checked" {
 		t.Fatalf("events = %#v", events)
 	}
+	// usage 经 llm.Structured 回传后落审计事件，不能在收口时丢掉。
+	var checked struct {
+		Usage *agentcore.Usage `json:"usage"`
+	}
+	if err := json.Unmarshal(events[1].Payload, &checked); err != nil || checked.Usage == nil || checked.Usage.Input != 10 || checked.Usage.Output != 3 {
+		t.Fatalf("usage not recorded in compliance event: %s", events[1].Payload)
+	}
 }
 
 type semanticResponseModel struct {

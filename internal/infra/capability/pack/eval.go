@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/tailscale/hujson"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/jsonc"
 )
 
 type EvalCheckType string
@@ -57,12 +57,8 @@ func ParseEvals(manifest model.PackManifest) (map[string]EvalSuite, error) {
 	suites := make(map[string]EvalSuite, len(paths))
 	seenIDs := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
-		standard, err := hujson.Standardize([]byte(manifest.EvalData[path]))
-		if err != nil {
-			return nil, fmt.Errorf("parse pack eval %q: %w", path, err)
-		}
 		var suite EvalSuite
-		if err := model.DecodeStrict(standard, &suite); err != nil {
+		if err := jsonc.Decode([]byte(manifest.EvalData[path]), &suite); err != nil {
 			return nil, fmt.Errorf("decode pack eval %q: %w", path, err)
 		}
 		if err := suite.validate(); err != nil {

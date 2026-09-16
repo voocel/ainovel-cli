@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/hujson"
 	"github.com/voocel/ainovel-cli/internal/app/decision"
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	"github.com/voocel/ainovel-cli/internal/app/profile"
@@ -21,6 +20,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain/creation"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/jsonc"
 )
 
 func Run(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
@@ -338,7 +338,7 @@ func runProfile(ctx context.Context, api *bootstrap.App, args []string, stdout, 
 			return fmt.Errorf("profile save 需要 --file --change --user --reason")
 		}
 		var profile model.CreatorProfile
-		if err := DecodeFile(*path, &profile); err != nil {
+		if err := jsonc.DecodeFile(*path, &profile); err != nil {
 			return err
 		}
 		changeSet, err := api.Resources.SaveCreatorProfile(ctx, *changeID, *userID, *reason, profile, time.Now().UTC())
@@ -579,7 +579,7 @@ func runProject(ctx context.Context, api *bootstrap.App, args []string, stdout, 
 			return fmt.Errorf("project create 需要 --project --change --user --reason --draft")
 		}
 		var draft projectdoc.ProjectDraft
-		if err := DecodeFile(*draftPath, &draft); err != nil {
+		if err := jsonc.DecodeFile(*draftPath, &draft); err != nil {
 			return err
 		}
 		project, err := api.Projects.CreateProject(ctx, projectdoc.CreateProjectCommand{
@@ -666,7 +666,7 @@ func runProject(ctx context.Context, api *bootstrap.App, args []string, stdout, 
 			return fmt.Errorf("project import 需要 --file --proposal --user --reason")
 		}
 		var projection projectdoc.ProjectProjection
-		if err := DecodeFile(*path, &projection); err != nil {
+		if err := jsonc.DecodeFile(*path, &projection); err != nil {
 			return err
 		}
 		var proposal model.Proposal
@@ -1034,22 +1034,6 @@ func runPrompt(ctx context.Context, api *bootstrap.App, args []string, stdout, s
 		return err
 	}
 	return writeResult(stdout, sources, nil)
-}
-
-// DecodeFile 解析 JSONC 文件（供 Headless 与 TUI 共用同一导入语义）。
-func DecodeFile(path string, target any) error {
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read JSONC file: %w", err)
-	}
-	standard, err := hujson.Standardize(payload)
-	if err != nil {
-		return fmt.Errorf("parse JSONC file: %w", err)
-	}
-	if err := model.DecodeStrict(standard, target); err != nil {
-		return fmt.Errorf("decode JSON file: %w", err)
-	}
-	return nil
 }
 
 func parseRevision(value string) (model.Revision, error) {

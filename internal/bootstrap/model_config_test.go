@@ -1,8 +1,9 @@
-package main
+package bootstrap
 
 import (
-	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 	"testing"
+
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
 func TestExecutionModelResolvesConnectionProtocol(t *testing.T) {

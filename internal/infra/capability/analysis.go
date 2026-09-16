@@ -10,12 +10,13 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
+	"github.com/voocel/ainovel-cli/internal/infra/llm"
 )
 
+// 三个语义判断都是三分法第二类（§11 第 7 条）：边界清晰的单次 LLM 函数。
+// 提示词、输入组装与输出契约就近留在这里，通用调用与严格解码收口在 llm。
+
 func (r *Runtime) AnalyzePreference(ctx context.Context, input model.PreferenceLearningInput) (model.PreferenceCandidate, error) {
-	if r.model == nil {
-		return model.PreferenceCandidate{}, fmt.Errorf("preference analysis model is required: %w", model.ErrInvalid)
-	}
 	if err := input.Validate(); err != nil {
 		return model.PreferenceCandidate{}, err
 	}
@@ -27,36 +28,29 @@ func (r *Runtime) AnalyzePreference(ctx context.Context, input model.PreferenceL
 	if err != nil {
 		return model.PreferenceCandidate{}, err
 	}
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"summary":        map[string]any{"type": "string"},
-			"evidence":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"proposed_rules": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"proposed_style_preferences": map[string]any{
-				"type": "object", "additionalProperties": map[string]any{"type": "string"},
+	var candidate model.PreferenceCandidate
+	if _, err := llm.Structured(ctx, r.model, llm.Call{
+		System: "你是写作偏好分析器。只从用户实际 before/after 修改中归纳可复用偏好；证据不足就明确报错，不得猜测人格或题材偏好。规则要短、可执行，并引用具体修改证据。",
+		Input:  string(payload),
+		Schema: llm.Schema{
+			Name: "creator_preference_candidate", Description: "从用户正文修改中提出可确认的写作偏好",
+			JSON: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary":        map[string]any{"type": "string"},
+					"evidence":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"proposed_rules": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"proposed_style_preferences": map[string]any{
+						"type": "object", "additionalProperties": map[string]any{"type": "string"},
+					},
+				},
+				"required":             []string{"summary", "evidence", "proposed_rules", "proposed_style_preferences"},
+				"additionalProperties": false,
 			},
 		},
-		"required":             []string{"summary", "evidence", "proposed_rules", "proposed_style_preferences"},
-		"additionalProperties": false,
-	}
-	response, err := r.model.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg("你是写作偏好分析器。只从用户实际 before/after 修改中归纳可复用偏好；证据不足就明确报错，不得猜测人格或题材偏好。规则要短、可执行，并引用具体修改证据。"),
-		agentcore.UserMsg(string(payload)),
-	}, nil,
-		agentcore.WithJSONSchema("creator_preference_candidate", "从用户正文修改中提出可确认的写作偏好", schema, true),
-		agentcore.WithCallPromptCacheKey(cacheKey),
-		agentcore.WithCallSessionID(input.CandidateID),
-	)
-	if err != nil {
+		CacheKey: cacheKey, SessionID: input.CandidateID,
+	}, &candidate); err != nil {
 		return model.PreferenceCandidate{}, err
-	}
-	if response == nil {
-		return model.PreferenceCandidate{}, fmt.Errorf("preference analysis model returned no response")
-	}
-	var candidate model.PreferenceCandidate
-	if err := decodeToolArgs(json.RawMessage(response.Message.TextContent()), &candidate); err != nil {
-		return model.PreferenceCandidate{}, fmt.Errorf("decode preference candidate: %w", err)
 	}
 	candidate.ID = input.CandidateID
 	candidate.SourceProjectID = input.ProjectID
@@ -72,9 +66,6 @@ func (r *Runtime) Analyze(
 	proposal model.Proposal,
 	structural change.StructuralImpact,
 ) (json.RawMessage, error) {
-	if r.model == nil {
-		return nil, fmt.Errorf("semantic impact model is required: %w", model.ErrInvalid)
-	}
 	type authorityDocument struct {
 		Ref     model.DocumentRef `json:"ref"`
 		Content json.RawMessage   `json:"content"`
@@ -108,42 +99,35 @@ func (r *Runtime) Analyze(
 		"properties": map[string]any{"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string"}},
 		"required":   []string{"kind", "id"}, "additionalProperties": false,
 	}
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"status": map[string]any{"type": "string", "enum": []string{"consistent", "conflict", "uncertain"}},
-			"findings": map[string]any{"type": "array", "items": map[string]any{
-				"type": "object", "properties": map[string]any{
-					"document": documentSchema, "explanation": map[string]any{"type": "string"},
-				}, "required": []string{"explanation"}, "additionalProperties": false,
-			}},
-			"options": map[string]any{"type": "array", "items": map[string]any{
-				"type": "object", "properties": map[string]any{
-					"strategy":    map[string]any{"type": "string", "enum": []string{"rewrite_affected", "reinterpret_future", "abandon"}},
-					"chapter_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"explanation": map[string]any{"type": "string"},
-				}, "required": []string{"strategy", "explanation"}, "additionalProperties": false,
-			}},
-		},
-		"required": []string{"status", "findings", "options"}, "additionalProperties": false,
-	}
-	response, err := r.model.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg("你是小说变更影响分析器。判断候选变更与已经发生的故事事实、人物动机和因果链是否冲突。consistent 时 findings/options 必须为空；conflict 或 uncertain 时必须给出 rewrite_affected、reinterpret_future、abandon 三种明确选项。不得替用户作决定。"),
-		agentcore.UserMsg(string(input)),
-	}, nil,
-		agentcore.WithJSONSchema("story_semantic_impact", "分析故事变更的语义影响和可选处理方案", schema, true),
-		agentcore.WithCallPromptCacheKey(cacheKey),
-		agentcore.WithCallSessionID(proposal.ID+":semantic-impact"),
-	)
-	if err != nil {
-		return nil, err
-	}
-	if response == nil {
-		return nil, fmt.Errorf("semantic impact model returned no response")
-	}
 	var report change.SemanticImpactReport
-	if err := decodeToolArgs(json.RawMessage(response.Message.TextContent()), &report); err != nil {
-		return nil, fmt.Errorf("decode semantic impact report: %w", err)
+	if _, err := llm.Structured(ctx, r.model, llm.Call{
+		System: "你是小说变更影响分析器。判断候选变更与已经发生的故事事实、人物动机和因果链是否冲突。consistent 时 findings/options 必须为空；conflict 或 uncertain 时必须给出 rewrite_affected、reinterpret_future、abandon 三种明确选项。不得替用户作决定。",
+		Input:  string(input),
+		Schema: llm.Schema{
+			Name: "story_semantic_impact", Description: "分析故事变更的语义影响和可选处理方案",
+			JSON: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"status": map[string]any{"type": "string", "enum": []string{"consistent", "conflict", "uncertain"}},
+					"findings": map[string]any{"type": "array", "items": map[string]any{
+						"type": "object", "properties": map[string]any{
+							"document": documentSchema, "explanation": map[string]any{"type": "string"},
+						}, "required": []string{"explanation"}, "additionalProperties": false,
+					}},
+					"options": map[string]any{"type": "array", "items": map[string]any{
+						"type": "object", "properties": map[string]any{
+							"strategy":    map[string]any{"type": "string", "enum": []string{"rewrite_affected", "reinterpret_future", "abandon"}},
+							"chapter_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"explanation": map[string]any{"type": "string"},
+						}, "required": []string{"strategy", "explanation"}, "additionalProperties": false,
+					}},
+				},
+				"required": []string{"status", "findings", "options"}, "additionalProperties": false,
+			},
+		},
+		CacheKey: cacheKey, SessionID: proposal.ID + ":semantic-impact",
+	}, &report); err != nil {
+		return nil, err
 	}
 	if err := report.Validate(); err != nil {
 		return nil, err
@@ -157,9 +141,6 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	proposal model.Proposal,
 	constraints []model.OwnershipRule,
 ) (model.SemanticComplianceReport, error) {
-	if r.model == nil {
-		return model.SemanticComplianceReport{}, fmt.Errorf("semantic compliance model is required: %w", model.ErrInvalid)
-	}
 	if operation.State != model.OperationRunning || operation.Snapshot.Executor != r.Identity() {
 		return model.SemanticComplianceReport{}, fmt.Errorf("semantic compliance operation context is invalid: %w", model.ErrStateConflict)
 	}
@@ -191,51 +172,42 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	if err != nil {
 		return model.SemanticComplianceReport{}, err
 	}
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"status": map[string]any{"type": "string", "enum": []string{"pass", "conflict", "uncertain"}},
-			"findings": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"constraint": map[string]any{
+	var report model.SemanticComplianceReport
+	usage, err := llm.Structured(ctx, r.model, llm.Call{
+		System: "你是独立的小说事实合规检查器。只判断候选正文是否违背用户 locked/guided 约束；不得改写正文。证据不足必须返回 uncertain。pass 时 findings 必须为空。",
+		Input:  string(input),
+		Schema: llm.Schema{
+			Name: "story_semantic_compliance", Description: "检查候选正文是否符合用户故事约束",
+			JSON: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"status": map[string]any{"type": "string", "enum": []string{"pass", "conflict", "uncertain"}},
+					"findings": map[string]any{
+						"type": "array",
+						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"kind": map[string]any{"type": "string"},
-								"id":   map[string]any{"type": "string"},
+								"constraint": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"kind": map[string]any{"type": "string"},
+										"id":   map[string]any{"type": "string"},
+									},
+									"required": []string{"kind", "id"}, "additionalProperties": false,
+								},
+								"explanation": map[string]any{"type": "string"},
 							},
-							"required": []string{"kind", "id"}, "additionalProperties": false,
+							"required": []string{"constraint", "explanation"}, "additionalProperties": false,
 						},
-						"explanation": map[string]any{"type": "string"},
 					},
-					"required": []string{"constraint", "explanation"}, "additionalProperties": false,
 				},
+				"required": []string{"status", "findings"}, "additionalProperties": false,
 			},
 		},
-		"required": []string{"status", "findings"}, "additionalProperties": false,
-	}
-	response, err := r.model.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg("你是独立的小说事实合规检查器。只判断候选正文是否违背用户 locked/guided 约束；不得改写正文。证据不足必须返回 uncertain。pass 时 findings 必须为空。"),
-		agentcore.UserMsg(string(input)),
-	}, nil,
-		agentcore.WithJSONSchema("story_semantic_compliance", "检查候选正文是否符合用户故事约束", schema, true),
-		agentcore.WithCallPromptCacheKey(cacheKey),
-		agentcore.WithCallSessionID(operation.ID+":semantic-compliance"),
-	)
+		CacheKey: cacheKey, SessionID: operation.ID + ":semantic-compliance",
+	}, &report)
 	if err != nil {
 		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
-	}
-	if response == nil {
-		err := fmt.Errorf("semantic compliance model returned no response")
-		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
-	}
-	var report model.SemanticComplianceReport
-	if err := model.DecodeStrict([]byte(response.Message.TextContent()), &report); err != nil {
-		return model.SemanticComplianceReport{}, r.recordSemanticFailure(
-			ctx, operation, fmt.Errorf("decode semantic compliance response: %w", err),
-		)
 	}
 	if err := report.Validate(); err != nil {
 		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
@@ -243,7 +215,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	eventPayload, err := json.Marshal(struct {
 		Report model.SemanticComplianceReport `json:"report"`
 		Usage  *agentcore.Usage               `json:"usage,omitempty"`
-	}{Report: report, Usage: response.Message.Usage})
+	}{Report: report, Usage: usage})
 	if err != nil {
 		return model.SemanticComplianceReport{}, fmt.Errorf("encode semantic compliance event: %w", err)
 	}

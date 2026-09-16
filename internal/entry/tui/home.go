@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
-	"github.com/voocel/ainovel-cli/internal/entry/headless"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
+	"github.com/voocel/ainovel-cli/internal/infra/jsonc"
 )
 
 // 首页（workbench §4）：一句话输入为主体；其他入口只有完善创作设定、
@@ -386,7 +386,7 @@ func (m model) importProjectCmd(path string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		var projection projectdoc.ProjectProjection
-		if err := headless.DecodeFile(path, &projection); err != nil {
+		if err := jsonc.DecodeFile(path, &projection); err != nil {
 			return importDoneMsg{err: err}
 		}
 		now := time.Now().UTC()

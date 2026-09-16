@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/tailscale/hujson"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/jsonc"
 )
 
 const ManifestName = "pack.jsonc"
@@ -51,12 +51,8 @@ func LoadDirectory(path string) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, err
 	}
-	standard, err := hujson.Standardize(manifestBytes)
-	if err != nil {
-		return Loaded{}, fmt.Errorf("parse %s: %w", ManifestName, err)
-	}
 	var manifest FileManifest
-	if err := model.DecodeStrict(standard, &manifest); err != nil {
+	if err := jsonc.Decode(manifestBytes, &manifest); err != nil {
 		return Loaded{}, fmt.Errorf("decode %s: %w", ManifestName, err)
 	}
 	if strings.TrimSpace(manifest.ID) == "" || strings.TrimSpace(manifest.Version) == "" || strings.TrimSpace(manifest.Name) == "" {

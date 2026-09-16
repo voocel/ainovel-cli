@@ -822,9 +822,10 @@ internal/
 │   ├── capability/         # Agent Runtime、Worker、工具与执行适配
 │   │   ├── prompt/         # Prompt 编译、来源与摘要
 │   │   └── pack/           # Novel Pack 安装、加载与合并
-│   ├── llm/                # 通用模型调用、结构化输出与重试
+│   ├── llm/                # 单次结构化调用、严格解码与 usage 回传
 │   │   └── models/         # 模型配置与角色映射
 │   ├── activity/           # 活动发布与订阅管道
+│   ├── jsonc/              # 用户可编辑 JSONC 输入的统一解码
 │   └── config/             # 配置加载与首次引导
 ├── entry/
 │   ├── tui/                # Bubble Tea，调用具名用例

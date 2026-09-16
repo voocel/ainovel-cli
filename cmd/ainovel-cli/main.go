@@ -7,16 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
-	"github.com/voocel/ainovel-cli/internal/app/task"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/entry/headless"
 	"github.com/voocel/ainovel-cli/internal/entry/tui"
-	"github.com/voocel/ainovel-cli/internal/infra/activity"
-	"github.com/voocel/ainovel-cli/internal/infra/capability"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
-	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
@@ -109,7 +104,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	api, err := buildApplication(authorityStore, config, !*headlessMode)
+	api, err := bootstrap.FromConfig(authorityStore, config, version, !*headlessMode)
 	if err != nil {
 		if *headlessMode {
 			authorityStore.Close()
@@ -132,16 +127,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 			InitialConfig: config,
 			ConfigError:   configError,
 			Rebuild: func(next appconfig.Config) (*bootstrap.App, error) {
-				return buildApplication(authorityStore, next, true)
+				return bootstrap.FromConfig(authorityStore, next, version, true)
 			},
-			Verify: func(ctx context.Context, next appconfig.Config) error {
-				mc, err := executionModelConfig(next)
-				if err != nil {
-					return err
-				}
-				mc.Timeout = 30 * time.Second
-				return models.Verify(ctx, mc)
-			},
+			Verify: bootstrap.VerifyModel,
 			Input:  os.Stdin,
 			Output: stdout,
 		})
@@ -151,35 +139,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runErr
 	}
 	return closeErr
-}
-
-// buildApplication 装配入口使用的应用组件；无模型配置时不安装执行器。
-// 有配置时装配真实 capability Runtime。实时活动通道只在交互入口装配
-// （发布与订阅共用同一 Hub），Headless 保持零活动开销。
-func buildApplication(authorityStore *store.Store, config appconfig.Config, withActivity bool) (*bootstrap.App, error) {
-	if !config.Configured() {
-		return bootstrap.New(authorityStore, bootstrap.Options{Version: version}), nil
-	}
-	modelConfig, err := executionModelConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	modelDigest, err := modelConfig.Digest()
-	if err != nil {
-		return nil, err
-	}
-	model, err := models.New(modelConfig)
-	if err != nil {
-		return nil, err
-	}
-	runtime := capability.NewRuntime(model, modelDigest, authorityStore)
-	api := bootstrap.New(authorityStore, bootstrap.Options{Version: version, Executors: task.ExecutorSet{LLM: runtime}})
-	if withActivity {
-		hub := activity.NewHub()
-		runtime.SetActivitySink(hub)
-		api.Workbench.AttachActivityFeed(hub)
-	}
-	return api, nil
 }
 
 // Diagnostic startup must work even when model configuration is broken. Opening
@@ -209,13 +168,4 @@ func runDiagnostics(ctx context.Context, path string, args []string, stdout, std
 		return err
 	}
 	return closeErr
-}
-
-// Resolve the user-owned connection name before entering the protocol adapter.
-func executionModelConfig(config appconfig.Config) (models.Config, error) {
-	pc, err := config.ActiveProvider()
-	if err != nil {
-		return models.Config{}, err
-	}
-	return models.Config{Provider: pc.Type, API: pc.API, Model: config.Model, APIKey: pc.APIKey, BaseURL: pc.BaseURL}, nil
 }
