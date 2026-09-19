@@ -7,10 +7,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/app/workbench"
@@ -19,32 +22,35 @@ import (
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
-// benchPane 是左右栏的焦点；详情是主区标签，不再占用第三栏。
+// benchPane 是可滚动区的焦点：大纲、正文、现场（Tab 轮换）。
 type benchPane int
 
 const (
 	benchPaneOutline benchPane = iota
+	benchPaneFeed
 	benchPaneMain
 )
 
 type workbenchState struct {
 	projectID string
 	// gen 是本次打开的代际号：全部异步消息带着它出生，不匹配即丢弃。
-	gen          int
-	refresh      *benchRefresh
-	rowsCache    *outlineCache
-	proseCache   *wrappedText
-	thoughtCache *wrappedText
-	search       string
-	snap         workbench.WorkbenchSnapshot
-	loaded       bool
-	view         int // 窄屏：0 主区，1 目录
-	tab          benchTab
-	thoughtOpen  bool
-	liveHeld     bool
-	liveText     string
-	liveOffset   int
-	cursor       int // 大纲可见行索引（含卷/弧头行；快照刷新后按身份重新锚定）
+	gen           int
+	refresh       *benchRefresh
+	rowsCache     *outlineCache
+	proseCache    *wrappedText
+	wordCache     *wordCache
+	search        string
+	content       benchContent
+	splitPercent  int
+	outputCache   *outputLayoutCache
+	outputHeld    []activity.OutputBlock
+	outputFrozen  bool
+	outputOffset  int
+	outputDropped uint64
+	reviewOffset  int
+	snap          workbench.WorkbenchSnapshot
+	loaded        bool
+	cursor        int // 大纲可见行索引（含卷/弧头行；快照刷新后按身份重新锚定）
 	// collapsed 是折叠的卷/弧节点（键 PlanNode.ID）；快照每轮整体替换，
 	// 折叠状态只能活在这里，跨刷新存活。
 	collapsed map[string]bool
@@ -52,10 +58,8 @@ type workbenchState struct {
 	// pinned 表示创作中用户手动选章、主区固定在选中内容上（§2）；
 	// Esc 分层返回：先回活动流，再回欢迎页。
 	pinned bool
-	// previewOffset/detailOffset 是正文与详情视图的显示行
-	// 滚动偏移，随选章归零。
+	// previewOffset 是正文视图的显示行滚动偏移，随选章归零。
 	previewOffset int
-	detailOffset  int
 	// feedOffset 是活动流历史偏移：0=跟随最新（§2 自动滚动跟随），>0=用户上翻
 	// 暂停跟随；新活动到达时按增量补偿，窗口锚定不动，↓ 到底恢复跟随。
 	feedOffset int
@@ -68,12 +72,14 @@ type workbenchState struct {
 	exporting  bool
 	spin       int // 创作中动画帧，随轮询节拍推进
 	decision   *decisionState
-	prompt     *promptState
-	// input 是常驻底部输入框：待裁决时 y 明确通过、n 聚焦写修改意见；
-	// 空回车不提交，回以确认指引（页面设计 §2）。
-	input  textinput.Model
-	notice string
-	err    string
+	// input 是常驻聚焦的底栏输入框（页面设计 §2）：文字是要求或修改意见，
+	// `/` 是命令，`y` 回车批准；空回车不提交，回以确认指引。
+	input         textinput.Model
+	inputScope    string
+	inputLabel    string
+	inputDecision string
+	notice        string
+	err           string
 	// activity 是实时活动快照（页面设计 §3/§4）：被唤醒后整读，不逐条回放；
 	// activityOff 只退订，绝不取消创作。
 	activity    activity.Snapshot
@@ -112,21 +118,9 @@ type decisionState struct {
 	stale         bool
 }
 
-// presentDecision 呈现（或清除）决定卡：批准必须由 y 明确确认，
-// 输入框不再自动聚焦（按 n 进入修改意见输入）。
+// presentDecision 呈现（或清除）决定卡；用户可能正在打字，不动输入框。
 func (b *workbenchState) presentDecision(decision *decisionState) {
 	b.decision = decision
-	b.input.SetValue("")
-	b.input.Blur()
-}
-
-// promptState 是工作台的单值输入态：调整目标章数、自动修订预算、提出创作要求或接受审阅发现。
-type promptState struct {
-	purpose string // "target" | "budget" | "directive" | "adjudicate"
-	label   string
-	scope   string // directive 的作用域，按大纲选中行决定
-	finding string // adjudicate 要接受的发现 ID
-	input   textinput.Model
 }
 
 type quickParams struct {
@@ -174,10 +168,20 @@ type activityMsg struct {
 
 func newWorkbenchState(projectID string, gen int) workbenchState {
 	return workbenchState{
-		projectID: projectID, gen: gen, input: newInput(""),
-		collapsed: make(map[string]bool), thoughtOpen: true,
-		refresh: &benchRefresh{}, rowsCache: &outlineCache{}, proseCache: &wrappedText{}, thoughtCache: &wrappedText{},
+		projectID: projectID, gen: gen, input: newBenchInput(),
+		collapsed: make(map[string]bool),
+		refresh:   &benchRefresh{}, rowsCache: &outlineCache{}, proseCache: &wrappedText{}, wordCache: &wordCache{},
+		outputCache: &outputLayoutCache{}, splitPercent: 25,
 	}
+}
+
+// newBenchInput 是常驻输入框：静态光标不挂闪烁定时器，焦点永不离开。
+func newBenchInput() textinput.Model {
+	input := newInput("")
+	input.Prompt = "› "
+	input.Cursor.SetMode(cursor.CursorStatic)
+	input.Focus()
+	return input
 }
 
 func pollTick(gen int) tea.Cmd {
@@ -291,12 +295,14 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					if !found {
 						bench.feedOffset = max(0, len(feed.Entries)-1)
-						bench.notice = "所读活动已超出实时保留范围，已定位到最早保留条目；按 d 查看历史"
+						bench.notice = "所读活动已超出实时保留范围，已定位到最早保留条目；输入 /diag 查看历史"
 					}
 				}
 			}
 			bench.activity = feed
 		}
+		// 动画随活动密度转：流式时快、等待时回落到轮询节拍。
+		bench.spin++
 		return m, m.watchActivityCmd()
 	case benchRefreshedMsg:
 		if message.gen != bench.gen {
@@ -327,7 +333,7 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 		anchorID, anchorChapter := m.selectedRowIdentity()
 		bench.snap, bench.loaded = message.snap, true
 		bench.cursor = anchorOutlineCursor(m.outlineRows(), anchorID, anchorChapter)
-		if !bench.pinned && !bench.liveHeld {
+		if !bench.pinned {
 			for i, row := range m.outlineRows() {
 				if row.isChapter() && (row.node.State == workbench.ChapterInProgress || row.node.State == workbench.ChapterPending) {
 					bench.cursor = i
@@ -423,83 +429,8 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDiagnosticsKey(key)
 	}
 	bench := &m.bench
-	// 单值输入态（目标/预算/要求）优先。
-	if bench.prompt != nil {
-		switch key.Type {
-		case tea.KeyEsc:
-			bench.prompt = nil
-			return m, nil
-		case tea.KeyEnter:
-			if bench.prompt.purpose == "export" {
-				return m.submitExport()
-			}
-			if bench.prompt.purpose == "search" {
-				query := strings.TrimSpace(bench.prompt.input.Value())
-				if m.findChapter(query, false) {
-					bench.prompt = nil
-					bench.err = ""
-				} else {
-					bench.err = "没有找到匹配的章节"
-				}
-				return m, nil
-			}
-			if bench.prompt.purpose == "directive" {
-				text := strings.TrimSpace(bench.prompt.input.Value())
-				if text == "" {
-					bench.notice = "写下你的创作要求后回车，Esc 取消"
-					return m, nil
-				}
-				scope := bench.prompt.scope
-				bench.prompt, bench.err = nil, ""
-				return m, m.addDirectiveCmd(scope, text)
-			}
-			if bench.prompt.purpose == "adjudicate" {
-				reason := strings.TrimSpace(bench.prompt.input.Value())
-				if reason == "" {
-					bench.notice = "写下接受这条发现的理由后回车，Esc 取消"
-					return m, nil
-				}
-				finding := bench.prompt.finding
-				bench.prompt, bench.err = nil, ""
-				return m, m.adjudicateCmd(finding, reason)
-			}
-			value, err := strconv.Atoi(strings.TrimSpace(bench.prompt.input.Value()))
-			if err != nil || value <= 0 {
-				bench.err = "请输入一个正整数"
-				return m, nil
-			}
-			purpose := bench.prompt.purpose
-			bench.prompt = nil
-			bench.err = ""
-			if purpose == "budget" {
-				return m, m.applyBudgetCmd(value)
-			}
-			return m.continueRunWith(value)
-		}
-		var cmd tea.Cmd
-		bench.prompt.input, cmd = bench.prompt.input.Update(key)
-		return m, cmd
-	}
-	// 修改意见输入态（按 n 进入）：文字回车=按意见重写；空回车回以指引。
-	if bench.input.Focused() && bench.decision != nil && bench.decision.hasProposal && !bench.writing {
-		switch key.Type {
-		case tea.KeyEsc:
-			bench.input.Blur()
-			return m, nil
-		case tea.KeyEnter:
-			if reason := strings.TrimSpace(bench.input.Value()); reason != "" {
-				return m.decideCmd(false, reason)
-			}
-			bench.notice = "按 y 确认通过，或写下修改意见后回车"
-			return m, nil
-		}
-		var cmd tea.Cmd
-		bench.input, cmd = bench.input.Update(key)
-		return m, cmd
-	}
 	if bench.reading {
-		switch key.Type {
-		case tea.KeyEsc:
+		if key.Type == tea.KeyEsc {
 			bench.reading = false
 			return m, nil
 		}
@@ -507,11 +438,18 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		bench.body, cmd = bench.body.Update(key)
 		return m, cmd
 	}
+	// 输入框常驻聚焦（页面设计 §2）：导航键归面板，其余一律进文本框，没有单键快捷操作。
 	switch key.Type {
 	case tea.KeyEsc:
-		// 分层返回（§5）：创作中固定了主区时先回到活动流，再回欢迎页。
-		if bench.pinned || bench.liveHeld {
-			bench.pinned, bench.liveHeld = false, false
+		// 分层返回（§5）：先清空输入，再解除固定回到跟随，最后回欢迎页。
+		if bench.input.Value() != "" {
+			bench.input.SetValue("")
+			bench.inputScope, bench.inputLabel, bench.inputDecision = "", "", ""
+			return m, nil
+		}
+		if bench.content != contentOutput || bench.outputFrozen || bench.pinned {
+			bench.pinned = false
+			bench.content, bench.outputFrozen, bench.outputHeld = contentOutput, false, nil
 			return m, nil
 		}
 		bench.close()
@@ -519,168 +457,323 @@ func (m model) handleBenchKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.home = newHomeState()
 		m.home.lastOpened = bench.projectID
 		return m, m.loadLibraryCmd()
-	case tea.KeyTab:
-		if m.multiPane() {
-			bench.pane = benchPane((int(bench.pane) + 1) % 2)
-		} else {
-			bench.view = (bench.view + 1) % 2
-		}
+	case tea.KeyEnter:
+		return m.submitInput()
+	case tea.KeyF1:
+		m.switchContent(contentOutput)
 		return m, nil
-	case tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
-		return m.navigateOutline(key.Type), nil
+	case tea.KeyF2:
+		m.switchContent(contentManuscript)
+		return m, nil
+	case tea.KeyF3:
+		m.switchContent(contentReview)
+		return m, nil
+	case tea.KeyTab:
+		bench.pane = benchPane((int(bench.pane) + 1) % 3)
+		return m, nil
+	case tea.KeyShiftTab:
+		bench.pane = benchPane((int(bench.pane) + 2) % 3)
+		return m, nil
 	case tea.KeyUp, tea.KeyDown:
 		delta := 1
 		if key.Type == tea.KeyUp {
 			delta = -1
 		}
-		// 目标栏 = 焦点栏；单栏形态总览视图作用于主区（活动流），正文视图作用于选章。
-		target := benchPaneOutline
-		if m.multiPane() {
-			target = bench.pane
-		} else if bench.view == 0 {
-			target = benchPaneMain
+		return m.scrollBenchPane(bench.pane, delta), nil
+	case tea.KeyPgUp, tea.KeyPgDown:
+		return m.navigateOutline(key.Type), nil
+	case tea.KeyHome, tea.KeyEnd:
+		if bench.input.Value() == "" {
+			return m.navigateOutline(key.Type), nil
 		}
-		return m.scrollBenchPane(target, delta), nil
-	case tea.KeyEnter:
-		// 批准必须由 y 明确确认（页面设计 §2）：空回车回以指引，不提交。
-		if bench.decision != nil && bench.decision.hasProposal && !bench.writing {
-			bench.notice = "按 y 确认通过，或按 n 输入修改意见"
+	}
+	var cmd tea.Cmd
+	wasEmpty := bench.input.Value() == ""
+	bench.input, cmd = bench.input.Update(key)
+	if wasEmpty && bench.input.Value() != "" {
+		bench.inputScope, bench.inputLabel = m.directiveScope()
+		bench.inputDecision = ""
+		if bench.content == contentReview && bench.decision != nil && bench.decision.hasProposal && !bench.writing {
+			bench.inputDecision = bench.decision.proposal.ID
+		}
+	}
+	if bench.input.Value() == "" {
+		bench.inputScope, bench.inputLabel, bench.inputDecision = "", "", ""
+	}
+	return m, cmd
+}
+
+// submitInput 是回车的唯一分派：空回车走面板动作，`/` 是命令，`y` 批准，
+// 其余文字在等你决定时是修改意见、否则是带作用域的要求（§4.9、D26）。
+// 校验失败保留输入并显示 err，其余情况清空输入。
+func (m model) submitInput() (tea.Model, tea.Cmd) {
+	bench := &m.bench
+	text := strings.TrimSpace(bench.input.Value())
+	bench.err, bench.notice = "", ""
+	pending := bench.decision != nil && bench.decision.hasProposal && !bench.writing && m.composingReview()
+	var (
+		next tea.Model
+		cmd  tea.Cmd
+	)
+	switch {
+	case text == "":
+		return m.enterPane()
+	case strings.HasPrefix(text, "/"):
+		next, cmd = m.runCommand(strings.TrimSpace(text[1:]))
+	case text == "y":
+		next, cmd = m.approve()
+	case text == "n":
+		bench.notice = "写下修改意见后回车"
+		if !pending {
+			bench.notice = "现在没有等你决定的稿件"
+		}
+		next = m
+	case pending:
+		if bench.inputScope != "" && bench.inputDecision != bench.decision.proposal.ID {
+			bench.err = "新的稿件正在等待审阅；这段文字仍是创作要求，请用 /note 提交，或 Esc 清空后审稿"
 			return m, nil
 		}
-		if bench.pane == benchPaneMain && bench.view == 0 && bench.tab == benchTabProse {
-			if text, live := m.liveProse(); live {
-				return m.openBody("正文预览 · 最终以确认稿为准\n\n" + text), nil
-			}
+		next, cmd = m.decideCmd(false, text)
+	default:
+		if bench.inputDecision != "" {
+			bench.err = "这份稿件已不再等待审阅；修改意见已保留，请 Esc 清空后重新选择操作"
+			return m, nil
 		}
-		if m.multiPane() || bench.view == 1 {
-			// 卷/弧头行：回车折叠/展开；章行：回车阅读（§5）。
-			rows := m.outlineRows()
-			if bench.cursor >= 0 && bench.cursor < len(rows) && rows[bench.cursor].header() && (bench.pane == benchPaneOutline || !m.multiPane() && bench.view == 1) {
-				bench.pinned = true
-				bench.notice = m.toggleFold(rows[bench.cursor].node.Node.ID)
-				return m, nil
-			}
-			return m.openChapter()
-		}
+		scope, _ := m.composerScope()
+		next, cmd = m, m.addDirectiveCmd(scope, text)
+	}
+	updated := next.(model)
+	if updated.bench.err == "" {
+		updated.bench.input.SetValue("")
+		updated.bench.inputScope, updated.bench.inputLabel, updated.bench.inputDecision = "", "", ""
+	}
+	return updated, cmd
+}
+
+// enterPane 是空回车：批准必须由 y 明确确认（页面设计 §2），空回车只回以指引。
+func (m model) enterPane() (tea.Model, tea.Cmd) {
+	bench := &m.bench
+	if bench.decision != nil && bench.decision.hasProposal && !bench.writing && len(m.outlineRows()) == 0 {
+		bench.notice = "输入 y 通过，或写下修改意见后回车"
 		return m, nil
 	}
-	switch key.String() {
-	case "1", "2", "3":
-		bench.tab = benchTab(key.String()[0] - '1')
-		bench.view, bench.pane = 0, benchPaneMain
-		return m, nil
-	case "o":
-		if !m.multiPane() {
-			bench.view = 1 - bench.view
+	if bench.pane == benchPaneMain {
+		switch bench.content {
+		case contentReview:
+			return m.openReview(), nil
+		case contentOutput:
+			return m.openBody(strings.Join(m.outputLines(max(1, m.width-4)), "\n")), nil
 		}
-		bench.pane = benchPaneOutline
-		return m, nil
-	case "t":
-		visible := false
-		frame := m.workbenchFrame()
-		for _, hit := range frame.hits {
-			if hit.key == "t" && hit.y < 2+frame.bodyHeight {
-				visible = true
-			}
-		}
-		if visible {
-			bench.thoughtOpen = !bench.thoughtOpen
-		} else {
-			bench.thoughtOpen, bench.tab, bench.view, bench.pane = true, benchTabActivity, 0, benchPaneMain
-		}
-		return m, nil
-	case "T":
-		if feed, ok := m.activityFeed(); ok && feed.ThinkingNote != "" {
-			return m.openBody("思考片段 · 模型提供的原文尾部\n\n" + feed.ThinkingNote), nil
-		}
-		return m, nil
-	case "f":
-		bench.pinned, bench.liveHeld = false, false
-		bench.feedOffset, bench.previewOffset = 0, 0
-		bench.view, bench.tab, bench.pane = 0, benchTabProse, benchPaneMain
-		return m, nil
-	case "/":
-		return m.openPrompt("search", "跳章 / 搜索 · 输入章节号或标题", ""), nil
-	case "N":
-		m.findChapter(bench.search, true)
-		return m, nil
-	case "e":
-		if bench.exporting {
-			return m, nil
-		}
-		if len(bench.snap.Manuscript) == 0 {
-			bench.err = "暂无已确认正文，先批准稿件后再导出"
-			return m, nil
-		}
-		return m.openPrompt("export", "导出已确认正文 · 输入 .txt 或 .epub 文件路径", ""), nil
-	case "?":
-		return m.openBody(benchHelp), nil
-	case "i":
-		if bench.loaded {
-			scope, label := m.directiveScope()
-			m = m.openPrompt("directive", label, "")
-			m.bench.prompt.scope = scope
-			return m, nil
-		}
+	}
+	// 大纲焦点下卷/弧头行：回车折叠/展开；其余回车阅读选中章（§5）。
+	rows := m.outlineRows()
+	if bench.pane == benchPaneOutline && bench.cursor >= 0 && bench.cursor < len(rows) && rows[bench.cursor].header() {
+		bench.pinned = true
+		bench.notice = m.toggleFold(rows[bench.cursor].node.Node.ID)
 		return m, nil
 	}
-	// p/x/d 在创作进行中同样可用：暂停/取消走乐观转换（驱动循环在当前步骤
-	// 完成后收束），诊断只读；其余键位在 writing 态屏蔽以免并发驱动。
-	switch key.String() {
-	case "p":
-		if bench.hasRun() && (bench.run().State == domainmodel.RunRunning || bench.run().State == domainmodel.RunWaitingUser) {
-			return m, m.pauseRunCmd()
-		}
-		return m, nil
-	case "x":
-		if bench.hasRun() && bench.run().State != domainmodel.RunCompleted &&
-			bench.run().State != domainmodel.RunFailed && bench.run().State != domainmodel.RunCancelled {
-			return m, m.cancelRunCmd()
-		}
-		return m, nil
-	case "d":
-		return m.openDiagnostics()
-	}
-	if bench.writing {
-		return m, nil
-	}
-	switch key.String() {
-	case "y":
-		if bench.decision != nil && bench.decision.hasProposal {
-			// 过期稿件不能直接通过（会撞版本冲突）：只留重写路径。
-			if bench.decision.stale {
-				bench.notice = "这份稿件完成后书又有了新变化，不能直接通过；按 n 写修改意见让它基于最新内容重写"
-				return m, nil
-			}
-			return m.decideCmd(true, "")
-		}
-	case "n":
-		if bench.decision != nil && bench.decision.hasProposal {
-			bench.input.Focus()
-			return m, nil
-		}
-	case "c":
-		return m.continueRun()
-	case "g":
-		if bench.loaded {
-			return m.openPrompt("target", "新的目标章数", strconv.Itoa(m.currentTarget())), nil
-		}
-	case "b":
-		if bench.decision != nil && !bench.decision.hasProposal && bench.hasRun() {
-			return m.openPrompt("budget", "新的自动修订预算", strconv.Itoa(bench.run().Strategy.AutoRepairBudget)), nil
-		}
-	case "a":
-		if finding, ok := m.firstBlockingFinding(); ok {
-			m = m.openPrompt("adjudicate", "接受发现「"+truncate(finding.Note, 40)+"」的理由", "")
-			m.bench.prompt.finding = finding.ID
-			return m, nil
-		}
-		bench.notice = "选中的章节没有待处理的阻塞发现"
+	return m.openChapter()
+}
+
+func (m model) approve() (tea.Model, tea.Cmd) {
+	bench := &m.bench
+	switch {
+	case bench.decision == nil || !bench.decision.hasProposal:
+		bench.notice = "现在没有等你决定的稿件"
+	case bench.writing:
+		bench.notice = "创作进行中，稿件写完后再裁决"
+	case !m.composingReview():
+		bench.notice = "请先按 F3 或输入 /review 审阅稿件，再输入 y 通过"
+	case bench.inputScope != "" && bench.inputDecision != bench.decision.proposal.ID:
+		bench.err = "待审稿件已变化，请 Esc 清空后重新确认"
+	case bench.decision.stale:
+		// 过期稿件不能直接通过（会撞版本冲突）：只留重写路径。
+		bench.notice = "这份稿件完成后书又有了新变化，不能直接通过；写下修改意见后回车，让它基于最新内容重写"
+	default:
+		return m.decideCmd(true, "")
 	}
 	return m, nil
 }
 
-// firstBlockingFinding 取选中章节第一条尚未被接受的阻塞发现（D43 的 a 键一次只裁一条）。
+// benchCommand 是底栏 `/` 命令：唯一前缀匹配，命令面板与帮助共用同一张表。
+// idleOnly 的命令在创作进行中屏蔽，以免并发驱动；quiet 的不进 `/` 总览（一行放不下）。
+type benchCommand struct {
+	name, usage, label string
+	idleOnly, quiet    bool
+	run                func(m model, arg string) (tea.Model, tea.Cmd)
+}
+
+var benchCommands = []benchCommand{
+	{name: "stream", label: "实时输出", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		m.switchContent(contentOutput)
+		return m, nil
+	}},
+	{name: "body", label: "阅读正文", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		m.switchContent(contentManuscript)
+		return m, nil
+	}},
+	{name: "split", usage: "<20–50>", label: "事件区高度百分比", run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		percent, err := strconv.Atoi(arg)
+		if err != nil || percent < 20 || percent > 50 {
+			m.bench.err = "用法：/split 20–50（事件区占中栏高度的百分比）"
+			return m, nil
+		}
+		m.bench.splitPercent = percent
+		return m, nil
+	}},
+	{name: "note", usage: "<要求>", label: "提出创作要求（不裁决稿件）", run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		if arg == "" {
+			m.bench.err = "用法：/note 要求内容；作用范围见输入框上方"
+			return m, nil
+		}
+		scope, _ := m.composerScope()
+		return m, m.addDirectiveCmd(scope, arg)
+	}},
+	{name: "review", label: "阅读待确认稿件", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		m.switchContent(contentReview)
+		return m, nil
+	}},
+	{name: "pause", label: "暂停推进", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		if b := &m.bench; b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
+			return m, m.pauseRunCmd()
+		}
+		m.bench.notice = "现在没有在推进的创作"
+		return m, nil
+	}},
+	{name: "continue", label: "继续创作", idleOnly: true, run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		return m.continueRun()
+	}},
+	{name: "export", usage: "<路径>", label: "导出", run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		return m.submitExport(arg)
+	}},
+	{name: "follow", label: "回到最新", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		b := &m.bench
+		b.pinned = false
+		b.feedOffset, b.previewOffset = 0, 0
+		b.content, b.outputFrozen, b.outputHeld = contentOutput, false, nil
+		b.pane = benchPaneMain
+		return m, nil
+	}},
+	{name: "think", label: "思考原文", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		if text := m.thinkingContent(); text != "" {
+			return m.openBody(text), nil
+		}
+		m.bench.notice = "模型未提供思考文本"
+		return m, nil
+	}},
+	{name: "view", label: "完整详情", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		return m.openBody(m.detailReport(max(1, m.width-4))), nil
+	}},
+	{name: "goal", usage: "<章数>", label: "目标章数", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		chapters, err := strconv.Atoi(arg)
+		if err != nil || chapters <= 0 {
+			m.bench.err = fmt.Sprintf("用法：/goal 章数（当前目标 %d 章）", m.currentTarget())
+			return m, nil
+		}
+		return m.continueRunWith(chapters)
+	}},
+	{name: "budget", usage: "<次数>", label: "修订预算", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		b := &m.bench
+		if b.decision == nil || b.decision.hasProposal || !b.hasRun() {
+			b.notice = "只有等待修订预算时才能调整"
+			return m, nil
+		}
+		budget, err := strconv.Atoi(arg)
+		if err != nil || budget <= 0 {
+			b.err = fmt.Sprintf("用法：/budget 次数（当前 %d 次）", b.run().Strategy.AutoRepairBudget)
+			return m, nil
+		}
+		return m, m.applyBudgetCmd(budget)
+	}},
+	{name: "accept", usage: "<理由>", label: "接受发现", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
+		finding, ok := m.firstBlockingFinding()
+		if !ok {
+			m.bench.notice = "选中的章节没有待处理的阻塞发现"
+			return m, nil
+		}
+		if arg == "" {
+			m.bench.err = "用法：/accept 理由 · 接受发现「" + truncate(finding.Note, 40) + "」"
+			return m, nil
+		}
+		return m, m.adjudicateCmd(finding.ID, arg)
+	}},
+	{name: "stop", label: "结束本轮", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		if b := &m.bench; b.hasRun() && b.run().State != domainmodel.RunCompleted &&
+			b.run().State != domainmodel.RunFailed && b.run().State != domainmodel.RunCancelled {
+			return m, m.cancelRunCmd()
+		}
+		m.bench.notice = "没有可以结束的创作"
+		return m, nil
+	}},
+	{name: "diag", label: "诊断", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		return m.openDiagnostics()
+	}},
+	{name: "next", label: "下一个匹配", quiet: true, run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		if m.bench.search == "" || !m.findChapter(m.bench.search, true) {
+			m.bench.notice = "先用 /章号 或 /标题 搜索"
+		}
+		return m, nil
+	}},
+	{name: "help", label: "帮助", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		return m.openBody(benchHelp), nil
+	}},
+}
+
+// matchCommand 按完整名称或唯一前缀取命令；有歧义时需继续输入。
+func matchCommand(name string) (benchCommand, bool) {
+	var found *benchCommand
+	for i := range benchCommands {
+		command := &benchCommands[i]
+		if command.name == name {
+			return *command, true
+		}
+		if strings.HasPrefix(command.name, name) {
+			if found != nil {
+				return benchCommand{}, false
+			}
+			found = command
+		}
+	}
+	if found == nil {
+		return benchCommand{}, false
+	}
+	return *found, true
+}
+
+// runCommand 分派 `/` 后的文本：命令按表执行，其余按章节号或标题跳转（原 / 键）。
+func (m model) runCommand(text string) (tea.Model, tea.Cmd) {
+	name, arg, _ := strings.Cut(text, " ")
+	if name == "" || name == "?" {
+		name = "help"
+	}
+	if command, ok := matchCommand(name); ok {
+		if command.idleOnly && m.bench.writing {
+			m.bench.notice = "创作进行中，先 /pause 或等它写完"
+			return m, nil
+		}
+		return command.run(m, strings.TrimSpace(arg))
+	}
+	var matches []string
+	for _, command := range benchCommands {
+		if strings.HasPrefix(command.name, name) {
+			matches = append(matches, "/"+command.name)
+		}
+	}
+	if len(matches) > 1 {
+		m.bench.err = "请继续输入以选择命令：" + strings.Join(matches, " 或 ")
+		return m, nil
+	}
+	if m.findChapter(text, false) {
+		if _, err := strconv.Atoi(text); err != nil {
+			m.bench.notice = "/next 下一个匹配"
+		}
+		return m, nil
+	}
+	m.bench.err = "没有找到匹配的章节；/? 查看命令"
+	return m, nil
+}
+
+// firstBlockingFinding 取选中章节第一条尚未被接受的阻塞发现（D43 的 /accept 一次只裁一条）。
 func (m model) firstBlockingFinding() (workbench.WorkbenchFinding, bool) {
 	chapterID := m.selectedChapterID()
 	for _, finding := range m.bench.snap.Findings {
@@ -710,28 +803,19 @@ func (m model) directiveScope() (scope, label string) {
 	return fmt.Sprintf("from_chapter:%d", next), fmt.Sprintf("对第 %d 章起的要求", next)
 }
 
-// scrollBenchPane 按当前标签分派滚动，不因运行状态改变用户正在看的内容。
+// scrollBenchPane 按焦点区分派滚动，不因运行状态改变用户正在看的内容。
 func (m model) scrollBenchPane(pane benchPane, delta int) tea.Model {
 	bench := &m.bench
 	switch pane {
+	case benchPaneFeed:
+		bench.feedOffset = min(max(0, bench.feedOffset-delta), max(0, len(bench.activity.Entries)-1))
 	case benchPaneMain:
-		switch bench.tab {
-		case benchTabActivity:
-			bench.feedOffset = min(max(0, bench.feedOffset-delta), max(0, len(bench.activity.Entries)-1))
-		case benchTabDetail:
-			bench.detailOffset = min(max(0, bench.detailOffset+delta), m.workbenchFrame().detailMaxOffset)
-		default:
-			return m.scrollProse(delta)
-		}
+		return m.scrollContent(delta)
 	default:
 		rows := m.outlineRows()
-		next := nextSelectable(rows, bench.cursor, delta, false)
-		if next != bench.cursor {
-			bench.cursor = next
-			bench.previewOffset, bench.detailOffset = 0, 0
-			bench.liveHeld = false
+		if next := nextSelectable(rows, bench.cursor, delta, false); next != bench.cursor {
 			// 创作中手动选章：固定主区在选中内容上，不被运行态覆盖（§2）。
-			bench.pinned = true
+			m.selectOutline(next)
 		}
 	}
 	return m
@@ -772,8 +856,8 @@ func (m model) toggleFold(id string) string {
 	return ""
 }
 
-// handleBenchMouse 鼠标热区（M3）：滚轮=指针所在栏的 ↑/↓ 语义；点击选章/
-// 折叠/切栏焦点；单栏点击标签行切视图；阅读态转发给正文视口。
+// handleBenchMouse 鼠标只做两件事：滚轮滚动指针所在栏、点击大纲行选章或折叠；
+// 命中坐标全部来自固定布局。阅读态转发给正文视口。
 func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.bench.diag != nil {
 		return m.handleDiagnosticsMouse(mouse)
@@ -784,35 +868,71 @@ func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		bench.body, cmd = bench.body.Update(mouse)
 		return m, cmd
 	}
-	// 输入态（修改意见/目标章数）不响应鼠标，避免焦点被点飞。
-	if bench.prompt != nil || bench.input.Focused() {
-		return m, nil
-	}
-	if mouse.Button == tea.MouseButtonWheelUp || mouse.Button == tea.MouseButtonWheelDown {
-		if mouse.Y < 2 || mouse.Y >= 2+m.workbenchFrame().bodyHeight {
+	l := m.benchLayout()
+	switch {
+	case mouse.Button == tea.MouseButtonWheelUp || mouse.Button == tea.MouseButtonWheelDown:
+		if !l.inBody(mouse.Y) || mouse.X >= l.inspectorX-1 {
 			return m, nil
 		}
-	}
-	switch {
-	case mouse.Button == tea.MouseButtonWheelUp:
-		return m.wheelBench(mouse.X, -1), nil
-	case mouse.Button == tea.MouseButtonWheelDown:
-		return m.wheelBench(mouse.X, 1), nil
+		delta := 1
+		if mouse.Button == tea.MouseButtonWheelUp {
+			delta = -1
+		}
+		return m.scrollBenchPane(l.paneAt(mouse.X, mouse.Y), delta), nil
 	case mouse.Action == tea.MouseActionPress && mouse.Button == tea.MouseButtonLeft:
-		return m.clickBench(mouse.X, mouse.Y)
+		if mouse.X >= l.mainX && mouse.X < l.inspectorX-1 && l.inBody(mouse.Y) {
+			bench.pane = l.paneAt(mouse.X, mouse.Y)
+			if mouse.Y == l.contentY && mouse.X >= l.mainX+1 {
+				index := (mouse.X - l.mainX - 1) / contentTabWidth
+				if index < len(contentLabels) {
+					m.switchContent(benchContent(index))
+				}
+			}
+			return m, nil
+		}
+		if mouse.X >= l.inspectorX && l.inBody(mouse.Y) {
+			start := l.bodyY + 11
+			tasks := m.visibleTasks()
+			if mouse.Y >= start && mouse.Y < start+2*len(tasks) {
+				m.inspectTask(tasks[(mouse.Y-start)/2])
+				return m, nil
+			}
+			if mouse.Y >= l.bodyY+4 && mouse.Y < l.bodyY+8 && bench.decision != nil {
+				m.switchContent(contentReview)
+				return m, nil
+			}
+		}
+		if mouse.Y == l.footerY+3 && mouse.X < l.width-1 {
+			if action, ok := m.benchActionAt(mouse.X); ok {
+				if bench.input.Value() != "" {
+					bench.notice = "输入框中有未提交内容，请先提交或清空"
+					return m, nil
+				}
+				bench.input.SetValue(action.key)
+				bench.inputScope, bench.inputLabel = m.directiveScope()
+				return m, nil
+			}
+		}
+		if index, ok := m.outlineRowAt(l, mouse.X, mouse.Y); ok {
+			m.clickOutlineRow(index)
+		}
 	}
 	return m, nil
 }
 
-func (m model) wheelBench(x, delta int) tea.Model {
-	if !m.multiPane() && m.bench.view == 1 {
-		return m.scrollBenchPane(benchPaneOutline, delta)
+// clickOutlineRow 与键盘选章同一入口：章行选中并固定主区，头行折叠/展开，占位行无动作。
+func (m *model) clickOutlineRow(index int) {
+	row := m.outlineRows()[index]
+	switch {
+	case row.placeholder:
+	case row.header():
+		m.bench.cursor, m.bench.pane, m.bench.pinned = index, benchPaneOutline, true
+		m.bench.notice = m.toggleFold(row.node.Node.ID)
+	default:
+		m.bench.pane = benchPaneOutline
+		m.selectOutline(index)
 	}
-	return m.scrollBenchPane(m.benchPaneAt(x), delta)
 }
-
-// multiPane 报告当前终端宽度是否启用多栏布局（页面设计 §2 宽度降级）。
-func (m model) multiPane() bool { return m.width >= 90 }
 
 // chapterCount 是大纲可选章节数。
 func chapterCount(snap workbench.WorkbenchSnapshot) int {
@@ -823,14 +943,6 @@ func chapterCount(snap workbench.WorkbenchSnapshot) int {
 		}
 	}
 	return count
-}
-
-func (m model) openPrompt(purpose, label, initial string) model {
-	input := newInput(initial)
-	input.Prompt = ""
-	input.Focus()
-	m.bench.prompt = &promptState{purpose: purpose, label: label, input: input}
-	return m
 }
 
 // addDirectiveCmd 把要求原话按作用域入账；刷新后右栏可见，之后的任务按当前
@@ -844,7 +956,7 @@ func (m model) addDirectiveCmd(scope, text string) tea.Cmd {
 			ProjectID: projectID, ChangeID: projectdoc.NewID("directive", now), UserID: user,
 			Scope: scope, Text: text, Reason: "工作台提出创作要求", CreatedAt: now,
 		})
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: "要求已记录：之后的创作照此执行，审阅逐条核验"}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: "要求已记录 · 对应范围的后续任务会采用并核验；现有正文尚未修改"}
 	}
 }
 
@@ -895,7 +1007,7 @@ func (m model) decideCmd(approve bool, reason string) (tea.Model, tea.Cmd) {
 func (m model) pauseRunCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	gen, runID := m.bench.gen, m.bench.run().ID
-	note := "已暂停，按 c 随时继续"
+	note := "已暂停，/continue 随时继续"
 	if m.bench.writing {
 		note = "暂停指令已发出：当前这一步完成后就会停下"
 	}
@@ -908,7 +1020,7 @@ func (m model) pauseRunCmd() tea.Cmd {
 func (m model) cancelRunCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	gen, runID := m.bench.gen, m.bench.run().ID
-	note := "本轮创作已取消；已写内容保留，按 c 会开启新一轮继续"
+	note := "本轮创作已取消；已写内容保留，/continue 会开启新一轮继续"
 	if m.bench.writing {
 		note = "取消指令已发出：当前这一步完成后停下；已写内容保留"
 	}
@@ -1195,39 +1307,43 @@ func (m model) selectedChapterNumber() int {
 }
 
 // outlineWindow 计算大纲视口窗口（视图与鼠标命中共用，防两处漂移）：
-// 装不下时窗口随选中行居中，并预留上下截断指示行。
-func outlineWindow(total, capacity, selected int) (start, end int, clipped bool) {
+// 装不下时窗口随选中行居中；截断指示行由布局恒定预留，不占用窗口容量。
+func outlineWindow(total, capacity, selected int) (start, end int) {
 	if total <= capacity {
-		return 0, total, false
+		return 0, total
 	}
-	capacity = max(1, capacity-2)
+	capacity = max(1, capacity)
 	selected = min(max(0, selected), total-1)
 	start = min(max(0, selected-capacity/2), total-capacity)
-	return start, start + capacity, true
+	return start, start + capacity
 }
 
-// viewOutlinePane 渲染大纲树：卷/弧层级（回车折叠/展开）+ 章节徽标（§2 左栏）；
-// 长书按视口窗口化，窗口随选中行移动，截断处给出方向指示。
-func (m model) viewOutlinePane(width, height int) string {
+// viewOutlinePane 渲染大纲树：卷/弧层级（回车折叠/展开）+ 章节徽标（§2 左栏）。
+// 行结构固定：标题、上截断指示（或空行）、outlineRows 行、下截断指示（或空行）。
+func (m model) viewOutlinePane(l benchLayout) []string {
 	rows := m.outlineRows()
-	var view strings.Builder
-	title := "大纲 / 搜索"
+	width := l.leftWidth - 1
+	title := "大纲"
 	if m.bench.cursor >= 0 && m.bench.cursor < len(rows) && rows[m.bench.cursor].context != "" {
-		title = "大纲 · " + truncate(rows[m.bench.cursor].context, width-11) + " /"
+		title = "大纲 · " + truncate(rows[m.bench.cursor].context, width-8)
 	}
-	view.WriteString(paneTitle(title, m.multiPane() && m.bench.pane == benchPaneOutline) + "\n")
-
-	start, end, clipped := outlineWindow(len(rows), max(1, height-1), m.bench.cursor)
-	if clipped && start > 0 {
-		view.WriteString(styleHint.Render(fmt.Sprintf("  ↑ 前面还有 %d 行", start)) + "\n")
+	lines := []string{sectionTitle(title, width, m.bench.pane == benchPaneOutline), ""}
+	start, end := outlineWindow(len(rows), l.outlineRows, m.bench.cursor)
+	if start > 0 {
+		lines[1] = styleHint.Render(fmt.Sprintf("  ↑ 前面还有 %d 行", start))
 	}
 	for index := start; index < end; index++ {
-		view.WriteString(m.outlineRowLine(rows[index], index == m.bench.cursor, width) + "\n")
+		lines = append(lines, m.outlineRowLine(rows[index], index == m.bench.cursor, width))
 	}
-	if clipped && end < len(rows) {
-		view.WriteString(styleHint.Render(fmt.Sprintf("  ↓ 后面还有 %d 行", len(rows)-end)) + "\n")
+	for len(lines) < 2+l.outlineRows {
+		lines = append(lines, "")
 	}
-	return view.String()
+	// 下截断指示行恒占位，本章摘要的起始行才是常量。
+	bottom := ""
+	if end < len(rows) {
+		bottom = styleHint.Render(fmt.Sprintf("  ↓ 后面还有 %d 行", len(rows)-end))
+	}
+	return append(lines, bottom)
 }
 
 // outlineRowLine 渲染一个大纲行；头行带折叠指示（▾ 展开 / ▸ 折叠 + 摘要）。
@@ -1235,9 +1351,9 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 	switch {
 	case row.placeholder:
 		if row.endChapter > row.chapter {
-			return styleSubtitle.Render(fmt.Sprintf("  ○ %d–%d 未规划", row.chapter, row.endChapter))
+			return styleSubtitle.Render(fmt.Sprintf("  ○ %02d–%02d 未规划", row.chapter, row.endChapter))
 		}
-		return styleSubtitle.Render(fmt.Sprintf("  ○ %d 未规划", row.chapter))
+		return styleSubtitle.Render(fmt.Sprintf("  ○ %02d 未规划", row.chapter))
 	case row.isChapter():
 		return m.outlineChapterLine(row.node, selected, width)
 	default:
@@ -1248,14 +1364,18 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 		if row.node.Node.Kind == domainmodel.PlanArc {
 			style, indent = styleSubtitle, " "
 		}
-		line := style.Render(indent + fold + truncate(row.node.Node.Title, max(4, width-10)))
+		text := indent + fold + truncate(row.node.Node.Title, max(4, width-10))
+		summary, pending := "", ""
 		if row.collapsed {
-			line += styleHint.Render(fmt.Sprintf(" · %d 章", row.chapters))
+			summary = fmt.Sprintf(" · %d 章", row.chapters)
 			if row.pending > 0 {
-				line += styleWarn.Render(" ◐")
+				pending = " ◐"
 			}
 		}
-		return marker(selected, line)
+		if selected {
+			return benchTheme.Selected.Render(fitLine("▎ "+text+summary+pending, width))
+		}
+		return "  " + style.Render(text) + styleHint.Render(summary) + styleWarn.Render(pending)
 	}
 }
 
@@ -1278,7 +1398,7 @@ func (m model) outlineChapterLine(entry workbench.OutlineNode, selected bool, wi
 	case workbench.ChapterInProgress:
 		badge, style = "▸", styleFocus
 	}
-	line := fmt.Sprintf("%s %d %s", badge, entry.Number, truncate(entry.Node.Title, max(4, width-8)))
+	line := fmt.Sprintf("%s %02d  %s", badge, entry.Number, truncate(entry.Node.Title, max(4, width-9)))
 	if selected {
 		return benchTheme.Selected.Render(fitLine("▎ "+line, width))
 	}
@@ -1296,6 +1416,7 @@ var toolActivityLabels = map[string]string{
 	"workspace_put_review":    "记录审阅意见",
 	"proposal_submit":         "提交候选稿",
 	"verdict_submit":          "给出审阅结论",
+	"semantic_compliance":     "核对语义合规",
 }
 
 func toolActivityLabel(tool string) string {
@@ -1318,57 +1439,193 @@ func (m model) activityFeed() (activity.Snapshot, bool) {
 	return feed, true
 }
 
-// viewActivity 渲染事件级活动流（页面设计 §3）：一行一事件；工具参数流只显示
-// 已接收数据量，不冒充正文字数；出错与重试可见，让"模型在自纠"可见而不可怕。
-func (m model) viewActivity(width, limit int) string {
+// activityLines 渲染事件级活动流（页面设计 §3）：一行一事件，带时钟与耗时；
+// 工具参数流只显示已接收数据量，不冒充正文字数；出错与重试可见，让"模型在自纠"
+// 可见而不可怕。跟随滚动（§2）：feedOffset=0 渲染尾部；用户上翻后窗口后移、暂停
+// 跟随，并提示底下还有多少新活动。指示行计入 limit，活动条高度恒定。
+func (m model) activityLines(width, limit int) []string {
 	feed, ok := m.activityFeed()
 	if !ok {
-		return ""
+		return nil
 	}
-	var view strings.Builder
-	// 跟随滚动（§2）：feedOffset=0 渲染尾部即自动跟随；用户上翻后窗口后移、
-	// 暂停跟随，并提示底下还有多少新活动。
 	offset := min(m.bench.feedOffset, max(0, len(feed.Entries)-1))
 	end := len(feed.Entries) - offset
-	start := max(0, end-limit)
+	reserve := 0
+	if offset > 0 {
+		reserve++
+	}
+	if end > limit-reserve {
+		reserve++
+	}
+	start := max(0, end-max(1, limit-reserve))
+	var lines []string
 	if start > 0 {
-		view.WriteString(styleHint.Render(fmt.Sprintf("  ↑ 更早还有 %d 条", start)) + "\n")
+		lines = append(lines, styleHint.Render(fmt.Sprintf("↑ 更早还有 %d 条", start)))
 	}
 	for _, entry := range feed.Entries[start:end] {
-		view.WriteString(m.activityLine(entry, width) + "\n")
+		lines = append(lines, m.activityLine(entry, width))
 	}
 	if offset > 0 {
-		view.WriteString(styleWarn.Render(fmt.Sprintf("⏸ 已暂停跟随 · 下方还有 %d 条新活动 · ↓ 回到最新", offset)) + "\n")
-		return view.String()
+		lines = append(lines, styleWarn.Render(fmt.Sprintf("⏸ 已暂停跟随 · 下方还有 %d 条新活动 · ↓ 回到最新", offset)))
 	}
-	if feed.Note != "" {
-		view.WriteString(styleHint.Render(truncate("· "+feed.Note, max(10, width))) + "\n")
-	}
-	return view.String()
+	return lines
 }
 
+// activityLine：时钟 图标 标签 [· 已接收 N]，右端是耗时（完成态取起止差，进行中实时计）。
 func (m model) activityLine(entry activity.Entry, width int) string {
-	if entry.Kind == activity.Retry {
-		return styleWarn.Render(fmt.Sprintf("↻ 连接不稳定，正在第 %d 次重试", entry.Attempt))
-	}
-	if entry.Kind == activity.ProseStall {
-		// 直播中断显式告知（不吞错）：预览停更 ≠ 模型停写，成稿不受影响。
-		return styleWarn.Render("⚠ 正文直播中断（仅预览受影响），最终以确认稿为准")
+	var clock string
+	if !entry.At.IsZero() {
+		clock = benchTheme.Muted.Render(entry.At.Local().Format("15:04:05")) + " "
 	}
 	label := toolActivityLabel(entry.Tool)
+	var body, elapsed string
 	switch {
+	case entry.Kind == activity.Retry:
+		body = styleWarn.Render(fmt.Sprintf("↻ 连接不稳定，正在第 %d 次重试", entry.Attempt))
+	case entry.Kind == activity.ProseStall:
+		// 直播中断显式告知（不吞错）：预览停更 ≠ 模型停写，成稿不受影响。
+		body = styleWarn.Render("⚠ 正文直播中断（仅预览受影响），最终以确认稿为准")
 	case entry.Err != "":
-		// 错误原因随行可见（M3）："模型在自纠"可见而不可怕；完整诊断按 d 下钻。
-		line := styleWarn.Render("! " + label + "遇到问题，模型正在自纠")
-		return line + "\n" + styleHint.Render(truncate("  └ "+oneLine(entry.Err), max(10, width)))
+		// 错误原因随行可见："模型在自纠"可见而不可怕；完整诊断 /diag 下钻。
+		body = styleWarn.Render("! " + label + "遇到问题，模型正在自纠 · " + oneLine(entry.Err))
+		elapsed = entryElapsed(entry)
 	case entry.Done:
-		return styleNotice.Render("✓ ") + label
+		body = styleNotice.Render("✓ ") + label
+		elapsed = entryElapsed(entry)
 	default:
 		line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " " + label + "……"
 		if entry.Bytes > 0 {
 			line += " 已接收 " + formatDataSize(entry.Bytes)
 		}
-		return styleFocus.Render(line)
+		body = styleFocus.Render(line)
+		elapsed = entryElapsed(entry)
+	}
+	return alignRight(clock+body, benchTheme.Muted.Render(elapsed), width)
+}
+
+func entryElapsed(entry activity.Entry) string {
+	switch {
+	case entry.At.IsZero():
+		return ""
+	case entry.Done && entry.DoneAt.IsZero():
+		return ""
+	case entry.Done:
+		return formatDuration(entry.DoneAt.Sub(entry.At))
+	default:
+		return formatDuration(time.Since(entry.At))
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	switch {
+	case d < 0:
+		return ""
+	case d < 10*time.Second:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	default:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+}
+
+// alignRight 把 right 靠右放在同一行；左边放不下时截断左边，两者至少隔一格。
+func alignRight(left, right string, width int) string {
+	if right == "" {
+		return fitLine(left, width)
+	}
+	room := width - lipgloss.Width(right) - 1
+	left = fitLine(left, max(0, room))
+	return left + strings.Repeat(" ", max(1, room-lipgloss.Width(left)+1)) + right
+}
+
+// tailLine 保留文本尾部并以 … 开头（思考片段只有尾部有意义）。
+func tailLine(text string, width int) string {
+	if lipgloss.Width(text) <= width {
+		return text
+	}
+	runes := []rune(text)
+	cut := len(runes)
+	for used := 1; cut > 0; cut-- {
+		if w := lipgloss.Width(string(runes[cut-1])); used+w > width {
+			break
+		} else {
+			used += w
+		}
+	}
+	return "…" + string(runes[cut:])
+}
+
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 10_000:
+		return fmt.Sprintf("%dK", n/1000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+func formatCost(usd float64) string {
+	if usd < 0.01 {
+		return fmt.Sprintf("$%.4f", usd)
+	}
+	return fmt.Sprintf("$%.2f", usd)
+}
+
+// groupDigits 千分位分组："9800" → "9,800"。
+func groupDigits(n int) string {
+	digits := fmt.Sprintf("%d", n)
+	var out []byte
+	for i, c := range []byte(digits) {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+// wordCache 按快照版本缓存全书字数（几百章时不逐帧重算）。
+type wordCache struct {
+	revision domainmodel.Revision
+	chapters int
+	count    int
+}
+
+func (m model) wordCount() int {
+	snap := m.bench.snap
+	cache := m.bench.wordCache
+	if cache != nil && cache.count > 0 && cache.revision == snap.Revision && cache.chapters == len(snap.Manuscript) {
+		return cache.count
+	}
+	count := 0
+	for _, chapter := range snap.Manuscript {
+		for _, block := range chapter.Blocks {
+			count += utf8.RuneCountInString(block.Text)
+		}
+	}
+	if cache != nil {
+		*cache = wordCache{revision: snap.Revision, chapters: len(snap.Manuscript), count: count}
+	}
+	return count
+}
+
+// benchPhaseLabel 概览卡"阶段"在快照没有环节文案时的兜底：按运行状态说话。
+func (m model) benchPhaseLabel() string {
+	bench := m.bench
+	switch {
+	case bench.writing:
+		return "创作中"
+	case bench.decision != nil:
+		return "等你决定"
+	case bench.hasRun():
+		return runStateLabel(bench.run().State)
+	default:
+		return "未开始"
 	}
 }
 
@@ -1384,16 +1641,21 @@ func formatDataSize(n int) string {
 	return fmt.Sprintf("%.1fK 数据", float64(n)/1024)
 }
 
-// viewDetailPane 详情标签的只读投影：选中章的已确认事实、审阅发现、
-// 创作意图与锁定摘要。
-func (m model) viewDetailPane(width int) string {
+// detailReport 完整详情（v 全屏）：选中章的已确认事实、审阅发现、创作意图与锁定摘要。
+func (m model) detailReport(width int) string {
 	bench := m.bench
 	title := "详情"
 	if number := m.selectedChapterNumber(); number > 0 {
 		title = fmt.Sprintf("第 %d 章详情", number)
 	}
 	var view strings.Builder
-	view.WriteString(paneTitle(title, bench.tab == benchTabDetail) + "\n")
+	view.WriteString(styleTitle.Render(title) + "\n")
+	for _, entry := range bench.snap.Outline {
+		if entry.Number == m.selectedChapterNumber() && entry.Node.Kind == domainmodel.PlanChapter && entry.Node.Summary != "" {
+			view.WriteString("\n" + styleTitle.Render("本章规划") + "\n" + entry.Node.Summary + "\n")
+			break
+		}
+	}
 
 	chapterID := m.selectedChapterID()
 	var facts []string
@@ -1401,9 +1663,9 @@ func (m model) viewDetailPane(width int) string {
 		if chapterID == "" || fact.SourceChapterID != chapterID {
 			continue
 		}
-		label := truncate(string(fact.Value), width-3)
+		label := factLabel(fact.Value)
 		if slices.Contains(bench.snap.PendingCanon, fact.ID) {
-			label = styleWarn.Render("待核验 ") + truncate(string(fact.Value), width-8)
+			label = styleWarn.Render("待核验 ") + factLabel(fact.Value)
 		}
 		facts = append(facts, label)
 	}
@@ -1430,20 +1692,20 @@ func (m model) viewDetailPane(width int) string {
 		if finding.Severity == domainmodel.FindingBlocking {
 			marker = "! "
 		}
-		view.WriteString(styleHint.Render(marker) + truncate(finding.Note, width-3) + "\n")
+		view.WriteString(styleHint.Render(marker) + finding.Note + "\n")
 		findings++
 	}
 
 	intent := bench.snap.Intent
 	view.WriteString("\n" + styleTitle.Render("创作意图") + "\n")
 	if len(intent.Required) > 0 {
-		view.WriteString(styleHint.Render("必须 ") + truncate(strings.Join(intent.Required, "、"), width-4) + "\n")
+		view.WriteString(styleHint.Render("必须 ") + strings.Join(intent.Required, "、") + "\n")
 	}
 	if len(intent.Forbidden) > 0 {
-		view.WriteString(styleHint.Render("禁止 ") + truncate(strings.Join(intent.Forbidden, "、"), width-4) + "\n")
+		view.WriteString(styleHint.Render("禁止 ") + strings.Join(intent.Forbidden, "、") + "\n")
 	}
 	if intent.EndingDirection != "" {
-		view.WriteString(styleHint.Render("结局 ") + truncate(intent.EndingDirection, width-4) + "\n")
+		view.WriteString(styleHint.Render("结局 ") + intent.EndingDirection + "\n")
 	}
 	if len(bench.snap.Ownership) > 0 {
 		view.WriteString(styleHint.Render(fmt.Sprintf("锁定 %d 处", len(bench.snap.Ownership))) + "\n")
@@ -1451,7 +1713,7 @@ func (m model) viewDetailPane(width int) string {
 	if len(bench.snap.Directives) > 0 {
 		view.WriteString("\n" + styleTitle.Render("创作要求") + "\n")
 		for _, directive := range bench.snap.Directives {
-			view.WriteString(styleHint.Render("· ") + truncate(directive.Text, width-3) + "\n")
+			view.WriteString(styleHint.Render("· ") + directive.Text + "（" + m.directiveScopeLabel(directive.Scope) + "）" + "\n")
 		}
 	}
 	return view.String()
@@ -1470,12 +1732,20 @@ func (m model) benchStateBadge() string {
 	case bench.decision != nil:
 		return styleWarn.Render("等你决定")
 	case bench.hasRun():
-		return stateBadge(runStateLabel(bench.run().State))
+		label := runStateLabel(bench.run().State)
+		switch bench.run().State {
+		case domainmodel.RunCompleted:
+			return styleNotice.Render(label)
+		case domainmodel.RunFailed:
+			return styleErr.Render(label)
+		default:
+			return styleHint.Render(label)
+		}
 	default:
 		return styleHint.Render("空闲")
 	}
 }
 
 func benchRule(width int) string {
-	return benchTheme.Border.Render(strings.Repeat("─", max(10, width)))
+	return benchTheme.Border.Render(strings.Repeat("─", max(0, width)))
 }

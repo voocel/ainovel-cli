@@ -8,9 +8,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
-
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
@@ -77,7 +77,7 @@ type model struct {
 }
 
 func newModel(ctx context.Context, deps Deps) model {
-	m := model{ctx: ctx, deps: deps, api: deps.API, config: deps.InitialConfig, width: 80, height: 24}
+	m := model{ctx: ctx, deps: deps, api: deps.API, config: deps.InitialConfig, width: minWidth, height: minHeight}
 	m.home = newHomeState()
 	if !deps.Configured {
 		m.page = pageWizard
@@ -147,6 +147,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.bench.body.SetContent(strings.Join(readingLines(m.bench.bodyText, m.bench.body.Width), "\n"))
 		}
 		return m, nil
+	case tea.MouseMsg:
+		// 门槛以下没有可命中的布局，鼠标事件无处归属。
+		if m.tooSmall() {
+			return m, nil
+		}
 	case tea.KeyMsg:
 		if message.Type == tea.KeyCtrlC {
 			if m.page == pageWizard && m.wizard.cancel != nil {
@@ -165,7 +170,35 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// 终端门槛（页面设计 §2）：达标后所有页面按固定几何排版，不做窄屏降级；
+// 不达标只提示最大化窗口，键盘仍可返回或退出。
+const (
+	minWidth  = 150
+	minHeight = 40
+)
+
+func (m model) tooSmall() bool { return m.width < minWidth || m.height < minHeight }
+
+func (m model) viewTooSmall() string {
+	w, h := max(1, m.width), max(1, m.height)
+	lines := []string{
+		benchTheme.Title.Render("请将终端窗口最大化"),
+		benchTheme.Muted.Render(fmt.Sprintf("当前 %d × %d · 需要至少 %d × %d", m.width, m.height, minWidth, minHeight)),
+		"",
+		benchTheme.Muted.Render("Esc 返回 · Ctrl+C 退出"),
+	}
+	block := make([]string, max(0, (h-len(lines))/2))
+	for _, line := range lines {
+		line = fitLine(line, w)
+		block = append(block, strings.Repeat(" ", max(0, (w-lipgloss.Width(line))/2))+line)
+	}
+	return strings.Join(fitBlock(strings.Join(block, "\n"), w, h), "\n")
+}
+
 func (m model) View() string {
+	if m.tooSmall() {
+		return m.viewTooSmall()
+	}
 	switch m.page {
 	case pageWizard:
 		return m.viewWizard()

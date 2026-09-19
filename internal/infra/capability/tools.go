@@ -72,7 +72,7 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifact)
+			return marshalWorkspaceArtifact(artifact)
 		}, nil
 	case prompt.ToolWorkspaceList:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -84,7 +84,11 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifacts)
+			views := make([]workspaceArtifactView, 0, len(artifacts))
+			for _, artifact := range artifacts {
+				views = append(views, workspaceArtifactView{WorkspaceArtifact: artifact, Content: nil})
+			}
+			return json.Marshal(views)
 		}, nil
 	case prompt.ToolWorkspacePutChapter:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -100,7 +104,7 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifact)
+			return marshalWorkspaceArtifact(artifact)
 		}, nil
 	case prompt.ToolWorkspaceReplaceBlock:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -119,7 +123,7 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifact)
+			return marshalWorkspaceArtifact(artifact)
 		}, nil
 	case prompt.ToolWorkspacePutCandidate:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -138,7 +142,7 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifact)
+			return marshalWorkspaceArtifact(artifact)
 		}, nil
 	case prompt.ToolWorkspacePutReview:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
@@ -161,23 +165,42 @@ func (r *Runtime) toolExecutor(
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(artifact)
+			return marshalWorkspaceArtifact(artifact)
 		}, nil
 	case prompt.ToolProposalSubmit:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Reason        string        `json:"reason"`
-				Patches       []model.Patch `json:"patches"`
-				WorkspaceKey  string        `json:"workspace_key"`
-				WorkspaceKeys []string      `json:"workspace_keys"`
-				ReviewKey     string        `json:"review_key"`
+				Reason            string           `json:"reason"`
+				Patches           []model.Patch    `json:"patches"`
+				WorkspaceKey      string           `json:"workspace_key"`
+				WorkspaceKeys     []string         `json:"workspace_keys"`
+				WorkspaceVersion  *int64           `json:"workspace_version"`
+				WorkspaceVersions map[string]int64 `json:"workspace_versions"`
+				ReviewKey         string           `json:"review_key"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
 			}
+			if args.WorkspaceKey != "" && len(args.WorkspaceKeys) > 0 {
+				return nil, fmt.Errorf("workspace_key and workspace_keys are mutually exclusive; single-chapter tasks use workspace_key only: %w", model.ErrInvalid)
+			}
 			workspaceKeys := args.WorkspaceKeys
 			if args.WorkspaceKey != "" {
 				workspaceKeys = append(workspaceKeys, args.WorkspaceKey)
+			}
+			versions := args.WorkspaceVersions
+			if args.WorkspaceVersion != nil {
+				if args.WorkspaceKey == "" || versions != nil {
+					return nil, fmt.Errorf("workspace_version requires workspace_key and cannot be combined with workspace_versions: %w", model.ErrInvalid)
+				}
+				versions = map[string]int64{args.WorkspaceKey: *args.WorkspaceVersion}
+			}
+			if versions != nil {
+				var err error
+				args.Patches, err = r.materializeWorkspaceChapters(ctx, operation, workspaceKeys, versions, args.Patches)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if err := r.validateSubmissionArtifact(ctx, operation, workspaceKeys, args.ReviewKey, args.Patches); err != nil {
 				return nil, err
@@ -193,6 +216,11 @@ func (r *Runtime) toolExecutor(
 				ApprovalState: model.ApprovalPending, CreatedAt: r.now(),
 			}
 			if err := proposal.Validate(); err != nil {
+				return nil, err
+			}
+			// 确定性结构校验（事实身份、old_value、依赖、D41）在工具边界当场反馈，收尾的
+			// PrepareExecution 只兜底：否则模型看到"提交成功"，任务却在收尾失败且无从自纠。
+			if err := r.changes.Validate(ctx, proposal); err != nil {
 				return nil, err
 			}
 			proposal, err := submit(proposal)
@@ -281,4 +309,14 @@ func decodeToolArgs(raw json.RawMessage, target any) error {
 		return fmt.Errorf("decode tool arguments: %w", err)
 	}
 	return nil
+}
+
+// The model sees JSON content; the storage model retains its byte-oriented contract.
+type workspaceArtifactView struct {
+	model.WorkspaceArtifact
+	Content json.RawMessage `json:"content,omitempty"`
+}
+
+func marshalWorkspaceArtifact(artifact model.WorkspaceArtifact) (json.RawMessage, error) {
+	return json.Marshal(workspaceArtifactView{WorkspaceArtifact: artifact, Content: json.RawMessage(artifact.Content)})
 }

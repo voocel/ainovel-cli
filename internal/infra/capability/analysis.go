@@ -9,6 +9,7 @@ import (
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/llm"
 )
@@ -173,6 +174,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 		return model.SemanticComplianceReport{}, err
 	}
 	var report model.SemanticComplianceReport
+	r.publishStage(operation, activity.ToolStart, "semantic_compliance", nil)
 	usage, err := llm.Structured(ctx, r.model, llm.Call{
 		System: "你是独立的小说事实合规检查器。只判断候选正文是否违背用户 locked/guided 约束；不得改写正文。证据不足必须返回 uncertain。pass 时 findings 必须为空。",
 		Input:  string(input),
@@ -206,6 +208,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 		},
 		CacheKey: cacheKey, SessionID: operation.ID + ":semantic-compliance",
 	}, &report)
+	r.publishStage(operation, activity.ToolEnd, "semantic_compliance", err)
 	if err != nil {
 		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
 	}

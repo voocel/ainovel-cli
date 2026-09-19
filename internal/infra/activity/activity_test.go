@@ -101,6 +101,59 @@ func TestPublishFoldsLifecycleAndMergesDeltas(t *testing.T) {
 
 // 契约 1/6：发布永不阻塞——订阅者完全不消费时，海量发布也立即返回；
 // 唤醒信号合并，消费一次即可读到最新快照。
+func TestTurnStartMarksWaitingUntilModelResponds(t *testing.T) {
+	hub := NewHub()
+	turn := toolEvent(TurnStart, "")
+	hub.Publish(turn)
+	snapshot, _ := hub.Snapshot("book-1")
+	if !snapshot.Waiting || !snapshot.WaitingSince.Equal(turn.At) || len(snapshot.Entries) != 0 {
+		t.Fatalf("after turn start: waiting=%v since=%v entries=%d", snapshot.Waiting, snapshot.WaitingSince, len(snapshot.Entries))
+	}
+	thinking := toolEvent(Thinking, "")
+	thinking.Text = "先看前情"
+	hub.Publish(thinking)
+	if snapshot, _ = hub.Snapshot("book-1"); snapshot.Waiting {
+		t.Fatal("first delta must end waiting")
+	}
+	hub.Publish(toolEvent(TurnStart, ""))
+	retry := toolEvent(Retry, "")
+	retry.Attempt = 2
+	hub.Publish(retry)
+	if snapshot, _ = hub.Snapshot("book-1"); !snapshot.Waiting || len(snapshot.Entries) != 1 {
+		t.Fatalf("retry keeps waiting: waiting=%v entries=%d", snapshot.Waiting, len(snapshot.Entries))
+	}
+	hub.Publish(toolEvent(ToolStart, "authority_read"))
+	if snapshot, _ = hub.Snapshot("book-1"); snapshot.Waiting {
+		t.Fatal("tool execution must end waiting")
+	}
+}
+
+func TestUsageAccumulatesPerRunAndToolEndRecordsDoneAt(t *testing.T) {
+	hub := NewHub()
+	start := toolEvent(ToolStart, "authority_read")
+	hub.Publish(start)
+	end := toolEvent(ToolEnd, "authority_read")
+	end.At = at().Add(2 * time.Second)
+	hub.Publish(end)
+	usage := toolEvent(Usage, "")
+	usage.Usage = UsageTotals{Input: 100, Output: 20, CacheRead: 60, Cost: 0.25}
+	hub.Publish(usage)
+	hub.Publish(usage)
+	snapshot, _ := hub.Snapshot("book-1")
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Done || snapshot.Entries[0].DoneAt.Sub(snapshot.Entries[0].At) != 2*time.Second {
+		t.Fatalf("tool end must record DoneAt: %#v", snapshot.Entries)
+	}
+	if snapshot.Usage != (UsageTotals{Input: 200, Output: 40, CacheRead: 120, Cost: 0.5}) {
+		t.Fatalf("usage totals = %#v", snapshot.Usage)
+	}
+	next := usage
+	next.RunID = "run-2"
+	hub.Publish(next)
+	if snapshot, _ = hub.Snapshot("book-1"); snapshot.Usage.Input != 100 || len(snapshot.Entries) != 0 {
+		t.Fatalf("new run must reset usage and entries: %#v", snapshot)
+	}
+}
+
 func TestPublishNeverBlocksWithStalledSubscriber(t *testing.T) {
 	hub := NewHub()
 	wake, cancel := hub.Subscribe("book-1")

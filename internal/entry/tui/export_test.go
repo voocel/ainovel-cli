@@ -28,15 +28,18 @@ func TestWorkbenchExportsAcceptedContent(t *testing.T) {
 	m := newModel(ctx, deps)
 	m.page = pageWorkbench
 	m.bench = newWorkbenchState("book", 1)
-	m.width, m.height = 100, 30
+	m.width, m.height = 150, 40
 	m.bench.snap, err = api.Workbench.WorkbenchSnapshot(ctx, "book")
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.bench.loaded = true
-	m = clickAction(t, m, "e")
-	m = typeText(t, m, filepath.Join(t.TempDir(), "作品.txt"))
-	m, cmd := press(t, m, tea.KeyEnter)
+	m, cmd := submit(t, m, "/e")
+	if cmd != nil || m.bench.exporting || !strings.Contains(m.bench.err, "用法") {
+		t.Fatalf("missing path must explain usage: err=%q", m.bench.err)
+	}
+	m, _ = press(t, m, tea.KeyEsc)
+	m, cmd = submit(t, m, "/e "+filepath.Join(t.TempDir(), "作品.txt"))
 	if cmd == nil || !m.bench.exporting {
 		t.Fatal("export not started")
 	}

@@ -22,18 +22,12 @@ type homeFrame struct {
 
 func (m model) homeFrame() homeFrame {
 	w, h := max(1, m.width), max(1, m.height)
-	if w < 30 || h < 16 {
-		return homeFrame{text: strings.Join(fitBlock("请扩大终端以使用创作首页\nEsc 退出", w, h), "\n")}
-	}
 	inner := min(96, w-4)
 	x := (w - inner) / 2
 	frame := homeFrame{}
 	lines := []string{}
 	add := func(text string) { lines = append(lines, strings.Repeat(" ", x)+fitLine(text, inner)) }
-	left := benchTheme.Accent.Render("AINOVEL")
-	if inner >= 40 {
-		left += benchTheme.Muted.Render(" / 创作首页")
-	}
+	left := benchTheme.Accent.Bold(true).Render("AINOVEL") + benchTheme.Muted.Render("  /  创作首页")
 	right := homeControl("模型设置", m.home.focus == focusConfig)
 	add(left + strings.Repeat(" ", max(1, inner-lipgloss.Width(left)-lipgloss.Width(right))) + right)
 	frame.hits = append(frame.hits, homeHit{x: x + inner - lipgloss.Width(right), y: 0, width: lipgloss.Width(right), focus: focusConfig, row: -1})
@@ -47,7 +41,6 @@ func (m model) homeFrame() homeFrame {
 	frame.hits = append(frame.hits, homeHit{x: x, y: len(lines), width: inner, focus: focusPremise, row: -1})
 	add(input.View())
 	add("")
-	actions := []benchAction{{strconv.Itoa(focusChapters), fmt.Sprintf("目标 %d 章", m.home.chapters)}, {strconv.Itoa(focusApproval), approvalLabel(m.home.approval)}, {strconv.Itoa(focusRefine), "更多设定"}, {strconv.Itoa(focusStart), "开始创作"}}
 	if m.home.editingChapters {
 		field := m.home.chapterInput
 		field.Width = max(1, inner-20)
@@ -55,28 +48,15 @@ func (m model) homeFrame() homeFrame {
 		field.Prompt = "目标章数  "
 		add(field.View())
 	} else {
-		actionWidth := inner
-		if inner >= 70 {
-			actions = actions[:3]
-			actionWidth = inner - 18
+		line, hits := homeActions([]homeAction{{focusChapters, fmt.Sprintf("目标 %d 章", m.home.chapters)}, {focusApproval, approvalLabel(m.home.approval)}, {focusRefine, "更多设定"}}, x, len(lines), m.home.focus)
+		primary := benchTheme.Accent.Bold(true).Render("开始创作 ↵")
+		if m.home.focus == focusStart {
+			primary = benchTheme.Selected.Render("开始创作 ↵")
 		}
-		rows, hits := actionRows(actions, actionWidth, x, len(lines), strconv.Itoa(m.home.focus))
-		if inner >= 70 {
-			primary := benchTheme.Accent.Bold(true).Render("[开始创作 ↵]")
-			if m.home.focus == focusStart {
-				primary = benchTheme.Selected.Render("[开始创作 ↵]")
-			}
-			size := lipgloss.Width(primary)
-			rows[0] += strings.Repeat(" ", inner-lipgloss.Width(rows[0])-size) + primary
-			hits = append(hits, benchHit{x: x + inner - size, y: len(lines), width: size, key: strconv.Itoa(focusStart)})
-		}
-		for _, hit := range hits {
-			focus, _ := strconv.Atoi(hit.key)
-			frame.hits = append(frame.hits, homeHit{x: hit.x, y: hit.y, width: hit.width, focus: focus, row: -1, open: true})
-		}
-		for _, row := range rows {
-			add(row)
-		}
+		size := lipgloss.Width(primary)
+		hits = append(hits, homeHit{x: x + inner - size, y: len(lines), width: size, focus: focusStart, row: -1, open: true})
+		frame.hits = append(frame.hits, hits...)
+		add(line + strings.Repeat(" ", max(1, inner-lipgloss.Width(line)-size)) + primary)
 	}
 	add("")
 	title := fmt.Sprintf("作品库 · %d 部", len(m.home.library))
@@ -92,14 +72,9 @@ func (m model) homeFrame() homeFrame {
 		if m.home.search.Value() != "" {
 			search = "/ " + truncate(m.home.search.Value(), max(4, inner-20))
 		}
-		rows, hits := actionRows([]benchAction{{strconv.Itoa(focusSearch), search}, {strconv.Itoa(focusImport), "导入作品"}}, inner, x, len(lines), strconv.Itoa(m.home.focus))
-		for _, hit := range hits {
-			focus, _ := strconv.Atoi(hit.key)
-			frame.hits = append(frame.hits, homeHit{x: hit.x, y: hit.y, width: hit.width, focus: focus, row: -1, open: true})
-		}
-		for _, row := range rows {
-			add(row)
-		}
+		line, hits := homeActions([]homeAction{{focusSearch, search}, {focusImport, "导入作品"}}, x, len(lines), m.home.focus)
+		frame.hits = append(frame.hits, hits...)
+		add(line)
 	}
 	frame.libraryY = len(lines)
 	frame.capacity = max(1, h-3-len(lines))
@@ -130,10 +105,7 @@ func (m model) homeFrame() homeFrame {
 			}
 			progress := fmt.Sprintf("%d/%d", entry.written, entry.target)
 			state := entry.state
-			right := progress + "  " + state
-			if inner >= 70 {
-				right = progressBar(entry.written, entry.target, 6) + "  " + right
-			}
+			right := progressBar(entry.written, entry.target, 6) + "  " + progress + "  " + state
 			titleWidth := max(4, inner-lipgloss.Width(right)-5)
 			label := truncate(title, titleWidth)
 			label = label + strings.Repeat(" ", max(1, inner-3-lipgloss.Width(label)-lipgloss.Width(right))) + right
@@ -170,18 +142,6 @@ func (m model) homeFrame() homeFrame {
 	if m.home.editingChapters {
 		hint = "输入目标章数 · Enter 确认 · Esc 取消"
 	}
-	if inner < 55 {
-		hint = "Tab切区 Enter开始 Esc退出"
-		if m.home.focus == focusLibrary {
-			hint = "↑↓选择 Enter打开 Esc退出"
-		}
-		if m.home.searching {
-			hint = "Enter选择 Esc清除"
-		}
-		if m.home.editingChapters {
-			hint = "Enter确认 Esc取消"
-		}
-	}
 	add(benchTheme.Muted.Render(hint))
 	frame.text = strings.Join(fitBlock(strings.Join(lines, "\n"), w, h), "\n")
 	return frame
@@ -189,9 +149,28 @@ func (m model) homeFrame() homeFrame {
 
 func homeControl(text string, selected bool) string {
 	if selected {
-		return benchTheme.Selected.Render("[" + text + "]")
+		return benchTheme.Selected.Render(text)
 	}
-	return benchTheme.Muted.Render("[" + text + "]")
+	return benchTheme.Muted.Render(text)
+}
+
+type homeAction struct {
+	focus int
+	label string
+}
+
+// homeActions 渲染一行控件并给出热区：热区与文字同一遍生成，几何不会漂移。
+func homeActions(actions []homeAction, x, y, focus int) (string, []homeHit) {
+	var line string
+	hits := make([]homeHit, 0, len(actions))
+	for i, action := range actions {
+		if i > 0 {
+			line += "   "
+		}
+		hits = append(hits, homeHit{x: x + lipgloss.Width(line), y: y, width: lipgloss.Width(action.label), focus: action.focus, row: -1, open: true})
+		line += homeControl(action.label, action.focus == focus)
+	}
+	return line, hits
 }
 
 func (m model) libraryIndices() []int {

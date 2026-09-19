@@ -12,6 +12,8 @@ import (
 type Kind string
 
 const (
+	TaskStart Kind = "task_start"
+	TaskEnd   Kind = "task_end"
 	ToolStart Kind = "tool_start"
 	ToolEnd   Kind = "tool_end"
 	// ToolDelta 表示工具参数 JSON 正在持续流入：只累计字节进度。正文预览
@@ -28,13 +30,32 @@ const (
 	// Thinking 表示模型正在构思；仅保留 Provider 明确提供的原文尾部供展开阅读。
 	Thinking Kind = "thinking"
 	Retry    Kind = "retry"
+	// TurnStart 表示一次模型调用已发出、尚无任何增量：快照据此记 Waiting，
+	// UI 显示等待时长，让漫长的首字延迟不像断线。
+	TurnStart Kind = "turn_start"
+	// Usage 是一条 assistant 消息结束时的 token 用量：只累加进快照总计，不成条目。
+	Usage Kind = "usage"
 )
+
+// UsageTotals 是本轮创作的 token 与费用累计（消费侧状态行展示）。
+type UsageTotals struct {
+	Input, Output, CacheRead int
+	Cost                     float64
+}
+
+func (u *UsageTotals) add(other UsageTotals) {
+	u.Input += other.Input
+	u.Output += other.Output
+	u.CacheRead += other.CacheRead
+	u.Cost += other.Cost
+}
 
 // Event 是一条带归属的活动事件；归属字段供消费侧做身份校验（交付契约 4）。
 type Event struct {
 	ProjectID   string
 	RunID       string
 	OperationID string
+	TaskLabel   string // 面向用户的任务名称，不参与执行语义。
 	Kind        Kind
 	Tool        string // ToolStart/ToolEnd/ToolDelta：规范工具名
 	CallID      string // 同一次工具调用的配对键：delta 与执行起止靠它对上
@@ -42,6 +63,7 @@ type Event struct {
 	Attempt     int    // Retry：第几次
 	Text        string // Text/Prose：文字增量
 	Bytes       int    // ToolDelta：本次增量字节数
+	Usage       UsageTotals
 	At          time.Time
 }
 
@@ -59,15 +81,21 @@ type Entry struct {
 	Bytes       int
 	Done        bool
 	At          time.Time
+	DoneAt      time.Time // 收尾时刻；零值表示仍在进行
 }
 
 // Snapshot 是某作品的最新活动快照。Entries 有界（旧条目被丢弃），连续 delta
 // 只合并为条目进度不追加条目（交付契约 3）。
 type Snapshot struct {
-	ProjectID   string
-	RunID       string
-	OperationID string // 最近活动所属的任务
-	Entries     []Entry
+	ProjectID     string
+	RunID         string
+	OperationID   string // 最近活动所属的任务
+	Entries       []Entry
+	Output        []OutputBlock
+	Tasks         []Task
+	OutputDropped uint64
+	outputTurn    uint64
+	outputBytes   int
 	// Note 是说明性文字折叠成的辅助行，只保留尾部。
 	Note     string
 	Thinking bool
@@ -81,6 +109,13 @@ type Snapshot struct {
 	// ProseCallID 标记 Prose 归属的工具调用；换调用即整体重置，
 	// 重试或二次落笔不残留上一稿。
 	ProseCallID string
+	// Waiting 表示请求已发出、还没收到第一个增量；WaitingSince 是发出时刻。
+	Waiting      bool
+	WaitingSince time.Time
+	// ThinkingSeen 表示本轮创作里 Provider 提供过思考文本。
+	ThinkingSeen bool
+	// Usage 是本轮（同一 RunID）累计用量；换 Run 时快照重建即清零。
+	Usage UsageTotals
 	// Seq 每次变更递增，消费侧可据此跳过重复渲染。
 	Seq uint64
 }
@@ -178,16 +213,43 @@ func (h *Hub) Snapshot(projectID string) (Snapshot, bool) {
 	}
 	copied := *snapshot
 	copied.Entries = append([]Entry(nil), snapshot.Entries...)
+	copied.Tasks = append([]Task(nil), snapshot.Tasks...)
 	copied.Prose = append([]byte(nil), snapshot.Prose...)
+	copied.Output = append([]OutputBlock(nil), snapshot.Output...)
+	for i := range copied.Output {
+		copied.Output[i].Text = append([]byte(nil), snapshot.Output[i].Text...)
+	}
 	return copied, true
 }
 
 func (s *Snapshot) fold(event Event) {
+	s.foldTask(event)
+	s.foldOutput(event)
 	if s.OperationID != event.OperationID {
 		s.OperationID = event.OperationID
 		s.Note, s.Thinking, s.ThinkingNote = "", false, ""
 		s.Prose, s.ProseCallID = nil, ""
+		s.Waiting = false
 	}
+	switch event.Kind {
+	case TaskEnd:
+		s.Thinking, s.Waiting = false, false
+		return
+	case TurnStart:
+		s.Waiting, s.WaitingSince = true, event.At
+		return
+	case Usage:
+		s.Usage.add(event.Usage)
+		return
+	case Retry:
+		s.append(Entry{
+			OperationID: event.OperationID, Kind: Retry,
+			Attempt: event.Attempt, Err: event.Err, Done: true, At: event.At,
+		})
+		return
+	}
+	// 任何增量或工具执行都说明模型已回应。
+	s.Waiting = false
 	switch event.Kind {
 	case ToolStart:
 		// 真实时序里参数流入先于执行：这次调用的进行中条目可能已由首个 delta
@@ -213,12 +275,12 @@ func (s *Snapshot) fold(event Event) {
 		s.Thinking = false
 	case ToolEnd:
 		if index := s.openIndex(event); index >= 0 {
-			s.Entries[index].Done, s.Entries[index].Err = true, event.Err
+			s.Entries[index].Done, s.Entries[index].Err, s.Entries[index].DoneAt = true, event.Err, event.At
 		} else {
 			// 起点条目已被丢弃：补一条完成条目，收尾事实不丢失。
 			s.append(Entry{
 				OperationID: event.OperationID, Kind: ToolStart, Tool: event.Tool,
-				CallID: event.CallID, Err: event.Err, Done: true, At: event.At,
+				CallID: event.CallID, Err: event.Err, Done: true, At: event.At, DoneAt: event.At,
 			})
 		}
 	case Prose:
@@ -240,12 +302,8 @@ func (s *Snapshot) fold(event Event) {
 		s.Thinking = true
 		if event.Text != "" {
 			s.ThinkingNote = tail(s.ThinkingNote+event.Text, maxThinkingSize)
+			s.ThinkingSeen = true
 		}
-	case Retry:
-		s.append(Entry{
-			OperationID: event.OperationID, Kind: Retry,
-			Attempt: event.Attempt, Err: event.Err, Done: true, At: event.At,
-		})
 	}
 }
 

@@ -44,7 +44,7 @@ func TestHomeFramesFitThemesAndLargeLibraries(t *testing.T) {
 	renderer.SetColorProfile(termenv.TrueColor)
 	for _, isDark := range []bool{false, true} {
 		renderer.SetHasDarkBackground(isDark)
-		for _, size := range [][2]int{{30, 16}, {40, 18}, {80, 24}, {120, 40}, {180, 48}} {
+		for _, size := range [][2]int{{150, 40}, {180, 50}, {240, 60}} {
 			m := homeFixture(t, size[0], size[1], 100)
 			m.home.focus, m.home.cursor = focusLibrary, 99
 			m.home.premise.SetValue(strings.Repeat("写一个关于旧信与雨夜的故事", 30))
@@ -72,7 +72,7 @@ func TestHomeFramesFitThemesAndLargeLibraries(t *testing.T) {
 }
 
 func TestHomeSearchAndMousePreserveInputAndSelectCorrectBook(t *testing.T) {
-	m := homeFixture(t, 100, 30, 100)
+	m := homeFixture(t, 150, 40, 100)
 	m, _ = clickHome(t, m, focusChapters)
 	m.home.chapterInput.SetValue("1000")
 	m, _ = press(t, m, tea.KeyEnter)
@@ -96,7 +96,7 @@ func TestHomeSearchAndMousePreserveInputAndSelectCorrectBook(t *testing.T) {
 }
 
 func TestHomePagingAndLateLoadKeepUserIntent(t *testing.T) {
-	m := homeFixture(t, 80, 24, 100)
+	m := homeFixture(t, 150, 40, 100)
 	m.home.focus = focusLibrary
 	m, _ = press(t, m, tea.KeyPgDown)
 	if m.home.cursor < 2 {
@@ -118,7 +118,7 @@ func TestHomePagingAndLateLoadKeepUserIntent(t *testing.T) {
 }
 
 func TestEntryFormsKeepActiveInputAndFeedbackVisible(t *testing.T) {
-	for _, size := range [][2]int{{40, 18}, {80, 24}, {160, 48}} {
+	for _, size := range [][2]int{{150, 40}, {180, 50}} {
 		m := homeFixture(t, size[0], size[1], 0)
 		m.page = pageWizard
 		m.wizard = newWizardState(m.config, "连接失败", true)
@@ -134,7 +134,7 @@ func TestEntryFormsKeepActiveInputAndFeedbackVisible(t *testing.T) {
 }
 
 func TestHomeLongStoryInputKeepsCursorEndVisible(t *testing.T) {
-	m := homeFixture(t, 80, 24, 0)
+	m := homeFixture(t, 150, 40, 0)
 	m.home.premise.SetValue("BEGINONLY" + strings.Repeat("雨夜来信", 60) + "TAIL")
 	view := ansi.Strip(m.View())
 	if !strings.Contains(view, "TAIL") || strings.Contains(view, "BEGINONLY") {

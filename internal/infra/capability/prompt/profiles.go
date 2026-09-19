@@ -172,7 +172,7 @@ func writerTools() []ToolSchema {
 const patchesSchema = `{
 	"type": "array",
 	"minItems": 1,
-	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；entity: {id,kind,name,aliases}，kind 取 character/location/item/organization，角色、地点、物品、组织都是实体；manuscript: {id,plan_node_id,number,title,author,blocks:[{id,text}]}，author 固定为 ai；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id,effective_chapter_id}，subject_id 必须是已存在或同一 Proposal 中新建的 entity 的 id，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，old_value 仅在更新已有事实时必填且须与上一版本一致；随正文提交时 source_chapter_id 必须是本次提交的正文章节，重写章节必须重申报该章全部既有事实（原样确认、更新或删除），event 类事实跨章只追加、不得改动其他章的事件；effective_chapter_id 是状态类事实在故事中的生效章节，只在插叙/回忆时填写、缺省等于来源章，状态的生效位置不得早于现值，倒叙内容记为 event；intent: 完整 Intent 文档。",
+	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；entity: {id,kind,name,aliases}，kind 取 character/location/item/organization，角色、地点、物品、组织都是实体；manuscript: {id,plan_node_id,number,title,author,blocks:[{id,text}]}，author 固定为 ai；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id,effective_chapter_id}，subject_id 必须是已存在或同一 Proposal 中新建的 entity 的 id，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，更新已有事实必须沿用原 id 并携带与上一版本逐字一致的 old_value，不得为同一事实另起新 id，新事实不得带 old_value；随正文提交时 source_chapter_id 必须是本次提交的正文章节，重写章节必须重申报该章全部既有事实（原样确认、更新或删除），event 类事实跨章只追加、不得改动其他章的事件；effective_chapter_id 是状态类事实在故事中的生效章节，只在插叙/回忆时填写、缺省等于来源章，状态的生效位置不得早于现值，倒叙内容记为 event；intent: 完整 Intent 文档。",
 	"items": {
 		"type": "object",
 		"properties": {
@@ -195,24 +195,33 @@ const patchesSchema = `{
 
 func proposalTool(extraRequired []string) ToolSchema {
 	required := append([]string{"reason", "patches"}, extraRequired...)
+	properties := map[string]any{
+		"reason":  map[string]any{"type": "string"},
+		"patches": json.RawMessage(patchesSchema),
+	}
+	description := `把最终候选提交为 Proposal，不直接修改权威状态。规划类提交每个计划节点一个 plan patch。`
+	for _, field := range extraRequired {
+		switch field {
+		case "workspace_key":
+			properties[field] = map[string]any{"type": "string", "minLength": 1}
+			properties["workspace_version"] = map[string]any{"type": "integer", "minimum": 1}
+			description += ` 单章提交优先使用 workspace_key 与 workspace_version（采用 workspace_put_chapter/workspace_read 返回的 key 和 version），宿主自动装配该版本正文。patches 仅提供 Canon Delta、实体等附带变更，不重复输出 manuscript 正文。例：{"reason":"完成章节","workspace_key":"chapter-1-draft","workspace_version":1,"patches":[...]}。不传版本时为旧式完整正文提交，正文必须与工作稿完全一致。`
+		case "workspace_keys":
+			properties[field] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true}
+			properties["workspace_versions"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "integer", "minimum": 1}}
+			description += ` 多章提交优先提供 workspace_keys 与 workspace_versions（key 到 version 的映射，必须覆盖每个 key）；宿主自动装配正文，patches 只提供 Canon Delta、实体等附带变更。不传版本映射时为旧式完整正文提交。`
+		}
+	}
 	schema, err := json.Marshal(map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"reason":        map[string]any{"type": "string"},
-			"patches":       json.RawMessage(patchesSchema),
-			"workspace_key": map[string]any{"type": "string"},
-			"workspace_keys": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1,
-			},
-			"review_key": map[string]any{"type": "string"},
-		},
+		"type":                 "object",
+		"properties":           properties,
 		"required":             required,
 		"additionalProperties": false,
 	})
 	if err != nil {
 		panic(err)
 	}
-	return tool(ToolProposalSubmit, `把最终候选提交为 Proposal，不直接修改权威状态。规划类提交＝每个计划节点一个 plan patch，例：{"document":{"kind":"plan","id":"chapter-1"},"operation":"put","content":{"id":"chapter-1","kind":"chapter","parent_id":"arc-1","order":1,"title":"章节标题","summary":"章节概要"}}`, string(schema))
+	return tool(ToolProposalSubmit, description, string(schema))
 }
 
 func tool(name, description, schema string) ToolSchema {

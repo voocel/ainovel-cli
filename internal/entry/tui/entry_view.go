@@ -8,9 +8,6 @@ func (m model) entryWidth() int { return min(76, max(1, m.width-4)) }
 // in a fixed footer, rather than recentering the screen as fields change.
 func (m model) entryPage(title string, content []string, problem, hint string) string {
 	w, h := max(1, m.width), max(1, m.height)
-	if w < 30 || h < 16 {
-		return strings.Join(fitBlock("请扩大终端以继续\nEsc 返回", w, h), "\n")
-	}
 	inner := m.entryWidth()
 	pad := strings.Repeat(" ", (w-inner)/2)
 	lines := []string{benchTheme.Accent.Render("AINOVEL") + benchTheme.Muted.Render(" / "+title), benchRule(inner), ""}

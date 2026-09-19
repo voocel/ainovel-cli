@@ -791,3 +791,62 @@ func TestAICanonRulesForFlashbacksEventsAndRedeclaration(t *testing.T) {
 		}
 	}
 }
+
+// Validate 是工具边界的只读结构校验：冲突当场报出、不落库，也不因基线落后于当前
+// Revision 而拒绝——漂移由收尾时的重定位处理。
+func TestValidateReportsStructuralConflictWithoutWriting(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	target := model.AuthorityTarget{Kind: model.AuthorityProject, ID: "book-1"}
+	seedProject(t, ctx, s, target, false)
+	engine := New(s)
+
+	// 给已有事实另起新 id 并带 old_value：真实模型犯过的错，必须在工具边界被指出。
+	renamed := pendingChange("renamed-origin", target, 1, model.AuthorAI, model.Patch{
+		Document:  model.DocumentRef{Kind: model.DocumentCanon, ID: "hero-origin-update"},
+		Operation: model.PatchPut,
+		Content: documentJSON(t, model.CanonFact{
+			ID: "hero-origin-update", Kind: model.CanonState, SubjectID: "hero", Predicate: "state.origin",
+			PreviousValue: json.RawMessage(`"农家子"`), Value: json.RawMessage(`"孤儿"`),
+		}),
+	})
+	err := engine.Validate(ctx, renamed)
+	if !errors.Is(err, ErrStructuralConflict) || !strings.Contains(err.Error(), "cannot declare old_value") {
+		t.Fatalf("validate renamed fact: %v", err)
+	}
+	if _, err := s.GetProposal(ctx, renamed.ID); !errors.Is(err, model.ErrNotFound) {
+		t.Fatalf("validate wrote the proposal: %v", err)
+	}
+
+	update := func(id string) model.Proposal {
+		return pendingChange(id, target, 1, model.AuthorAI, model.Patch{
+			Document:  model.DocumentRef{Kind: model.DocumentCanon, ID: "hero-origin"},
+			Operation: model.PatchPut,
+			Content: documentJSON(t, model.CanonFact{
+				ID: "hero-origin", Kind: model.CanonState, SubjectID: "hero", Predicate: "state.origin",
+				PreviousValue: json.RawMessage(`"农家子"`), Value: json.RawMessage(`"孤儿"`),
+			}),
+		})
+	}
+	if err := engine.Validate(ctx, update("valid-update")); err != nil {
+		t.Fatalf("validate correct update: %v", err)
+	}
+	prepared, err := engine.Prepare(ctx, update("committed-update"))
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	approved, err := Decide(prepared, model.ApprovalApproved, model.Author{Kind: model.AuthorUser, ID: "user-1"}, testTime().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if _, err := engine.Commit(ctx, approved); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	// 当前 Revision 已到 2：Prepare 报冲突，Validate 仍按提案基线 1 校验通过。
+	if _, err := engine.Prepare(ctx, update("late-prepare")); !errors.Is(err, model.ErrRevisionConflict) {
+		t.Fatalf("prepare after drift: %v", err)
+	}
+	if err := engine.Validate(ctx, update("late-validate")); err != nil {
+		t.Fatalf("validate after drift: %v", err)
+	}
+}

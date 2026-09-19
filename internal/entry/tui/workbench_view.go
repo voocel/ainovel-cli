@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -11,54 +14,123 @@ import (
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
-type benchTab int
+const benchHelp = `创作控制台
 
+F1 实时输出：思考、模型说明与正文预览分块显示；上滚暂停跟随，/follow 返回最新。
+F2 正文：阅读选中章节，清楚区分候选稿与已入稿正文。
+F3 审阅：查看当前待确认方案；输入 y 批准，或写下修改意见后回车重写。
+
+在实时输出与正文视图中，文字始终是创作要求，即使有稿件等待确认。
+开始输入时固定要求范围或审阅对象，切换章节和视图不会改变已输入文字的作用对象。
+/note 内容 在任意视图独立提出要求，不裁决稿件。
+
+/stream · /body · /review   切换实时输出、正文、审阅
+/split <20–50>             设置事件区高度占比（默认 25%）
+/follow                    恢复实时输出跟随
+/think                     全屏查看当前保留的思考原文
+/view                      全屏查看要求、事实、发现与创作设定
+/pause · /continue         暂停推进、继续创作
+/goal <章数>               调整目标并继续
+/budget <次数>             等待时调整自动修订预算
+/accept <理由>             接受所选章节第一条阻塞发现
+/export <路径>             导出已确认正文（.txt 或 .epub）
+/stop · /diag              结束本轮、查看诊断
+/<章号或标题> · /next      跳章或搜索、下一个匹配
+/help                      本页
+
+命令支持唯一前缀；有歧义时保留输入并列出可选命令。
+Tab / Shift+Tab            目录 → 执行事件 → 内容区轮换焦点
+↑ / ↓ · PgUp / PgDn        滚动焦点区域；输入为空时 Home/End 定位目录首尾
+Enter（空）                折叠卷弧，或全屏阅读当前内容；不会批准稿件
+Esc                        清空输入 → 关闭全屏 / 返回直播 → 作品首页
+
+点击章节进入正文；点击标签切换视图；点击待办进入审阅。
+点击输入框下方操作填入命令，回车执行；鼠标滚轮只滚动所在区域。
+思考仅展示模型服务提供的原文，不是可靠解释；直播内容不会自动成为正式稿。
+输出历史有界；前文截断会明确提示。完整作品与待确认稿始终通过正文和审阅查看。
+暂停只停止后续推进，当前任务可能继续收尾。终端原生划选复制通常需要按住 Shift。`
+
+// 三栏控制台：目录、执行事件与内容工作区、任务上下文。
+// 布局只由终端尺寸决定，与决定卡、报错、输入态无关；渲染与鼠标命中共用同一份，
+// 坐标不可能漂移。
 const (
-	benchTabProse benchTab = iota
-	benchTabActivity
-	benchTabDetail
+	benchHeaderRows   = 3
+	benchFooterRows   = 5
+	benchPad          = 2 // 正文栏左右留白
+	benchOverviewRows = 4 // 概览卡：标题线 + 阶段/字数/全书
+	proseMeasure      = 96
 )
 
-const benchHelp = `工作台
-
-Tab       左右区域切换；窄屏切换目录与主区
-1 / 2 / 3 正文 / 活动 / 详情
-o         聚焦目录；窄屏展开目录
-↑ / ↓     选章或滚动当前视图
-Enter     展开卷/弧，或全屏阅读选中章
-t / T     展开思考片段 / 全屏查看原文尾部
-f         返回实时正文，恢复跟随
-i         添加要求（输入框会显示作用范围）
-y / n     批准待确认稿件 / 输入修改意见
-a         为选中章节的阻塞发现填写接受理由
-c / p     继续创作 / 暂停推进
-g / b     调整目标 / 等待时调整修订预算
-x / d     结束本轮 / 诊断
-Esc       关闭输入或阅读 → 返回跟随 → 作品首页
-
-点击标签、章节、思考标题及底部操作均可执行对应动作。
-鼠标滚轮作用于指针所在区域。输入时不启用单键快捷操作。
-暂停推进后当前任务可能继续收尾，之后不启动下一项。
-思考仅展示模型提供的原文尾部，不是对正文的可靠解释。
-/ 输入章节号或标题定位；N 下一个匹配。
-PgUp/PgDn 翻页，Home/End 定位目录首尾。
-e 导出已确认正文，输入 .txt 或 .epub 文件路径。已有文件不会覆盖。
-终端原生选择复制通常需要按住 Shift（取决于终端设置）。`
-
-// A frame owns both rendered cells and hit targets. No separate mouse geometry
-// can drift when a decision, an input or a narrow terminal changes the layout.
-type benchHit struct {
-	x, y, width int
-	key         string
-	row         int
+type benchLayout struct {
+	width, height int
+	// 列：导航 | 正文与现场 | 上下文；inner 为正文栏去掉留白后的宽度。
+	leftWidth, mainX, mainWidth, inner int
+	inspectorX, inspectorWidth         int
+	// 行：顶栏 3 | 正文区 | 底栏 5。
+	bodyY, bodyHeight, footerY int
+	// 左栏：概览卡（benchOverviewRows）、空行、大纲（标题线、上截断指示、outlineRows 行、
+	// 下截断指示）、本章摘要（标题线起于 detailY）。指示行恒预留，首个大纲行的 y 是常量。
+	outlineTitleY, outlineRowsY, outlineRows, detailY, detailRows int
+	// 中栏：执行事件、单行分隔线、内容标签与正文。
+	proseRows, activityY, activityRows int
+	contentY                           int
+	// proseLines 是分页导航使用的正文可见行数。
+	proseLines int
 }
 
-type benchFrame struct {
-	text            string
-	hits            []benchHit
-	bodyHeight      int
-	proseHeight     int
-	detailMaxOffset int
+func (m model) benchLayout() benchLayout {
+	l := benchLayout{width: m.width, height: m.height, leftWidth: 32, inspectorWidth: 32}
+	if m.width >= 180 {
+		l.leftWidth, l.inspectorWidth = 34, 36
+	}
+	l.mainX = l.leftWidth + 1
+	l.inspectorX = m.width - l.inspectorWidth
+	l.mainWidth = l.inspectorX - l.mainX - 1
+	l.inner = l.mainWidth - 2*benchPad
+	l.bodyY = benchHeaderRows
+	l.bodyHeight = m.height - benchHeaderRows - benchFooterRows
+	l.footerY = l.bodyY + l.bodyHeight
+	l.detailRows = l.bodyHeight - 10 - m.taskRows()
+	l.detailY = l.bodyY + 10 + m.taskRows()
+	l.outlineTitleY = l.bodyY + benchOverviewRows + 1
+	l.outlineRowsY = l.outlineTitleY + 2
+	l.outlineRows = l.footerY - l.outlineRowsY - 1
+	percent := m.bench.splitPercent
+	if percent == 0 {
+		percent = 25
+	}
+	l.activityRows = max(6, l.bodyHeight*percent/100)
+	l.activityY = l.bodyY
+	l.contentY = l.bodyY + l.activityRows + 1
+	l.proseRows = l.footerY - l.contentY - 1
+	l.proseLines = l.proseRows - 3
+	return l
+}
+
+func (l benchLayout) inBody(y int) bool { return y >= l.bodyY && y < l.footerY }
+
+func (l benchLayout) paneAt(x, y int) benchPane {
+	switch {
+	case x < l.leftWidth:
+		return benchPaneOutline
+	case y < l.contentY:
+		return benchPaneFeed
+	default:
+		return benchPaneMain
+	}
+}
+
+// outlineRowAt 把大纲区内的坐标映射为大纲行下标；窗口与 viewOutlinePane 同一算法。
+func (m model) outlineRowAt(l benchLayout, x, y int) (int, bool) {
+	if x >= l.leftWidth || y < l.outlineRowsY || y >= l.outlineRowsY+l.outlineRows {
+		return 0, false
+	}
+	rows := m.outlineRows()
+	start, end := outlineWindow(len(rows), l.outlineRows, m.bench.cursor)
+	if index := start + y - l.outlineRowsY; index < end {
+		return index, true
+	}
+	return 0, false
 }
 
 type benchAction struct{ key, label string }
@@ -83,181 +155,6 @@ func fitBlock(text string, width, height int) []string {
 	return result
 }
 
-func (m model) outlineWidth() int { return min(32, max(24, m.width/5)) }
-
-func (m model) mainWidth() int {
-	if m.multiPane() {
-		return max(1, m.width-m.outlineWidth()-1)
-	}
-	return max(1, m.width)
-}
-
-// Controls wrap at display-cell boundaries, and each wrapped button keeps its
-// own hit target. The action is dispatched through the same keyboard handler.
-func actionRows(actions []benchAction, width, x, y int, selected ...string) ([]string, []benchHit) {
-	rows := []string{""}
-	var hits []benchHit
-	for _, action := range actions {
-		label := fitLine("["+action.label+"]", width)
-		used, size := lipgloss.Width(rows[len(rows)-1]), lipgloss.Width(label)
-		if used > 0 && used+size+1 > width {
-			rows = append(rows, "")
-			used = 0
-		}
-		if used > 0 {
-			rows[len(rows)-1] += " "
-			used++
-		}
-		hits = append(hits, benchHit{x: x + used, y: y + len(rows) - 1, width: size, key: action.key})
-		style := benchTheme.Muted
-		if len(selected) > 0 && selected[0] == action.key {
-			style = benchTheme.Selected
-		}
-		rows[len(rows)-1] += style.Render(label)
-	}
-	return rows, hits
-}
-
-func (m model) benchDock() ([]string, []benchHit) {
-	b := m.bench
-	w := max(1, m.width)
-	lines := []string{benchRule(w)}
-	var hits []benchHit
-	appendActions := func(actions []benchAction) {
-		rows, targets := actionRows(actions, w-2, 1, len(lines))
-		for _, row := range rows {
-			lines = append(lines, " "+row)
-		}
-		hits = append(hits, targets...)
-	}
-	if b.decision != nil {
-		d := b.decision
-		lines = append(lines, " "+benchTheme.Warning.Render(fitLine("◇ 等你决定 · "+d.reason, w-2)))
-		if d.hasProposal {
-			if d.stale {
-				lines = append(lines, " "+benchTheme.Warning.Render(fitLine("稿件基于旧版本，不能直接通过", w-2)))
-			}
-			if !b.writing && !b.input.Focused() {
-				actions := []benchAction{{"n", "n 修改意见"}}
-				if !d.stale {
-					actions = append([]benchAction{{"y", "y 批准并继续"}}, actions...)
-				}
-				appendActions(actions)
-			}
-		} else if !b.writing {
-			appendActions([]benchAction{{"c", "c 继续创作"}, {"b", "b 修订预算"}})
-		}
-	}
-	if b.err != "" {
-		lines = append(lines, " "+benchTheme.Error.Render(fitLine("! "+oneLine(b.err), w-2)))
-	} else if b.notice != "" {
-		lines = append(lines, " "+benchTheme.Accent.Render(fitLine(oneLine(b.notice), w-2)))
-	}
-	if b.prompt != nil {
-		input := b.prompt.input
-		input.Width = max(1, w-5)
-		lines = append(lines, " "+benchTheme.Accent.Render(fitLine(b.prompt.label, w-2)), " "+input.View())
-	} else if b.input.Focused() {
-		input := b.input
-		input.Width = max(1, w-5)
-		lines = append(lines, " "+input.View())
-	} else {
-		actions := []benchAction{{"i", "i 提要求"}, {"t", "t 思考"}}
-		if len(b.snap.Manuscript) > 0 && !b.exporting {
-			actions = append(actions, benchAction{"e", "e 导出"})
-		}
-		if b.writing {
-			if b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
-				actions = append([]benchAction{{"p", "p 暂停推进"}}, actions...)
-			}
-		} else if b.decision == nil {
-			actions = append([]benchAction{{"c", "c 继续创作"}}, actions...)
-		}
-		if b.pinned || b.liveHeld || b.feedOffset > 0 {
-			actions = append(actions, benchAction{"f", "f 回到最新"})
-		}
-		appendActions(actions)
-		_, label := m.directiveScope()
-		hits = append(hits, benchHit{x: 1, y: len(lines), width: w - 2, key: "i"})
-		lines = append(lines, " "+benchTheme.Muted.Render(fitLine("› "+label+"…  [i]", w-2)))
-	}
-	hint := "/ 跳章或搜索 · Tab 切区 · 1 正文 2 活动 3 详情 · ? 更多"
-	if w < 75 {
-		hint = "Tab 切区 · ? 更多 · Esc 返回"
-	}
-	if b.prompt != nil || b.input.Focused() {
-		hint = "Enter 提交 · Esc 取消输入"
-	}
-	lines = append(lines, " "+benchTheme.Muted.Render(fitLine(hint, w-2)))
-	return lines, hits
-}
-
-func (m model) workbenchFrame() benchFrame {
-	w, h := max(1, m.width), max(1, m.height)
-	if w < 30 || h < 10 {
-		return benchFrame{text: strings.Join(fitBlock("请扩大终端以使用工作台\nEsc 返回作品首页", w, h), "\n")}
-	}
-	dock, dockHits := m.benchDock()
-	bodyHeight := max(1, h-2-len(dock))
-	frame := benchFrame{bodyHeight: bodyHeight}
-	mainWidth, mainX := m.mainWidth(), 0
-	if m.multiPane() {
-		mainX = m.outlineWidth() + 1
-	}
-	main, hits, proseHeight, detailMaxOffset := m.mainPanel(mainWidth, bodyHeight)
-	frame.proseHeight = proseHeight
-	frame.detailMaxOffset = detailMaxOffset
-	for _, hit := range hits {
-		hit.x += mainX
-		hit.y += 2
-		frame.hits = append(frame.hits, hit)
-	}
-	if !m.multiPane() && m.bench.view == 1 {
-		main = fitBlock(m.viewOutlinePane(w-2, bodyHeight), w, bodyHeight)
-	}
-	if m.multiPane() || m.bench.view == 1 {
-		rows := m.outlineRows()
-		start, end, clipped := outlineWindow(len(rows), max(1, bodyHeight-1), m.bench.cursor)
-		y := 3
-		if clipped && start > 0 {
-			y++
-		}
-		width := m.outlineWidth()
-		if !m.multiPane() {
-			width = w
-			frame.hits = nil
-		}
-		frame.hits = append(frame.hits, benchHit{x: 0, y: 2, width: width, key: "/"})
-		for i := start; i < end; i++ {
-			frame.hits = append(frame.hits, benchHit{x: 0, y: y, width: width, key: "chapter", row: i})
-			y++
-		}
-	}
-	visible := frame.hits[:0]
-	for _, hit := range frame.hits {
-		if hit.y >= 2 && hit.y < 2+bodyHeight && hit.x >= 0 && hit.x+hit.width <= w {
-			visible = append(visible, hit)
-		}
-	}
-	frame.hits = visible
-	lines := strings.Split(m.viewBenchTopBar(), "\n")
-	if m.multiPane() {
-		left := fitBlock(m.viewOutlinePane(m.outlineWidth()-2, bodyHeight), m.outlineWidth(), bodyHeight)
-		for i := 0; i < bodyHeight; i++ {
-			lines = append(lines, left[i]+benchTheme.Border.Render("│")+main[i])
-		}
-	} else {
-		lines = append(lines, main...)
-	}
-	for _, hit := range dockHits {
-		hit.y += 2 + bodyHeight
-		frame.hits = append(frame.hits, hit)
-	}
-	lines = append(lines, dock...)
-	frame.text = strings.Join(fitBlock(strings.Join(lines, "\n"), w, h), "\n")
-	return frame
-}
-
 func (m model) viewWorkbench() string {
 	if m.bench.diag != nil {
 		return m.viewDiagnostics()
@@ -267,173 +164,191 @@ func (m model) viewWorkbench() string {
 		body = append(body, benchTheme.Muted.Render(fitLine("↑/↓ 滚动 · Esc 返回", m.width)))
 		return strings.Join(body, "\n")
 	}
-	return m.workbenchFrame().text
+	return m.viewBench()
 }
 
-func (m model) benchPaneAt(x int) benchPane {
-	if m.multiPane() && x < m.outlineWidth() {
-		return benchPaneOutline
+func (m model) viewBench() string {
+	l := m.benchLayout()
+	lines := m.viewBenchHeader(l)
+	left, main := m.leftColumn(l), m.mainColumn(l)
+	right := m.inspectorColumn(l)
+	separator := benchTheme.Border.Render("│")
+	for i := 0; i < l.bodyHeight; i++ {
+		leftBorder, rightBorder := separator, separator
+		if i == l.activityRows {
+			leftBorder, rightBorder = benchTheme.Border.Render("├"), benchTheme.Border.Render("┤")
+		}
+		lines = append(lines, left[i]+leftBorder+main[i]+rightBorder+right[i])
 	}
-	return benchPaneMain
+	lines = append(lines, m.benchFooter(l)...)
+	return strings.Join(fitBlock(strings.Join(lines, "\n"), l.width, l.height), "\n")
 }
 
-func (m model) clickBench(x, y int) (tea.Model, tea.Cmd) {
-	frame := m.workbenchFrame()
-	for _, hit := range frame.hits {
-		if y != hit.y || x < hit.x || x >= hit.x+hit.width {
-			continue
-		}
-		if hit.key != "chapter" {
-			return m.handleBenchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(hit.key)})
-		}
-		rows := m.outlineRows()
-		row := rows[hit.row]
-		if row.placeholder {
-			return m, nil
-		}
-		m.bench.pane, m.bench.cursor, m.bench.pinned = benchPaneOutline, hit.row, true
-		if row.header() {
-			m.bench.notice = m.toggleFold(row.node.Node.ID)
-		} else {
-			m.bench.pinned, m.bench.liveHeld = true, false
-			m.bench.previewOffset, m.bench.detailOffset = 0, 0
-			if !m.multiPane() {
-				m.bench.view = 0
-			}
-		}
-		return m, nil
-	}
-	if y >= 2 && y < 2+frame.bodyHeight {
-		m.bench.pane = m.benchPaneAt(x)
-	}
-	return m, nil
-}
-
-func (m model) viewBenchTopBar() string {
-	w := max(1, m.width)
+// 顶栏分开呈现作品状态与模型用量，第三行分隔线兼作进度条。
+func (m model) viewBenchHeader(l benchLayout) []string {
 	title := m.bench.snap.Intent.Premise
 	if title == "" {
 		title = m.bench.projectID
 	}
-	right := m.benchStateBadge()
-	if w >= 75 {
-		right = benchTheme.Muted.Render(fmt.Sprintf("%d/%d 章 · ", len(m.bench.snap.Manuscript), m.currentTarget())) + right
-	}
-	left := benchTheme.Accent.Render("AINOVEL") + benchTheme.Border.Render(" / ") + benchTheme.Title.Render(truncate(title, max(4, w-lipgloss.Width(right)-14)))
-	left = fitLine(left, max(1, w-lipgloss.Width(right)-2))
-	gap := max(1, w-lipgloss.Width(left)-lipgloss.Width(right)-1)
-	return fitLine(" "+left+strings.Repeat(" ", gap)+right, w) + "\n" + benchRule(w)
+	done, total := len(m.bench.snap.Manuscript), m.currentTarget()
+	right := benchTheme.Muted.Render(fmt.Sprintf("已入稿 %d / %d 章", done, total)) + "   " + m.benchStateBadge()
+	brand := benchTheme.Accent.Bold(true).Render("AINOVEL") + "  "
+	left := brand + benchTheme.Title.Render(truncate(title, max(4, l.width-lipgloss.Width(right)-lipgloss.Width(brand)-4)))
+	gap := max(1, l.width-lipgloss.Width(left)-lipgloss.Width(right)-2)
+	telemetry := alignRight(m.statusLine(), benchTheme.Muted.Render("Tab 切换区域   Esc 返回"), l.width-2)
+	return []string{fitLine(" "+left+strings.Repeat(" ", gap)+right, l.width), " " + telemetry, progressRule(done, total, l.width)}
 }
 
-func (m model) mainPanel(width, height int) ([]string, []benchHit, int, int) {
-	padding := 2
-	inner := max(1, width-2*padding)
-	tabActions := []benchAction{{"1", "1 正文"}, {"2", "2 活动"}, {"3", "3 详情"}}
-	if !m.multiPane() {
-		tabActions = append([]benchAction{{"o", "o 目录"}}, tabActions...)
+// progressRule 分隔线兼进度：已入稿比例用强调色实线，其余用边框色。
+func progressRule(done, total, width int) string {
+	width = max(1, width)
+	filled := 0
+	if total > 0 {
+		filled = min(width, max(0, done)*width/total)
 	}
-	tabs, hits := actionRows(tabActions, inner, padding, 0, fmt.Sprint(int(m.bench.tab)+1))
-	lines := append(tabs, "")
-	available := max(1, height-len(lines))
-	proseHeight := available
-	detailMaxOffset := 0
-	switch m.bench.tab {
-	case benchTabActivity:
-		process, processHits := m.processPanel(inner, available, true)
-		for _, hit := range processHits {
-			hit.x += padding
-			hit.y += len(lines)
-			hits = append(hits, hit)
-		}
-		lines = append(lines, process...)
-	case benchTabDetail:
-		text := m.viewDetailPane(inner)
-		all := textLines(text, inner)
-		detailMaxOffset = max(0, len(all)-available)
-		offset := min(m.bench.detailOffset, detailMaxOffset)
-		lines = append(lines, all[offset:]...)
-	default:
-		processHeight := 0
-		if available >= 15 {
-			processHeight = 5
-			if m.bench.thoughtOpen {
-				processHeight += 3
-			}
-		}
-		proseHeight = max(1, available-processHeight)
-		lines = append(lines, m.prosePanel(inner, proseHeight)...)
-		if processHeight > 0 {
-			process, processHits := m.processPanel(inner, processHeight, false)
-			for _, hit := range processHits {
-				hit.x += padding
-				hit.y += len(lines)
-				hits = append(hits, hit)
-			}
-			lines = append(lines, process...)
-		}
-	}
-	for i := range lines {
-		lines[i] = strings.Repeat(" ", padding) + fitLine(lines[i], inner)
-	}
-	return fitBlock(strings.Join(lines, "\n"), width, height), hits, proseHeight, detailMaxOffset
+	return benchTheme.Accent.Render(strings.Repeat("━", filled)) + benchTheme.Border.Render(strings.Repeat("─", width-filled))
 }
 
-func (m model) processPanel(width, height int, full bool) ([]string, []benchHit) {
-	feed, ok := m.activityFeed()
-	lines := []string{benchTheme.Border.Render("─ AI 创作现场 " + strings.Repeat("─", max(0, width-14)))}
-	label := "▸ 思考片段"
-	if m.bench.thoughtOpen {
-		label = "▾ 思考片段"
-	}
-	if feed.Thinking {
-		label += " · 构思中"
-	}
-	lines = append(lines, benchTheme.Muted.Render(label+"  [t]"))
-	hits := []benchHit{{x: 0, y: 1, width: min(width, lipgloss.Width(label)+5), key: "t"}}
-	if m.bench.thoughtOpen {
-		thought := "模型未提供思考文本"
-		if feed.ThinkingNote != "" {
-			thought = feed.ThinkingNote
-		}
-		limit := min(3, max(1, height-5))
-		if full {
-			limit = min(8, max(1, height/3))
-		}
-		wrapped := m.bench.thoughtCache.wrap(thought, max(1, width-2))
-		if len(wrapped) > limit {
-			wrapped = wrapped[len(wrapped)-limit:]
-		}
-		for _, line := range wrapped {
-			lines = append(lines, benchTheme.Muted.Render("│ "+line))
-		}
-		if full && feed.ThinkingNote != "" {
-			hits = append(hits, benchHit{x: 0, y: len(lines), width: min(width, 28), key: "T"})
-			lines = append(lines, benchTheme.Accent.Render("[T 全屏查看原文尾部]"))
-		}
-	}
-	if ok {
-		remaining := max(0, height-len(lines))
-		events := textLines(strings.TrimSuffix(m.viewActivity(width, max(1, remaining)), "\n"), width)
-		if len(events) > remaining {
-			events = events[len(events)-remaining:]
-		}
-		lines = append(lines, events...)
+func (m model) leftColumn(l benchLayout) []string {
+	width := l.leftWidth - 1
+	lines := append(m.overviewCard(width), "")
+	lines = append(lines, m.viewOutlinePane(l)...)
+	return fitBlock(strings.Join(lines, "\n"), l.leftWidth, l.bodyHeight)
+}
+
+// The inspector keeps decision context next to the manuscript, independent of reading focus.
+func (m model) inspectorColumn(l benchLayout) []string {
+	width := l.inspectorWidth - 2
+	lines := []string{sectionTitle("创作控制", width, false)}
+	lines = append(lines, benchTheme.Muted.Render("确认方式  ")+approvalLabel(m.bench.snap.Approval))
+	if m.bench.hasRun() {
+		lines = append(lines, fmt.Sprintf("修订预算  %d 次", m.bench.run().Strategy.AutoRepairBudget))
 	} else {
-		lines = append(lines, benchTheme.Muted.Render("尚无实时活动 · 历史记录按 d 查看"))
+		lines = append(lines, "尚未开始本轮创作")
 	}
-	return fitBlock(strings.Join(lines, "\n"), width, height), hits
+	lines = append(lines, "", sectionTitle("待办", width, false))
+	if d := m.bench.decision; d != nil {
+		lines = append(lines, benchTheme.Warning.Render(m.reviewTarget()))
+		lines = append(lines, inspectorLimit(contextLines("", d.reason, width), 2)...)
+		if d.hasProposal {
+			lines = append(lines, benchTheme.Accent.Render("/review 审阅  /note 另提要求"))
+		} else {
+			lines = append(lines, benchTheme.Accent.Render("/continue 继续  /budget 预算"))
+		}
+	} else {
+		lines = append(lines, "暂无待决定事项", fitLine(oneLine(m.bench.snap.NextStep), width))
+	}
+	for len(lines) < 10 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.taskPanel(width)...)
+	lines = append(lines, m.detailSummary(width, l.detailRows)...)
+	return indentBlock(lines, l.inspectorWidth, l.bodyHeight)
 }
 
-func (m model) liveProse() (string, bool) {
-	if m.bench.liveHeld {
-		return m.bench.liveText, true
+// mainColumn 正文居中排版，下方是固定高度的活动条；输入命令时命令浮层叠在中栏底部，
+// 只覆盖行内容，不改变任何几何。
+func (m model) mainColumn(l benchLayout) []string {
+	lines := indentBlock(m.activityStrip(l.mainWidth-2, l.activityRows), l.mainWidth, l.activityRows)
+	lines = append(lines, benchRule(l.mainWidth))
+	lines = append(lines, fitBlock(" "+m.contentTabs(l.mainWidth-2), l.mainWidth, 1)[0])
+	lines = append(lines, indentBlock(m.contentPanel(l.inner, l.proseRows), l.mainWidth, l.proseRows)...)
+	if overlay := m.commandOverlay(l.mainWidth - 2); len(overlay) > 0 {
+		copy(lines[len(lines)-len(overlay):], indentBlock(overlay, l.mainWidth, len(overlay)))
 	}
-	if !m.bench.pinned && (m.bench.writing || m.bench.snap.CurrentPhase != "") {
-		if feed, ok := m.activityFeed(); ok && len(feed.Prose) > 0 {
-			return string(feed.Prose), true
+	return lines
+}
+
+func indentBlock(lines []string, width, height int) []string {
+	for i := range lines {
+		lines[i] = " " + lines[i]
+	}
+	return fitBlock(strings.Join(lines, "\n"), width, height)
+}
+
+// sectionTitle 分区标题线：标题后用边框色横线补满，焦点区标题带 ▎。
+func sectionTitle(text string, width int, focused bool) string {
+	title := paneTitle(text, focused)
+	return title + " " + benchTheme.Border.Render(strings.Repeat("─", max(0, width-lipgloss.Width(title)-1)))
+}
+
+// overviewCard 左栏顶部：阶段、字数、全书的要求/事实/待核验计数，一眼看清全局。
+func (m model) overviewCard(width int) []string {
+	snap := m.bench.snap
+	phase := snap.CurrentPhase
+	if phase == "" {
+		phase = m.benchPhaseLabel()
+	}
+	field := func(label, value string) string {
+		return benchTheme.Muted.Render(label) + strings.Repeat(" ", 4) + fitLine(value, max(1, width-8))
+	}
+	return []string{
+		sectionTitle("概览", width, false),
+		field("阶段", phase),
+		field("字数", fmt.Sprintf("%s · 已入稿 %d 章", groupDigits(m.wordCount()), len(snap.Manuscript))),
+		benchTheme.Muted.Render(fitLine(fmt.Sprintf("要求 %d · 事实 %d · 待核验 %d", len(snap.Directives), len(snap.Canon), len(snap.PendingCanon)), width)),
+	}
+}
+
+// activityStrip 正文下方的活动条（页面设计 §3）：最近事件带时钟与耗时，
+// 末尾一行是等待计时或思考尾部；↑↓/滚轮翻历史时暂停跟随。
+func (m model) activityStrip(width, rows int) []string {
+	lines := []string{sectionTitle("执行事件", width, m.bench.pane == benchPaneFeed)}
+	feed, ok := m.activityFeed()
+	if !ok {
+		return append(lines, benchTheme.Muted.Render("尚无实时活动 · /diag 查看历史"))
+	}
+	var tail []string
+	if feed.Waiting {
+		line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " 等待模型回应"
+		if !feed.WaitingSince.IsZero() {
+			line += fmt.Sprintf(" · %d 秒", int(time.Since(feed.WaitingSince).Seconds()))
 		}
+		tail = append(tail, styleFocus.Render(line))
 	}
-	return "", false
+	if len(tail) == 0 {
+		state := m.bench.snap.CurrentPhase
+		if state == "" {
+			state = m.benchPhaseLabel()
+		}
+		if feed.Thinking && (m.bench.writing || m.bench.snap.CurrentPhase != "") {
+			state += " · 构思中"
+		}
+		tail = append(tail, benchTheme.Muted.Render(state+" · /split 调整分区"))
+	}
+	lines = append(lines, m.activityLines(width, max(1, rows-1-len(tail)))...)
+	for len(lines) < rows-len(tail) {
+		lines = append(lines, "")
+	}
+	return append(lines, tail...)
+}
+
+func contextLines(label, text string, width int) []string {
+	lines := readingLines(label+" "+text, width)
+	lines[0] = benchTheme.Accent.Render(label) + strings.TrimPrefix(lines[0], label)
+	return lines
+}
+
+// factLabel 把事实值显示为可读文本：JSON 字符串去引号，其余原样。
+func factLabel(value []byte) string {
+	var text string
+	if json.Unmarshal(value, &text) == nil {
+		return text
+	}
+	return string(value)
+}
+
+func chapterStateLabel(state workbench.ChapterState) string {
+	switch state {
+	case workbench.ChapterConfirmed:
+		return "已入稿"
+	case workbench.ChapterPending:
+		return "候选待确认"
+	case workbench.ChapterInProgress:
+		return "进行中"
+	default:
+		return "已规划"
+	}
 }
 
 func (m model) chapterProse() (string, string, string) {
@@ -441,12 +356,12 @@ func (m model) chapterProse() (string, string, string) {
 	if !ok {
 		text := m.bench.snap.NextStep
 		if text == "" {
-			text = "从一个故事开始。按 c 继续创作，按 i 添加要求。"
+			text = "从一个故事开始。输入 /continue 继续创作，或直接写下要求。"
 		}
 		if m.bench.writing {
 			text = m.bench.snap.CurrentPhase
 			if text == "" {
-				text = "正在构思与准备正文，可按 2 查看实时活动。"
+				text = "正在构思与准备正文，可在上方查看执行事件，F1 查看实时输出。"
 			}
 		}
 		return "作品总览", "尚无正文", text
@@ -462,37 +377,17 @@ func (m model) chapterProse() (string, string, string) {
 	return fmt.Sprintf("第 %d 章 · %s", chapter.Number, chapter.Title), state, strings.Join(paragraphs, "\n\n")
 }
 
+// prosePanel 中栏：标题（焦点在正文时带 ▎）、状态、正文；直播时跟随尾部，冻结时停在冻结位。
 func (m model) prosePanel(width, height int) []string {
-	var title, state, text string
-	liveText, live := m.liveProse()
-	if live {
-		title, state, text = "正在落笔", "正文预览 · 最终以确认稿为准", liveText
-		for _, row := range m.bench.snap.Outline {
-			if row.State == workbench.ChapterInProgress && !m.bench.liveHeld {
-				title = fmt.Sprintf("第 %d 章 · %s", row.Number, row.Node.Title)
-				break
-			}
-		}
-	}
-	if !live {
-		title, state, text = m.chapterProse()
-	}
-	if m.bench.pinned && m.bench.writing {
+	width = min(width, proseMeasure)
+	title, state, text := m.chapterProse()
+	if m.bench.writing {
 		state += " · 创作继续进行中"
 	}
-	if m.bench.liveHeld {
-		state = "预览 · 已暂停跟随 · f 回到最新"
-	}
-	lines := []string{benchTheme.Muted.Render(fitLine(state, width)), benchTheme.Title.Render(fitLine(title, width)), ""}
-	body := m.bench.proseCache.wrap(text, min(width, 88))
+	lines := []string{benchTheme.Title.Render(fitLine(title, width)), benchTheme.Muted.Render(fitLine(state, width)), ""}
+	body := m.bench.proseCache.wrap(text, width)
 	capacity := max(1, height-len(lines))
 	offset := min(m.bench.previewOffset, max(0, len(body)-capacity))
-	if live {
-		offset = max(0, len(body)-capacity)
-		if m.bench.liveHeld {
-			offset = min(m.bench.liveOffset, offset)
-		}
-	}
 	for _, line := range body[offset:min(len(body), offset+capacity)] {
 		lines = append(lines, benchTheme.Text.Render(line))
 	}
@@ -500,24 +395,181 @@ func (m model) prosePanel(width, height int) []string {
 }
 
 func (m model) scrollProse(delta int) tea.Model {
-	frame := m.workbenchFrame()
-	width, height := min(88, max(1, m.mainWidth()-4)), max(1, frame.proseHeight-3)
-	if text, live := m.liveProse(); live {
-		last := max(0, len(m.bench.proseCache.wrap(text, width))-height)
-		if !m.bench.liveHeld {
-			if delta > 0 {
-				return m
-			}
-			m.bench.liveHeld, m.bench.liveText, m.bench.liveOffset = true, text, last
-		}
-		m.bench.liveOffset = min(last, max(0, m.bench.liveOffset+delta))
-		if delta > 0 && m.bench.liveOffset == last {
-			m.bench.liveHeld = false
-		}
-		return m
-	}
+	l := m.benchLayout()
 	_, _, text := m.chapterProse()
-	last := max(0, len(m.bench.proseCache.wrap(text, width))-height)
+	last := max(0, len(m.bench.proseCache.wrap(text, min(l.inner, proseMeasure)))-max(1, l.proseRows-3))
 	m.bench.previewOffset = min(last, max(0, m.bench.previewOffset+delta))
 	return m
+}
+
+// The composer sits between two rules; context stays inline and hints share a row with the model.
+func (m model) benchFooter(l benchLayout) []string {
+	b := m.bench
+	inner := l.width - 2
+	input := b.input
+	context := truncate(m.benchContext(), inner/3)
+	input.Width = max(1, inner-lipgloss.Width(context)-5)
+	input.Placeholder = m.inputPlaceholder()
+	input.TextStyle = benchTheme.Text.Background(benchColors.InputBackground)
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(benchColors.Placeholder).Background(benchColors.InputBackground)
+	input.Cursor.Style = benchTheme.Text
+	input.Cursor.TextStyle = input.TextStyle
+	if input.Value() != "" {
+		// textinput paints padding with TextStyle too; keep the gray surface as short as the text.
+		input.Width = min(input.Width, max(1, lipgloss.Width(input.Value())))
+		input.SetCursor(input.Position())
+	}
+	feedback := ""
+	switch {
+	case b.err != "":
+		feedback = benchTheme.Error.Render("! " + oneLine(b.err))
+	case b.notice != "":
+		feedback = benchTheme.Accent.Render(oneLine(b.notice))
+	}
+	lowerRule := benchRule(l.width)
+	if strings.TrimSpace(ansi.Strip(feedback)) != "" {
+		feedback = truncate(feedback, inner-4)
+		lowerRule = benchRule(2) + " " + feedback + " " + benchRule(max(0, l.width-lipgloss.Width(feedback)-4))
+	}
+	modelLabel := benchTheme.Muted.Render(truncate(m.config.Model, inner/4))
+	return []string{
+		benchRule(l.width),
+		" " + alignRight(input.View(), context, inner),
+		lowerRule,
+		" " + alignRight(m.benchActionHints(), modelLabel, inner),
+		"",
+	}
+}
+
+func (m model) inputPlaceholder() string {
+	d := m.bench.decision
+	switch {
+	case d == nil || !d.hasProposal || m.bench.writing || !m.composingReview():
+		return "写下要求后回车，或输入 / 命令"
+	case d.stale:
+		return "写下修改意见后回车，让它基于最新内容重写"
+	default:
+		return "写下修改意见后回车，或输入 y 通过"
+	}
+}
+
+// statusLine 顶栏运行信息：模型名与本轮累计用量。
+func (m model) statusLine() string {
+	var parts []string
+	feed, _ := m.activityFeed()
+	usage := feed.Usage
+	parts = append(parts, fmt.Sprintf("本轮 Token · 输入 %s · 输出 %s", formatTokens(usage.Input), formatTokens(usage.Output)))
+	cache := "缓存命中 —"
+	if usage.Input > 0 {
+		cache = fmt.Sprintf("缓存命中 %s / %.1f%%", formatTokens(usage.CacheRead), 100*float64(usage.CacheRead)/float64(usage.Input))
+	}
+	parts = append(parts, cache)
+	if usage.Cost > 0 {
+		parts = append(parts, formatCost(usage.Cost))
+	}
+	return benchTheme.Muted.Render(strings.Join(parts, " · "))
+}
+
+// commandOverlay 输入以 / 开头时的命令浮层：按前缀过滤，展示完整命令与用法；
+// 无匹配时说明回车会按章号或标题跳转。
+func (m model) commandOverlay(width int) []string {
+	text := m.bench.input.Value()
+	if !strings.HasPrefix(text, "/") {
+		return nil
+	}
+	name, _, _ := strings.Cut(text[1:], " ")
+	lines := []string{sectionTitle("命令 · 回车执行，支持唯一前缀", width, false)}
+	var matches []benchCommand
+	for _, command := range benchCommands {
+		if strings.HasPrefix(command.name, name) {
+			matches = append(matches, command)
+		}
+	}
+	if len(matches) == 0 {
+		if _, err := strconv.Atoi(name); err == nil {
+			return append(lines, "回车跳到第 "+name+" 章")
+		}
+		return append(lines, "回车搜索标题「"+name+"」")
+	}
+	const shown = 7
+	for i, command := range matches {
+		if i == shown {
+			lines = append(lines, benchTheme.Muted.Render(fmt.Sprintf("… 还有 %d 个，继续输入首字母筛选", len(matches)-shown)))
+			break
+		}
+		usage := "/" + command.name
+		if command.usage != "" {
+			usage += " " + command.usage
+		}
+		pad := strings.Repeat(" ", max(1, 20-lipgloss.Width(usage)))
+		lines = append(lines, benchTheme.Accent.Render(usage)+pad+command.label)
+	}
+	return lines
+}
+
+func (m model) benchContext() string {
+	if strings.HasPrefix(m.bench.input.Value(), "/note") {
+		_, label := m.composerScope()
+		return benchTheme.Accent.Render("创作要求 · " + label + " · 不裁决待确认稿件")
+	}
+	if d := m.bench.decision; d != nil && m.composingReview() {
+		text := "◇ 等你决定 · " + m.reviewTarget()
+		if d.hasProposal && d.stale {
+			text = "◇ 等你决定 · 不能直接通过 · " + m.reviewTarget()
+		}
+		if !d.hasProposal {
+			text += " · " + d.reason
+		}
+		return benchTheme.Warning.Render(text)
+	}
+	_, label := m.composerScope()
+	return benchTheme.Accent.Render("创作要求 · " + label)
+}
+
+// benchActions 当前可用的操作：待决定时裁决键在前，其余按运行态给出。
+func (m model) benchActions() []benchAction {
+	b := m.bench
+	var actions []benchAction
+	// 等你决定时的 y / 修改意见由输入框占位文字承担，不再列为动作。
+	switch {
+	case b.decision != nil && !b.writing && b.decision.hasProposal:
+		actions = append(actions, benchAction{"/review", "审阅稿件"}, benchAction{"/note", "另提要求"})
+	case b.decision != nil && !b.writing:
+		actions = append(actions, benchAction{"/c", "继续创作"}, benchAction{"/budget", "修订预算"})
+	case b.writing:
+		if b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
+			actions = append(actions, benchAction{"/p", "暂停推进"})
+		}
+	default:
+		actions = append(actions, benchAction{"/c", "继续创作"})
+	}
+	if len(b.snap.Manuscript) > 0 && !b.exporting {
+		actions = append(actions, benchAction{"/e", "导出"})
+	}
+	if b.pinned || b.outputFrozen || b.feedOffset > 0 {
+		actions = append(actions, benchAction{"/f", "回到最新"})
+	}
+	// Keep only the primary action here; the command picker exposes the full set.
+	return append(actions[:min(1, len(actions))], benchAction{"/?", "更多"})
+}
+
+// Rendering and mouse hit testing share the same labels and spacing.
+func (m model) benchActionHints() string {
+	var hints []string
+	for _, action := range m.benchActions() {
+		hints = append(hints, benchTheme.Accent.Render(action.key)+" "+benchTheme.Muted.Render(action.label))
+	}
+	return strings.Join(hints, "   ") + benchTheme.Muted.Render("   · / 命令 · Tab 面板 · ↑↓ 滚动 · Enter 发送")
+}
+
+func (m model) benchActionAt(x int) (benchAction, bool) {
+	start := 1
+	for _, action := range m.benchActions() {
+		end := start + lipgloss.Width(action.key+" "+action.label)
+		if x >= start && x < end {
+			return action, true
+		}
+		start = end + 3
+	}
+	return benchAction{}, false
 }

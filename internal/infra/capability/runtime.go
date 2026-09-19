@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
@@ -23,6 +24,7 @@ var (
 type Runtime struct {
 	model       agentcore.ChatModel
 	store       runtimeStore
+	changes     *change.Engine // 只做工具边界的只读结构校验；提交仍由 Operation Engine 经 change 完成
 	prompts     *prompt.Registry
 	workspace   *workspace.Service
 	now         func() time.Time
@@ -43,7 +45,6 @@ func (r *Runtime) SetActivitySink(sink ActivitySink) { r.activity = sink }
 type runtimeStore interface {
 	GetDocument(context.Context, model.AuthorityTarget, model.DocumentRef, model.Revision) (model.DocumentVersion, error)
 	ListPlanNodes(context.Context, model.AuthorityTarget, model.Revision) ([]model.PlanNode, error)
-	ListDocuments(context.Context, model.AuthorityTarget, model.DocumentKind, model.Revision) ([]model.DocumentVersion, error)
 	GetWorkspaceArtifact(context.Context, string, string) (model.WorkspaceArtifact, error)
 	ListWorkspaceArtifacts(context.Context, string) ([]model.WorkspaceArtifact, error)
 	PutWorkspaceArtifact(context.Context, model.WorkspaceArtifact, int64, int) (model.WorkspaceArtifact, error)
@@ -53,7 +54,8 @@ type runtimeStore interface {
 
 func NewRuntime(model agentcore.ChatModel, modelDigest string, authorityStore *store.Store) *Runtime {
 	return &Runtime{
-		model: model, store: authorityStore, prompts: prompt.NewRegistry(authorityStore),
+		model: model, store: authorityStore, changes: change.New(authorityStore),
+		prompts:     prompt.NewRegistry(authorityStore),
 		workspace:   workspace.New(authorityStore),
 		now:         func() time.Time { return time.Now().UTC() },
 		modelDigest: modelDigest,

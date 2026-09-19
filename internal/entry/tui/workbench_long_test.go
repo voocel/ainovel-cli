@@ -14,7 +14,7 @@ import (
 )
 
 func longWorkbench(count int) model {
-	m := model{ctx: context.Background(), width: 120, height: 40, page: pageWorkbench}
+	m := model{ctx: context.Background(), width: 150, height: 40, page: pageWorkbench}
 	m.bench = newWorkbenchState("long", 1)
 	m.bench.loaded, m.bench.writing = true, true
 	m.bench.snap.Intent.TargetChapters = count + 500
@@ -27,6 +27,10 @@ func longWorkbench(count int) model {
 		m.bench.snap.Manuscript = append(m.bench.snap.Manuscript, domainmodel.ManuscriptChapter{ID: fmt.Sprint(i), Number: i, Title: "雨夜来信", Blocks: []domainmodel.ManuscriptBlock{{Text: strings.Repeat("雨停了，屋檐却还在滴水。", 250)}}})
 	}
 	m.bench.activity = activity.Snapshot{Seq: 1, RunID: "run", Prose: []byte(strings.Repeat("雨停了，屋檐却还在滴水。", 700)), ThinkingNote: strings.Repeat("保留雨声作为过渡。", 450)}
+	m.bench.activity.Output = []activity.OutputBlock{
+		{ID: 1, Version: 1, Kind: activity.Thinking, Text: []byte(m.bench.activity.ThinkingNote)},
+		{ID: 2, Version: 1, Kind: activity.Prose, Text: append([]byte(nil), m.bench.activity.Prose...)},
+	}
 	return m
 }
 
@@ -52,21 +56,18 @@ func TestLongOutlineNavigation(t *testing.T) {
 		t.Fatal("Home did not reach beginning")
 	}
 	m = m.navigateOutline(tea.KeyPgDown)
-	if m.bench.cursor < 20 {
-		t.Fatal("page down did not move a viewport")
+	if m.bench.cursor != m.benchLayout().outlineRows {
+		t.Fatalf("page down moved to %d, want one viewport", m.bench.cursor)
 	}
 	m = m.navigateOutline(tea.KeyEnd)
 	if m.selectedChapterNumber() != 500 {
 		t.Fatal("End selected placeholder instead of last chapter")
 	}
-	for _, width := range []int{40, 80, 120, 180} {
+	for _, width := range []int{150, 180, 240} {
 		m.width = width
-		frame := m.workbenchFrame()
-		if lipgloss.Height(frame.text) != 40 || lipgloss.Width(frame.text) > width {
+		view := m.View()
+		if lipgloss.Height(view) != 40 || lipgloss.Width(view) > width {
 			t.Fatalf("long layout overflow at width %d", width)
-		}
-		if len(frame.hits) > 60 {
-			t.Fatal("offscreen chapters got hit targets")
 		}
 	}
 }
@@ -150,11 +151,13 @@ func BenchmarkLongWorkbenchStreaming(b *testing.B) {
 	m := longWorkbench(500)
 	m.findChapter("500", false)
 	m.bench.pinned = false
+	m.switchContent(contentOutput)
 	prefix := string(m.bench.activity.Prose)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.bench.activity.Prose = []byte(prefix + fmt.Sprint(i))
+		m.bench.activity.Output[1].Text = []byte(prefix + fmt.Sprint(i))
+		m.bench.activity.Output[1].Version = uint64(i + 2)
 		_ = m.View()
 	}
 }

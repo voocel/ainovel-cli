@@ -183,6 +183,7 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.bench.presentDecision(&decisionState{
 			reason: "导入的草案等你批准", proposal: message.proposal, hasProposal: true,
 		})
+		m.switchContent(contentReview)
 		return m, tea.Batch(m.refreshBenchCmd(), watch)
 	case tea.MouseMsg:
 		return m.handleHomeMouse(message)

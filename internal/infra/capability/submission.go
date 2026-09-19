@@ -20,7 +20,7 @@ func (r *Runtime) validateSubmissionArtifact(
 	switch operation.Kind {
 	case model.OperationWriteChapter, model.OperationRewriteChapter:
 		if len(workspaceKeys) != 1 {
-			return fmt.Errorf("writer submission requires workspace_key: %w", model.ErrInvalid)
+			return fmt.Errorf("single-chapter submission requires exactly one workspace_key, got %d; use the key returned by workspace_put_chapter: %w", len(workspaceKeys), model.ErrInvalid)
 		}
 		return r.validateWorkspaceChapters(ctx, operation, workspaceKeys, patches)
 	case model.OperationRewriteAffected:
@@ -39,6 +39,51 @@ func (r *Runtime) validateSubmissionArtifact(
 		return validateCanonRevision(operation, patches)
 	}
 	return nil
+}
+
+// Reference submission copies the exact versioned draft into the proposal. Other
+// patches still pass the same Canon, directive, scope and structural validation.
+func (r *Runtime) materializeWorkspaceChapters(ctx context.Context, operation model.Operation, keys []string, versions map[string]int64, patches []model.Patch) ([]model.Patch, error) {
+	switch operation.Kind {
+	case model.OperationWriteChapter, model.OperationRewriteChapter:
+		if len(keys) != 1 {
+			return nil, fmt.Errorf("single-chapter reference submission requires one workspace_key: %w", model.ErrInvalid)
+		}
+	case model.OperationRewriteAffected:
+	default:
+		return nil, fmt.Errorf("workspace versions are only supported for chapter writing and rewriting: %w", model.ErrInvalid)
+	}
+	if len(keys) == 0 || len(versions) != len(keys) {
+		return nil, fmt.Errorf("provide one workspace version for every submitted key: %w", model.ErrInvalid)
+	}
+	for _, patch := range patches {
+		if patch.Document.Kind == model.DocumentManuscript {
+			return nil, fmt.Errorf("versioned workspace submission assembles manuscript patches automatically; omit manuscript patches and submit Canon/other changes only: %w", model.ErrInvalid)
+		}
+	}
+	result := append([]model.Patch(nil), patches...)
+	for _, key := range keys {
+		version, ok := versions[key]
+		if !ok || version < 1 {
+			return nil, fmt.Errorf("workspace %q requires a positive version from workspace_read or workspace_put_chapter: %w", key, model.ErrInvalid)
+		}
+		artifact, err := r.store.GetWorkspaceArtifact(ctx, operation.ID, key)
+		if err != nil {
+			return nil, fmt.Errorf("read workspace %q: %w", key, err)
+		}
+		if artifact.Version != version {
+			return nil, fmt.Errorf("workspace %q version mismatch: submitted %d, current %d; read the current draft before resubmitting: %w", key, version, artifact.Version, model.ErrStateConflict)
+		}
+		if artifact.MediaType != workspace.ChapterMediaType {
+			return nil, fmt.Errorf("workspace %q is not a chapter: %w", key, model.ErrInvalid)
+		}
+		var chapter model.ManuscriptChapter
+		if err := decodeToolArgs(artifact.Content, &chapter); err != nil {
+			return nil, fmt.Errorf("decode workspace %q: %w", key, err)
+		}
+		result = append(result, model.Patch{Document: model.DocumentRef{Kind: model.DocumentManuscript, ID: chapter.ID}, Operation: model.PatchPut, Content: append(json.RawMessage(nil), artifact.Content...)})
+	}
+	return result, nil
 }
 
 // validateCanonRevision 是事实核验任务的提交门（D41）：只允许 canon 补丁，每条 put 的
@@ -74,41 +119,6 @@ func validateCanonRevision(operation model.Operation, patches []model.Patch) err
 	}
 	if declared == 0 {
 		return fmt.Errorf("chapter %q needs at least one canon fact: %w", input.ChapterID, model.ErrInvalid)
-	}
-	return nil
-}
-
-// validateChapterCanon 在工具边界执行 D41 的来源归属与重申报：每条新事实的来源章必须是
-// 本次提交的正文，提交的每章必须重申报 base 上来源于它的全部事实（put 或 delete）。
-func validateChapterCanon(base []model.DocumentVersion, patches []model.Patch, chapters map[string]struct{}) error {
-	touched := make(map[string]struct{}, len(patches))
-	for _, patch := range patches {
-		if patch.Document.Kind != model.DocumentCanon {
-			continue
-		}
-		touched[patch.Document.ID] = struct{}{}
-		if patch.Operation != model.PatchPut {
-			continue
-		}
-		var fact model.CanonFact
-		if err := decodeToolArgs(patch.Content, &fact); err != nil {
-			return fmt.Errorf("decode proposed Canon Delta: %w", err)
-		}
-		if _, ok := chapters[fact.SourceChapterID]; !ok {
-			return fmt.Errorf("canon %q must be sourced from a submitted chapter: %w", fact.ID, model.ErrInvalid)
-		}
-	}
-	for _, document := range base {
-		var fact model.CanonFact
-		if err := json.Unmarshal(document.Content, &fact); err != nil {
-			return fmt.Errorf("decode canon %q: %w", document.Document.ID, err)
-		}
-		if _, rewritten := chapters[fact.SourceChapterID]; !rewritten {
-			continue
-		}
-		if _, ok := touched[fact.ID]; !ok {
-			return fmt.Errorf("chapter %q must redeclare canon %q (confirm, update or delete): %w", fact.SourceChapterID, fact.ID, model.ErrInvalid)
-		}
 	}
 	return nil
 }
@@ -198,6 +208,7 @@ func (r *Runtime) validateWorkspaceChapters(
 			return fmt.Errorf("encode submitted workspace chapter: %w", err)
 		}
 		manuscriptMatches, canonDeltaDeclared := false, false
+		mismatch := "missing manuscript put patch; submit workspace_key + workspace_version to assemble it automatically"
 		for _, patch := range patches {
 			if patch.Document.Kind == model.DocumentCanon && patch.Operation == model.PatchPut {
 				var fact model.CanonFact
@@ -219,10 +230,12 @@ func (r *Runtime) validateWorkspaceChapters(
 			}
 			if bytes.Equal(workspaceContent, proposedContent) {
 				manuscriptMatches = true
+			} else {
+				mismatch = manuscriptDifference(workspaceChapter, proposedChapter)
 			}
 		}
 		if !manuscriptMatches {
-			return fmt.Errorf("proposal manuscript must match workspace artifact %q: %w", workspaceKey, model.ErrInvalid)
+			return fmt.Errorf("proposal manuscript must match workspace artifact %q: %s; read the draft or submit its key and version without a manuscript patch: %w", workspaceKey, mismatch, model.ErrInvalid)
 		}
 		if !canonDeltaDeclared {
 			return fmt.Errorf("writer submission requires a Canon Delta for chapter %q: %w", workspaceChapter.ID, model.ErrInvalid)
@@ -245,13 +258,40 @@ func (r *Runtime) validateWorkspaceChapters(
 			return fmt.Errorf("writer proposal includes unverified manuscript %q: %w", chapterID, model.ErrInvalid)
 		}
 	}
-	var base []model.DocumentVersion
-	if operation.Snapshot.BaseRevision > model.InitialRevision {
-		if base, err = r.store.ListDocuments(ctx, operation.Target, model.DocumentCanon, operation.Snapshot.BaseRevision); err != nil {
-			return err
+	// 来源归属、重申报等 D41 规则由工具边界的 change.Engine.Validate 统一执行，这里不再重复。
+	return nil
+}
+
+func manuscriptDifference(saved, proposed model.ManuscriptChapter) string {
+	if len(saved.Blocks) != len(proposed.Blocks) {
+		return fmt.Sprintf("blocks count differs: workspace %d, submitted %d", len(saved.Blocks), len(proposed.Blocks))
+	}
+	for i, block := range saved.Blocks {
+		other := proposed.Blocks[i]
+		if block.ID != other.ID {
+			return fmt.Sprintf("blocks[%d].id differs: workspace %q, submitted %q", i, block.ID, other.ID)
+		}
+		if block.Text != other.Text {
+			a, b := []rune(block.Text), []rune(other.Text)
+			pos := 0
+			for pos < len(a) && pos < len(b) && a[pos] == b[pos] {
+				pos++
+			}
+			start := max(0, pos-12)
+			return fmt.Sprintf("block %q text differs at character %d: workspace %q, submitted %q", block.ID, pos+1, string(a[start:min(len(a), pos+20)]), string(b[start:min(len(b), pos+20)]))
 		}
 	}
-	return validateChapterCanon(base, patches, seenChapters)
+	a, _ := json.Marshal(saved)
+	b, _ := json.Marshal(proposed)
+	var left, right map[string]json.RawMessage
+	_ = json.Unmarshal(a, &left)
+	_ = json.Unmarshal(b, &right)
+	for _, field := range []string{"id", "plan_node_id", "number", "title", "author", "depends_on"} {
+		if !bytes.Equal(left[field], right[field]) {
+			return field + " differs from workspace"
+		}
+	}
+	return "chapter representation differs from workspace"
 }
 
 // checkDirectiveWordCounts 是量化要求的确定性校验（§4.9 / S13）：字数按各 block

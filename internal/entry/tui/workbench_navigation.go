@@ -75,8 +75,8 @@ func (c *wrappedText) wrap(text string, width int) []string {
 func (m *model) selectOutline(index int) {
 	m.bench.cursor = index
 	m.bench.pinned = true
-	m.bench.liveHeld = false
-	m.bench.previewOffset, m.bench.detailOffset = 0, 0
+	m.bench.previewOffset = 0
+	m.bench.content = contentManuscript
 }
 
 // Search the complete outline, including collapsed descendants. Only ancestors
@@ -135,8 +135,7 @@ func (m *model) findChapter(query string, next bool) bool {
 			}
 		}
 		m.bench.search = query
-		m.bench.view, m.bench.pane = 0, benchPaneMain
-		m.bench.tab = benchTabProse
+		m.bench.pane = benchPaneMain
 		return true
 	}
 	return false
@@ -144,16 +143,20 @@ func (m *model) findChapter(query string, next bool) bool {
 
 func (m model) navigateOutline(key tea.KeyType) model {
 	rows := m.outlineRows()
-	if len(rows) == 0 {
-		return m
-	}
 	// Page keys scroll the focused content; Home/End locate outline boundaries.
-	if (key == tea.KeyPgUp || key == tea.KeyPgDown) && ((m.multiPane() && m.bench.pane == benchPaneMain) || (!m.multiPane() && m.bench.view == 0)) {
-		delta := max(1, m.workbenchFrame().proseHeight-3)
+	l := m.benchLayout()
+	if (key == tea.KeyPgUp || key == tea.KeyPgDown) && m.bench.pane != benchPaneOutline {
+		delta := max(1, l.proseLines)
+		if m.bench.pane == benchPaneFeed {
+			delta = max(1, l.activityRows-2)
+		}
 		if key == tea.KeyPgUp {
 			delta = -delta
 		}
-		return m.scrollBenchPane(benchPaneMain, delta).(model)
+		return m.scrollBenchPane(m.bench.pane, delta).(model)
+	}
+	if len(rows) == 0 {
+		return m
 	}
 	index := m.bench.cursor
 	switch key {
@@ -162,9 +165,9 @@ func (m model) navigateOutline(key tea.KeyType) model {
 	case tea.KeyEnd:
 		index = len(rows) - 1
 	case tea.KeyPgUp:
-		index = max(0, index-max(1, m.workbenchFrame().bodyHeight-3))
+		index = max(0, index-max(1, l.outlineRows))
 	case tea.KeyPgDown:
-		index = min(len(rows)-1, index+max(1, m.workbenchFrame().bodyHeight-3))
+		index = min(len(rows)-1, index+max(1, l.outlineRows))
 	}
 	for index > 0 && rows[index].placeholder {
 		index--

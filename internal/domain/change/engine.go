@@ -39,6 +39,17 @@ func (e *Engine) Prepare(ctx context.Context, proposal model.Proposal) (model.Pr
 	return e.prepare(ctx, proposal, false, 0)
 }
 
+// Validate 只做确定性结构校验、不落库：执行器在工具边界调用它，把冲突当场回给模型
+// 自纠（§11 第 7 条），收尾的 PrepareExecution 仍是兜底。基线按提案自己的 BaseRevision
+// 读取而不核对当前 Revision——漂移留给收尾时的重定位（D51）处理。
+func (e *Engine) Validate(ctx context.Context, proposal model.Proposal) error {
+	if err := proposal.Validate(); err != nil {
+		return err
+	}
+	_, _, err := e.analyze(ctx, proposal)
+	return err
+}
+
 func (e *Engine) PrepareExecution(ctx context.Context, proposal model.Proposal, attempt int) (model.Proposal, error) {
 	if attempt <= 0 {
 		return model.Proposal{}, fmt.Errorf("execution proposal requires an attempt: %w", model.ErrInvalid)
@@ -275,6 +286,11 @@ func (e *Engine) validateAndAnalyze(ctx context.Context, change model.Proposal) 
 	if current != change.BaseRevision {
 		return StructuralImpact{}, nil, fmt.Errorf("base revision %d, current revision %d: %w", change.BaseRevision, current, model.ErrRevisionConflict)
 	}
+	return e.analyze(ctx, change)
+}
+
+// analyze 在提案自己的 BaseRevision 上执行全部确定性结构校验并计算结构影响，不落库。
+func (e *Engine) analyze(ctx context.Context, change model.Proposal) (StructuralImpact, documentState, error) {
 	if err := validateTargetDocuments(change.Target, change.Patches); err != nil {
 		return StructuralImpact{}, nil, err
 	}

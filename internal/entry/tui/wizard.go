@@ -200,7 +200,7 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if mouse, ok := message.(tea.MouseMsg); ok {
-		if mouse.Action != tea.MouseActionPress || mouse.Button != tea.MouseButtonLeft || m.width < 30 || m.height < 18 {
+		if mouse.Action != tea.MouseActionPress || mouse.Button != tea.MouseButtonLeft {
 			return m, nil
 		}
 		layout := m.wizardLayout()

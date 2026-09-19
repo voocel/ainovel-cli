@@ -7,6 +7,7 @@ import "github.com/charmbracelet/lipgloss"
 var benchColors = struct {
 	Text, Muted, Border, Accent      lipgloss.AdaptiveColor
 	SelectedText, SelectedBackground lipgloss.AdaptiveColor
+	Placeholder, InputBackground     lipgloss.AdaptiveColor
 	Warning, Error, Success          lipgloss.AdaptiveColor
 }{
 	Text:               lipgloss.AdaptiveColor{Light: "#252F30", Dark: "#DDE3DD"},
@@ -15,6 +16,8 @@ var benchColors = struct {
 	Accent:             lipgloss.AdaptiveColor{Light: "#356B58", Dark: "#A5C6AA"},
 	SelectedText:       lipgloss.AdaptiveColor{Light: "#244A39", Dark: "#DCE9DC"},
 	SelectedBackground: lipgloss.AdaptiveColor{Light: "#DDE7D9", Dark: "#2B3C30"},
+	Placeholder:        lipgloss.AdaptiveColor{Light: "#8B9294", Dark: "#8E9699"},
+	InputBackground:    lipgloss.AdaptiveColor{Light: "#ECEEEF", Dark: "#303438"},
 	Warning:            lipgloss.AdaptiveColor{Light: "#92541B", Dark: "#F0B477"},
 	Error:              lipgloss.AdaptiveColor{Light: "#AD352F", Dark: "#FF928B"},
 	Success:            lipgloss.AdaptiveColor{Light: "#32633B", Dark: "#8BCB94"},

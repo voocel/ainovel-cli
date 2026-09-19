@@ -27,7 +27,7 @@ func TestWizardPresetMouseAndKeyboard(t *testing.T) {
 	if m.wizard.step != 1 || m.wizard.inputs[2].Value() != "private-key" {
 		t.Fatal("navigation lost field values")
 	}
-	for _, size := range [][2]int{{30, 18}, {40, 18}, {80, 24}, {160, 48}} {
+	for _, size := range [][2]int{{150, 40}, {180, 50}} {
 		m.width, m.height = size[0], size[1]
 		view := m.View()
 		if lipgloss.Width(view) > size[0] || lipgloss.Height(view) != size[1] || !strings.Contains(view, "保存并开始") || strings.Contains(view, "private-key") {
@@ -84,7 +84,7 @@ func TestWizardValidatesAddressAndRedactsProviderErrors(t *testing.T) {
 func TestWizardResponsiveControlsAndCollapsedAddress(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	m := newModel(context.Background(), deps)
-	for _, size := range [][2]int{{30, 18}, {80, 24}, {112, 26}, {180, 50}} {
+	for _, size := range [][2]int{{150, 40}, {180, 50}} {
 		m.width, m.height = size[0], size[1]
 		m.wizard = newWizardState(appconfig.Config{Provider: "custom", Model: "my-model", BaseURL: "https://example.com/v1"}, "", false)
 		m.wizard.custom = true
@@ -171,7 +171,7 @@ func TestWizardCustomConnectionPreservesSavedConnections(t *testing.T) {
 func TestWizardWideColumnsStayAligned(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	m := newModel(context.Background(), deps)
-	for _, width := range []int{112, 128, 160, 240} {
+	for _, width := range []int{150, 160, 200, 240} {
 		m.width, m.height = width, 40
 		for _, choosing := range []bool{true, false} {
 			m.wizard = newWizardState(appconfig.Config{Provider: "openai", Model: "custom-model"}, "", false)
@@ -203,7 +203,7 @@ func TestWizardProtocolIsSelectionOnly(t *testing.T) {
 	if m.wizard.inputs[0].Value() != "anthropic" {
 		t.Fatal("right did not select anthropic")
 	}
-	m.width = 128
+	m.width = 160
 	for _, hit := range m.wizardLayout().hits {
 		if hit.action == 22 {
 			next, _ = m.Update(tea.MouseMsg{X: hit.x, Y: hit.y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})

@@ -13,7 +13,7 @@ type wizardScreen struct {
 	hits  []wizardHit
 }
 
-// Drawing and hit testing share geometry, including the compact-height layout.
+// Drawing and hit testing share geometry.
 func (m model) wizardLayout() wizardScreen {
 	w := max(1, m.width-4)
 	fieldWidth := min(68, w)
@@ -66,19 +66,11 @@ func (m model) wizardLayout() wizardScreen {
 						style = benchTheme.Selected.Padding(0, 1)
 					}
 					segment := style.Render(protocol)
-					if fieldWidth < 34 { // Narrow terminals keep the current choice readable.
-						if protocol == m.wizard.inputs[0].Value() {
-							control("‹ "+protocol+" ›", 0, m.wizard.step == 0)
-						}
-						continue
-					}
 					screen.hits = append(screen.hits, wizardHit{x, len(screen.lines), lipgloss.Width(segment), 20 + j})
 					parts = append(parts, segment)
 					x += lipgloss.Width(segment) + 1
 				}
-				if fieldWidth >= 34 {
-					add(strings.Join(parts, " "))
-				}
+				add(strings.Join(parts, " "))
 			} else {
 				screen.addWizardInput(m, i, fieldWidth, add)
 			}
@@ -102,41 +94,34 @@ func (m model) wizardLayout() wizardScreen {
 			}
 			control("接口 · "+endpoint+"  ⇄", 8, m.wizard.step == 8)
 		}
-		control("[ 保存并开始 → ]", 4, m.wizard.step == 4)
+		control("保存并开始 →", 4, m.wizard.step == 4)
 		button := "测试连接（可选）"
 		if m.wizard.verifying {
 			button = "正在验证连接…  Esc 取消"
 		}
 		control(button, 9, m.wizard.step == 9 || m.wizard.verifying)
 	}
-	// Extra space carries useful context; the form stays aligned at the same origin.
-	if len(screen.lines)+6 <= m.height {
-		add("")
-		add(benchTheme.Muted.Render("配置保存在本机；仅测试连接会发送请求。"))
+	add("")
+	add(benchTheme.Muted.Render("配置保存在本机；仅测试连接会发送请求。"))
+	add(benchTheme.Muted.Render("保存：" + appconfig.ConfigPath(m.deps.ConfigDir)))
+	add(benchTheme.Muted.Render("重启时环境变量优先于配置文件。"))
+	notes := []string{
+		benchTheme.Accent.Render("连接，然后开始创作"),
+		"", "选择服务商 → 配置连接", "", "配置只需完成一次。", "",
+		benchTheme.Muted.Render("使用服务商提供的模型 ID。"),
+		benchTheme.Muted.Render("环境凭据或本地模型可不填密钥。"),
+		benchTheme.Muted.Render("中转服务需填写自定义地址。"),
 	}
-	if len(screen.lines)+6 <= m.height {
-		add(benchTheme.Muted.Render("保存：" + appconfig.ConfigPath(m.deps.ConfigDir)))
-		add(benchTheme.Muted.Render("重启时环境变量优先于配置文件。"))
-	}
-	if m.width >= 112 && m.height >= 22 {
-		notes := []string{
-			benchTheme.Accent.Render("连接，然后开始创作"),
-			"", "选择服务商 → 配置连接", "", "配置只需完成一次。", "",
-			benchTheme.Muted.Render("使用服务商提供的模型 ID。"),
-			benchTheme.Muted.Render("环境凭据或本地模型可不填密钥。"),
-			benchTheme.Muted.Render("中转服务需填写自定义地址。"),
+	column := max(76, m.width/2)
+	for i, note := range notes {
+		row := i + 3
+		if row >= len(screen.lines) {
+			break
 		}
-		column := max(76, m.width/2)
-		for i, note := range notes {
-			row := i + 3
-			if row >= len(screen.lines) {
-				break
-			}
-			// fitLine only truncates; pad the left column in terminal cells so
-			// short text and blank rows cannot pull the sidebar toward the form.
-			left := lipgloss.NewStyle().Width(column).Render(fitLine(screen.lines[row], column))
-			screen.lines[row] = left + benchTheme.Border.Render("│") + "  " + fitLine(note, max(1, m.width-column-5))
-		}
+		// fitLine only truncates; pad the left column in terminal cells so
+		// short text and blank rows cannot pull the sidebar toward the form.
+		left := lipgloss.NewStyle().Width(column).Render(fitLine(screen.lines[row], column))
+		screen.lines[row] = left + benchTheme.Border.Render("│") + "  " + fitLine(note, max(1, m.width-column-5))
 	}
 	return screen
 }
@@ -156,20 +141,6 @@ func (s *wizardScreen) addWizardInput(m model, i, width int, add func(string)) {
 	if m.wizard.step == i {
 		style = benchTheme.Accent
 	}
-	// At short heights, a single-row field preserves every control and the footer.
-	fields := 3
-
-	if m.wizard.advanced {
-		fields++
-	}
-	extra := 0
-	if m.wizard.inputs[0].Value() == "openai" {
-		extra = 1
-	}
-	if m.wizard.custom {
-		extra += 2
-	}
-	compact := m.height < 11+3*fields+extra
 	input := m.wizard.name
 	if i != 7 {
 		input = m.wizard.inputs[i]
@@ -179,27 +150,15 @@ func (s *wizardScreen) addWizardInput(m model, i, width int, add func(string)) {
 		input.Prompt = "› "
 	}
 	input.Width = max(1, width-4)
-	prefix := ""
-	if compact {
-		prefix = label + "  "
-		input.Width = max(1, width-lipgloss.Width(prefix)-4)
-	} else {
-		add(style.Render(label))
-	}
+	add(style.Render(label))
 	input.SetCursor(input.Position())
 	s.hits = append(s.hits, wizardHit{2, len(s.lines), width, i})
-	add(style.Render(prefix) + input.View())
-	if !compact {
-		add("")
-	}
+	add(input.View())
+	add("")
 }
 
 func (m model) viewWizard() string {
-	if m.width < 30 || m.height < 18 {
-		return strings.Join(fitBlock("请扩大终端以继续配置\n至少 30 列 × 18 行 · Ctrl+C 退出", max(1, m.width), max(1, m.height)), "\n")
-	}
 	screen := m.wizardLayout()
-	// A custom provider with an expanded URL needs the compact form on short screens.
 	lines := fitBlock(strings.Join(screen.lines, "\n"), m.width, m.height-3)
 	hint := "↑↓ 选择 · Enter 继续 · Esc 返回"
 	if !m.wizard.choosing {

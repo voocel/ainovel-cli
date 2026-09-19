@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/app/workbench"
@@ -53,6 +54,12 @@ func pressRune(t *testing.T, m model, r rune) (model, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	return updated.(model), cmd
+}
+
+// submit 在常驻输入框里输入文字并回车（要求、修改意见、y 或 / 命令）。
+func submit(t *testing.T, m model, text string) (model, tea.Cmd) {
+	t.Helper()
+	return press(t, typeText(t, m, text), tea.KeyEnter)
 }
 
 func pressTimes(t *testing.T, m model, key tea.KeyType, times int) model {
@@ -320,8 +327,8 @@ func TestOpenWaitingProjectRestoresDecisionCard(t *testing.T) {
 }
 
 func TestDecisionRequiresExplicitApproveAndReasonRejects(t *testing.T) {
-	// 页面设计 §2：批准必须由 y 明确确认；空回车不提交并回以指引；
-	// n 进入修改意见输入，文字回车拒绝并按意见重写。
+	// 页面设计 §2：批准必须输入 y 回车；空回车不提交并回以指引；
+	// 其他文字回车即修改意见，拒绝并按意见重写。
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
 	m.gen = 1
@@ -329,52 +336,44 @@ func TestDecisionRequiresExplicitApproveAndReasonRejects(t *testing.T) {
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
 	present := func() {
+		m.bench.content = contentReview
 		m.bench.presentDecision(&decisionState{
 			reason: "第 1 章写好了，等你确认", continueAfter: true,
 			proposal: domainmodel.Proposal{ID: "p-1", Reason: "第一章候选"}, hasProposal: true,
 		})
 	}
 	present()
-	if m.bench.input.Focused() {
-		t.Fatal("待裁决时输入框不应自动聚焦（批准须 y 明确确认）")
-	}
-	if !strings.Contains(m.View(), "等你决定") {
-		t.Fatal("决定卡未出现在视图中")
+	if !strings.Contains(ansi.Strip(m.View()), "等你决定") || !strings.Contains(ansi.Strip(m.View()), "输入 y 通过") {
+		t.Fatal("决定卡或输入指引未出现在视图中")
 	}
 	// 空回车：不提交，回以确认指引。
 	m, cmd := press(t, m, tea.KeyEnter)
-	if m.bench.decision == nil || cmd != nil || !strings.Contains(m.bench.notice, "按 y 确认通过") {
+	if m.bench.decision == nil || cmd != nil || !strings.Contains(m.bench.notice, "输入 y 通过") {
 		t.Fatalf("空回车应回以指引且不提交：decision=%v notice=%q", m.bench.decision, m.bench.notice)
 	}
-	// y：明确批准。
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	m = updated.(model)
-	if m.bench.decision != nil || cmd == nil {
-		t.Fatal("y 未派发批准")
+	// 单独的 y 只是打进输入框，回车才批准。
+	m, cmd = pressRune(t, m, 'y')
+	if m.bench.decision == nil || cmd != nil || m.bench.input.Value() != "y" {
+		t.Fatalf("y 不回车不应批准：decision=%v input=%q", m.bench.decision, m.bench.input.Value())
 	}
-	// n 聚焦输入，文字回车 = 拒绝重写。
-	present()
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	m = updated.(model)
-	if !m.bench.input.Focused() {
-		t.Fatal("n 未聚焦修改意见输入框")
-	}
-	m = typeText(t, m, "开头太平淡")
 	m, cmd = press(t, m, tea.KeyEnter)
+	if m.bench.decision != nil || cmd == nil || m.bench.input.Value() != "" {
+		t.Fatal("y 回车未派发批准")
+	}
+	// 文字回车 = 拒绝重写；单独的 n 只给指引。
+	present()
+	m, cmd = submit(t, m, "n")
+	if m.bench.decision == nil || cmd != nil || !strings.Contains(m.bench.notice, "修改意见") {
+		t.Fatalf("n 应回以指引：decision=%v notice=%q", m.bench.decision, m.bench.notice)
+	}
+	m, cmd = submit(t, m, "开头太平淡")
 	if m.bench.decision != nil || m.bench.input.Value() != "" || cmd == nil {
 		t.Fatalf("带意见回车未派发拒绝：decision=%v input=%q", m.bench.decision, m.bench.input.Value())
 	}
-	// 聚焦状态下空回车同样回以指引。
-	present()
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	m = updated.(model)
-	m, cmd = press(t, m, tea.KeyEnter)
-	if m.bench.decision == nil || cmd != nil || !strings.Contains(m.bench.notice, "按 y 确认通过") {
-		t.Fatalf("聚焦空回车应回以指引：decision=%v notice=%q", m.bench.decision, m.bench.notice)
-	}
-	m, _ = press(t, m, tea.KeyEsc)
-	if m.bench.input.Focused() {
-		t.Fatal("Esc 未释放输入框")
+	// 没有待裁决稿件时，y 不是批准，是提醒。
+	m, cmd = submit(t, m, "y")
+	if cmd != nil || !strings.Contains(m.bench.notice, "没有等你决定") {
+		t.Fatalf("无稿件时 y 应提醒：notice=%q", m.bench.notice)
 	}
 }
 
@@ -444,9 +443,8 @@ func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T
 		decision == nil || !decision.hasProposal || decision.continueAfter {
 		t.Fatalf("import landing: page=%v project=%q decision=%#v", m.page, m.bench.projectID, decision)
 	}
-	// 批准须 y 明确确认（页面设计 §2）。
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	m = updated.(model)
+	// 批准须输入 y 回车（页面设计 §2）。
+	m, cmd = submit(t, m, "y")
 	updated, _ = m.Update(findMsg[decisionDoneMsg](t, cmd))
 	m = updated.(model)
 	copied, err := api.Projects.Project(ctx, "copied-book", domainmodel.InitialRevision)
@@ -456,8 +454,7 @@ func TestHomeImportEntryImportsProjectionAndApprovesViaDecisionCard(t *testing.T
 }
 
 func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
-	// 页面设计 §2：宽屏两栏（大纲/主区），窄屏降级单栏；
-	// §3 三层校正链：待确认章节读候选稿并明确标注。
+	// 页面设计 §2：两栏（大纲/主区）；§3 三层校正链：待确认章节读候选稿并明确标注。
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
 	m.gen = 1
@@ -496,28 +493,22 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 	// 快照刷新会把光标锚定在第一个章行（此处直接注入快照，手动对齐）。
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0)
 	view := m.View()
-	for _, want := range []string{"大纲", "卷一", "● 1", "◐ 2", "详情"} {
+	for _, want := range []string{"大纲", "卷一", "● 01", "◐ 02", "本章"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("three-pane view missing %q", want)
 		}
 	}
-	m, _ = pressRune(t, m, '3')
-	if !strings.Contains(m.View(), "创作意图") {
-		t.Fatal("detail tab must show intent")
+	m, _ = submit(t, m, "/v")
+	if !m.bench.reading || !strings.Contains(m.bench.body.View(), "创作意图") {
+		t.Fatal("detail report must show intent")
 	}
-	m, _ = pressRune(t, m, '1')
+	m, _ = press(t, m, tea.KeyEsc)
 	m.bench.pane = benchPaneOutline
 	// 选中第 2 章（待确认）回车 → 读候选稿并标注。
 	m, _ = press(t, m, tea.KeyDown)
 	m, _ = press(t, m, tea.KeyEnter)
 	if !m.bench.reading || !strings.Contains(m.bench.body.View(), "候选稿") {
 		t.Fatalf("candidate reading: reading=%v", m.bench.reading)
-	}
-	m, _ = press(t, m, tea.KeyEsc)
-	// 窄屏降级：单栏 Tab 视图仍在。
-	m.width = 80
-	if view := m.View(); !strings.Contains(view, "目录") {
-		t.Fatal("narrow view should fall back to tabbed single pane")
 	}
 }
 
@@ -618,8 +609,8 @@ func TestFoldPreferencePersistsAcrossReopen(t *testing.T) {
 }
 
 func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
-	// M3 鼠标热区：滚轮=指针所在栏的 ↑/↓ 语义（主区创作中翻活动历史）；
-	// 点击章行选中、点击头行折叠；单栏点击标签行切视图。
+	// 鼠标：滚轮=指针所在栏的 ↑/↓ 语义（主区创作中翻活动历史）；
+	// 点击章行选中、点击头行折叠、点击标签切视图；坐标全部来自固定布局。
 	deps, api := newTestDeps(t, true)
 	hub := activity.NewHub()
 	api.Workbench.AttachActivityFeed(hub)
@@ -647,27 +638,28 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 		updated, _ := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		m = updated.(model)
 	}
-	wheel := func(x int, up bool) {
+	wheel := func(x, y int, up bool) {
 		button := tea.MouseButtonWheelDown
 		if up {
 			button = tea.MouseButtonWheelUp
 		}
-		updated, _ := m.Update(tea.MouseMsg{X: x, Y: 10, Action: tea.MouseActionPress, Button: button})
+		updated, _ := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: button})
 		m = updated.(model)
 	}
 
-	// 大纲行从 y=3 起（顶栏 2 行 + 栏标题 1 行）。点击第 2 章（行 3）。
-	click(5, 3+3)
+	l := m.benchLayout()
+	// 点击第 2 章（行 3）。
+	click(5, l.outlineRowsY+3)
 	if m.bench.cursor != 3 || m.bench.pane != benchPaneOutline {
 		t.Fatalf("click chapter: cursor=%d pane=%d", m.bench.cursor, m.bench.pane)
 	}
 	// 点击卷二头行（行 4）折叠：光标落在头行，弧二与第三章消失。
-	click(5, 3+4)
+	click(5, l.outlineRowsY+4)
 	if !m.bench.collapsed["v2"] || m.bench.cursor != 4 || strings.Contains(m.View(), "第三章") {
 		t.Fatalf("click header must collapse: collapsed=%v cursor=%d", m.bench.collapsed, m.bench.cursor)
 	}
 	// 大纲上滚轮：光标上移到第 2 章（行 3）。
-	wheel(5, true)
+	wheel(5, l.outlineRowsY, true)
 	if m.bench.cursor != 3 {
 		t.Fatalf("wheel over outline: cursor=%d", m.bench.cursor)
 	}
@@ -682,21 +674,18 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	}
 	updated, _ := m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	m.bench.tab = benchTabActivity
-	wheel(60, true)
+	wheel(l.mainX+2, l.activityY+1, true)
 	if m.bench.feedOffset != 1 {
-		t.Fatalf("wheel over main must page feed history: offset=%d", m.bench.feedOffset)
+		t.Fatalf("wheel over the activity strip must page history: offset=%d", m.bench.feedOffset)
 	}
-	wheel(60, false)
+	wheel(l.mainX+2, l.activityY+1, false)
 	if m.bench.feedOffset != 0 {
 		t.Fatalf("wheel down must resume follow: offset=%d", m.bench.feedOffset)
 	}
-	// 单栏降级：点击标签行第二个标签切到正文视图。
-	m.width = 80
-	m.bench.writing = false
-	click(4, 2)
-	if m.bench.view != 1 {
-		t.Fatalf("tab click must switch view, view=%d", m.bench.view)
+	// 正文区滚轮只动正文，不碰大纲与现场。
+	wheel(l.mainX+5, l.contentY+3, true)
+	if m.bench.feedOffset != 0 || m.bench.cursor != 3 {
+		t.Fatalf("wheel over prose leaked: offset=%d cursor=%d", m.bench.feedOffset, m.bench.cursor)
 	}
 }
 
@@ -710,20 +699,19 @@ func TestWorkbenchTargetPromptContinuesWithNewGoal(t *testing.T) {
 	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 3},
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
-	m = updated.(model)
-	if m.bench.prompt == nil || m.bench.prompt.purpose != "target" {
-		t.Fatalf("g 未进入目标输入态: %#v", m.bench.prompt)
+	m, cmd := submit(t, m, "/goal")
+	if cmd != nil || !strings.Contains(m.bench.err, "当前目标 3 章") || m.bench.input.Value() != "/goal" {
+		t.Fatalf("缺参应报用法并保留输入: err=%q input=%q", m.bench.err, m.bench.input.Value())
 	}
-	m = typeText(t, m, "5")
-	m, cmd := press(t, m, tea.KeyEnter)
-	if m.bench.prompt != nil || !m.bench.writing || cmd == nil {
-		t.Fatalf("target prompt did not continue run: prompt=%v writing=%v", m.bench.prompt, m.bench.writing)
+	m, _ = press(t, m, tea.KeyEsc)
+	m, cmd = submit(t, m, "/g 5")
+	if m.bench.input.Value() != "" || !m.bench.writing || cmd == nil {
+		t.Fatalf("/goal did not continue run: input=%q writing=%v", m.bench.input.Value(), m.bench.writing)
 	}
 }
 
 func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
-	// §4.9：按 i 提创作要求，作用域跟随大纲选中行；空回车只给指引不提交；
+	// §4.9：直接在底栏写要求，作用域跟随大纲选中行；空回车不提交；
 	// 文字回车入账为 Directive 并刷新工作台。
 	deps, api := newTestDeps(t, true)
 	ctx := context.Background()
@@ -747,18 +735,16 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 1},
 		Outline: []workbench.OutlineNode{{Node: plan[0]}, {Node: plan[1]}, {Node: plan[2], Number: 1}},
 	}
-	m, _ = pressRune(t, m, 'i')
-	if m.bench.prompt == nil || m.bench.prompt.purpose != "directive" || m.bench.prompt.scope != "plan_node:volume-1" {
-		t.Fatalf("i 未进入要求输入态或作用域不对: %#v", m.bench.prompt)
+	if scope, label := m.directiveScope(); scope != "plan_node:volume-1" || label != "对「第一卷」的要求" {
+		t.Fatalf("scope follows the selected outline row: %s %s", scope, label)
 	}
 	m, cmd := press(t, m, tea.KeyEnter)
-	if m.bench.prompt == nil || cmd != nil || m.bench.notice == "" {
-		t.Fatalf("empty directive must stay in prompt with guidance: prompt=%v notice=%q", m.bench.prompt, m.bench.notice)
+	if cmd != nil {
+		t.Fatal("empty enter must not submit anything")
 	}
-	m = typeText(t, m, "每章结尾留钩子")
-	m, cmd = press(t, m, tea.KeyEnter)
-	if m.bench.prompt != nil || cmd == nil {
-		t.Fatalf("directive prompt did not submit: prompt=%v", m.bench.prompt)
+	m, cmd = submit(t, m, "每章结尾留钩子")
+	if m.bench.input.Value() != "" || cmd == nil {
+		t.Fatalf("directive did not submit: input=%q", m.bench.input.Value())
 	}
 	message := findMsg[runControlMsg](t, cmd)
 	if message.err != nil || message.next != "refresh" {
@@ -784,7 +770,7 @@ func TestWorkbenchActivityFeedRendersAndUnsubscribes(t *testing.T) {
 	if m.bench.activityCh == nil {
 		t.Fatal("opening a project must subscribe to run activity")
 	}
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.writing = true
 
 	publish := func(kind activity.Kind, mutate func(*activity.Event)) {
@@ -815,6 +801,14 @@ func TestWorkbenchActivityFeedRendersAndUnsubscribes(t *testing.T) {
 	}
 	if strings.Contains(view, "workspace_put_chapter") {
 		t.Fatalf("raw tool name leaked into view:\n%s", view)
+	}
+	// 下一轮请求已发出、尚无增量：现场显示等待中，动画帧随唤醒推进。
+	spin := m.bench.spin
+	publish(activity.TurnStart, nil)
+	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
+	m = updated.(model)
+	if view := m.View(); !strings.Contains(view, "等待模型回应") || m.bench.spin == spin {
+		t.Fatalf("waiting indicator missing (spin %d→%d):\n%s", spin, m.bench.spin, view)
 	}
 
 	// 陈旧代际的唤醒不得写入当前工作台。
@@ -855,7 +849,7 @@ func TestWorkbenchRendersStreamingProsePreview(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-live")
 	m = updated.(model)
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.writing = true
 
 	base := activity.Event{
@@ -888,7 +882,7 @@ func TestActivityShowsThinkingExcerptAndErrorReason(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-think")
 	m = updated.(model)
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.writing = true
 
 	base := activity.Event{ProjectID: "book-think", RunID: "run-1", OperationID: "op-1", At: time.Now().UTC()}
@@ -919,7 +913,7 @@ func TestRewriteCandidateTakesPrecedenceOverOldAuthorityChapter(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-rw")
 	m = updated.(model)
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.loaded = true
 	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-rw", Revision: 3,
@@ -980,7 +974,7 @@ func TestActivityFeedScrollPausesFollowAndResumes(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-scroll")
 	m = updated.(model)
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.loaded, m.bench.writing = true, true
 	publish := func(kind activity.Kind, callID string) {
 		hub.Publish(activity.Event{
@@ -995,8 +989,7 @@ func TestActivityFeedScrollPausesFollowAndResumes(t *testing.T) {
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
 
-	m, _ = press(t, m, tea.KeyTab) // 焦点到主区
-	m.bench.tab = benchTabActivity
+	m = pressTimes(t, m, tea.KeyTab, 1) // 焦点到事件区
 	m = pressTimes(t, m, tea.KeyUp, 3)
 	if m.bench.feedOffset != 3 {
 		t.Fatalf("feed offset after scrolling up = %d", m.bench.feedOffset)
@@ -1051,7 +1044,7 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-long")
 	m = updated.(model)
-	m.width, m.height = 180, 20 // 矮终端逼出大纲窗口化
+	m.width, m.height = 180, 40 // 31 行大纲装不进 19 行窗口，逼出窗口化
 	m.bench.loaded = true
 	snap := workbench.WorkbenchSnapshot{ProjectID: "book-long", Revision: 1}
 	snap.Outline = append(snap.Outline, workbench.OutlineNode{
@@ -1071,10 +1064,11 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	m.bench.snap = snap
 	m.bench.cursor = 25 // 行索引：0 是卷头行，章 N 在第 N 行
 	view := m.View()
-	if !strings.Contains(view, "25 第25回") || !strings.Contains(view, "前面还有") {
+	if !strings.Contains(view, "25  第25回") || !strings.Contains(view, "前面还有") {
 		t.Fatalf("outline viewport must follow cursor:\n%s", view)
 	}
-	m, _ = press(t, m, tea.KeyTab)
+	m = pressTimes(t, m, tea.KeyTab, 2)
+	m.switchContent(contentManuscript)
 	if m.bench.pane != benchPaneMain {
 		t.Fatalf("pane after tab = %d", m.bench.pane)
 	}
@@ -1082,7 +1076,7 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	if m.bench.cursor != 25 || m.bench.previewOffset != 1 {
 		t.Fatalf("main focus must page preview: cursor=%d offset=%d", m.bench.cursor, m.bench.previewOffset)
 	}
-	m, _ = press(t, m, tea.KeyTab)
+	m = pressTimes(t, m, tea.KeyShiftTab, 2)
 	if m.bench.pane != benchPaneOutline {
 		t.Fatalf("pane = %d, want outline again", m.bench.pane)
 	}
@@ -1099,7 +1093,7 @@ func TestManualSelectionPinsMainPaneDuringWriting(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	updated, _ := m.openProject("book-pin")
 	m = updated.(model)
-	m.width, m.height = 120, 40
+	m.width, m.height = 150, 40
 	m.bench.loaded, m.bench.writing = true, true
 	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-pin", Revision: 2,
@@ -1142,17 +1136,21 @@ func TestWritingStateAllowsPauseCancelDiagnostics(t *testing.T) {
 	}
 	m.bench.snap.Run = &domainmodel.CreationRun{ID: "run-1", State: domainmodel.RunRunning}
 	m.bench.loaded = true
-	if _, cmd := pressRune(t, m, 'p'); cmd == nil {
-		t.Fatal("p must issue pause during writing")
+	if _, cmd := submit(t, m, "/pause"); cmd == nil {
+		t.Fatal("/pause must issue pause during writing")
 	}
-	if _, cmd := pressRune(t, m, 'x'); cmd == nil {
-		t.Fatal("x must issue cancel during writing")
+	if _, cmd := submit(t, m, "/stop"); cmd == nil {
+		t.Fatal("/stop must issue cancel during writing")
 	}
-	if _, cmd := pressRune(t, m, 'd'); cmd == nil {
-		t.Fatal("d must load diagnostics during writing")
+	if _, cmd := submit(t, m, "/diag"); cmd == nil {
+		t.Fatal("/diag must load diagnostics during writing")
 	}
-	if _, cmd := pressRune(t, m, 'c'); cmd != nil {
-		t.Fatal("c must stay blocked during writing")
+	if blocked, cmd := submit(t, m, "/continue"); cmd != nil || !strings.Contains(blocked.bench.notice, "创作进行中") {
+		t.Fatalf("/continue must stay blocked during writing: notice=%q", blocked.bench.notice)
+	}
+	// 写作中提要求照常入账（S12），不被当成快捷键。
+	if typed, cmd := submit(t, m, "p 开头的要求也只是文字"); cmd == nil || typed.bench.input.Value() != "" {
+		t.Fatal("plain text during writing must become a directive")
 	}
 }
 

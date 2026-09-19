@@ -444,6 +444,12 @@ Operation 的产出统一表达为 Outcome：`proposal`、`verdict`、`artifacts
 
 ### 6.1 Operation Workspace
 
+模型工具层读取工件时，将 JSON 内容直接返回为 JSON 对象／数组；`workspace_list` 仅返回 key、version 等元数据，正文通过 `workspace_read` 获取。存储层仍使用字节内容，不改变持久化格式。
+
+章节提交优先采用版本引用：单章传 `workspace_key` 与 `workspace_version`，批量重写传 `workspace_keys` 与 `workspace_versions`（key 到版本的映射）。Host 校验版本后从工作稿装配正文 patch，模型只提交 Canon Delta、实体等附带变更。版本引用不得同时携带 manuscript patch，避免两份正文来源；版本冲突明确拒绝，不静默使用最新稿。生成的 Proposal 继续经过原有章节范围、字数、Canon 和结构校验，不直接写入权威状态。
+
+为兼容已冻结的执行配置，无版本参数的旧式完整正文提交仍可用，并继续要求与工作稿一致。新工具 Schema 区分单章与多章参数；运行时同时传两种键参数会明确报互斥错误。正文不一致时指出 block 和首个差异位置，缺少正文 patch 与内容不一致分别说明。
+
 Operation 必须拥有可持久化但非权威的工作区，用来保存：
 
 - 未完成的章节草稿和结构化候选；
@@ -453,6 +459,8 @@ Operation 必须拥有可持久化但非权威的工作区，用来保存：
 - 尚未提交的 Proposal 候选。
 
 Agent 可以通过受限工具读写所属 Operation Workspace，但不能直接写 Project Authority Store。`WriteChapter` 可以在工作区内反复写入、按稳定块 ID 修改和校验草稿；完成后只把最终候选提交为 Proposal。`RewriteChapter` 从已批准的 Manuscript Revision 播种独立工作副本，不直接原地修改正式章节。
+
+提交工具是模型唯一能看见校验结果的地方：`proposal_submit` 在工具边界调用 Change Engine 的只读 `Validate`，按提案自身基线执行全部确定性结构校验（事实身份与 old_value、依赖、D41 来源与重申报、规划数量），冲突原样回给模型在同一会话内自纠；收尾的 `PrepareExecution` 只作兜底并处理基线漂移。工具边界不得另写引擎规则的子集。
 
 工作区编辑以 `block_id + expected_workspace_version` 为主要定位和并发前提，不以逐字匹配整段 `old_string` 作为核心协议。Markdown 导出不要求用户看见内部 ID，但显式导入时必须携带基线版本并重建稳定映射；无法唯一定位时明确冲突，不猜测替换位置。
 
@@ -498,7 +506,7 @@ Goal 与运行策略的每次修改都记录为版本化 Run 事件；每个 Ope
 
 每个 Project 同时最多存在一个非终态 CreationRun。用户改变目标、控制强度或创作范围时更新当前 Run，不启动竞争 Run；终态 Run 保留为历史，需要新一轮创作或精修时创建新 Run。影响故事内容的 AI Operation 必须归属一个 CreationRun，纯维护类 Operation（如重建派生数据）可以独立存在。
 
-状态语义：`running / waiting_user / paused / completed / failed / cancelled`。`waiting_user` 是 §5.4 无人值守等待态的载体：已写内容、工作区与上下文全部保留，用户裁决后原地继续。Operation 层的结局向上传导时必须区分三类：`stale`（由 Project 内容变化导致）可按 §5.5 的确定性规则创建继承 Workspace 的后继 Operation；明确可重试错误只归唯一重试策略（§6.2）处理；`failed` 必须显式暴露，CreationRun 转入 `failed` 或 `waiting_user`——未经明确策略或用户操作，Coordinator 不得把 failed 自动转换成新任务，不吞错、不隐藏失败、不无限重跑。
+状态语义：`running / waiting_user / paused / completed / failed / cancelled`。`waiting_user` 是 §5.4 无人值守等待态的载体：已写内容、工作区与上下文全部保留，用户裁决后原地继续。Operation 层的结局向上传导时必须区分三类：`stale`（由 Project 内容变化导致）可按 §5.5 的确定性规则创建继承 Workspace 的后继 Operation；明确可重试错误只归唯一重试策略（§6.2）处理；`failed` 必须显式暴露：执行失败按 D56 的会话级重开策略处理——预算内自动重开同一任务（对话、工作区与失败原因带回模型），用尽转入 `waiting_user`；`fail` 决策与卡死判定转入 `failed`。除此之外 Coordinator 不得把 failed 自动转换成新任务，不吞错、不隐藏失败、不无限重跑。
 
 Creation Coordinator 位于独立的 `creation` 包，通过公开 Goal 契约接收应用依据运行策略和作品版本产生的下一步；它校验、执行并记录落点，不做文学判断，属于 §11 模块纪律第 7 条的第一类。
 
@@ -970,3 +978,11 @@ Goal 的完成、等待、失败决策通过 `SettleCreationRun` 落盘：同一
 Restart 的后继创建与前任工作区继承必须在同一事务内提交，避免出现可被领取但缺失外部请求记录、草稿或反馈的后继。相同后继 ID 的重入比较完整执行配置，不能把不同 Pack、Creator Profile 或执行器视为同一请求；推进适配器完整传递显式 Worker 与模型配置。
 
 心跳续租同时校验 worker 与 attempt，旧执行不能为新 attempt 续租。工件同 ID 的幂等写入同时校验内容、证据及作品和生成任务归属，跨任务 ID 碰撞返回冲突。以上沿用既有状态和持久化格式，不增加任务状态或 schema 迁移。
+
+### D56：执行失败的会话级重开策略（2026-09-16）
+
+真实实证暴露的缺口：第 2 章的 Agent 会话结束后在收尾被拒，Run 立即转 `failed`；Run 是终态，协调器里已有的 Resume/后继机制永远走不到，用户续跑只能新建 Run 从头重写，草稿与对话全部作废。执行失败是会话级事件，不是整轮创作的失败。
+
+协调器对 `failed` 的 Operation 在预算内（常量 `autoReopenBudget = 3`，最多自动重开 3 次）不落盘任何 Run 状态，下一轮由 `ensureChainedOperation` 现有的 Resume（恢复对话与工作区）或后继（被否决候选）路径重开；capability 在重开的会话提示里注入上一次失败原因（取自 `operation.transitioned` 事件），模型先修正再继续。预算用尽转入 `waiting_user`，说明次数与最近原因，草稿保留；用户续跑等于再授予一次尝试，仍失败则再次停下。
+
+它与 provider 的调用级重试不叠加（§6.2）：调用级重试处理单次调用，重开处理已结束的会话。预算先为协调器常量，不进 RunStrategy 与预设摘要，出现真实调节需求再按 §14 提升为字段。`fail` 决策与卡死判定仍转 `failed`；不新增任务状态与 schema。
