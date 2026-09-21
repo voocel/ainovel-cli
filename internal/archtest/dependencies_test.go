@@ -25,6 +25,7 @@ var allowedImports = map[string][]string{
 	"archtest":                {},
 	"domain/model":            {},
 	"infra/activity":          {},
+	"infra/export":            {},
 	"infra/store":             {"domain/model"},
 	"domain/change":           {"domain/model"},
 	"domain/derive":           {"domain/model"},
@@ -37,7 +38,7 @@ var allowedImports = map[string][]string{
 	"infra/capability":        {"infra/activity", "domain/model", "infra/store", "domain/change", "infra/capability/prompt", "infra/workspace", "infra/llm", "infra/llm/models"},
 	"domain/operation":        {"domain/model", "domain/change"},
 	"app/project":             {"domain/model", "infra/store", "domain/change"},
-	"app/diag":                {"domain/model", "infra/store"},
+	"app/diag":                {"domain/model", "infra/store", "infra/export"},
 	"app/resource":            {"domain/model", "infra/store", "domain/change", "app/project", "infra/capability/pack", "infra/capability/prompt"},
 	"app/profile":             {"domain/model", "infra/store", "app/project", "app/resource", "domain/derive", "infra/capability/prompt"},
 	"app/task":                {"domain/creation", "domain/model", "infra/store", "app/project", "app/resource", "app/profile", "domain/operation", "infra/capability/prompt"},
@@ -45,7 +46,7 @@ var allowedImports = map[string][]string{
 	// novel policies, presentation queries, or application assembly.
 	"domain/creation": {"domain/model"},
 	"app/evidence":    {"domain/model", "infra/store", "domain/change", "domain/operation"},
-	"app/novel":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/project", "app/resource", "app/task"},
+	"app/novel":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/project", "app/resource", "app/task", "infra/export"},
 	"app/decision":    {"domain/model", "infra/store", "domain/change", "app/project", "app/resource", "app/task"},
 	"app/workbench":   {"infra/activity", "domain/model", "infra/store", "domain/creation", "app/decision", "app/novel", "app/project"},
 	// 模型绑定用例只认配置与模型适配器，不认任务与作品。

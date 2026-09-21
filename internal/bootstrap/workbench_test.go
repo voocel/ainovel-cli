@@ -113,7 +113,7 @@ func TestWorkbenchSnapshotAcrossLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot before run: %v", err)
 	}
-	if snapshot.Run != nil || snapshot.Decision != nil || snapshot.NextStep == "" {
+	if snapshot.Run != nil || snapshot.Decision != nil || snapshot.TargetChapters != 1 {
 		t.Fatalf("fresh snapshot = %#v", snapshot)
 	}
 
@@ -190,7 +190,7 @@ func TestWorkbenchSnapshotAcrossLifecycle(t *testing.T) {
 	if confirmedCount != 2 || snapshot.Decision != nil || snapshot.CurrentPhase != "" {
 		t.Fatalf("completed snapshot: confirmed=%d decision=%v phase=%q", confirmedCount, snapshot.Decision, snapshot.CurrentPhase)
 	}
-	if snapshot.Run == nil || snapshot.Run.State != model.RunCompleted || snapshot.NextStep == "" {
-		t.Fatalf("completed run projection = %#v next=%q", snapshot.Run, snapshot.NextStep)
+	if snapshot.Run == nil || snapshot.Run.State != model.RunCompleted || snapshot.TargetChapters != 2 {
+		t.Fatalf("completed run projection = %#v target=%d", snapshot.Run, snapshot.TargetChapters)
 	}
 }

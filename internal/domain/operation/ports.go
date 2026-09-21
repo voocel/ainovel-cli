@@ -4,14 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
 // Store 定义任务执行需要的持久化契约；领取、续租及执行写入遵循同一归属围栏。
+// 权威读写经注入的 change.Engine 完成，这里只列执行引擎自己调用的方法。
 type Store interface {
-	change.Store
-
 	ClaimNextOperationForExecutor(
 		ctx context.Context,
 		workerID, executor string,
@@ -26,7 +24,9 @@ type Store interface {
 		now time.Time,
 	) (model.Operation, error)
 	ConcludeOperation(ctx context.Context, id string, attempt int, to model.OperationState, message string, now time.Time) (model.Operation, error)
+	CurrentRevision(ctx context.Context, target model.AuthorityTarget) (model.Revision, error)
 	FailOperation(ctx context.Context, id string, attempt int, code model.FailureCode, message string, now time.Time) (model.Operation, error)
+	GetChangeSet(ctx context.Context, id string) (model.ChangeSet, error)
 	GetDerivedDocument(
 		ctx context.Context,
 		projectID string,

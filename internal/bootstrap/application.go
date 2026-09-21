@@ -68,7 +68,7 @@ func New(s *store.Store, options Options) *App {
 	if analyzer, ok := options.Executors.LLM.(change.SemanticAnalyzer); ok {
 		changes = change.NewWithSemanticAnalyzer(s, analyzer)
 	}
-	engine := operation.NewEngine(s, options.Contracts...)
+	engine := operation.NewEngine(s, changes, options.Contracts...)
 	projects := project.New(s, changes)
 	analyzer, _ := options.Executors.LLM.(resource.PreferenceAnalyzer)
 	resources := resource.New(s, changes, projects, analyzer)

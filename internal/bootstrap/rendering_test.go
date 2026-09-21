@@ -61,7 +61,7 @@ func (g renderingAdapter) Next(ctx context.Context, run model.CreationRun) (runs
 
 func newMediaApp(st *store.Store, executors tasks.ExecutorSet, policy renderingPolicy, contracts ...operation.VerdictContract) *testApp {
 	changes := change.New(st)
-	adapter := renderingAdapter{projects: projectdoc.New(st, changes), evidence: evidencereader.New(st, changes, operation.NewEngine(st, contracts...)), policy: policy}
+	adapter := renderingAdapter{projects: projectdoc.New(st, changes), evidence: evidencereader.New(st, changes, operation.NewEngine(st, changes, contracts...)), policy: policy}
 	return newTestApp(st, bootstrap.Options{Executors: executors, Contracts: contracts, Goals: map[model.GoalKind]runs.Goal{goalRendering: adapter}, Now: testTime})
 }
 

@@ -10,6 +10,10 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
+// DefaultLease 是 Worker 租约的默认时长：心跳按其三分之一续租，进程退出后最多这么久
+// 被回收。入口不传时统一取这里，不各自硬编码。
+const DefaultLease = time.Minute
+
 // ForCreation binds application execution settings without exposing their shape
 // to the goal coordinator. A new binding is made for each drive invocation.
 func (s *Manager) ForCreation(base StartOperationCommand) creation.Tasks {

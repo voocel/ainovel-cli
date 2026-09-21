@@ -30,7 +30,8 @@ func newTestApp(s *store.Store, options ...bootstrap.Options) *testApp {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	fixture := &testApp{store: s, changes: change.New(s), operations: operation.NewEngine(s, opts.Contracts...), now: now}
+	changes := change.New(s)
+	fixture := &testApp{store: s, changes: changes, operations: operation.NewEngine(s, changes, opts.Contracts...), now: now}
 	opts.Now = func() time.Time { return fixture.now() }
 	fixture.App = bootstrap.New(s, opts)
 	return fixture

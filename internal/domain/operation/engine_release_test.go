@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
@@ -50,7 +51,7 @@ func TestCancelledExecutionReleasesOperationForResume(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(background)
 	defer cancel()
-	_, err = NewEngine(authorityStore).runClaimed(ctx, blockingExecutor{cancel: cancel}, claimed, "worker-1", time.Minute, now)
+	_, err = NewEngine(authorityStore, change.New(authorityStore)).runClaimed(ctx, blockingExecutor{cancel: cancel}, claimed, "worker-1", time.Minute, now)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted run error = %v, want context.Canceled", err)
 	}

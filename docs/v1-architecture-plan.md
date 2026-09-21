@@ -838,6 +838,7 @@ internal/
 │   ├── llm/                # 单次结构化调用、严格解码与 usage 回传
 │   │   └── models/         # 模型配置与角色映射
 │   ├── activity/           # 活动发布与订阅管道
+│   ├── export/             # 原子落盘与 EPUB 容器编码；零内部依赖
 │   ├── jsonc/              # 用户可编辑 JSONC 输入的统一解码
 │   └── config/             # 配置加载与首次引导
 ├── entry/
@@ -1011,3 +1012,11 @@ Runtime 直接运行单次 `AgentLoop`：串行工具执行、同步持久化消
 - 角色映射是 worker profile 的 `ModelRole`（architect / writer / editor）；未配的角色跟随默认。配置文件顶层 `provider / model / thinking` 加 `roles{role:{provider, model, thinking}}`；环境变量（含 `AINOVEL_THINKING`）在启动时仍优先于文件。
 - 切换入口：`app/binding.Service`（工作台 `/model [角色]` 面板与 headless `model` 命令共用），先保存文件再重绑，任一失败状态不变。
 - `schemaVersion` 2 → 3（`execution_profiles` 删列、旧执行器串不可领取），按 D38 不迁移。
+
+### D58：审批策略解析归 Change Engine，执行引擎只做编排（2026-09-21）
+
+架构评审发现 Operation Engine 内含生效审批策略（D23 取更严格一方）、milestone 判定（写死 Manuscript / Canon / Plan / Ownership / Intent 的语义）、在途 locked/guided 约束合并与合规证据放行判断，违反 §11 第 4 条；同时 `operation.Store` 内嵌整个 `change.Store`，只因引擎自行构造了一个 `change.Engine`。
+
+决定：**哪条策略管这份提案、它是否构成 milestone、正文受哪些约束、合规证据能否自动放行，都是变更协议（§5）的判断，住在 `domain/change`（`approval.go`）；Operation Engine 只决定何时做独立分析、任务落到哪个状态。** `operation.NewEngine` 改为注入 `*change.Engine`，`operation.Store` 只列执行引擎自己调用的方法。工具边界的 `Validate` 不含授权检查是刻意的：AI 提案触及 locked 文档时走 `awaiting_approval` 等用户裁决（D23），不是模型能自纠的结构错误。
+
+同日的非协议清理：`change/engine.go` 按 engine / validate / authorize / approval 拆分；`app/task.DefaultLease` 收敛三处硬编码的租约时长；`change.Engine.BasisHolds` 收敛两处基线有效性布尔判断；原子落盘与 EPUB 容器编码从 app 移入 `infra/export`；`app/workbench` 读模型不再下发按键文案，TUI 以单一处境枚举渲染；headless 与 main 共用一张命令表。以上不改变持久化格式、任务状态或授权规则。

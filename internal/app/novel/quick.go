@@ -11,6 +11,7 @@ import (
 
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/app/resource"
+	"github.com/voocel/ainovel-cli/internal/app/task"
 	"github.com/voocel/ainovel-cli/internal/domain/creation"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
@@ -19,7 +20,8 @@ type QuickWriteCommand struct {
 	ProjectID string
 	UserID    string
 	Premise   string
-	Chapters  int
+	// Chapters 是目标章数；0 表示沿用当前目标（见 TargetChapters）。
+	Chapters int
 	// Approval 请求更新 Project 的有效审批策略；Run 创建时只保留不可变预设摘要。
 	Approval        model.ApprovalPolicy
 	Packs           []resource.PackRef
@@ -57,14 +59,24 @@ func (s *Application) QuickWrite(ctx context.Context, command QuickWriteCommand)
 		return QuickWriteResult{}, fmt.Errorf("quick write requires a configured model: %w", model.ErrInvalid)
 	}
 	if strings.TrimSpace(command.ProjectID) == "" || strings.TrimSpace(command.UserID) == "" ||
-		strings.TrimSpace(command.Premise) == "" || command.Chapters <= 0 ||
-		strings.TrimSpace(command.WorkerID) == "" || command.LeaseDuration <= 0 || command.CreatedAt.IsZero() {
-		return QuickWriteResult{}, fmt.Errorf("quick write project, user, premise, positive chapters, worker, lease and time are required: %w", model.ErrInvalid)
+		strings.TrimSpace(command.Premise) == "" || command.Chapters < 0 ||
+		strings.TrimSpace(command.WorkerID) == "" || command.CreatedAt.IsZero() {
+		return QuickWriteResult{}, fmt.Errorf("quick write project, user, premise, non-negative chapters, worker and time are required: %w", model.ErrInvalid)
+	}
+	if command.LeaseDuration <= 0 {
+		command.LeaseDuration = task.DefaultLease
 	}
 	switch command.Approval {
 	case "", model.ApprovalAuto, model.ApprovalMilestone, model.ApprovalManual:
 	default:
 		return QuickWriteResult{}, fmt.Errorf("quick write approval must be auto, milestone or manual: %w", model.ErrInvalid)
+	}
+	if command.Chapters == 0 {
+		chapters, err := s.currentTarget(ctx, command.ProjectID)
+		if err != nil {
+			return QuickWriteResult{}, err
+		}
+		command.Chapters = chapters
 	}
 
 	result := QuickWriteResult{ProjectID: command.ProjectID}
@@ -88,6 +100,25 @@ func (s *Application) QuickWrite(ctx context.Context, command QuickWriteCommand)
 		return result, err
 	}
 	return s.finishQuickResult(ctx, outcome, result)
+}
+
+// currentTarget 解析"沿用当前目标"：作品还不存在时没有目标可沿用。
+func (s *Application) currentTarget(ctx context.Context, projectID string) (int, error) {
+	project, err := s.projects.Project(ctx, projectID, model.InitialRevision)
+	if projectdoc.IsNotFound(err) {
+		return 0, fmt.Errorf("quick write on a new project requires positive chapters: %w", model.ErrInvalid)
+	}
+	if err != nil {
+		return 0, err
+	}
+	run, ok, err := s.runs.LatestCreationRun(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return TargetChapters(project, nil), nil
+	}
+	return TargetChapters(project, &run), nil
 }
 
 func attachRun(run model.CreationRun, result QuickWriteResult) QuickWriteResult {

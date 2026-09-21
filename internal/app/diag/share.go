@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 	"regexp"
 	"runtime"
 	"time"
+
+	"github.com/voocel/ainovel-cli/internal/infra/export"
 )
 
 // ShareReport is a closed projection: no raw IDs, errors, payloads or free text.
@@ -196,35 +197,17 @@ func (q *Query) ExportShare(ctx context.Context, request Request, path string) e
 	return writeShare(ctx, path, Share(report))
 }
 
+// Exclusive publication: an existing report is never replaced.
 func writeShare(ctx context.Context, path string, report ShareReport) error {
 	if path == "" {
 		return fmt.Errorf("diagnostic output path is required")
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".diag-*.tmp")
+	err := export.Publish(ctx, path, false, func(w io.Writer) error {
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(report)
+	})
 	if err != nil {
-		return fmt.Errorf("create diagnostic file: %w", err)
-	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
-		return fmt.Errorf("encode diagnostic report: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync diagnostic file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close diagnostic file: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// Hard-link publication is atomic and refuses an existing destination.
-	if err := os.Link(file.Name(), path); err != nil {
 		return fmt.Errorf("publish diagnostic file: %w", err)
 	}
 	return nil

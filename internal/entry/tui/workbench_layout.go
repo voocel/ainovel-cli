@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
 // 双栏创作台：左栏目录，右栏「正文 / 活动」视图 + 常驻创作现场 + 决定卡；底栏输入。
@@ -123,7 +122,7 @@ func (m model) benchHeader(l benchLayout) []string {
 	if title == "" {
 		title = m.bench.projectID
 	}
-	done, total := len(m.bench.snap.Manuscript), m.currentTarget()
+	done, total := len(m.bench.snap.Manuscript), m.bench.snap.TargetChapters
 	right := m.benchStateBadge() + benchTheme.Muted.Render(fmt.Sprintf("  ·  已入稿 %d / %d 章", done, total)) + " "
 	brand := " " + benchTheme.Accent.Bold(true).Render("AINOVEL") + benchTheme.Muted.Render("  /  ")
 	left := brand + benchTheme.Title.Render(truncate(title, max(4, l.width-lipgloss.Width(right)-lipgloss.Width(brand)-2)))
@@ -261,6 +260,9 @@ func (m model) commandOverlay(width int) []string {
 	lines := []string{sectionTitle(benchTheme.Muted.Render("命令 · 回车执行，支持唯一前缀"), width)}
 	var matches []benchCommand
 	for _, command := range benchCommands {
+		if command.quiet && name == "" {
+			continue
+		}
 		if strings.HasPrefix(command.name, name) {
 			matches = append(matches, command)
 		}
@@ -356,13 +358,9 @@ func (m model) composerContext() string {
 func (m model) usageLabel(l benchLayout) string {
 	parts := []string{m.bindingLabel()}
 	if feed, ok := m.activityFeed(); ok && feed.Usage.Input > 0 && l.railWidth == 0 {
-		usage := feed.Usage
-		parts = append(parts, fmt.Sprintf("↑%s ↓%s", formatTokens(usage.Input), formatTokens(usage.Output)))
-		if usage.CacheRead > 0 {
-			parts = append(parts, fmt.Sprintf("缓存 %.0f%%", 100*float64(usage.CacheRead)/float64(usage.Input)))
-		}
-		if usage.Cost > 0 {
-			parts = append(parts, formatCost(usage.Cost))
+		parts = append(parts, tokensLine(feed.Usage))
+		if feed.Usage.Cost > 0 {
+			parts = append(parts, formatCost(feed.Usage.Cost))
 		}
 	}
 	return benchTheme.Muted.Render(truncate(strings.Join(parts, " · "), (l.width-2)/2))
@@ -372,15 +370,12 @@ type benchAction struct{ key, label string }
 
 // primaryAction 当前最该做的一件事；其余全部在 / 命令面板里。
 func (m model) primaryAction() benchAction {
-	b := m.bench
-	switch {
-	case b.writing:
+	switch m.bench.situation() {
+	case situationWriting, situationPausing, situationCancelling:
 		return benchAction{"/pause", "暂停推进"}
-	case b.decision != nil && b.decision.hasProposal:
+	case situationDecidingProposal:
 		return benchAction{"/review", "查看完整变更"}
-	case b.decision != nil:
-		return benchAction{"/continue", "继续创作"}
-	case b.hasRun() && b.run().State == domainmodel.RunCompleted:
+	case situationCompleted:
 		return benchAction{"/goal", "提高目标续写"}
 	default:
 		return benchAction{"/continue", "继续创作"}

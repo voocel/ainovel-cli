@@ -65,6 +65,16 @@ func (e *Engine) VerifyBasis(ctx context.Context, target model.AuthorityTarget, 
 	return nil
 }
 
+// BasisHolds 是 VerifyBasis 的布尔视图：基线不成立返回 false 而非错误，其它错误照常上抛。
+// 证据有效性查询（审阅裁定、工件、用户裁决）共用这一处，不各自翻译 ErrBasisMismatch。
+func (e *Engine) BasisHolds(ctx context.Context, target model.AuthorityTarget, basis model.EvidenceBasis, at model.Revision) (bool, error) {
+	err := e.VerifyBasis(ctx, target, basis, at)
+	if errors.Is(err, ErrBasisMismatch) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (e *Engine) canonScopeAt(ctx context.Context, target model.AuthorityTarget, at model.Revision, scope model.CanonScope) ([]model.DocumentBasis, error) {
 	documents, err := e.store.ListDocuments(ctx, target, model.DocumentCanon, at)
 	if err != nil {

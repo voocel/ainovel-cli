@@ -3,7 +3,6 @@ package evidence
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
@@ -30,12 +29,9 @@ type Check struct {
 }
 
 func (r *Reader) Valid(ctx context.Context, target model.AuthorityTarget, revision model.Revision, basis model.EvidenceBasis) (bool, error) {
-	err := r.changes.VerifyBasis(ctx, target, basis, revision)
-	if errors.Is(err, change.ErrBasisMismatch) {
-		return false, nil
-	}
-	return err == nil, err
+	return r.changes.BasisHolds(ctx, target, basis, revision)
 }
+
 func (r *Reader) Artifacts(ctx context.Context, projectID string, revision model.Revision) ([]model.Artifact, error) {
 	artifacts, err := r.store.ListArtifacts(ctx, projectID)
 	if err != nil {

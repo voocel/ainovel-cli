@@ -90,7 +90,8 @@ type WorkbenchSnapshot struct {
 	Adjudications []model.Adjudication `json:"adjudications,omitempty"`
 	// PendingCanon 是正文改动后待核验的事实 ID（D41）。
 	PendingCanon []string `json:"pending_canon,omitempty"`
-	NextStep     string   `json:"next_step,omitempty"`
+	// TargetChapters 是当前目标章数：Run 的小说目标，没有时回退 Intent。
+	TargetChapters int `json:"target_chapters"`
 }
 
 func (s *Query) WorkbenchSnapshot(ctx context.Context, projectID string) (WorkbenchSnapshot, error) {
@@ -131,7 +132,7 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 		snapshot.PendingCanon = append(snapshot.PendingCanon, gap.Pending...)
 	}
 	snapshot.Outline = buildOutline(project, snapshot.Candidates, writingPlanID)
-	snapshot.NextStep = workbenchNextStep(snapshot)
+	snapshot.TargetChapters = novel.TargetChapters(project, snapshot.Run)
 	return snapshot, nil
 }
 
@@ -320,31 +321,4 @@ func buildOutline(project projectdoc.Snapshot, candidates []ChapterCandidate, wr
 func hasKey(set map[string]struct{}, id string) bool {
 	_, ok := set[id]
 	return ok
-}
-
-// workbenchNextStep 生成创作语言的下一步引导（键名属于产品键位表，随文案下发）。
-func workbenchNextStep(snapshot WorkbenchSnapshot) string {
-	if snapshot.CurrentPhase != "" {
-		return ""
-	}
-	if snapshot.Decision != nil {
-		if snapshot.Decision.HasProposal {
-			return "有稿件待验收。进入 F3 审阅后，输入 y 回车通过，或提交修改意见。"
-		}
-		return "创作在等你的决定：" + snapshot.Decision.Reason
-	}
-	if snapshot.Run == nil {
-		return "输入 /continue 回车开始创作。"
-	}
-	switch snapshot.Run.State {
-	case model.RunFailed:
-		return "输入 /diag 查看诊断，/continue 重试。"
-	case model.RunCancelled:
-		return "创作已取消。输入 /continue 从现有内容继续。"
-	case model.RunCompleted:
-		return "续写：/goal <总章数>，回车即继续。"
-	case model.RunPaused:
-		return "创作已暂停。输入 /continue 回车继续。"
-	}
-	return ""
 }

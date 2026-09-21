@@ -22,7 +22,7 @@ func studioModel(t *testing.T, width, height int) model {
 	m.bench = newWorkbenchState("letters", 1)
 	m.bench.loaded, m.bench.writing = true, true
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "letters", Intent: domainmodel.Intent{Premise: "亡者来信", TargetChapters: 8},
+		ProjectID: "letters", Intent: domainmodel.Intent{Premise: "亡者来信", TargetChapters: 8}, TargetChapters: 8,
 		Run:          &domainmodel.CreationRun{ID: "run", State: domainmodel.RunRunning},
 		CurrentPhase: "撰写第 4 章",
 		Directives: []domainmodel.Directive{
@@ -99,6 +99,7 @@ func longWorkbench(tb testing.TB, count int) model {
 	m.bench = newWorkbenchState("long", 1)
 	m.bench.loaded, m.bench.writing = true, true
 	m.bench.snap.Intent.TargetChapters = count + 500
+	m.bench.snap.TargetChapters = count + 500
 	m.bench.snap.Run = &domainmodel.CreationRun{ID: "run", State: domainmodel.RunRunning}
 	for i := 1; i <= count; i++ {
 		if i%50 == 1 {

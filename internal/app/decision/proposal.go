@@ -177,6 +177,10 @@ func semanticResolutionOption(
 	if err := report.Validate(); err != nil {
 		return change.SemanticImpactReport{}, change.ResolutionOption{}, err
 	}
+	// 一致的报告没有候选策略，先返回让调用方给出“直接批准即可”，不要误报成策略不存在。
+	if report.Status == change.SemanticImpactConsistent {
+		return report, change.ResolutionOption{}, nil
+	}
 	for _, option := range report.Options {
 		if option.Strategy == strategy {
 			return report, option, nil

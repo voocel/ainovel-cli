@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -48,8 +47,8 @@ type RunResult struct {
 	Artifacts []model.Artifact `json:"artifacts,omitempty"`
 }
 
-func NewEngine(authorityStore Store, contracts ...VerdictContract) *Engine {
-	e := &Engine{store: authorityStore, changes: change.New(authorityStore), verdicts: make(map[model.OperationKind]VerdictValidator)}
+func NewEngine(authorityStore Store, changes *change.Engine, contracts ...VerdictContract) *Engine {
+	e := &Engine{store: authorityStore, changes: changes, verdicts: make(map[model.OperationKind]VerdictValidator)}
 	e.verdicts[model.OperationReviewRange] = e.validateReviewEvidence
 	for _, contract := range contracts {
 		if _, err := model.KindSpec(contract.Kind); err != nil {
@@ -219,7 +218,7 @@ func (e *Engine) runClaimed(
 	} else if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
-	constraints, err := e.semanticConstraints(ctx, operation, proposal)
+	constraints, err := e.changes.SemanticConstraints(ctx, operation.Snapshot.BaseRevision, proposal)
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
@@ -409,14 +408,14 @@ func (e *Engine) finalize(
 		}
 		prepared, result.Proposal = relocated, relocated
 	}
-	policy, err := e.effectiveApprovalPolicy(ctx, operation, prepared.BaseRevision)
+	policy, err := e.changes.EffectiveApprovalPolicy(ctx, operation.Snapshot.ApprovalPolicy, prepared)
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
 	if policy == model.ApprovalCustom {
 		return e.fail(ctx, operation, fmt.Errorf("custom approval policy requires an explicit policy contract: %w", model.ErrInvalid), now)
 	}
-	if policy == model.ApprovalManual || (policy == model.ApprovalMilestone && milestoneProposal(prepared)) {
+	if policy == model.ApprovalManual || (policy == model.ApprovalMilestone && change.Milestone(prepared)) {
 		awaiting, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, model.OperationAwaitingApproval,
 			"proposal awaits user approval", now,
 		)
@@ -428,12 +427,12 @@ func (e *Engine) finalize(
 	}
 	// 恢复或重定位不能把旧约束下的 pass 用在新约束上。需要时只重做独立检查，
 	// 保留已经生成的候选内容；检查不可用仍沿既有规则等待用户裁决。
-	constraints, err := e.semanticConstraints(ctx, operation, prepared)
+	constraints, err := e.changes.SemanticConstraints(ctx, operation.Snapshot.BaseRevision, prepared)
 	if err != nil {
 		return e.fail(ctx, operation, err, now)
 	}
 	if len(constraints) > 0 {
-		basis, err := complianceBasisDigest(prepared, constraints)
+		basis, err := change.ComplianceBasisDigest(prepared, constraints)
 		if err != nil {
 			return e.fail(ctx, operation, err, now)
 		}
@@ -454,7 +453,7 @@ func (e *Engine) finalize(
 			result.Proposal = prepared
 		}
 	}
-	if reason, err := e.semanticApprovalReason(ctx, operation, prepared); err != nil {
+	if reason, err := change.ComplianceReason(prepared, constraints); err != nil {
 		return e.fail(ctx, operation, err, now)
 	} else if reason != "" {
 		awaiting, err := e.store.ConcludeOperation(ctx, operation.ID, operation.Attempt, model.OperationAwaitingApproval, reason, now)
@@ -508,144 +507,10 @@ func shouldAnalyzeSemanticCompliance(
 ) bool {
 	if len(constraints) == 0 || operation.Snapshot.ApprovalPolicy == model.ApprovalManual ||
 		operation.Snapshot.ApprovalPolicy == model.ApprovalCustom ||
-		(operation.Snapshot.ApprovalPolicy == model.ApprovalMilestone && milestoneProposal(proposal)) {
+		(operation.Snapshot.ApprovalPolicy == model.ApprovalMilestone && change.Milestone(proposal)) {
 		return false
 	}
 	return true
-}
-
-// effectiveApprovalPolicy 取启动快照与最新已批准 Revision 上的权威审批策略中
-// 更严格的一方（D23）：收紧立即生效来自权威文档，放松不追溯来自快照下限。
-func (e *Engine) effectiveApprovalPolicy(
-	ctx context.Context,
-	operation model.Operation,
-	revision model.Revision,
-) (model.ApprovalPolicy, error) {
-	policy := operation.Snapshot.ApprovalPolicy
-	if operation.Target.Kind != model.AuthorityProject || revision == model.InitialRevision {
-		return policy, nil
-	}
-	document, err := e.store.GetDocument(ctx, operation.Target,
-		model.DocumentRef{Kind: model.DocumentApproval, ID: "root"}, revision)
-	if errors.Is(err, model.ErrNotFound) {
-		return policy, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	var setting model.ApprovalSetting
-	if err := json.Unmarshal(document.Content, &setting); err != nil {
-		return "", fmt.Errorf("decode approval setting: %w", err)
-	}
-	return model.StricterApproval(policy, setting.Policy), nil
-}
-
-func (e *Engine) semanticConstraints(
-	ctx context.Context,
-	operation model.Operation,
-	proposal model.Proposal,
-) ([]model.OwnershipRule, error) {
-	hasManuscript := false
-	for _, patch := range proposal.Patches {
-		if patch.Document.Kind == model.DocumentManuscript {
-			hasManuscript = true
-			break
-		}
-	}
-	if !hasManuscript || operation.Target.Kind != model.AuthorityProject {
-		return nil, nil
-	}
-	// D23：约束取“启动快照与提案基线（提交时的最新已批准 Revision）中更严格
-	// 的一方”。收紧立即生效来自提案基线，放松不追溯来自启动快照。
-	snapshotRules, err := e.ownershipRules(ctx, operation.Target, operation.Snapshot.BaseRevision)
-	if err != nil {
-		return nil, err
-	}
-	constraints := snapshotRules
-	if proposal.BaseRevision != operation.Snapshot.BaseRevision {
-		latestRules, err := e.ownershipRules(ctx, operation.Target, proposal.BaseRevision)
-		if err != nil {
-			return nil, err
-		}
-		constraints = mergeStricterRules(snapshotRules, latestRules)
-	}
-	filtered := constraints[:0]
-	for _, rule := range constraints {
-		if rule.Control == model.ControlLocked || rule.Control == model.ControlGuided {
-			filtered = append(filtered, rule)
-		}
-	}
-	slices.SortFunc(filtered, func(left, right model.OwnershipRule) int {
-		if compared := strings.Compare(left.Target.Key(), right.Target.Key()); compared != 0 {
-			return compared
-		}
-		return strings.Compare(strings.Join(left.Guidance, "\n"), strings.Join(right.Guidance, "\n"))
-	})
-	return filtered, nil
-}
-
-func (e *Engine) ownershipRules(
-	ctx context.Context,
-	target model.AuthorityTarget,
-	revision model.Revision,
-) ([]model.OwnershipRule, error) {
-	if revision == model.InitialRevision {
-		return nil, nil
-	}
-	documents, err := e.store.ListDocuments(ctx, target, model.DocumentOwnership, revision)
-	if err != nil {
-		return nil, err
-	}
-	rules := make([]model.OwnershipRule, 0, len(documents))
-	for _, document := range documents {
-		var rule model.OwnershipRule
-		if err := json.Unmarshal(document.Content, &rule); err != nil {
-			return nil, fmt.Errorf("decode ownership constraint %q: %w", document.Document.ID, err)
-		}
-		rules = append(rules, rule)
-	}
-	return rules, nil
-}
-
-func controlRank(level model.ControlLevel) int {
-	switch level {
-	case model.ControlLocked:
-		return 2
-	case model.ControlGuided:
-		return 1
-	default:
-		return 0
-	}
-}
-
-// mergeStricterRules 对同一 target 取控制级别更严格的一方；两侧同为 guided 且
-// guidance 不同时二者都保留——在途任务必须同时通过新旧约束校验（基线 §5.5）。
-func mergeStricterRules(snapshot, latest []model.OwnershipRule) []model.OwnershipRule {
-	byTarget := make(map[string][]model.OwnershipRule)
-	for _, rule := range snapshot {
-		byTarget[rule.Target.Key()] = append(byTarget[rule.Target.Key()], rule)
-	}
-	for _, rule := range latest {
-		key := rule.Target.Key()
-		existing := byTarget[key]
-		if len(existing) == 0 {
-			byTarget[key] = []model.OwnershipRule{rule}
-			continue
-		}
-		strongest := existing[0]
-		switch {
-		case controlRank(rule.Control) > controlRank(strongest.Control):
-			byTarget[key] = []model.OwnershipRule{rule}
-		case controlRank(rule.Control) < controlRank(strongest.Control):
-		case rule.Control == model.ControlGuided && !slices.Equal(rule.Guidance, strongest.Guidance):
-			byTarget[key] = append(existing, rule)
-		}
-	}
-	merged := make([]model.OwnershipRule, 0, len(byTarget))
-	for _, rules := range byTarget {
-		merged = append(merged, rules...)
-	}
-	return merged
 }
 
 func unavailableComplianceReport(
@@ -659,86 +524,6 @@ func unavailableComplianceReport(
 		})
 	}
 	return report
-}
-
-func (e *Engine) semanticApprovalReason(
-	ctx context.Context,
-	operation model.Operation,
-	proposal model.Proposal,
-) (string, error) {
-	constraints, err := e.semanticConstraints(ctx, operation, proposal)
-	if err != nil || len(constraints) == 0 {
-		return "", err
-	}
-	if len(proposal.Impact.Compliance) == 0 {
-		return "semantic compliance evidence is required for locked or guided story constraints", nil
-	}
-	var report model.SemanticComplianceReport
-	if err := json.Unmarshal(proposal.Impact.Compliance, &report); err != nil {
-		return "", fmt.Errorf("decode semantic compliance report: %w", err)
-	}
-	if err := report.Validate(); err != nil {
-		return "", err
-	}
-	basis, err := complianceBasisDigest(proposal, constraints)
-	if err != nil {
-		return "", err
-	}
-	if report.BasisDigest != basis {
-		return "semantic compliance evidence does not cover the candidate and current constraints", nil
-	}
-	if report.Status != model.SemanticCompliancePass {
-		return fmt.Sprintf("semantic compliance is %s; user approval is required", report.Status), nil
-	}
-	return "", nil
-}
-
-func complianceBasisDigest(proposal model.Proposal, constraints []model.OwnershipRule) (string, error) {
-	payload, err := json.Marshal(struct {
-		Patches     []model.Patch         `json:"patches"`
-		Constraints []model.OwnershipRule `json:"constraints"`
-	}{proposal.Patches, constraints})
-	if err != nil {
-		return "", fmt.Errorf("encode compliance basis: %w", err)
-	}
-	return model.Digest(payload), nil
-}
-
-// milestoneProposal 判定变化的重大性。例行推进——章节正文与随章提交的 Canon
-// Delta——不构成 milestone，否则 milestone 塌缩为 manual、中间档消失（基线 §5.4）。
-func milestoneProposal(proposal model.Proposal) bool {
-	chapters := make(map[string]struct{})
-	for _, patch := range proposal.Patches {
-		if patch.Document.Kind == model.DocumentManuscript && patch.Operation == model.PatchPut {
-			chapters[patch.Document.ID] = struct{}{}
-		}
-	}
-	for _, patch := range proposal.Patches {
-		switch patch.Document.Kind {
-		case model.DocumentOwnership, model.DocumentIntent:
-			return true
-		case model.DocumentCanon:
-			if patch.Operation == model.PatchDelete {
-				return true
-			}
-			var fact model.CanonFact
-			if json.Unmarshal(patch.Content, &fact) != nil {
-				return true
-			}
-			if _, routine := chapters[fact.SourceChapterID]; !routine {
-				return true
-			}
-		case model.DocumentPlan:
-			if patch.Operation == model.PatchDelete {
-				return true
-			}
-			var node model.PlanNode
-			if json.Unmarshal(patch.Content, &node) == nil && (node.Kind == model.PlanVolume || node.Kind == model.PlanArc) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // fail 收尾失败并按原因打码（D46）：结果未知不是普通失败，用户对账或重提前不会自动重试。
@@ -801,7 +586,7 @@ func (e *Engine) analyzeCompliance(ctx context.Context, executor Executor, worke
 			return nil, err
 		}
 	}
-	basis, err := complianceBasisDigest(proposal, constraints)
+	basis, err := change.ComplianceBasisDigest(proposal, constraints)
 	if err != nil {
 		return nil, err
 	}

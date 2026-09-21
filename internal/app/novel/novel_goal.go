@@ -139,6 +139,20 @@ func (Policy) Next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 	return creation.Step{Work: &work}, nil
 }
 
+// TargetChapters 是当前目标章数：最近一轮创作的小说目标优先，其次作品意图，
+// 都没有时至少覆盖已有正文。续跑沿用目标与工作台呈现共用这一条规则。
+func TargetChapters(project projectdoc.Snapshot, run *model.CreationRun) int {
+	if run != nil {
+		if goal, err := model.DecodeNovelGoal(run.Goal); err == nil {
+			return goal.TargetChapters
+		}
+	}
+	if project.Intent.TargetChapters > 0 {
+		return project.Intent.TargetChapters
+	}
+	return max(1, len(project.Manuscript))
+}
+
 // completionUnmet 是完成契约的最小落点（D29）：在同一 Revision 上验证蓝图覆盖
 // 目标章数且每章有正文。队列为空不等于完成。返回空串表示契约满足。
 func completionUnmet(project projectdoc.Snapshot, goal model.NovelGoal) string {

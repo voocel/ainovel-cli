@@ -487,8 +487,9 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 	m.width, m.height = 180, 40
 	run := domainmodel.CreationRun{ID: "run:book-1", State: domainmodel.RunWaitingUser}
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-1",
-		Intent:    domainmodel.Intent{Premise: "测试书", TargetChapters: 3, EndingDirection: "圆满"},
+		ProjectID:      "book-1",
+		Intent:         domainmodel.Intent{Premise: "测试书", TargetChapters: 3, EndingDirection: "圆满"},
+		TargetChapters: 3,
 		Outline: []workbench.OutlineNode{
 			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
 			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
@@ -555,7 +556,7 @@ func TestOutlineFoldingCollapsesSubtreeAndAnchorsCursor(t *testing.T) {
 		{Node: domainmodel.PlanNode{ID: "c3", Kind: domainmodel.PlanChapter, ParentID: "a2", Title: "第三章"}, Number: 3, State: workbench.ChapterPlanned},
 	}
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-fold", Intent: domainmodel.Intent{Premise: "折叠", TargetChapters: 5},
+		ProjectID: "book-fold", Intent: domainmodel.Intent{Premise: "折叠", TargetChapters: 5}, TargetChapters: 5,
 		Outline: outline,
 	}
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0) // 第一个章行（行 2）
@@ -608,7 +609,7 @@ func TestFoldPreferencePersistsAcrossReopen(t *testing.T) {
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-pref", Intent: domainmodel.Intent{Premise: "偏好", TargetChapters: 1},
+		ProjectID: "book-pref", Intent: domainmodel.Intent{Premise: "偏好", TargetChapters: 1}, TargetChapters: 1,
 		Outline: []workbench.OutlineNode{
 			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
 			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
@@ -645,7 +646,7 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	m.bench.loaded = true
 	m.width, m.height = 180, 40
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-mouse", Intent: domainmodel.Intent{Premise: "鼠标", TargetChapters: 3},
+		ProjectID: "book-mouse", Intent: domainmodel.Intent{Premise: "鼠标", TargetChapters: 3}, TargetChapters: 3,
 		Outline: []workbench.OutlineNode{
 			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "卷一"}},
 			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "弧一"}},
@@ -730,7 +731,7 @@ func TestWorkbenchTargetPromptContinuesWithNewGoal(t *testing.T) {
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 3},
+		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 3}, TargetChapters: 3,
 	}
 	m, cmd := submit(t, m, "/goal")
 	if cmd != nil || !strings.Contains(m.bench.err, "当前目标 3 章") || m.bench.input.Value() != "/goal" {
@@ -765,7 +766,7 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
 	m.bench.snap = workbench.WorkbenchSnapshot{
-		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 1},
+		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 1}, TargetChapters: 1,
 		Outline: []workbench.OutlineNode{{Node: plan[0]}, {Node: plan[1]}, {Node: plan[2], Number: 1}},
 	}
 	if scope, label := m.directiveScope(); scope != "plan_node:volume-1" || label != "「第一卷」" {

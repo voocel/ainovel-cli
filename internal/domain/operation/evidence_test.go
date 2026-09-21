@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
@@ -20,7 +21,7 @@ func TestEvidenceContractCannotDropFrozenDependencies(t *testing.T) {
 	}
 	defer s.Close()
 	op := createAssetOperation(t, ctx, s, time.Now())
-	engine := NewEngine(s, VerdictContract{Kind: model.OperationGenerateAsset, Validate: func(context.Context, model.Operation, json.RawMessage) (model.EvidenceBasis, error) {
+	engine := NewEngine(s, change.New(s), VerdictContract{Kind: model.OperationGenerateAsset, Validate: func(context.Context, model.Operation, json.RawMessage) (model.EvidenceBasis, error) {
 		return model.EvidenceBasis{}, nil
 	}})
 	if _, err := engine.ValidateEvidence(ctx, op, json.RawMessage(`{"passed":true}`)); !errors.Is(err, model.ErrInvalid) {

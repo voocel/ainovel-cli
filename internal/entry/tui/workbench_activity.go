@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 )
 
@@ -304,25 +303,23 @@ func (m model) sceneTitle(feed activity.Snapshot, ok bool) string {
 // idleSceneText 没有实时活动时，现场条说明当下处境与下一步。
 func (m model) idleSceneText() string {
 	b := m.bench
-	switch {
-	case b.writing:
+	switch b.situation() {
+	case situationWriting, situationPausing, situationCancelling:
 		if b.snap.CurrentPhase != "" {
 			return b.snap.CurrentPhase + " · 准备中"
 		}
 		return "准备中"
-	case b.decision != nil:
+	case situationDecidingProposal, situationDeciding:
 		return "等你决定 · 见下方决定卡"
-	case !b.hasRun():
+	case situationNoRun:
 		return "还没有开始创作 · /continue 开始"
-	}
-	switch b.run().State {
-	case domainmodel.RunCompleted:
+	case situationCompleted:
 		return "全书完成 · /goal 提高目标续写"
-	case domainmodel.RunPaused:
+	case situationPaused:
 		return "已暂停 · /continue 继续"
-	case domainmodel.RunFailed:
+	case situationFailed:
 		return "需要处理 · /continue 重试，/diag 查看诊断"
-	case domainmodel.RunCancelled:
+	case situationCancelled:
 		return "本轮已取消 · /continue 开启新一轮"
 	default:
 		return runStateLabel(b.run().State)

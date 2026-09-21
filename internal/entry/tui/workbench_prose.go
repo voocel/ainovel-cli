@@ -75,20 +75,39 @@ func (m model) overviewSource() proseSource {
 	if src.title == "" {
 		src.title = "作品总览"
 	}
-	switch {
-	case m.bench.writing:
-		src.live = true
-		src.state = "◌ 创作进行中"
-		src.text = snap.CurrentPhase
-		if src.text == "" {
-			src.text = "正在构思与规划，下方创作现场可以看到模型的每一步。"
-		}
-	case snap.NextStep != "":
-		src.text = snap.NextStep
-	default:
-		src.text = "从一个故事开始。输入 /continue 继续创作，或直接写下要求。"
+	if !m.bench.writing {
+		src.text = m.nextStepText()
+		return src
+	}
+	src.live = true
+	src.state = "◌ 创作进行中"
+	src.text = snap.CurrentPhase
+	if src.text == "" {
+		src.text = "正在构思与规划，下方创作现场可以看到模型的每一步。"
 	}
 	return src
+}
+
+// nextStepText 总览页的下一步引导：键名属于界面键位表，随界面文案维护。
+func (m model) nextStepText() string {
+	switch m.bench.situation() {
+	case situationDecidingProposal:
+		return "有稿件待验收。进入 F3 审阅后，输入 y 回车通过，或提交修改意见。"
+	case situationDeciding:
+		return "创作在等你的决定：" + m.bench.decision.reason
+	case situationNoRun:
+		return "输入 /continue 回车开始创作。"
+	case situationFailed:
+		return "输入 /diag 查看诊断，/continue 重试。"
+	case situationCancelled:
+		return "创作已取消。输入 /continue 从现有内容继续。"
+	case situationCompleted:
+		return "续写：/goal <总章数>，回车即继续。"
+	case situationPaused:
+		return "创作已暂停。输入 /continue 回车继续。"
+	default:
+		return "从一个故事开始。输入 /continue 继续创作，或直接写下要求。"
+	}
 }
 
 func (m model) candidateFor(number int) (domainmodel.ManuscriptChapter, bool) {

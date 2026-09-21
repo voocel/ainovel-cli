@@ -68,15 +68,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return headless.Run(context.Background(), nil, nil, stdout, stderr)
 	}
 	if *headlessMode {
-		switch commands[0] {
-		case "quick", "creation", "project", "proposal", "operation", "prompt", "pack", "profile", "artifact", "diag", "model", "help":
-		default:
+		// 命令表决定装配深度：不开库、只读开库或完整装配。
+		command, ok := headless.Lookup(commands[0])
+		if !ok {
 			return fmt.Errorf("未知命令 %q", commands[0])
 		}
-		if commands[0] == "help" {
+		switch command.Storage {
+		case headless.StorageNone:
 			return headless.Run(context.Background(), nil, commands, stdout, stderr)
-		}
-		if commands[0] == "diag" {
+		case headless.StorageReadOnly:
 			return runDiagnostics(context.Background(), *databasePath, commands, stdout, stderr)
 		}
 	}

@@ -50,8 +50,8 @@ func TestRecoveryRechecksComplianceAfterConstraintChange(t *testing.T) {
 				t.Fatal(err)
 			}
 			proposal := *outcome.Proposal
-			engine := NewEngine(s)
-			constraints, err := engine.semanticConstraints(ctx, op, proposal)
+			engine := NewEngine(s, change.New(s))
+			constraints, err := change.New(s).SemanticConstraints(ctx, op.Snapshot.BaseRevision, proposal)
 			if err != nil {
 				t.Fatal(err)
 			}

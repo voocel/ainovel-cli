@@ -6,8 +6,8 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// Prose follows Unicode line-break opportunities (including Chinese punctuation),
-// while long unbroken tokens fall back to whole grapheme clusters.
+// readingLines 是正文与中文长文的唯一折行：按 Unicode 断行机会（含中文标点）换行，
+// 超长的不可断片段退回按字素簇硬切。带样式的界面块只经 fitBlock 裁切，不走这里。
 func readingLines(text string, width int) []string {
 	width = max(1, width)
 	var lines []string

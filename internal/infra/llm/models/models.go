@@ -64,9 +64,6 @@ func New(config Config) (agentcore.ChatModel, error) {
 	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.Model) == "" {
 		return nil, fmt.Errorf("model provider and name are required: %w", model.ErrInvalid)
 	}
-	if config.API != "" && (config.Provider != "openai" || (config.API != "chat" && config.API != "responses")) {
-		return nil, fmt.Errorf("invalid API endpoint for provider %q", config.Provider)
-	}
 	options := make([]agentllm.ModelOption, 0, 4)
 	if config.API != "" {
 		options = append(options, agentllm.WithProviderExtra(map[string]any{"api": config.API}))

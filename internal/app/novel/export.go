@@ -3,6 +3,7 @@ package novel
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/export"
 )
 
 type ExportCommand struct {
@@ -89,12 +91,15 @@ func (s *Application) Export(ctx context.Context, command ExportCommand) (Export
 	if err != nil {
 		return ExportResult{}, err
 	}
-	err = publishExport(ctx, path, command.Overwrite, func(w io.Writer) error {
+	err = export.Publish(ctx, path, command.Overwrite, func(w io.Writer) error {
 		if format == "epub" {
-			return writeEPUB(ctx, w, book)
+			return export.WriteEPUB(w, epubBook(book))
 		}
 		return writeTXT(ctx, w, book)
 	})
+	if errors.Is(err, os.ErrExist) {
+		err = fmt.Errorf("文件已存在，请换一个文件名，或使用 --overwrite：%w", err)
+	}
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("导出失败：%w", err)
 	}
@@ -142,35 +147,16 @@ func writeTXT(ctx context.Context, w io.Writer, book exportBook) error {
 	return out.Flush()
 }
 
-// Publish only a fully written file. Link creates the destination exclusively,
-// so another exporter cannot be overwritten between an existence check and IO.
-func publishExport(ctx context.Context, path string, overwrite bool, write func(io.Writer) error) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".ainovel-export-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-	if err := write(file); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if overwrite {
-		return os.Rename(file.Name(), path)
-	}
-	if err := os.Link(file.Name(), path); err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("文件已存在，请换一个文件名，或使用 --overwrite：%w", err)
+// The EPUB container only sees plain text: headings and paragraph splits are
+// settled here, so the same chapter reads identically in TXT and EPUB.
+func epubBook(book exportBook) export.EPUB {
+	doc := export.EPUB{Identifier: fmt.Sprintf("ainovel:%s:r%d", book.ID, book.Revision), Title: book.Title, Author: book.Author, Language: "zh-CN", Modified: book.Modified}
+	for _, chapter := range book.Chapters {
+		var paragraphs []string
+		for _, block := range chapter.Blocks {
+			paragraphs = append(paragraphs, strings.Split(strings.ReplaceAll(block.Text, "\r\n", "\n"), "\n\n")...)
 		}
-		return err
+		doc.Chapters = append(doc.Chapters, export.EPUBChapter{Title: chapterHeading(chapter), Paragraphs: paragraphs})
 	}
-	return nil
+	return doc
 }

@@ -104,6 +104,60 @@ func (b *workbenchState) run() domainmodel.CreationRun {
 	return *b.snap.Run
 }
 
+// benchSituation 是工作台的处境。顶栏徽章、现场条、主操作与总览引导都只按它分支，
+// 不再各自重算 writing 与 run.State 的组合。
+type benchSituation int
+
+const (
+	situationNoRun benchSituation = iota
+	situationWriting
+	situationPausing    // 用户已暂停，当前任务还在收尾
+	situationCancelling // 本轮已取消，当前任务还在收尾
+	situationDecidingProposal
+	situationDeciding
+	situationCompleted
+	situationPaused
+	situationFailed
+	situationCancelled
+	situationRunning
+)
+
+// situation 的优先级：进程内是否正在跑（直播语义绑进程态）> 是否等用户裁决 >
+// 有没有运行过 > 持久化的运行状态。
+func (b *workbenchState) situation() benchSituation {
+	if b.writing {
+		if b.hasRun() {
+			switch b.run().State {
+			case domainmodel.RunPaused:
+				return situationPausing
+			case domainmodel.RunCancelled:
+				return situationCancelling
+			}
+		}
+		return situationWriting
+	}
+	if b.decision != nil {
+		if b.decision.hasProposal {
+			return situationDecidingProposal
+		}
+		return situationDeciding
+	}
+	if !b.hasRun() {
+		return situationNoRun
+	}
+	switch b.run().State {
+	case domainmodel.RunCompleted:
+		return situationCompleted
+	case domainmodel.RunPaused:
+		return situationPaused
+	case domainmodel.RunFailed:
+		return situationFailed
+	case domainmodel.RunCancelled:
+		return situationCancelled
+	}
+	return situationRunning
+}
+
 // decisionState 是决定卡：等待原因 + 可选的待裁决稿件。
 // continueAfter 标记裁决后是否自动续跑（创作运行的稿件续跑，导入草案不续）；
 // stale 表示稿件基线已过期（直接通过会撞版本冲突），只留重写路径。
@@ -224,7 +278,7 @@ func (m model) startQuickWriteCmd(params quickParams) tea.Cmd {
 		result, err := api.Novels.QuickWrite(ctx, novel.QuickWriteCommand{
 			ProjectID: params.projectID, UserID: user,
 			Premise: params.premise, Chapters: params.chapters, Approval: params.approval,
-			WorkerID: "tui-" + user, LeaseDuration: time.Minute, CreatedAt: now,
+			WorkerID: "tui-" + user, CreatedAt: now,
 		})
 		return quickDoneMsg{gen: gen, result: result, err: err}
 	})
@@ -450,16 +504,6 @@ func (m model) adjudicateCmd(finding, reason string) tea.Cmd {
 	}
 }
 
-// currentTarget 取当前目标章数：小说目标优先，其余回退到 Intent。
-func (m model) currentTarget() int {
-	if m.bench.hasRun() {
-		if goal, err := domainmodel.DecodeNovelGoal(m.bench.run().Goal); err == nil {
-			return goal.TargetChapters
-		}
-	}
-	return m.bench.snap.Intent.TargetChapters
-}
-
 // decideCmd 批准或带理由拒绝当前待裁决稿件；创作运行的稿件裁决后自动续跑。
 func (m model) decideCmd(approve bool, reason string) (tea.Model, tea.Cmd) {
 	bench := &m.bench
@@ -516,19 +560,14 @@ func (m model) applyBudgetCmd(budget int) tea.Cmd {
 	}
 }
 
-// continueRun 是统一续跑入口：同一命令从落点继续；chapters>0 时同时调整目标章数。
+// continueRun 是统一续跑入口：同一命令从落点继续，目标章数沿用当前目标。
 func (m model) continueRun() (tea.Model, tea.Cmd) { return m.continueRunWith(0) }
 
+// continueRunWith 续跑并把目标调整为 chapters 章；0 表示沿用当前目标（由 app/novel 解析）。
 func (m model) continueRunWith(chapters int) (tea.Model, tea.Cmd) {
 	bench := &m.bench
 	if !bench.loaded {
 		return m, m.refreshBenchCmd()
-	}
-	if chapters <= 0 {
-		chapters = m.currentTarget()
-		if chapters <= 0 {
-			chapters = max(1, len(bench.snap.Manuscript))
-		}
 	}
 	bench.writing = true
 	bench.presentDecision(nil)
@@ -608,30 +647,26 @@ func (m model) wordCount() int {
 // benchStateBadge 顶栏运行状态。
 func (m model) benchStateBadge() string {
 	bench := m.bench
-	switch {
-	case bench.writing && bench.hasRun() && bench.run().State == domainmodel.RunPaused:
+	switch bench.situation() {
+	case situationPausing:
 		return styleWarn.Render("Ⅱ 已暂停推进 · 当前任务收尾中")
-	case bench.writing && bench.hasRun() && bench.run().State == domainmodel.RunCancelled:
+	case situationCancelling:
 		return styleWarn.Render("已结束本轮 · 当前任务收尾中")
-	case bench.writing:
+	case situationWriting:
 		label := "◉ 正在创作"
 		if number := m.currentChapter(); number > 0 {
 			label += fmt.Sprintf(" · 第 %d 章", number)
 		}
 		return styleFocus.Render(label + " " + spinnerFrames[bench.spin%len(spinnerFrames)])
-	case bench.decision != nil:
+	case situationDecidingProposal, situationDeciding:
 		return styleWarn.Render("◇ 等你决定")
-	case bench.hasRun():
-		label := runStateLabel(bench.run().State)
-		switch bench.run().State {
-		case domainmodel.RunCompleted:
-			return styleNotice.Render("✓ " + label)
-		case domainmodel.RunFailed:
-			return styleErr.Render("! " + label)
-		default:
-			return styleHint.Render(label)
-		}
-	default:
+	case situationCompleted:
+		return styleNotice.Render("✓ " + runStateLabel(bench.run().State))
+	case situationFailed:
+		return styleErr.Render("! " + runStateLabel(bench.run().State))
+	case situationNoRun:
 		return styleHint.Render("尚未开始")
+	default:
+		return styleHint.Render(runStateLabel(bench.run().State))
 	}
 }

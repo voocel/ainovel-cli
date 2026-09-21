@@ -160,7 +160,7 @@ func (m model) buildOutlineRows() []outlineRow {
 		}
 		rows = append(rows, row)
 	}
-	target := m.currentTarget()
+	target := m.bench.snap.TargetChapters
 	if number := chapterCount(bench.snap) + 1; number <= target {
 		rows = append(rows, outlineRow{chapter: number, endChapter: target, placeholder: true})
 	}
@@ -180,7 +180,7 @@ func (m model) outlineRows() []outlineRow {
 	if len(m.bench.snap.Outline) > 0 {
 		first = &m.bench.snap.Outline[0]
 	}
-	target := m.currentTarget()
+	target := m.bench.snap.TargetChapters
 	if cache == nil {
 		return m.buildOutlineRows()
 	}
@@ -581,7 +581,7 @@ func (m model) outlineChapterLine(entry workbench.OutlineNode, selected bool, wi
 	case workbench.ChapterInProgress:
 		symbol, style, titleStyle = "◉", benchTheme.Accent, benchTheme.Text
 	}
-	digits := max(2, len(strconv.Itoa(m.currentTarget())))
+	digits := max(2, len(strconv.Itoa(m.bench.snap.TargetChapters)))
 	label := fmt.Sprintf("%0*d  %s", digits, entry.Number, truncate(entry.Node.Title, max(1, width-digits-7)))
 	if selected {
 		return benchTheme.Selected.Render(fitLine("▎ "+symbol+" "+label, width))

@@ -13,13 +13,10 @@ func fitLine(text string, width int) string {
 	return ansi.Truncate(text, max(0, width), "…")
 }
 
-func textLines(text string, width int) []string {
-	return strings.Split(ansi.Wrap(text, max(1, width), ""), "\n")
-}
-
-// fitBlock 把文本裁成恰好 height 行、每行恰好 width 列。
+// fitBlock 把已带样式的界面块裁成恰好 height 行、每行恰好 width 列（ANSI 感知折行）。
+// 正文与中文长文的折行走 readingLines，这里不承担阅读排版。
 func fitBlock(text string, width, height int) []string {
-	lines := textLines(text, width)
+	lines := strings.Split(ansi.Wrap(text, max(1, width), ""), "\n")
 	result := make([]string, max(0, height))
 	for i := range result {
 		if i < len(lines) {

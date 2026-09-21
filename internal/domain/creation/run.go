@@ -116,6 +116,20 @@ type Outcome struct {
 	Waiting  string
 }
 
+// 运行状态文案分工：应用经 WorkReasons 说明"在做什么工作"（只有它知道是规划还是
+// 写第几章），内核说明"这轮运行发生了什么"（被暂停、被取消、重试了几次）。两边各写
+// 自己那半，拼成用户看到的一句话；内核不猜工作内容，应用不描述运行机制。
+const (
+	reasonResumed   = "继续创作"
+	reasonRunning   = "持续创作中"
+	reasonPausedRun = "创作已暂停，随时可以继续"
+	reasonPausedJob = "创作已暂停，恢复该任务后再继续"
+	reasonCancelled = "本轮创作已取消"
+	reasonCancelJob = "创作任务被取消"
+	// reasonDiagnostics 接在失败文案后面，指向事件日志里的原始诊断。
+	reasonDiagnostics = "可展开 %s 的事件记录查看原始诊断"
+)
+
 func (s *Coordinator) Drive(
 	ctx context.Context,
 	run model.CreationRun,
@@ -124,7 +138,7 @@ func (s *Coordinator) Drive(
 ) (Outcome, error) {
 	clock := &stepClock{now: s.now, last: command.CreatedAt}
 	if run.State == model.RunWaitingUser || run.State == model.RunPaused {
-		resumed, err := s.store.TransitionCreationRun(ctx, run.ID, run.State, model.RunRunning, "继续创作", 0, clock.next())
+		resumed, err := s.store.TransitionCreationRun(ctx, run.ID, run.State, model.RunRunning, reasonResumed, 0, clock.next())
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -241,7 +255,7 @@ func (s *Coordinator) Drive(
 			}
 			return Outcome{Run: settled, Revision: decision.Revision, Waiting: operation.ID}, nil
 		case model.OperationPaused:
-			settled, err := s.settleRun(ctx, run, model.RunPaused, "创作已暂停，恢复该任务后再继续", 0, clock.next())
+			settled, err := s.settleRun(ctx, run, model.RunPaused, reasonPausedJob, 0, clock.next())
 			return Outcome{Run: settled, Revision: decision.Revision}, err
 		case model.OperationFailed:
 			outcome, reopen, err := s.reopenOrWait(ctx, tasks, run, decision.Revision, work, operation, clock.next())
@@ -250,7 +264,7 @@ func (s *Coordinator) Drive(
 			}
 			return outcome, err
 		case model.OperationCancelled:
-			settled, err := s.settleRun(ctx, run, model.RunCancelled, "创作任务被取消", 0, clock.next())
+			settled, err := s.settleRun(ctx, run, model.RunCancelled, reasonCancelJob, 0, clock.next())
 			return Outcome{Run: settled, Revision: decision.Revision}, err
 		case model.OperationStale:
 			// 控制收紧或基线漂移导致失效：下一轮由 ensureChainedOperation 安全迁移到后继。
@@ -291,7 +305,7 @@ func (s *Coordinator) reopenOrWait(
 	at time.Time,
 ) (Outcome, bool, error) {
 	if operation.FailureCode == model.FailureSubmissionBlocked || operation.FailureCode == model.FailureResultUnknown {
-		reason := fmt.Sprintf("%s：%s。已停止自动重试并保留工作区，请处理原因后显式续跑；可展开 %s 的事件记录查看原始诊断",
+		reason := fmt.Sprintf("%s：%s。已停止自动重试并保留工作区，请处理原因后显式续跑；"+reasonDiagnostics,
 			work.Reasons.Failure, operation.Error, operation.ID)
 		settled, err := s.settleRun(ctx, run, model.RunWaitingUser, reason, 0, at)
 		return Outcome{Run: settled, Revision: revision}, false, err
@@ -303,14 +317,14 @@ func (s *Coordinator) reopenOrWait(
 	if failures <= autoReopenBudget {
 		return Outcome{}, true, nil
 	}
-	reason := fmt.Sprintf("%s：已自动重试 %d 次仍未成功，停下等你处理（最近一次原因：%s）。续跑会带着已有草稿再试一次；可展开 %s 的事件记录查看原始诊断",
+	reason := fmt.Sprintf("%s：已自动重试 %d 次仍未成功，停下等你处理（最近一次原因：%s）。续跑会带着已有草稿再试一次；"+reasonDiagnostics,
 		work.Reasons.Failure, failures-1, operation.Error, operation.ID)
 	settled, err := s.settleRun(ctx, run, model.RunWaitingUser, reason, 0, at)
 	return Outcome{Run: settled, Revision: revision}, false, err
 }
 
 func failureReason(work WorkItem, operationID string) string {
-	return fmt.Sprintf("%s；可展开 %s 的事件记录查看原始诊断", work.Reasons.Failure, operationID)
+	return fmt.Sprintf("%s；"+reasonDiagnostics, work.Reasons.Failure, operationID)
 }
 
 // ensureChainedOperation 解析创作槽位当前有效的 Operation：沿确定性后继链
@@ -514,7 +528,7 @@ func (s *Coordinator) StartCreationRun(
 	run := model.CreationRun{
 		ID: command.RunID, ProjectID: command.ProjectID,
 		Goal: command.Goal, Strategy: command.Strategy, Preset: command.Preset,
-		State: model.RunRunning, StateReason: "持续创作中",
+		State: model.RunRunning, StateReason: reasonRunning,
 		CreatedAt: command.CreatedAt, UpdatedAt: command.CreatedAt,
 	}
 	return s.store.CreateCreationRun(ctx, run)
@@ -559,7 +573,7 @@ func (s *Coordinator) PauseCreationRun(ctx context.Context, runID string, at tim
 	if run.State == model.RunPaused {
 		return run, nil
 	}
-	return s.store.TransitionCreationRun(ctx, runID, run.State, model.RunPaused, "创作已暂停，随时可以继续", 0, at)
+	return s.store.TransitionCreationRun(ctx, runID, run.State, model.RunPaused, reasonPausedRun, 0, at)
 }
 
 // CancelCreationRun 终止本轮创作；已写内容保留在权威流，重新开始会开启
@@ -572,7 +586,7 @@ func (s *Coordinator) CancelCreationRun(ctx context.Context, runID string, at ti
 	if run.State == model.RunCancelled {
 		return run, nil
 	}
-	return s.store.TransitionCreationRun(ctx, runID, run.State, model.RunCancelled, "本轮创作已取消", 0, at)
+	return s.store.TransitionCreationRun(ctx, runID, run.State, model.RunCancelled, reasonCancelled, 0, at)
 }
 
 // UpdateCreationRunStrategy 让用户中途调整自动化边界（§6.3）：只影响之后创建

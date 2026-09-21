@@ -320,7 +320,7 @@ var benchCommands = []benchCommand{
 	{name: "goal", usage: "<章数>", label: "调整总章数并继续", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
 		chapters, err := strconv.Atoi(arg)
 		if err != nil || chapters <= 0 {
-			m.bench.err = fmt.Sprintf("用法：/goal 章数（当前目标 %d 章）", m.currentTarget())
+			m.bench.err = fmt.Sprintf("用法：/goal 章数（当前目标 %d 章）", m.bench.snap.TargetChapters)
 			return m, nil
 		}
 		return m.continueRunWith(chapters)

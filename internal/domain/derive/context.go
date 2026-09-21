@@ -112,7 +112,7 @@ func BuildStoryContext(content ProjectContent, kind model.OperationKind, task js
 	selected := make(map[string]ContextDocument)
 	var include func(model.DocumentRef) error
 	include = func(ref model.DocumentRef) error {
-		if ref.Kind == model.DocumentIntent && ref.ID == "root" {
+		if ref.Kind == model.DocumentIntent && ref.ID == model.SingletonDocumentID {
 			return nil
 		}
 		if _, exists := selected[ref.Key()]; exists {
