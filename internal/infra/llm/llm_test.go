@@ -8,6 +8,7 @@ import (
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/llm"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 )
 
 type scriptedChat struct {
@@ -49,7 +50,7 @@ func TestStructuredRequestsSchemaAndDecodesStrictly(t *testing.T) {
 	var out struct {
 		Status string `json:"status"`
 	}
-	usage, err := llm.Structured(context.Background(), chat, call, &out)
+	usage, err := llm.Structured(context.Background(), models.Binding{Chat: chat}, call, &out)
 	if err != nil || out.Status != "pass" || usage == nil || usage.Input != 10 {
 		t.Fatalf("structured call: err=%v out=%+v usage=%+v", err, out, usage)
 	}
@@ -60,17 +61,17 @@ func TestStructuredRequestsSchemaAndDecodesStrictly(t *testing.T) {
 		t.Fatalf("call identity not forwarded: %+v system=%q", chat.config, chat.system)
 	}
 	chat.response = `{"status":"pass","extra":1}`
-	if _, err := llm.Structured(context.Background(), chat, call, &out); err == nil {
+	if _, err := llm.Structured(context.Background(), models.Binding{Chat: chat}, call, &out); err == nil {
 		t.Fatal("unknown field accepted")
 	}
 }
 
 func TestStructuredRejectsMissingModelAndEmptyReply(t *testing.T) {
 	var out struct{}
-	if _, err := llm.Structured(context.Background(), nil, call, &out); !errors.Is(err, model.ErrInvalid) {
+	if _, err := llm.Structured(context.Background(), models.Binding{}, call, &out); !errors.Is(err, model.ErrInvalid) {
 		t.Fatalf("nil model error = %v", err)
 	}
-	if _, err := llm.Structured(context.Background(), &scriptedChat{nilReply: true}, call, &out); err == nil {
+	if _, err := llm.Structured(context.Background(), models.Binding{Chat: &scriptedChat{nilReply: true}}, call, &out); err == nil {
 		t.Fatal("nil response accepted")
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
@@ -24,24 +23,10 @@ type CompileCommand struct {
 	Packs               []resource.PackRef
 	CreatorProfiles     []resource.CreatorProfileRef
 	CoreProtocolVersion string
-	ModelConfigDigest   string
 	CreatedAt           time.Time
 }
 
 func (s *Compiler) Compile(ctx context.Context, command CompileCommand) (prompt.Compiled, error) {
-	// 模型配置摘要以已装配的 LLM Runtime 为准（可选接口，同 SemanticAnalyzer 的断言模式）。
-	modelConfigDigest := command.ModelConfigDigest
-	if runtime, ok := s.runtime.(interface{ ModelConfigDigest() string }); ok {
-		runtimeDigest := runtime.ModelConfigDigest()
-		if modelConfigDigest == "" {
-			modelConfigDigest = runtimeDigest
-		} else if modelConfigDigest != runtimeDigest {
-			return prompt.Compiled{}, fmt.Errorf("execution profile model config does not match configured runtime: %w", model.ErrInvalid)
-		}
-	}
-	if strings.TrimSpace(modelConfigDigest) == "" {
-		return prompt.Compiled{}, fmt.Errorf("model config digest is required: %w", model.ErrInvalid)
-	}
 	target := model.AuthorityTarget{Kind: model.AuthorityProject, ID: command.ProjectID}
 	revision := command.Revision
 	contextKey, err := derive.ContextKey(command.Kind, command.Input)
@@ -165,7 +150,6 @@ func (s *Compiler) Compile(ctx context.Context, command CompileCommand) (prompt.
 		Intent: intent, Ownership: ownership, OverlayRules: overlayRules,
 		StoryContext: storyContext, Task: task,
 		BaseRevision: revision, ProjectOverlayRevision: revision,
-		ModelConfigDigest: modelConfigDigest,
 	}, command.CreatedAt)
 }
 

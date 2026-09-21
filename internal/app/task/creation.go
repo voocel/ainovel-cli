@@ -47,9 +47,8 @@ func (t creationTasks) Restart(ctx context.Context, previousID, runID string, wo
 	return t.manager.RestartOperation(ctx, RestartOperationCommand{
 		FromOperationID: previousID, OperationID: work.ID, Input: command.Input,
 		Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
-		WorkerProfileID: command.WorkerProfileID, ModelConfigDigest: command.ModelConfigDigest,
-		CoreProtocolVersion: command.CoreProtocolVersion,
-		ConfigDigest:        command.ConfigDigest, ApprovalPolicy: command.ApprovalPolicy,
+		WorkerProfileID: command.WorkerProfileID, CoreProtocolVersion: command.CoreProtocolVersion,
+		ConfigDigest: command.ConfigDigest, ApprovalPolicy: command.ApprovalPolicy,
 		RunID: runID, CreatedAt: at,
 	})
 }
@@ -61,4 +60,8 @@ func (t creationTasks) Resume(ctx context.Context, id string, at time.Time) (mod
 func (t creationTasks) Run(ctx context.Context, id, workerID string, lease time.Duration, at time.Time) (model.Operation, error) {
 	result, err := t.manager.RunOperation(ctx, id, workerID, lease, at)
 	return result.Operation, err
+}
+
+func (t creationTasks) Failures(ctx context.Context, id string) (int, error) {
+	return t.manager.store.CountOperationFailures(ctx, id)
 }

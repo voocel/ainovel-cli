@@ -38,10 +38,24 @@ type WorkerProfile struct {
 	StopCondition  string          `json:"stop_condition"`
 }
 
+// ModelRoles 是 worker profile 可声明的模型角色；配置的角色映射按这些键覆盖默认模型。
+var ModelRoles = []string{"architect", "writer", "editor"}
+
+func KnownModelRole(role string) bool {
+	for _, known := range ModelRoles {
+		if known == role {
+			return true
+		}
+	}
+	return false
+}
+
 func (p WorkerProfile) Validate() error {
-	if strings.TrimSpace(p.ID) == "" || strings.TrimSpace(p.Version) == "" ||
-		strings.TrimSpace(p.ModelRole) == "" || strings.TrimSpace(p.StopCondition) == "" {
-		return fmt.Errorf("worker profile identity, role and stop condition are required: %w", model.ErrInvalid)
+	if strings.TrimSpace(p.ID) == "" || strings.TrimSpace(p.Version) == "" || strings.TrimSpace(p.StopCondition) == "" {
+		return fmt.Errorf("worker profile identity and stop condition are required: %w", model.ErrInvalid)
+	}
+	if !KnownModelRole(p.ModelRole) {
+		return fmt.Errorf("unknown model role %q: %w", p.ModelRole, model.ErrInvalid)
 	}
 	if len(p.PromptSlots) == 0 || len(p.Tools) == 0 {
 		return fmt.Errorf("worker profile requires prompt slots and tools: %w", model.ErrInvalid)
@@ -96,7 +110,6 @@ type CompileRequest struct {
 	Task                   json.RawMessage
 	BaseRevision           model.Revision
 	ProjectOverlayRevision model.Revision
-	ModelConfigDigest      string
 }
 
 type SourceKind string
@@ -120,7 +133,6 @@ type Compiled struct {
 	ProjectID           string       `json:"project_id"`
 	WorkerProfile       string       `json:"worker_profile"`
 	CoreProtocolVersion string       `json:"core_protocol_version"`
-	ModelConfigDigest   string       `json:"model_config_digest"`
 	StablePrefix        string       `json:"stable_prefix"`
 	DynamicTail         string       `json:"dynamic_tail"`
 	Tools               []ToolSchema `json:"ordered_tool_schemas"`
@@ -142,8 +154,8 @@ func (c Compiled) record(createdAt time.Time) (model.ExecutionProfileRecord, err
 	}
 	record := model.ExecutionProfileRecord{
 		ProjectID: c.ProjectID, WorkerProfile: c.WorkerProfile,
-		CoreProtocolVersion: c.CoreProtocolVersion, ModelConfigDigest: c.ModelConfigDigest,
-		PromptDigest: c.PromptDigest, ToolSchemaDigest: c.ToolSchemaDigest,
+		CoreProtocolVersion: c.CoreProtocolVersion,
+		PromptDigest:        c.PromptDigest, ToolSchemaDigest: c.ToolSchemaDigest,
 		StablePrefix: c.StablePrefix, DynamicTail: c.DynamicTail,
 		Tools: tools, Sources: sources, CreatedAt: createdAt,
 	}
@@ -153,11 +165,9 @@ func (c Compiled) record(createdAt time.Time) (model.ExecutionProfileRecord, err
 	return record, nil
 }
 
-// ExecutorIdentity 是 LLM 执行族的身份（D45）：agent 循环版本加模型配置路由。
-// 同一模型配置的 Runtime 才能领取并执行按它冻结的任务。
-func ExecutorIdentity(modelConfigDigest string) string {
-	return "llm.agent@1/" + modelConfigDigest
-}
+// ExecutorIdentity 是 LLM 执行族的身份（D45）：agent 循环的族与版本。模型不在
+// 身份里——它是运行时绑定（D57），每次尝试以 agent.run_started 记录实际使用的模型。
+const ExecutorIdentity = "llm.agent@1"
 
 func validSlot(slot Slot) bool {
 	switch slot {

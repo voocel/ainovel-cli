@@ -39,7 +39,7 @@ func TestCanonMaterializationUsesFrozenValuesAndStrictAssertions(t *testing.T) {
 	fact := model.CanonFact{ID: ref.ID, Kind: model.CanonState, SubjectID: "hero", Predicate: "state.origin", PreviousValue: json.RawMessage(`"农家子"`), Value: json.RawMessage(`"农家，少年"`)}
 	content, _ := json.Marshal(fact)
 	commit(approvedRuntimeProposal("punctuation", target, 1, now, model.Patch{Document: ref, Operation: model.PatchPut, Content: content}))
-	r := NewRuntime(nil, "model", s)
+	r := NewRuntime(s)
 	op := model.Operation{ID: "rewrite", Target: target, Snapshot: model.ExecutionSnapshot{BaseRevision: 2}}
 	assertFact := func(patches []model.Patch, old, value string) {
 		t.Helper()

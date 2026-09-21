@@ -183,7 +183,6 @@ func (m model) updateHome(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.bench.presentDecision(&decisionState{
 			reason: "导入的草案等你批准", proposal: message.proposal, hasProposal: true,
 		})
-		m.switchContent(contentReview)
 		return m, tea.Batch(m.refreshBenchCmd(), watch)
 	case tea.MouseMsg:
 		return m.handleHomeMouse(message)
@@ -279,7 +278,7 @@ func (m model) handleHomeKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case focusConfig:
 			m.page = pageWizard
-			m.wizard = newWizardState(m.config, "", true)
+			m.wizard = newWizardState(m.api.Models.Config(), "", true)
 			return m, nil
 		}
 		return m.createProject(nil)

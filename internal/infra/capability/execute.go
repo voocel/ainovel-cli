@@ -11,13 +11,14 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
+	"github.com/voocel/ainovel-cli/internal/infra/llm"
 )
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
 // verdict_submit 的审阅/校验类以结构化 Verdict 收尾，其余以 Proposal 收尾。
 func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outcome model.OperationOutcome, resultErr error) {
-	if r.model == nil {
-		return model.OperationOutcome{}, fmt.Errorf("capability model is required: %w", model.ErrInvalid)
+	if !r.Bound() {
+		return model.OperationOutcome{}, fmt.Errorf("capability model is not bound: %w", model.ErrInvalid)
 	}
 	if operation.State != model.OperationRunning {
 		return model.OperationOutcome{}, fmt.Errorf("operation %q is %s: %w", operation.ID, operation.State, model.ErrStateConflict)
@@ -36,6 +37,13 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
+	// 本次尝试的模型按 Worker 角色取绑定，读一次沿用到结束（D57）。
+	worker, err := prompt.BuiltinWorkerProfile(prompt.WorkerID(compiled.WorkerProfile))
+	if err != nil {
+		return model.OperationOutcome{}, err
+	}
+	binding, _ := r.bindingFor(worker.ModelRole)
+	thinking := llm.EffectiveThinking(binding)
 	wantsVerdict := false
 	for _, definition := range compiled.Tools {
 		if definition.Name == prompt.ToolVerdictSubmit {
@@ -78,7 +86,8 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
-	cacheKey, err := prompt.CacheKey(operation.Target.ID, compiled.WorkerProfile, compiled.ProfileDigest, operation.ID)
+	// 会话血统混入模型配置摘要：换模型或思考强度后的尝试是新会话（§7 缓存纪律）。
+	cacheKey, err := prompt.CacheKey(operation.Target.ID, compiled.WorkerProfile, compiled.ProfileDigest, operation.ID+":"+binding.Digest)
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
@@ -88,7 +97,8 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	executionCtx, stopExecution := context.WithCancelCause(ctx)
 	defer stopExecution(nil)
 	config := agentcore.LoopConfig{
-		Model:              r.model,
+		Model:              binding.Chat,
+		ThinkingLevel:      thinking,
 		MaxToolConcurrency: 1,
 		Middlewares:        []agentcore.ToolMiddleware{submissionGuard(stopExecution)},
 		PromptCacheKey:     cacheKey,
@@ -126,6 +136,24 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	}
 	recoveredMessages, lastFailure, err := r.restoreMessages(ctx, operation)
 	if err != nil {
+		return model.OperationOutcome{}, err
+	}
+	// 每次尝试记下实际使用的模型：快照不再冻结模型配置，历史由这条事件解释（D57）。
+	startPayload, err := json.Marshal(struct {
+		Role         string                  `json:"role"`
+		Provider     string                  `json:"provider"`
+		Model        string                  `json:"model"`
+		Thinking     agentcore.ThinkingLevel `json:"thinking,omitempty"`
+		ConfigDigest string                  `json:"config_digest"`
+	}{Role: worker.ModelRole, Provider: binding.Provider, Model: binding.Model, Thinking: thinking, ConfigDigest: binding.Digest})
+	if err != nil {
+		return model.OperationOutcome{}, fmt.Errorf("encode agent run start: %w", err)
+	}
+	if _, err := r.store.AppendOperationEvent(ctx, model.OperationEvent{
+		OperationID: operation.ID, StepID: "agent.start", Attempt: operation.Attempt,
+		IdempotencyKey: fmt.Sprintf("agent-start:%d", operation.Attempt),
+		Kind:           "agent.run_started", Payload: startPayload, CreatedAt: r.now(),
+	}); err != nil {
 		return model.OperationOutcome{}, err
 	}
 	workspaceArtifacts, err := r.store.ListWorkspaceArtifacts(ctx, operation.ID)
@@ -269,6 +297,7 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 		}
 		out.Kind = activity.Usage
 		out.Usage = activity.UsageTotals{Input: usage.Input, Output: usage.Output, CacheRead: usage.CacheRead}
+		out.Model, out.Provider = usage.Model, usage.Provider
 		if usage.Cost != nil {
 			out.Usage.Cost = usage.Cost.Total
 		}

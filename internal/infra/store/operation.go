@@ -18,11 +18,12 @@ const operationColumns = `
 	attempt, execution_snapshot, input, error, failure_code, lease_owner, lease_until_unix_ms,
 	created_at_unix_ms, updated_at_unix_ms, run_id, run_policy_version`
 
-// MaxOperationAttempts 是 lease 过期后自动重排的尝试上限。达到上限的 Operation
-// 转入 failed 而不是继续排队：无进展的重试必须有明确上界，否则模型调用持续超时
-// 会让同一任务被无限重领并持续计费（v1-architecture-plan §6.2）。
+// MaxLeaseExpiries 是同一 Operation 租约过期后自动重排的次数上限。达到上限转入
+// failed 而不是继续排队：无进展的重试必须有明确上界，否则模型调用持续超时会让
+// 同一任务被无限重领并持续计费（v1-architecture-plan §6.2）。按过期次数而不是
+// attempt 计：attempt 是执行围栏，进程退出主动释放的执行不是无进展。
 // 用户显式重排（failed → queued）不受此限，那是有人在场的决定。
-const MaxOperationAttempts = 5
+const MaxLeaseExpiries = 5
 
 func (s *Store) CreateOperation(ctx context.Context, operation model.Operation) (model.Operation, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -551,13 +552,20 @@ func (s *Store) RecoverExpiredOperations(ctx context.Context, now time.Time) ([]
 	for _, operation := range expired {
 		id := operation.id
 		ids = append(ids, id)
+		var expiries int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM operation_events WHERE operation_id = ? AND kind = 'operation.lease_expired'`, id,
+		).Scan(&expiries); err != nil {
+			return nil, fmt.Errorf("count lease expiries of %q: %w", id, err)
+		}
+		expiries++
 		recovered := model.OperationQueued
 		message := fmt.Sprintf("worker lease expired before %s; operation requeued", now.UTC().Format(time.RFC3339Nano))
-		if operation.attempt >= MaxOperationAttempts {
+		if expiries >= MaxLeaseExpiries {
 			recovered = model.OperationFailed
 			message = fmt.Sprintf(
-				"worker lease expired before %s after %d attempts (limit %d); operation failed instead of requeued",
-				now.UTC().Format(time.RFC3339Nano), operation.attempt, MaxOperationAttempts,
+				"worker lease expired before %s for the %d. time (limit %d); operation failed instead of requeued",
+				now.UTC().Format(time.RFC3339Nano), expiries, MaxLeaseExpiries,
 			)
 		}
 		result, err := tx.ExecContext(ctx, `
@@ -588,6 +596,23 @@ func (s *Store) RecoverExpiredOperations(ctx context.Context, now time.Time) ([]
 		return nil, fmt.Errorf("commit expired operation recovery: %w", err)
 	}
 	return ids, nil
+}
+
+// CountOperationFailures 从事件日志数 Operation 落过几次 failed：执行失败的收尾与
+// 租约过期判失败都算。D56 的自动重开预算只数失败——attempt 是执行围栏，进程退出
+// 释放的执行不在其中。
+func (s *Store) CountOperationFailures(ctx context.Context, id string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operation_events
+		WHERE operation_id = ?
+			AND ((kind = 'operation.transitioned' AND json_extract(CAST(payload AS TEXT), '$.to') = ?)
+				OR (kind = 'operation.lease_expired' AND json_extract(CAST(payload AS TEXT), '$.state') = ?))`,
+		id, model.OperationFailed, model.OperationFailed).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count failures of operation %q: %w", id, err)
+	}
+	return count, nil
 }
 
 // PutWorkspaceArtifact 只接受当前执行实例的写入：writerAttempt 必须等于 Operation

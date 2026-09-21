@@ -18,7 +18,6 @@ type ReloadPromptCommand struct {
 	Packs               []resource.PackRef
 	CreatorProfiles     []resource.CreatorProfileRef
 	CoreProtocolVersion string
-	ModelConfigDigest   string
 	CreatedAt           time.Time
 }
 
@@ -38,8 +37,7 @@ func (s *Compiler) ReloadPrompt(ctx context.Context, command ReloadPromptCommand
 	compiled, err := s.Compile(ctx, CompileCommand{
 		ProjectID: command.ProjectID, Revision: revision, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
 		Input: command.Input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
-		CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest,
-		CreatedAt: command.CreatedAt,
+		CoreProtocolVersion: command.CoreProtocolVersion, CreatedAt: command.CreatedAt,
 	})
 	if err != nil {
 		return ReloadPromptResult{}, err

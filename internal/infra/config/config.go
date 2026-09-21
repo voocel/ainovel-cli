@@ -13,12 +13,13 @@ import (
 )
 
 // Config 是用户级模型配置。作品数据与它无关：换模型不换书。
+// Provider/Model/Thinking 是默认绑定；Roles 按角色覆盖，未配的角色跟随默认。
 type Config struct {
 	Provider  string                    `json:"provider,omitempty"`
 	Model     string                    `json:"model,omitempty"`
-	APIKey    string                    `json:"api_key,omitempty"`
-	BaseURL   string                    `json:"base_url,omitempty"`
+	Thinking  string                    `json:"thinking,omitempty"` // 思考强度意图：空 = 自动
 	Providers map[string]ProviderConfig `json:"providers,omitempty"`
+	Roles     map[string]RoleConfig     `json:"roles,omitempty"`
 }
 
 // ProviderConfig 将连接身份与底层协议分开，允许同一协议配置多个连接。
@@ -30,72 +31,112 @@ type ProviderConfig struct {
 	Models  []string `json:"models,omitempty"`
 }
 
-func (c Config) ActiveProvider() (ProviderConfig, error) {
-	pc, err := c.providerConfig()
+// RoleConfig 是某个角色（architect / writer / editor）的模型覆盖；Thinking 留空继承顶层。
+type RoleConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Thinking string `json:"thinking,omitempty"`
+}
+
+// ActiveProvider 返回默认绑定所用的连接。
+func (c Config) ActiveProvider() (ProviderConfig, error) { return c.Connection(c.Provider) }
+
+// Connection 返回并校验一个已命名连接：协议、api 选项都在这里把关。
+func (c Config) Connection(name string) (ProviderConfig, error) {
+	pc, err := c.providerConfig(name)
 	if err != nil {
 		return ProviderConfig{}, err
 	}
 	switch pc.Type {
 	case "openai", "anthropic", "gemini":
 	case "deepseek", "openrouter", "qwen", "glm", "grok", "minimax", "mimo", "ollama", "bedrock":
-		if pc.Type != c.Provider {
+		if pc.Type != name {
 			return ProviderConfig{}, fmt.Errorf("自定义连接协议只支持 openai、anthropic、gemini")
 		}
 	default:
 		return ProviderConfig{}, fmt.Errorf("不支持的协议类型 %q", pc.Type)
 	}
 	if pc.API != "" && pc.API != "chat" && pc.API != "responses" {
-		return ProviderConfig{}, fmt.Errorf("连接 %q 的 api 必须为 chat 或 responses", c.Provider)
+		return ProviderConfig{}, fmt.Errorf("连接 %q 的 api 必须为 chat 或 responses", name)
 	}
 	if pc.API != "" && pc.Type != "openai" {
-		return ProviderConfig{}, fmt.Errorf("连接 %q 只有 openai 协议支持 api 选项", c.Provider)
+		return ProviderConfig{}, fmt.Errorf("连接 %q 只有 openai 协议支持 api 选项", name)
 	}
 	return pc, nil
 }
 
-func (c Config) providerConfig() (ProviderConfig, error) {
-	pc := ProviderConfig{Type: c.Provider, APIKey: c.APIKey, BaseURL: c.BaseURL}
-	if c.Providers != nil {
-		var ok bool
-		pc, ok = c.Providers[c.Provider]
-		if !ok {
-			return ProviderConfig{}, fmt.Errorf("连接 %q 未配置", c.Provider)
-		}
+// providerConfig 查找已命名连接；type 留空表示连接名就是内置服务商。
+func (c Config) providerConfig(name string) (ProviderConfig, error) {
+	pc, ok := c.Providers[name]
+	if !ok {
+		return ProviderConfig{}, fmt.Errorf("连接 %q 未配置", name)
 	}
 	if pc.Type == "" {
-		pc.Type = c.Provider
+		pc.Type = name
 	}
 	return pc, nil
 }
 
-// WithProvider 返回独立的连接映射，保留其他连接并将旧扁平配置迁入映射。
+// WithProvider 把连接写入独立的映射并设为默认绑定，保留其他连接、不改输入。
 func (c Config) WithProvider(name, model string, pc ProviderConfig) Config {
+	providers := c.copyProviders()
+	pc.Models = withModel(pc.Models, model)
+	providers[name] = pc
+	c.Provider, c.Model, c.Providers = name, model, providers
+	return c
+}
+
+// WithRole 让角色改用指定连接的模型（模型并入该连接的已保存列表）；连接必须已存在。
+func (c Config) WithRole(role, connection, model, thinking string) Config {
+	providers := c.copyProviders()
+	if pc, ok := providers[connection]; ok {
+		pc.Models = withModel(pc.Models, model)
+		providers[connection] = pc
+	}
+	roles := make(map[string]RoleConfig, len(c.Roles)+1)
+	for key, value := range c.Roles {
+		roles[key] = value
+	}
+	roles[role] = RoleConfig{Provider: connection, Model: model, Thinking: thinking}
+	c.Providers, c.Roles = providers, roles
+	return c
+}
+
+// WithoutRole 清除角色覆盖，让它跟随默认绑定。
+func (c Config) WithoutRole(role string) Config {
+	roles := make(map[string]RoleConfig, len(c.Roles))
+	for key, value := range c.Roles {
+		if key != role {
+			roles[key] = value
+		}
+	}
+	if len(roles) == 0 {
+		roles = nil
+	}
+	c.Roles = roles
+	return c
+}
+
+func (c Config) copyProviders() map[string]ProviderConfig {
 	providers := make(map[string]ProviderConfig, len(c.Providers)+1)
 	for key, value := range c.Providers {
 		providers[key] = value
 	}
-	if c.Providers == nil && c.Provider != "" && c.Provider != name {
-		old := ProviderConfig{Type: c.Provider, APIKey: c.APIKey, BaseURL: c.BaseURL}
-		if c.Model != "" {
-			old.Models = []string{c.Model}
-		}
-		providers[c.Provider] = old
+	return providers
+}
+
+// withModel 返回独立的模型列表，缺席时把 model 追加到末尾。
+func withModel(models []string, model string) []string {
+	models = append([]string(nil), models...)
+	if model == "" {
+		return models
 	}
-	pc.Models = append([]string(nil), pc.Models...)
-	found := false
-	for _, item := range pc.Models {
+	for _, item := range models {
 		if item == model {
-			found = true
-			break
+			return models
 		}
 	}
-	if model != "" && !found {
-		pc.Models = append(pc.Models, model)
-	}
-	providers[name] = pc
-	c.Provider, c.Model, c.Providers = name, model, providers
-	c.APIKey, c.BaseURL = "", ""
-	return c
+	return append(models, model)
 }
 
 // Configured 报告是否具备发起真实创作的最低配置。
@@ -107,8 +148,18 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Provider) == "" || strings.TrimSpace(c.Model) == "" {
 		return errors.New("provider 和 model 必须同时设置")
 	}
-	_, err := c.ActiveProvider()
-	return err
+	if _, err := c.ActiveProvider(); err != nil {
+		return err
+	}
+	for role, rc := range c.Roles {
+		if strings.TrimSpace(role) == "" || strings.TrimSpace(rc.Provider) == "" || strings.TrimSpace(rc.Model) == "" {
+			return fmt.Errorf("角色 %q 必须同时设置 provider 和 model", role)
+		}
+		if _, err := c.Connection(rc.Provider); err != nil {
+			return fmt.Errorf("角色 %q：%w", role, err)
+		}
+	}
+	return nil
 }
 
 // DefaultDir 是配置与作品库的默认位置（~/.ainovel/v1）。v1 与 v0 的配置格式
@@ -187,23 +238,19 @@ func ResolveConfig(dir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	overrides := Config{
-		Provider: os.Getenv("AINOVEL_PROVIDER"),
-		Model:    os.Getenv("AINOVEL_MODEL"),
-		APIKey:   os.Getenv("AINOVEL_API_KEY"),
-		BaseURL:  os.Getenv("AINOVEL_BASE_URL"),
-	}
+	envProvider := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER"))
+	apiKey := strings.TrimSpace(os.Getenv("AINOVEL_API_KEY"))
+	baseURL := strings.TrimSpace(os.Getenv("AINOVEL_BASE_URL"))
 	providerType := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER_TYPE"))
 	api := strings.TrimSpace(os.Getenv("AINOVEL_API"))
-	if strings.TrimSpace(overrides.Provider) != "" && overrides.Provider != config.Provider {
-		// 切换连接不能继承原连接的密钥或地址。
-		if config.Providers == nil {
-			config.APIKey, config.BaseURL = "", ""
-		}
-		config.Provider = overrides.Provider
+	if envProvider != "" {
+		config.Provider = envProvider
 	}
-	if strings.TrimSpace(overrides.Model) != "" {
-		config.Model = overrides.Model
+	if model := strings.TrimSpace(os.Getenv("AINOVEL_MODEL")); model != "" {
+		config.Model = model
+	}
+	if thinking := strings.TrimSpace(os.Getenv("AINOVEL_THINKING")); thinking != "" {
+		config.Thinking = thinking
 	}
 	if (config.Provider == "") != (config.Model == "") {
 		return Config{}, errors.New("AINOVEL_PROVIDER 和 AINOVEL_MODEL 必须同时设置")
@@ -211,15 +258,19 @@ func ResolveConfig(dir string) (Config, error) {
 	if config.Provider == "" {
 		return config, nil
 	}
-	pc, err := config.providerConfig()
+	// 环境变量指向文件里没有的连接时，连接完全由环境变量定义：不从别的连接继承密钥或地址。
+	pc, err := config.providerConfig(config.Provider)
 	if err != nil {
-		return Config{}, err
+		if envProvider == "" {
+			return Config{}, err
+		}
+		pc = ProviderConfig{}
 	}
-	if strings.TrimSpace(overrides.APIKey) != "" {
-		pc.APIKey = overrides.APIKey
+	if apiKey != "" {
+		pc.APIKey = apiKey
 	}
-	if strings.TrimSpace(overrides.BaseURL) != "" {
-		pc.BaseURL = overrides.BaseURL
+	if baseURL != "" {
+		pc.BaseURL = baseURL
 	}
 	if providerType != "" {
 		pc.Type = providerType

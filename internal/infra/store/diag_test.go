@@ -139,7 +139,7 @@ func TestDiagAggregatesCoverHiddenTasksAndCurrentAttempt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, err := s.db.Exec(`UPDATE operations SET state='failed',attempt=2,executor='llm.agent@1/test-digest',failure_code='result_unknown' WHERE id='op-054'`)
+	_, err := s.db.Exec(`UPDATE operations SET state='failed',attempt=2,executor='llm.agent@1',failure_code='result_unknown' WHERE id='op-054'`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func BenchmarkDiagSnapshot(b *testing.B) {
 			payload := []byte(strings.Repeat("private-content-", 4096))
 			for i := 0; i < count; i++ {
 				id := fmt.Sprintf("op-%04d", i)
-				if _, err = tx.Exec(`INSERT INTO operations(id,content_digest,kind,target_kind,target_id,priority,state,attempt,execution_snapshot,input,executor,run_id,created_at_unix_ms,updated_at_unix_ms) VALUES (?,'digest','write_chapter','project','book',0,'succeeded',1,?,?,'llm.agent@1/digest','run',1,1)`, id, []byte(`{"config_digest":"profile"}`), payload); err != nil {
+				if _, err = tx.Exec(`INSERT INTO operations(id,content_digest,kind,target_kind,target_id,priority,state,attempt,execution_snapshot,input,executor,run_id,created_at_unix_ms,updated_at_unix_ms) VALUES (?,'digest','write_chapter','project','book',0,'succeeded',1,?,?,'llm.agent@1','run',1,1)`, id, []byte(`{"config_digest":"profile"}`), payload); err != nil {
 					b.Fatal(err)
 				}
 				if _, err = tx.Exec(`INSERT INTO operation_events(operation_id,sequence,step_id,attempt,idempotency_key,kind,payload,payload_digest,created_at_unix_ms) VALUES (?,1,'',1,'message','agent.message_committed',?,'digest',1)`, id, payload); err != nil {

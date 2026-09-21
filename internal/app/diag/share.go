@@ -175,7 +175,7 @@ func Share(report Report) ShareReport {
 		s.Coverage = append(s.Coverage, ShareCoverage{source, allowed(c.Status, "complete", "partial", "unavailable", "not_collected", "truncated")})
 	}
 	for _, e := range report.Events {
-		kind := allowed(e.Kind, "agent.run_ended", "agent.message_committed", "operation.claimed", "operation.priority_changed", "operation.transitioned", "operation.lease_expired", "workspace.artifact_written", "workspace.seeded", "semantic.compliance_checked", "semantic.compliance_failed")
+		kind := allowed(e.Kind, "agent.run_started", "agent.run_ended", "agent.message_committed", "operation.claimed", "operation.priority_changed", "operation.transitioned", "operation.lease_expired", "workspace.artifact_written", "workspace.seeded", "semantic.compliance_checked", "semantic.compliance_failed")
 		if kind == "unknown" || len(s.Events) == 200 {
 			s.Omitted++
 			s.OmittedEvents++

@@ -43,7 +43,7 @@ func TestRuntimePersistsSubmissionFailureAndRetainsDraft(t *testing.T) {
 	defer cancel()
 	s, op := runningWriterWithDraft(t, ctx)
 	llm := &repeatingSubmissionModel{recoveryRuntimeModel: recoveryRuntimeModel{now: time.Now()}}
-	r := NewRuntime(llm, "model", s)
+	r := boundRuntime(s, llm)
 	_, err := r.Execute(ctx, op)
 	if !errors.Is(err, model.ErrSubmissionBlocked) || model.FailureCodeFor(err) != model.FailureSubmissionBlocked || !strings.Contains(err.Error(), "连续 3 次") || !strings.Contains(err.Error(), "version mismatch") || llm.calls != 3 {
 		t.Fatalf("failure was hidden or loop continued: calls=%d err=%v", llm.calls, err)
@@ -124,7 +124,7 @@ func TestRuntimeSubmissionStopsOnlyAfterResultIsPersisted(t *testing.T) {
 			defer cancel()
 			s, op := runningWriterWithDraft(t, ctx)
 			llm := &recoveryRuntimeModel{now: time.Now(), proposalArgs: json.RawMessage(`{"reason":"完成","workspace_key":"draft","workspace_version":1,"patches":[{"document":{"kind":"canon","id":"arrival"},"operation":"put","content":{"id":"arrival","kind":"event","subject_id":"hero","predicate":"event.arrival","new_value":"抵达山门","source_chapter_id":"chapter-1"}}]}`)}
-			r := NewRuntime(llm, "model", s)
+			r := boundRuntime(s, llm)
 			cause := errors.New("result persistence failed")
 			if failCommit {
 				r.store = failedResultStore{runtimeStore: s, cause: cause}

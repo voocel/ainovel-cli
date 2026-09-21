@@ -25,6 +25,8 @@ type Task struct {
 	StartedAt, EndedAt time.Time
 	Usage              UsageTotals
 	Scope              Scope
+	// Turns/Calls/Retries 是这项任务累计的模型轮次、工具调用与重试次数（跨尝试累计）。
+	Turns, Calls, Retries int
 }
 
 func (s *Snapshot) foldTask(e Event) {
@@ -67,7 +69,18 @@ func (s *Snapshot) foldTask(e Event) {
 		}
 	case TaskEnd:
 		t.Done, t.EndedAt, t.Err, t.Phase = true, e.At, e.Err, TaskEnd
+		if worked := e.At.Sub(t.StartedAt); !t.StartedAt.IsZero() && worked > 0 {
+			s.Worked += worked
+		}
 	case Usage:
 		t.Usage.add(e.Usage)
+	}
+	switch e.Kind {
+	case TurnStart:
+		t.Turns++
+	case ToolStart:
+		t.Calls++
+	case Retry:
+		t.Retries++
 	}
 }

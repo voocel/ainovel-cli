@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,17 +9,16 @@ import (
 
 func TestConfigRoundTripAndEnvOverride(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cfg")
-	for _, key := range []string{"AINOVEL_PROVIDER", "AINOVEL_MODEL", "AINOVEL_API_KEY", "AINOVEL_BASE_URL", "AINOVEL_PROVIDER_TYPE", "AINOVEL_API"} {
-		t.Setenv(key, "")
-	}
+	clearModelEnv(t)
 
 	if loaded, err := LoadConfig(dir); err != nil || loaded.Configured() {
 		t.Fatalf("missing config = %#v, %v, want empty without error", loaded, err)
 	}
-	saved := Config{Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-test"}
+	saved := Config{}.WithProvider("deepseek", "deepseek-chat", ProviderConfig{APIKey: "sk-test"})
 	if err := SaveConfig(dir, saved); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
+	// 启动解析把当前连接的 type 补成显式值，其余与保存的一致。
 	resolved, err := ResolveConfig(dir)
 	pc, _ := saved.ActiveProvider()
 	if err != nil || !reflect.DeepEqual(resolved, saved.WithProvider(saved.Provider, saved.Model, pc)) {
@@ -36,9 +34,7 @@ func TestConfigRoundTripAndEnvOverride(t *testing.T) {
 
 func TestResolveConfigRejectsHalfConfigured(t *testing.T) {
 	dir := t.TempDir()
-	for _, key := range []string{"AINOVEL_PROVIDER", "AINOVEL_MODEL", "AINOVEL_API_KEY", "AINOVEL_BASE_URL", "AINOVEL_PROVIDER_TYPE", "AINOVEL_API"} {
-		t.Setenv(key, "")
-	}
+	clearModelEnv(t)
 	t.Setenv("AINOVEL_PROVIDER", "openai")
 	if _, err := ResolveConfig(dir); err == nil {
 		t.Fatal("half-configured model settings were accepted")
@@ -47,7 +43,7 @@ func TestResolveConfigRejectsHalfConfigured(t *testing.T) {
 
 func clearModelEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"AINOVEL_PROVIDER", "AINOVEL_MODEL", "AINOVEL_API_KEY", "AINOVEL_BASE_URL", "AINOVEL_PROVIDER_TYPE", "AINOVEL_API"} {
+	for _, key := range []string{"AINOVEL_PROVIDER", "AINOVEL_MODEL", "AINOVEL_API_KEY", "AINOVEL_BASE_URL", "AINOVEL_PROVIDER_TYPE", "AINOVEL_API", "AINOVEL_THINKING"} {
 		t.Setenv(key, "")
 	}
 }
@@ -80,10 +76,11 @@ func TestNamedConnectionsAndEnvironmentIsolation(t *testing.T) {
 	}
 }
 
-func TestLegacySwitchDoesNotReuseCredentials(t *testing.T) {
+// 环境变量指向文件里没有的连接：连接由环境变量定义，不沿用文件里其他连接的密钥或地址。
+func TestEnvironmentConnectionDoesNotReuseCredentials(t *testing.T) {
 	clearModelEnv(t)
 	dir := t.TempDir()
-	if err := os.WriteFile(ConfigPath(dir), []byte(`{"provider":"openai","model":"old-model","api_key":"private","base_url":"https://private.test"}`), 0600); err != nil {
+	if err := os.WriteFile(ConfigPath(dir), []byte(`{"provider":"openai","model":"old-model","providers":{"openai":{"api_key":"private","base_url":"https://private.test"}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AINOVEL_PROVIDER", "my-local")
@@ -101,10 +98,10 @@ func TestLegacySwitchDoesNotReuseCredentials(t *testing.T) {
 }
 
 func TestWithProviderPreservesConnectionsAndDoesNotMutateInput(t *testing.T) {
-	legacy := Config{Provider: "deepseek", Model: "deepseek-chat", APIKey: "old-secret"}
-	cfg := legacy.WithProvider("proxy", "new-model", ProviderConfig{Type: "openai", Models: []string{"new-model"}})
-	if cfg.Providers["deepseek"].APIKey != "old-secret" || cfg.APIKey != "" || cfg.BaseURL != "" || len(cfg.Providers["proxy"].Models) != 1 {
-		t.Fatalf("migration: %#v", cfg)
+	base := Config{}.WithProvider("deepseek", "deepseek-chat", ProviderConfig{APIKey: "old-secret"})
+	cfg := base.WithProvider("proxy", "new-model", ProviderConfig{Type: "openai", Models: []string{"new-model"}})
+	if cfg.Provider != "proxy" || cfg.Providers["deepseek"].APIKey != "old-secret" || len(cfg.Providers["proxy"].Models) != 1 {
+		t.Fatalf("other connections must survive a switch: %#v", cfg)
 	}
 	updated := cfg.WithProvider("proxy", "second-model", cfg.Providers["proxy"])
 	if len(cfg.Providers["proxy"].Models) != 1 || len(updated.Providers["proxy"].Models) != 2 {
@@ -121,20 +118,9 @@ func TestSaveConfigNormalizesAndRestrictsPermissions(t *testing.T) {
 	if err := os.WriteFile(ConfigPath(dir), []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Provider: "openai", Model: "model", APIKey: "secret"}
+	cfg := Config{}.WithProvider("openai", "model", ProviderConfig{APIKey: "secret"})
 	if err := SaveConfig(dir, cfg); err != nil {
 		t.Fatal(err)
-	}
-	data, err := os.ReadFile(ConfigPath(dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := raw["api_key"]; ok {
-		t.Fatal("top-level credentials persisted")
 	}
 	loaded, err := LoadConfig(dir)
 	if err != nil || loaded.Providers["openai"].APIKey != "secret" {
@@ -158,7 +144,7 @@ func TestSaveConfigNormalizesAndRestrictsPermissions(t *testing.T) {
 
 func TestActiveProviderValidation(t *testing.T) {
 	if _, err := (Config{Provider: "openai", Providers: map[string]ProviderConfig{}}).ActiveProvider(); err == nil {
-		t.Fatal("empty explicit provider map fell back to legacy configuration")
+		t.Fatal("missing connection accepted")
 	}
 	for _, pc := range []ProviderConfig{{Type: "openai", API: "invalid"}, {Type: "anthropic", API: "responses"}} {
 		cfg := Config{}.WithProvider("custom", "model", pc)
@@ -200,8 +186,54 @@ func TestCustomConnectionProtocolValidation(t *testing.T) {
 			t.Fatalf("protocol %q: %v", protocol, err)
 		}
 	}
-	c := Config{Provider: "deepseek", Model: "model"}
-	if err := c.Validate(); err != nil {
+	// 内置服务商的连接不必写 type：连接名就是协议。
+	if err := (Config{}).WithProvider("deepseek", "model", ProviderConfig{}).Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestThinkingAndRoleOverridesRoundTrip(t *testing.T) {
+	clearModelEnv(t)
+	dir := t.TempDir()
+	cfg := Config{Thinking: "high"}.WithProvider("deepseek", "deepseek-chat", ProviderConfig{APIKey: "k"})
+	cfg = cfg.WithProvider("proxy", "gpt-5", ProviderConfig{Type: "openai", APIKey: "p"})
+	cfg = cfg.WithProvider("deepseek", "deepseek-chat", cfg.Providers["deepseek"])
+	cfg = cfg.WithRole("writer", "proxy", "gpt-5-writer", "medium").WithRole("editor", "deepseek", "deepseek-chat", "")
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Thinking != "high" || resolved.Roles["writer"] != (RoleConfig{Provider: "proxy", Model: "gpt-5-writer", Thinking: "medium"}) ||
+		resolved.Roles["editor"] != (RoleConfig{Provider: "deepseek", Model: "deepseek-chat"}) {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if got := resolved.Providers["proxy"].Models; len(got) != 2 || got[1] != "gpt-5-writer" {
+		t.Fatalf("role model was not remembered on its connection: %v", got)
+	}
+	t.Setenv("AINOVEL_THINKING", "low")
+	if resolved, err = ResolveConfig(dir); err != nil || resolved.Thinking != "low" {
+		t.Fatalf("env thinking override = %#v, %v", resolved, err)
+	}
+
+	cleared := cfg.WithoutRole("writer").WithoutRole("editor")
+	if cleared.Roles != nil || len(cfg.Roles) != 2 {
+		t.Fatalf("WithoutRole = %#v (input roles %d)", cleared.Roles, len(cfg.Roles))
+	}
+	for _, bad := range []Config{
+		cfg.WithRole("writer", "missing", "m", ""),
+		cfg.WithRole("writer", "proxy", "", ""),
+	} {
+		if err := bad.Validate(); err == nil {
+			t.Fatalf("invalid role accepted: %#v", bad.Roles)
+		}
+	}
+	if _, err := cfg.Connection("proxy"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.Connection("missing"); err == nil {
+		t.Fatal("unknown connection accepted")
 	}
 }

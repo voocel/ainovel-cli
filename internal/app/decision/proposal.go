@@ -41,7 +41,6 @@ type ResolveProposalCommand struct {
 	Packs               []resource.PackRef
 	CreatorProfiles     []resource.CreatorProfileRef
 	CoreProtocolVersion string
-	ModelConfigDigest   string
 	RunID               string
 	CreatedAt           time.Time
 }
@@ -78,8 +77,8 @@ func (s *Review) ResolveProposal(ctx context.Context, command ResolveProposalCom
 		result.Proposal = &rejected
 		return result, nil
 	}
-	if strategy == change.ResolutionRewriteAffected && command.ModelConfigDigest == "" && !s.tasks.HasLLM() {
-		return ResolveProposalResult{}, fmt.Errorf("affected rewrite requires a configured runtime or model config digest: %w", model.ErrInvalid)
+	if strategy == change.ResolutionRewriteAffected && !s.tasks.HasLLM() {
+		return ResolveProposalResult{}, fmt.Errorf("affected rewrite requires a configured model: %w", model.ErrInvalid)
 	}
 	if strategy == change.ResolutionRewriteAffected && strings.TrimSpace(command.RunID) == "" {
 		return ResolveProposalResult{}, fmt.Errorf("affected rewrite requires a creation run: %w", model.ErrInvalid)
@@ -132,9 +131,8 @@ func (s *Review) ResolveProposal(ctx context.Context, command ResolveProposalCom
 		OperationID: operationID, ProjectID: proposal.Target.ID,
 		Kind:  model.OperationRewriteAffected,
 		Input: input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
-		CoreProtocolVersion: coreVersion, ModelConfigDigest: command.ModelConfigDigest,
-		ApprovalPolicy: model.ApprovalManual,
-		RunID:          command.RunID, CreatedAt: *committed.DecidedAt,
+		CoreProtocolVersion: coreVersion, ApprovalPolicy: model.ApprovalManual,
+		RunID: command.RunID, CreatedAt: *committed.DecidedAt,
 	})
 	if err != nil {
 		return result, fmt.Errorf("proposal was committed but affected rewrite operation could not be created; retry the same resolution: %w", err)

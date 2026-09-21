@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/app/binding"
 	"github.com/voocel/ainovel-cli/internal/app/decision"
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	"github.com/voocel/ainovel-cli/internal/app/profile"
@@ -48,6 +49,8 @@ func Run(ctx context.Context, api *bootstrap.App, args []string, stdout, stderr 
 		return runArtifact(ctx, api, args[1:], stdout, stderr)
 	case "diag":
 		return runDiag(ctx, api, args[1:], stdout, stderr)
+	case "model":
+		return runModel(api, args[1:], stdout, stderr)
 	case "help":
 		return writeHelp(stdout)
 	default:
@@ -718,7 +721,6 @@ func runProposal(ctx context.Context, api *bootstrap.App, args []string, stdout,
 		strategy := flags.String("strategy", "", "rewrite_affected、reinterpret_future 或 abandon")
 		runID := flags.String("run", "", "rewrite_affected 所属 Creation Run ID")
 		reason := flags.String("reason", "", "裁决反馈；放弃候选时会进入后续重写任务")
-		modelDigest := flags.String("model-digest", "", "模型配置摘要；已配置 Runtime 时可省略")
 		coreVersion := flags.String("core", "core-v1", "Core Protocol 版本")
 		var packIDs, profileRefs stringValues
 		flags.Var(&packIDs, "pack", "受影响章节重写使用的 Pack ID；可重复")
@@ -741,7 +743,7 @@ func runProposal(ctx context.Context, api *bootstrap.App, args []string, stdout,
 			ProposalID: *id, UserID: *userID, Strategy: *strategy, Reason: *reason,
 			RunID: *runID,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: *coreVersion,
-			ModelConfigDigest: *modelDigest, CreatedAt: time.Now().UTC(),
+			CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, result, err)
 	}
@@ -790,7 +792,6 @@ func runOperation(ctx context.Context, api *bootstrap.App, args []string, stdout
 		worker := flags.String("profile", "", "Worker Profile ID；默认由 Operation kind 决定")
 		inputPath := flags.String("input", "", "任务输入 JSON 文件")
 		policy := flags.String("approval", "manual", "auto、milestone 或 manual；custom 需未来的显式策略契约")
-		modelDigest := flags.String("model-digest", "", "模型配置摘要")
 		priority := flags.Int("priority", 0, "优先级")
 		var packIDs, profileRefs, dependencyIDs stringValues
 		flags.Var(&packIDs, "pack", "启用 Pack ID；可重复，启动时冻结最新 Revision")
@@ -822,8 +823,8 @@ func runOperation(ctx context.Context, api *bootstrap.App, args []string, stdout
 			OperationID: *id, ProjectID: *projectID, Kind: spec.Kind, RunID: *runID,
 			WorkerProfileID: *worker, Priority: *priority, Input: input,
 			Packs: packs, CreatorProfiles: profiles, DependsOn: dependencyIDs,
-			CoreProtocolVersion: "core-v1", ModelConfigDigest: *modelDigest,
-			ApprovalPolicy: model.ApprovalPolicy(*policy), CreatedAt: time.Now().UTC(),
+			CoreProtocolVersion: "core-v1",
+			ApprovalPolicy:      model.ApprovalPolicy(*policy), CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, operation, err)
 	case "restart":
@@ -832,7 +833,6 @@ func runOperation(ctx context.Context, api *bootstrap.App, args []string, stdout
 		id := flags.String("id", "", "新 Operation ID")
 		worker := flags.String("profile", "", "新 Worker Profile ID；默认沿用原职责")
 		policy := flags.String("approval", "", "新审批策略；默认沿用")
-		modelDigest := flags.String("model-digest", "", "新模型配置摘要；默认使用当前 Runtime")
 		coreVersion := flags.String("core", "", "Core Protocol 版本；默认沿用")
 		var packIDs, profileRefs stringValues
 		flags.Var(&packIDs, "pack", "使用最新 Pack Revision；可重复；不传则沿用旧 Revision")
@@ -861,8 +861,7 @@ func runOperation(ctx context.Context, api *bootstrap.App, args []string, stdout
 		operation, err := api.Tasks.RestartOperation(ctx, task.RestartOperationCommand{
 			FromOperationID: *fromID, OperationID: *id, WorkerProfileID: *worker,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: *coreVersion,
-			ModelConfigDigest: *modelDigest, ApprovalPolicy: model.ApprovalPolicy(*policy),
-			CreatedAt: time.Now().UTC(),
+			ApprovalPolicy: model.ApprovalPolicy(*policy), CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, operation, err)
 	case "run":
@@ -960,7 +959,6 @@ func runPrompt(ctx context.Context, api *bootstrap.App, args []string, stdout, s
 		kind := flags.String("kind", "", "Operation kind，用于构建对应故事上下文")
 		worker := flags.String("profile", "", "Worker Profile ID；默认由 Operation kind 决定")
 		inputPath := flags.String("input", "", "任务输入 JSON 文件")
-		modelDigest := flags.String("model-digest", "", "模型配置摘要")
 		var packIDs, profileRefs stringValues
 		flags.Var(&packIDs, "pack", "启用 Pack ID；可重复，编译时冻结最新 Revision")
 		flags.Var(&profileRefs, "creator-profile", "启用 id@scope Creator Profile；可重复")
@@ -985,7 +983,7 @@ func runPrompt(ctx context.Context, api *bootstrap.App, args []string, stdout, s
 		result, err := api.Prompts.ReloadPrompt(ctx, profile.ReloadPromptCommand{
 			ProjectID: *projectID, Kind: model.OperationKind(*kind), WorkerProfileID: *worker, Input: input,
 			Packs: packs, CreatorProfiles: profiles, CoreProtocolVersion: "core-v1",
-			ModelConfigDigest: *modelDigest, CreatedAt: time.Now().UTC(),
+			CreatedAt: time.Now().UTC(),
 		})
 		return writeResult(stdout, result, err)
 	}
@@ -1247,6 +1245,7 @@ func writeHelp(output io.Writer) error {
   pack install|export|eval
   profile save|show|learn|candidates|confirm
   artifact list|gc
+  model [list|use [--role R] [--connection C] <模型|编号>|use --role R --inherit|effort [--role R] <档位|inherit>]
   diag [--project ID] [--run ID] [--operation ID] [--after ID] [--event-after N]
   diag export [--project ID] [--run ID] [--operation ID] --file diagnostics.json`))
 	return err
@@ -1277,5 +1276,71 @@ func runArtifact(ctx context.Context, api *bootstrap.App, args []string, stdout,
 		return writeResult(stdout, map[string]int{"removed": removed}, err)
 	default:
 		return fmt.Errorf("未知 artifact 子命令 %q", args[0])
+	}
+}
+
+// runModel 是模型绑定命令组：查看、列出、切换连接/模型与思考强度，按角色可覆盖。
+// 模型名可能自带斜杠（OpenRouter），所以连接用 --connection 指定而不是斜杠语法。
+func runModel(api *bootstrap.App, args []string, stdout, stderr io.Writer) error {
+	if api == nil || api.Models == nil {
+		return fmt.Errorf("model 命令需要已装配的应用")
+	}
+	if len(args) == 0 {
+		selections := make([]binding.Selection, 0, 4)
+		for _, role := range api.Models.Roles() {
+			selections = append(selections, api.Models.Current(role))
+		}
+		return writeResult(stdout, selections, nil)
+	}
+	switch args[0] {
+	case "list":
+		return writeResult(stdout, api.Models.Choices(), nil)
+	case "use":
+		flags := newFlags("model use", stderr)
+		role := flags.String("role", "", "角色：architect、writer 或 editor；留空是默认绑定")
+		connection := flags.String("connection", "", "连接名；留空沿用当前连接")
+		inherit := flags.Bool("inherit", false, "清除该角色的覆盖，跟随默认")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *inherit {
+			if *role == "" || flags.NArg() != 0 {
+				return fmt.Errorf("model use --inherit 需要 --role")
+			}
+			if err := api.Models.Use(*role, "", ""); err != nil {
+				return err
+			}
+			return writeResult(stdout, api.Models.Current(*role), nil)
+		}
+		if flags.NArg() != 1 {
+			return fmt.Errorf("model use 需要一个模型名或 model list 里的编号")
+		}
+		target, connectionName := flags.Arg(0), *connection
+		if index, err := strconv.Atoi(target); err == nil {
+			choices := api.Models.Choices()
+			if index < 1 || index > len(choices) {
+				return fmt.Errorf("编号 %d 超出范围（1–%d）", index, len(choices))
+			}
+			target, connectionName = choices[index-1].Model, choices[index-1].Connection
+		}
+		if err := api.Models.Use(*role, connectionName, target); err != nil {
+			return err
+		}
+		return writeResult(stdout, api.Models.Current(*role), nil)
+	case "effort":
+		flags := newFlags("model effort", stderr)
+		role := flags.String("role", "", "角色：architect、writer 或 editor；留空是默认绑定")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return fmt.Errorf("model effort 需要一个档位：auto / off / minimal / low / medium / high / xhigh / max，角色可用 inherit")
+		}
+		if err := api.Models.SetThinking(*role, flags.Arg(0)); err != nil {
+			return err
+		}
+		return writeResult(stdout, api.Models.Current(*role), nil)
+	default:
+		return fmt.Errorf("model 需要 list、use 或 effort 子命令")
 	}
 }

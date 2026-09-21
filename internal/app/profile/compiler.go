@@ -13,11 +13,10 @@ type Compiler struct {
 	store    *store.Store
 	projects *projectdoc.Repository
 	prompts  *prompt.Registry
-	runtime  any
 }
 
-func New(s *store.Store, projects *projectdoc.Repository, runtime any) *Compiler {
-	return &Compiler{store: s, projects: projects, prompts: prompt.NewRegistry(s), runtime: runtime}
+func New(s *store.Store, projects *projectdoc.Repository) *Compiler {
+	return &Compiler{store: s, projects: projects, prompts: prompt.NewRegistry(s)}
 }
 func (s *Compiler) Load(ctx context.Context, digest string) (prompt.Compiled, error) {
 	return s.prompts.Load(ctx, digest)

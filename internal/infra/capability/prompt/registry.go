@@ -80,8 +80,8 @@ func (r *Registry) Load(ctx context.Context, digest string) (Compiled, error) {
 	}
 	return Compiled{
 		ProjectID: record.ProjectID, WorkerProfile: record.WorkerProfile,
-		CoreProtocolVersion: record.CoreProtocolVersion, ModelConfigDigest: record.ModelConfigDigest,
-		StablePrefix: record.StablePrefix, DynamicTail: record.DynamicTail,
+		CoreProtocolVersion: record.CoreProtocolVersion,
+		StablePrefix:        record.StablePrefix, DynamicTail: record.DynamicTail,
 		Tools: tools, Sources: sources, PromptDigest: record.PromptDigest,
 		ToolSchemaDigest: record.ToolSchemaDigest, ProfileDigest: record.Digest,
 	}, nil

@@ -66,7 +66,18 @@ type Event struct {
 	Text        string // Text/Prose：文字增量
 	Bytes       int    // ToolDelta：本次增量字节数
 	Usage       UsageTotals
+	Model       string // Usage：这条消息实际使用的模型与提供方（服务端上报）
+	Provider    string
 	At          time.Time
+}
+
+// ModelUsage 是本轮某个模型的累计用量：按首次使用排序，中途换模型即多一项。
+type ModelUsage struct {
+	Model, Provider string
+	Usage           UsageTotals
+	Messages        int // 收到用量的消息数
+	FirstAt, LastAt time.Time
+	FirstKind       string // 首次使用时的任务种类
 }
 
 // Entry 是快照中的一行生命周期条目：一次工具调用（进行中或已收尾）或一次重试。
@@ -118,6 +129,11 @@ type Snapshot struct {
 	ThinkingSeen bool
 	// Usage 是本轮（同一 RunID）累计用量；换 Run 时快照重建即清零。
 	Usage UsageTotals
+	// Models 是本轮用过的模型各自的累计用量；ActiveModel 是最近一条用量所属的模型。
+	Models      []ModelUsage
+	ActiveModel string
+	// Worked 是本轮已结束任务的执行时长之和（进行中的任务由消费侧按 StartedAt 补算）。
+	Worked time.Duration
 	// Seq 每次变更递增，消费侧可据此跳过重复渲染。
 	Seq uint64
 }
@@ -219,6 +235,7 @@ func (h *Hub) Snapshot(projectID string) (Snapshot, bool) {
 	for i := range copied.Tasks {
 		copied.Tasks[i].Scope = copied.Tasks[i].Scope.clone()
 	}
+	copied.Models = append([]ModelUsage(nil), snapshot.Models...)
 	copied.Prose = append([]byte(nil), snapshot.Prose...)
 	copied.Output = append([]OutputBlock(nil), snapshot.Output...)
 	for i := range copied.Output {
@@ -246,6 +263,7 @@ func (s *Snapshot) fold(event Event) {
 		return
 	case Usage:
 		s.Usage.add(event.Usage)
+		s.foldModel(event)
 		return
 	case Retry:
 		s.append(Entry{
@@ -311,6 +329,23 @@ func (s *Snapshot) fold(event Event) {
 			s.ThinkingSeen = true
 		}
 	}
+}
+
+// foldModel 把一条消息的用量记到它所用的模型名下；模型顺序即首次使用顺序。
+func (s *Snapshot) foldModel(event Event) {
+	s.ActiveModel = event.Model
+	for i := range s.Models {
+		if m := &s.Models[i]; m.Model == event.Model && m.Provider == event.Provider {
+			m.Usage.add(event.Usage)
+			m.Messages++
+			m.LastAt = event.At
+			return
+		}
+	}
+	s.Models = append(s.Models, ModelUsage{
+		Model: event.Model, Provider: event.Provider, Usage: event.Usage, Messages: 1,
+		FirstAt: event.At, LastAt: event.At, FirstKind: event.TaskKind,
+	})
 }
 
 // openIndex 定位这次调用对应的未收尾条目：双方都有 CallID 时严格按它配对

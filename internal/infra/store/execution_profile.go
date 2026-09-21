@@ -19,12 +19,12 @@ func (s *Store) SaveExecutionProfile(ctx context.Context, profile model.Executio
 	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO execution_profiles (
-			digest, project_id, worker_profile, core_protocol_version, model_config_digest,
+			digest, project_id, worker_profile, core_protocol_version,
 			prompt_digest, tool_schema_digest, stable_prefix, dynamic_tail, tools, sources,
 			created_at_unix_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (digest) DO NOTHING`,
-		profile.Digest, profile.ProjectID, profile.WorkerProfile, profile.CoreProtocolVersion, profile.ModelConfigDigest,
+		profile.Digest, profile.ProjectID, profile.WorkerProfile, profile.CoreProtocolVersion,
 		profile.PromptDigest, profile.ToolSchemaDigest, profile.StablePrefix, profile.DynamicTail,
 		[]byte(profile.Tools), []byte(profile.Sources), profile.CreatedAt.UnixMilli())
 	if err != nil {
@@ -45,10 +45,10 @@ func (s *Store) GetExecutionProfile(ctx context.Context, digest string) (model.E
 	var tools, sources []byte
 	var createdAt int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT project_id, worker_profile, core_protocol_version, model_config_digest,
+		SELECT project_id, worker_profile, core_protocol_version,
 			prompt_digest, tool_schema_digest, stable_prefix, dynamic_tail, tools, sources, created_at_unix_ms
 		FROM execution_profiles WHERE digest = ?`, digest).
-		Scan(&profile.ProjectID, &profile.WorkerProfile, &profile.CoreProtocolVersion, &profile.ModelConfigDigest,
+		Scan(&profile.ProjectID, &profile.WorkerProfile, &profile.CoreProtocolVersion,
 			&profile.PromptDigest, &profile.ToolSchemaDigest, &profile.StablePrefix, &profile.DynamicTail,
 			&tools, &sources, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {

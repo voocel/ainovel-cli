@@ -3,12 +3,40 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/voocel/ainovel-cli/internal/app/workbench"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
-// A draft keeps its target while the reader navigates or live progress advances.
+// reviewing 表示有稿件等你裁决：输入框里的文字是修改意见，y 是通过。
+func (m model) reviewing() bool {
+	d := m.bench.decision
+	return d != nil && d.hasProposal && !m.bench.writing
+}
+
+// directiveScope 按目录选中行定要求的作用域（§4.9）：章行只管该章，卷/弧行管整个子树，
+// 占位行或尚无目录时从下一章起生效。target 是给人看的短语。
+func (m model) directiveScope() (scope, target string) {
+	rows := m.outlineRows()
+	if cursor := m.bench.cursor; cursor >= 0 && cursor < len(rows) {
+		row := rows[cursor]
+		switch {
+		case row.placeholder:
+			return fmt.Sprintf("from_chapter:%d", row.chapter), fmt.Sprintf("第 %d 章起", row.chapter)
+		case row.isChapter():
+			return domainmodel.DirectiveScopePlanNode(row.node.Node.ID), fmt.Sprintf("第 %d 章", row.chapter)
+		default:
+			return domainmodel.DirectiveScopePlanNode(row.node.Node.ID), "「" + row.node.Node.Title + "」"
+		}
+	}
+	next := len(m.bench.snap.Manuscript) + 1
+	return fmt.Sprintf("from_chapter:%d", next), fmt.Sprintf("第 %d 章起", next)
+}
+
+// composerScope 草稿在第一个字时锁定作用域，之后切章不改变它的语义。
 func (m model) composerScope() (string, string) {
 	if m.bench.inputScope != "" {
 		return m.bench.inputScope, m.bench.inputLabel
@@ -66,23 +94,59 @@ func (m model) reviewTarget() string {
 	return "当前创作方案"
 }
 
+func chapterWords(chapter domainmodel.ManuscriptChapter) int {
+	words := 0
+	for _, block := range chapter.Blocks {
+		words += utf8.RuneCountInString(block.Text)
+	}
+	return words
+}
+
+// candidateSummary 决定卡上的一行变更摘要：只比对具体正文，不推测语义差异。
+func (m model) candidateSummary() string {
+	chapters, err := m.reviewChapters()
+	if err != nil {
+		return benchTheme.Warning.Render("候选稿读取异常 · " + err.Error())
+	}
+	var parts []string
+	for _, chapter := range chapters {
+		previous, ok := chapterByNumber(m.bench.snap.Manuscript, chapter.Number)
+		if !ok {
+			parts = append(parts, fmt.Sprintf("新稿 %s 字", groupDigits(chapterWords(chapter))))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("正文 %s → %s 字", groupDigits(chapterWords(previous)), groupDigits(chapterWords(chapter))))
+		if previous.Title != chapter.Title {
+			parts = append(parts, "标题已调整")
+		}
+	}
+	if attached := len(m.bench.decision.proposal.Patches) - len(chapters); attached > 0 {
+		parts = append(parts, fmt.Sprintf("另有 %d 项附带变更", attached))
+	}
+	if reason := strings.TrimSpace(m.bench.decision.proposal.Reason); reason != "" {
+		parts = append(parts, "说明："+oneLine(reason))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// reviewContent 完整审阅文本（/review 全屏）：原因、变更、候选正文与全部附带变更。
 func (m model) reviewContent() (string, error) {
 	d := m.bench.decision
 	if d == nil || !d.hasProposal {
-		return "暂无待确认稿件\n\n候选稿准备好后，会在右侧待办中提示。你可以继续阅读正文或观察实时输出。", nil
+		return "暂无待确认稿件\n\n候选稿准备好后，决定卡会出现在正文下方。", nil
+	}
+	chapters, err := m.reviewChapters()
+	if err != nil {
+		return "", err
 	}
 	var body strings.Builder
 	body.WriteString("审阅 · " + m.reviewTarget() + "\n\n" + d.reason + "\n")
 	if d.stale {
 		body.WriteString("\n此稿基于旧版本，只可提出修改意见重写。\n")
 	}
-	chapters, err := m.reviewChapters()
-	if err != nil {
-		return "", err
-	}
-	body.WriteString("\n本次变更（对比当前已入稿正文）\n" + strings.Join(m.candidateChanges(chapters, 90), "\n") + "\n")
+	body.WriteString("\n本次变更（对比当前已入稿正文）\n" + m.candidateSummary() + "\n")
 	for _, chapter := range chapters {
-		body.WriteString("\n" + renderChapterBody(chapter, "候选稿 · 尚未入稿") + "\n")
+		body.WriteString(fmt.Sprintf("\n第 %d 章 · %s\n候选稿 · 尚未入稿\n\n%s\n", chapter.Number, chapter.Title, chapterText(chapter)))
 	}
 	for _, patch := range d.proposal.Patches {
 		if patch.Document.Kind == domainmodel.DocumentManuscript && patch.Operation == domainmodel.PatchPut {
@@ -96,7 +160,7 @@ func (m model) reviewContent() (string, error) {
 			body.WriteString("\n大纲 · " + node.Title + "\n" + node.Summary + "\n")
 			continue
 		}
-		// Preserve every attached change for review, including less common document types.
+		// 少见的文档类型也原样保留，审阅不能漏掉任何附带变更。
 		body.WriteString(fmt.Sprintf("\n附带变更（原始内容） · %s · %s\n%s\n", patch.Document.ID, patch.Operation, patch.Content))
 	}
 	if d.stale {
@@ -113,5 +177,102 @@ func (m model) openReview() model {
 		m.bench.err = err.Error()
 		return m
 	}
-	return m.openBody(text).(model)
+	return m.openBody(text)
+}
+
+// revealCandidate 决定卡点击：单章候选直接在正文视图里读；其余打开完整审阅。
+func (m model) revealCandidate() model {
+	chapters, err := m.reviewChapters()
+	if err == nil && len(chapters) == 1 && m.findChapter(fmt.Sprint(chapters[0].Number), false) {
+		return m
+	}
+	return m.openReview()
+}
+
+// firstBlockingFinding 取选中章第一条尚未被接受的阻塞发现（/accept 一次只裁一条）。
+func (m model) firstBlockingFinding() (workbench.WorkbenchFinding, bool) {
+	chapterID := m.selectedChapterID()
+	for _, finding := range m.bench.snap.Findings {
+		if chapterID != "" && finding.ChapterID == chapterID && finding.Severity == domainmodel.FindingBlocking {
+			return finding, true
+		}
+	}
+	return workbench.WorkbenchFinding{}, false
+}
+
+func factLabel(value []byte) string {
+	var text string
+	if json.Unmarshal(value, &text) == nil {
+		return text
+	}
+	return string(value)
+}
+
+// detailReport 完整详情（/view 全屏）：本章规划、已确认事实、审阅发现、创作意图与要求。
+func (m model) detailReport() string {
+	bench := m.bench
+	number := m.selectedChapterNumber()
+	title := "详情"
+	if number > 0 {
+		title = fmt.Sprintf("第 %d 章详情", number)
+	}
+	var view strings.Builder
+	view.WriteString(styleTitle.Render(title) + "\n")
+	if node, ok := m.outlineChapter(number); ok && node.Node.Summary != "" {
+		view.WriteString("\n" + styleTitle.Render("本章规划") + "\n" + node.Node.Summary + "\n")
+	}
+	chapterID := m.selectedChapterID()
+	var facts []string
+	for _, fact := range bench.snap.Canon {
+		if chapterID == "" || fact.SourceChapterID != chapterID {
+			continue
+		}
+		label := factLabel(fact.Value)
+		if slices.Contains(bench.snap.PendingCanon, fact.ID) {
+			label = styleWarn.Render("待核验 ") + label
+		}
+		facts = append(facts, label)
+	}
+	if len(facts) > 0 {
+		view.WriteString("\n" + styleTitle.Render("已确认事实") + "\n")
+		for _, fact := range facts {
+			view.WriteString(styleHint.Render("· ") + fact + "\n")
+		}
+	}
+	findings := 0
+	for _, finding := range bench.snap.Findings {
+		if chapterID == "" || finding.ChapterID != chapterID {
+			continue
+		}
+		if findings == 0 {
+			view.WriteString("\n" + styleTitle.Render("审阅发现") + "\n")
+		}
+		marker := "· "
+		if finding.Severity == domainmodel.FindingBlocking {
+			marker = "! "
+		}
+		view.WriteString(styleHint.Render(marker) + finding.Note + "\n")
+		findings++
+	}
+	intent := bench.snap.Intent
+	view.WriteString("\n" + styleTitle.Render("创作意图") + "\n")
+	if len(intent.Required) > 0 {
+		view.WriteString(styleHint.Render("必须 ") + strings.Join(intent.Required, "、") + "\n")
+	}
+	if len(intent.Forbidden) > 0 {
+		view.WriteString(styleHint.Render("禁止 ") + strings.Join(intent.Forbidden, "、") + "\n")
+	}
+	if intent.EndingDirection != "" {
+		view.WriteString(styleHint.Render("结局 ") + intent.EndingDirection + "\n")
+	}
+	if len(bench.snap.Ownership) > 0 {
+		view.WriteString(styleHint.Render(fmt.Sprintf("锁定 %d 处", len(bench.snap.Ownership))) + "\n")
+	}
+	if len(bench.snap.Directives) > 0 {
+		view.WriteString("\n" + styleTitle.Render("创作要求") + "\n")
+		for _, directive := range bench.snap.Directives {
+			view.WriteString(styleHint.Render("· ") + directive.Text + "（" + m.directiveScopeLabel(directive.Scope) + "）\n")
+		}
+	}
+	return view.String()
 }

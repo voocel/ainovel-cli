@@ -1,6 +1,10 @@
 package models
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/voocel/agentcore"
+)
 
 func TestDigestTracksExecutionConfigWithoutLeakingAPIKey(t *testing.T) {
 	first, err := (Config{Provider: "deepseek", Model: "deepseek-chat", APIKey: "secret-a"}).Digest()
@@ -20,6 +24,24 @@ func TestDigestTracksExecutionConfigWithoutLeakingAPIKey(t *testing.T) {
 	}
 	if changed == first {
 		t.Fatal("model change did not change the config digest")
+	}
+}
+
+func TestThinkingLevelChangesDigestAndBinds(t *testing.T) {
+	c := Config{Provider: "openai", Model: "custom", APIKey: "k"}
+	auto, _ := c.Digest()
+	c.Thinking = agentcore.ThinkingHigh
+	high, _ := c.Digest()
+	if auto == high {
+		t.Fatal("thinking level must be part of the execution configuration")
+	}
+	binding, err := Bind(c)
+	if err != nil || binding.Chat == nil || binding.Digest != high || binding.Thinking != agentcore.ThinkingHigh || binding.Model != "custom" {
+		t.Fatalf("binding = %#v, %v", binding, err)
+	}
+	roles := Bindings{Default: binding, Roles: map[string]Binding{"writer": {Model: "other"}}}
+	if roles.For("writer").Model != "other" || roles.For("editor").Model != "custom" {
+		t.Fatal("role lookup must fall back to the default binding")
 	}
 }
 

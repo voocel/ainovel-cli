@@ -38,7 +38,7 @@ func TestReplaceChapterBlockUsesStableIDAndWorkspaceVersion(t *testing.T) {
 		Target: model.AuthorityTarget{Kind: model.AuthorityProject, ID: "book-1"},
 		State:  model.OperationQueued, RunID: run.ID,
 		Snapshot: model.ExecutionSnapshot{
-			Executor: "llm.agent@1/model", BaseRevision: 1, InputDigest: model.Digest(input),
+			Executor: "llm.agent@1", BaseRevision: 1, InputDigest: model.Digest(input),
 			ConfigDigest: "execution-profile", ApprovalPolicy: model.ApprovalManual,
 		},
 		Input: input, CreatedAt: now, UpdatedAt: now,

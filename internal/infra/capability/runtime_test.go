@@ -16,6 +16,7 @@ import (
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 	"github.com/voocel/ainovel-cli/internal/infra/workspace"
 )
@@ -45,7 +46,7 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
-	runtime := NewRuntime(nil, "model", authorityStore)
+	runtime := NewRuntime(authorityStore)
 	runtime.now = func() time.Time { return now.Add(2 * time.Second) }
 
 	read, err := runtime.toolExecutor(operation, "writer.compose@1", "authority_read", nil, nil)
@@ -282,7 +283,7 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 		},
 	})
 	model := &recoveryRuntimeModel{proposalArgs: proposalArgs, now: now.Add(7 * time.Second)}
-	runtime := NewRuntime(model, "model", authorityStore)
+	runtime := boundRuntime(authorityStore, model)
 	runtime.now = func() time.Time { return now.Add(8 * time.Second) }
 	outcome, err := runtime.Execute(ctx, second)
 	if err != nil {
@@ -397,7 +398,7 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 		review: review, steps: []json.RawMessage{incomplete, noIntent, mismatched, noDirectives, complete},
 		now: now.Add(2 * time.Second),
 	}
-	runtime := NewRuntime(model, "model", authorityStore)
+	runtime := boundRuntime(authorityStore, model)
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
 	hub := activity.NewHub()
 	runtime.SetActivitySink(hub)
@@ -465,6 +466,13 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if model.requests != 6 || feed.Usage.Input != 60 || feed.Usage.Output != 18 || feed.Usage.Cost < 0.059 || feed.Usage.Cost > 0.061 {
 		t.Fatalf("usage totals = %#v", feed.Usage)
 	}
+	// 用量按服务端上报的模型归档（右栏按模型分列的依据）。
+	if len(feed.Models) != 1 || feed.Models[0].Model != "verdict-model" || feed.Models[0].Provider != "test" || feed.Models[0].Messages != 6 || feed.ActiveModel != "verdict-model" {
+		t.Fatalf("per-model usage = %#v active=%q", feed.Models, feed.ActiveModel)
+	}
+	if task := feed.Tasks[0]; task.Turns != 6 || task.Calls != 6 {
+		t.Fatalf("task counters = %+v", task)
+	}
 }
 
 type verdictRuntimeModel struct {
@@ -503,7 +511,7 @@ func (m *verdictRuntimeModel) GenerateStream(
 			StopReason: agentcore.StopReasonStop, Timestamp: m.now.Add(time.Duration(index) * time.Second),
 		}
 	}
-	message.Usage = &agentcore.Usage{Input: 10, Output: 3, Cost: &agentcore.Cost{Total: 0.01}}
+	message.Usage = &agentcore.Usage{Provider: "test", Model: "verdict-model", Input: 10, Output: 3, Cost: &agentcore.Cost{Total: 0.01}}
 	stream := make(chan agentcore.StreamEvent, 4)
 	for _, call := range message.ToolCalls() {
 		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallStart, Message: message}
@@ -770,7 +778,7 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 		t.Fatalf("claim operation: %v", err)
 	}
 	model := &semanticResponseModel{}
-	runtime := NewRuntime(model, "model", authorityStore)
+	runtime := boundRuntime(authorityStore, model)
 	runtime.now = func() time.Time { return now.Add(2 * time.Second) }
 	hub := activity.NewHub()
 	runtime.SetActivitySink(hub)
@@ -873,7 +881,7 @@ func TestRuntimeAnalyzesSemanticImpactWithStrictContract(t *testing.T) {
 			{"strategy":"reinterpret_future","explanation":"在后文重新解释"},
 			{"strategy":"abandon","explanation":"放弃变更"}
 		]}`}
-	runtime := NewRuntime(model, "model", authorityStore)
+	runtime := boundRuntime(authorityStore, model)
 	proposal := domainmodel.Proposal{
 		ID: "semantic-change", Target: target, BaseRevision: 1,
 		Author: domainmodel.Author{Kind: domainmodel.AuthorUser, ID: "user-1"}, Reason: "修改前提",
@@ -916,7 +924,7 @@ func TestAffectedRewriteSubmissionCoversEveryWorkspaceChapter(t *testing.T) {
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now)
+	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity, time.Minute, now)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
@@ -945,7 +953,7 @@ func TestAffectedRewriteSubmissionCoversEveryWorkspaceChapter(t *testing.T) {
 				Content: json.RawMessage(fmt.Sprintf(`{"id":"fact-%d","kind":"event","subject_id":"hero","predicate":"event.rewrite_%d","new_value":true,"source_chapter_id":"%s"}`, index+1, index+1, chapter.ID))},
 		)
 	}
-	runtime := NewRuntime(nil, "model", authorityStore)
+	runtime := NewRuntime(authorityStore)
 	if err := runtime.validateSubmissionArtifact(ctx, operation, keys, "", patches); err != nil {
 		t.Fatalf("validate complete batch: %v", err)
 	}
@@ -1000,11 +1008,11 @@ func TestWriterSubmissionEnforcesDirectiveWordCounts(t *testing.T) {
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now)
+	operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity, time.Minute, now)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
-	runtime := NewRuntime(nil, "model", authorityStore)
+	runtime := NewRuntime(authorityStore)
 	submit := func(text string, version int64) error {
 		chapter := domainmodel.ManuscriptChapter{
 			ID: "chapter-1", PlanNodeID: "plan-1", Number: 1, Title: "标题不计入字数", Author: domainmodel.AuthorAI,
@@ -1089,7 +1097,7 @@ func TestRuntimePlanSubmissionEnforcesRequestedChapters(t *testing.T) {
 		"patches": []domainmodel.Patch{patchFor(volume), patchFor(arc), patchFor(chapterOne)},
 	})
 	model := &planRuntimeModel{steps: []json.RawMessage{overshoot, exact}, now: now.Add(2 * time.Second)}
-	runtime := NewRuntime(model, "model", authorityStore)
+	runtime := boundRuntime(authorityStore, model)
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
 	outcome, err := runtime.Execute(ctx, operation)
 	if err != nil {
@@ -1153,7 +1161,7 @@ func (m *planRuntimeModel) SupportsTools() bool { return true }
 // 只走工具校验不执行模型的用例可以用任意非空值。
 func runtimeSnapshot(input json.RawMessage, base domainmodel.Revision, policy domainmodel.ApprovalPolicy, config string) domainmodel.ExecutionSnapshot {
 	return domainmodel.ExecutionSnapshot{
-		Executor: prompt.ExecutorIdentity("model"), BaseRevision: base, InputDigest: domainmodel.Digest(input),
+		Executor: prompt.ExecutorIdentity, BaseRevision: base, InputDigest: domainmodel.Digest(input),
 		ConfigDigest: config, ApprovalPolicy: policy,
 	}
 }
@@ -1172,7 +1180,7 @@ func seedRuntimeProfile(
 	compiled, err := prompt.NewRegistry(authorityStore).Reload(ctx, prompt.CompileRequest{
 		ProjectID: projectID, CoreProtocolVersion: "core-v1", Worker: worker,
 		Intent: domainmodel.Intent{Premise: "测试作品"}, StoryContext: json.RawMessage(`{"revision":` + fmt.Sprint(base) + `}`),
-		Task: task, BaseRevision: base, ProjectOverlayRevision: base, ModelConfigDigest: "model",
+		Task: task, BaseRevision: base, ProjectOverlayRevision: base,
 	}, time.Date(2026, 8, 18, 11, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("seed execution profile: %v", err)
@@ -1234,7 +1242,7 @@ func TestWriterSubmissionRequiresRedeclaringChapterFacts(t *testing.T) {
 	if _, err := authorityStore.CreateOperation(ctx, operation); err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
-	if operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now); err != nil {
+	if operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity, time.Minute, now); err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
 	chapter := domainmodel.ManuscriptChapter{
@@ -1247,7 +1255,7 @@ func TestWriterSubmissionRequiresRedeclaringChapterFacts(t *testing.T) {
 	}, 0, operation.Attempt); err != nil {
 		t.Fatalf("put workspace chapter: %v", err)
 	}
-	runtime := NewRuntime(nil, "model", authorityStore)
+	runtime := NewRuntime(authorityStore)
 	manuscript := domainmodel.Patch{Document: domainmodel.DocumentRef{Kind: domainmodel.DocumentManuscript, ID: "chapter-1"}, Operation: domainmodel.PatchPut, Content: content}
 	canon := func(raw string) domainmodel.Patch {
 		var fact domainmodel.CanonFact
@@ -1367,4 +1375,11 @@ func seedRuntimeProject(t *testing.T, ctx context.Context, authorityStore *store
 	if _, err := authorityStore.CommitProposal(ctx, seed); err != nil {
 		t.Fatalf("commit seed: %v", err)
 	}
+}
+
+// boundRuntime 是测试里的常驻 Runtime 加一套默认绑定；模型摘要固定为 "model"。
+func boundRuntime(authorityStore *store.Store, chat agentcore.ChatModel) *Runtime {
+	runtime := NewRuntime(authorityStore)
+	runtime.Bind(models.Bindings{Default: models.Binding{Provider: "test", Model: "model", Digest: "model", Chat: chat}})
+	return runtime
 }

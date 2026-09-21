@@ -5,6 +5,7 @@ package bootstrap
 import (
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/app/binding"
 	"github.com/voocel/ainovel-cli/internal/app/decision"
 	"github.com/voocel/ainovel-cli/internal/app/diag"
 	"github.com/voocel/ainovel-cli/internal/app/evidence"
@@ -18,6 +19,8 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/creation"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/domain/operation"
+	"github.com/voocel/ainovel-cli/internal/infra/activity"
+	"github.com/voocel/ainovel-cli/internal/infra/capability"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
@@ -33,6 +36,8 @@ type App struct {
 	Decisions *decision.Review
 	Workbench *workbench.Query
 	Evidence  *evidence.Reader
+	// Models 是模型绑定用例：常驻 capability Runtime 随时重绑，不重建应用。
+	Models *binding.Service
 }
 
 type Options struct {
@@ -41,9 +46,24 @@ type Options struct {
 	Contracts []operation.VerdictContract
 	Goals     map[model.GoalKind]creation.Goal
 	Now       func() time.Time
+	// ConfigDir 是模型配置落盘位置；Interactive 装配实时活动通道（发布与订阅共用
+	// 同一 Hub），脚本入口保持零活动开销。
+	ConfigDir   string
+	Interactive bool
 }
 
+// New 装配应用。未注入 LLM 执行器时装配常驻的 capability Runtime：模型绑定是运行时
+// 属性（D57），未绑定的 Runtime 不领取任务，绑定后队列任务自然接上。
 func New(s *store.Store, options Options) *App {
+	var runtime *capability.Runtime
+	binder, _ := options.Executors.LLM.(binding.Binder) // 注入的执行器能重绑就用它
+	if options.Executors.LLM == nil {
+		runtime = capability.NewRuntime(s)
+		options.Executors.LLM, binder = runtime, runtime
+		if options.Interactive {
+			runtime.SetActivitySink(activity.NewHub())
+		}
+	}
 	changes := change.New(s)
 	if analyzer, ok := options.Executors.LLM.(change.SemanticAnalyzer); ok {
 		changes = change.NewWithSemanticAnalyzer(s, analyzer)
@@ -52,7 +72,7 @@ func New(s *store.Store, options Options) *App {
 	projects := project.New(s, changes)
 	analyzer, _ := options.Executors.LLM.(resource.PreferenceAnalyzer)
 	resources := resource.New(s, changes, projects, analyzer)
-	prompts := profile.New(s, projects, options.Executors.LLM)
+	prompts := profile.New(s, projects)
 	tasks := task.New(s, engine, options.Executors, prompts)
 	reviews := novel.NewReviews(s, changes, projects)
 	goals := map[model.GoalKind]creation.Goal{model.GoalNovel: novel.NewGoal(reviews)}
@@ -68,14 +88,19 @@ func New(s *store.Store, options Options) *App {
 	}
 	runs := creation.New(s, goals, now)
 	decisions := decision.New(s, changes, projects, tasks)
-	return &App{
+	app := &App{
 		Diag:     diag.New(s, options.Version, now),
 		Projects: projects, Resources: resources, Prompts: prompts,
 		Tasks: tasks, Runs: runs, Reviews: reviews, Decisions: decisions,
 		Novels:    novel.New(s, changes, projects, runs, tasks),
 		Workbench: workbench.New(s, projects, runs, reviews, decisions),
 		Evidence:  evidence.New(s, changes, engine),
+		Models:    binding.New(options.ConfigDir, binder),
 	}
+	if runtime != nil && options.Interactive {
+		app.Workbench.AttachActivityFeed(runtime.ActivityHub())
+	}
+	return app
 }
 
 // NewDiagnostics assembles only the read-only reporting use case.

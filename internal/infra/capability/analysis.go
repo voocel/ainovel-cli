@@ -29,8 +29,12 @@ func (r *Runtime) AnalyzePreference(ctx context.Context, input model.PreferenceL
 	if err != nil {
 		return model.PreferenceCandidate{}, err
 	}
+	binding, ok := r.bindingFor("")
+	if !ok {
+		return model.PreferenceCandidate{}, fmt.Errorf("preference analysis requires a bound model: %w", model.ErrInvalid)
+	}
 	var candidate model.PreferenceCandidate
-	if _, err := llm.Structured(ctx, r.model, llm.Call{
+	if _, err := llm.Structured(ctx, binding, llm.Call{
 		System: "你是写作偏好分析器。只从用户实际 before/after 修改中归纳可复用偏好；证据不足就明确报错，不得猜测人格或题材偏好。规则要短、可执行，并引用具体修改证据。",
 		Input:  string(payload),
 		Schema: llm.Schema{
@@ -100,8 +104,12 @@ func (r *Runtime) Analyze(
 		"properties": map[string]any{"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string"}},
 		"required":   []string{"kind", "id"}, "additionalProperties": false,
 	}
+	binding, ok := r.bindingFor("")
+	if !ok {
+		return nil, fmt.Errorf("%w: model is not bound", change.ErrSemanticUnavailable)
+	}
 	var report change.SemanticImpactReport
-	if _, err := llm.Structured(ctx, r.model, llm.Call{
+	if _, err := llm.Structured(ctx, binding, llm.Call{
 		System: "你是小说变更影响分析器。判断候选变更与已经发生的故事事实、人物动机和因果链是否冲突。consistent 时 findings/options 必须为空；conflict 或 uncertain 时必须给出 rewrite_affected、reinterpret_future、abandon 三种明确选项。不得替用户作决定。",
 		Input:  string(input),
 		Schema: llm.Schema{
@@ -145,6 +153,11 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	if operation.State != model.OperationRunning || operation.Snapshot.Executor != r.Identity() {
 		return model.SemanticComplianceReport{}, fmt.Errorf("semantic compliance operation context is invalid: %w", model.ErrStateConflict)
 	}
+	// 合规检查由 Operation Engine 在执行结束后单独调用，用调用时刻的默认绑定（D57）。
+	binding, ok := r.bindingFor("")
+	if !ok {
+		return model.SemanticComplianceReport{}, fmt.Errorf("semantic compliance requires a bound model: %w", model.ErrStateConflict)
+	}
 	type constraintDocument struct {
 		Rule    model.OwnershipRule `json:"rule"`
 		Content json.RawMessage     `json:"authoritative_content"`
@@ -175,7 +188,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	}
 	var report model.SemanticComplianceReport
 	r.publishStage(operation, activity.ToolStart, "semantic_compliance", nil)
-	usage, err := llm.Structured(ctx, r.model, llm.Call{
+	usage, err := llm.Structured(ctx, binding, llm.Call{
 		System: "你是独立的小说事实合规检查器。只判断候选正文是否违背用户 locked/guided 约束；不得改写正文。证据不足必须返回 uncertain。pass 时 findings 必须为空。",
 		Input:  string(input),
 		Schema: llm.Schema{

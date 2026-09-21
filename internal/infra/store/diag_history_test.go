@@ -32,7 +32,7 @@ func seedDiagHistory(tb testing.TB, count int) *Store {
 			tb.Fatal(err)
 		}
 	}
-	op, err := tx.Prepare(`INSERT INTO operations(id,content_digest,kind,target_kind,target_id,priority,state,attempt,execution_snapshot,input,executor,run_id,created_at_unix_ms,updated_at_unix_ms) VALUES (?,'digest','write_chapter','project','book',0,'succeeded',3,?,x'7b7d','llm.agent@1/profile','run',1,200)`)
+	op, err := tx.Prepare(`INSERT INTO operations(id,content_digest,kind,target_kind,target_id,priority,state,attempt,execution_snapshot,input,executor,run_id,created_at_unix_ms,updated_at_unix_ms) VALUES (?,'digest','write_chapter','project','book',0,'succeeded',3,?,x'7b7d','llm.agent@1','run',1,200)`)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func seedDiagHistory(tb testing.TB, count int) *Store {
 	message := []byte(`{"role":"assistant","content":"` + strings.Repeat("content ", 256) + `"}`)
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("op-%04d", i)
-		if _, err = op.Exec(id, []byte(`{"executor":"llm.agent@1/profile","config_digest":"profile"}`)); err != nil {
+		if _, err = op.Exec(id, []byte(`{"executor":"llm.agent@1","config_digest":"profile"}`)); err != nil {
 			tb.Fatal(err)
 		}
 		for sequence := 1; sequence <= 200; sequence++ {

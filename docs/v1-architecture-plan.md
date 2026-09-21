@@ -473,14 +473,16 @@ Workspace 解决两个问题：一是中间草稿不污染正式 Revision 历史
 Operation 创建时固定执行快照（D45）：
 
 ```text
-executor          执行器身份：族@版本[/路由]，如 llm.agent@1/<model digest>、external.generation@1
+executor          执行器身份：族@版本[/路由]，如 llm.agent@1、external.generation@1（LLM 族不带模型路由，见 D57）
 base_revision     基线 Project Revision
 input_digest      任务输入摘要（= Digest(input)，校验时必须相符）
 config_digest     执行配置摘要：LLM 族是 Execution Profile 的内容摘要；外部族是执行器自报的配置摘要
 approval_policy   启动时刻的审批策略（追溯记录与最低约束）
 ```
 
-快照不区分执行族的字段形状：Execution Profile（Worker、核心协议、模型配置、Prompt 与工具摘要、来源清单）是 LLM 族的配置记录，按内容寻址、同摘要天然幂等，不再对快照自身取摘要。`bootstrap` 通过 `app/task.ExecutorSet` 静态装配 LLM 与 external 两族，按任务族创建、按冻结身份运行；跨执行器领取仍保持全局优先级。领取按 `executor` 相等过滤，执行前核对身份；引擎与推导器都不认识 Prompt Registry。运行中 Prompt、Pack、Profile 或模型配置发生变化，不回头改写当前 Operation 的执行环境。系统把它标记为仍可继续、需要用户重启或已经 stale；不得把新旧配置混入同一次结果。用户希望新配置立即作用于当前任务时，产品执行“取消/保留旧工作区 → 基于新快照重启”的显式操作。
+快照不区分执行族的字段形状：Execution Profile（Worker、核心协议、Prompt 与工具摘要、来源清单）是 LLM 族的配置记录，按内容寻址、同摘要天然幂等，不再对快照自身取摘要。`bootstrap` 通过 `app/task.ExecutorSet` 静态装配 LLM 与 external 两族，按任务族创建、按冻结身份运行；跨执行器领取仍保持全局优先级。领取按 `executor` 相等过滤，执行前核对身份；引擎与推导器都不认识 Prompt Registry。运行中 Prompt、Pack 或 Profile 发生变化，不回头改写当前 Operation 的执行环境。系统把它标记为仍可继续、需要用户重启或已经 stale；不得把新旧配置混入同一次结果。用户希望新配置立即作用于当前任务时，产品执行“取消/保留旧工作区 → 基于新快照重启”的显式操作。
+
+模型绑定（连接、模型、思考强度）不在快照与 Execution Profile 里（D57）：它是 Runtime 的运行时属性，随时可换。队列中的任务在每次 attempt 开始时取当时的绑定；在途 attempt 保持自己的绑定跑完（不迁移配置热修改在途请求），要立刻换只需暂停再继续。每次 attempt 追加 `agent.run_started` 事件记录实际角色、provider、模型、生效思考强度与模型配置摘要，历史由事件解释而不是由快照冻结。
 
 但权限与审批不属于执行环境：提交裁决始终取快照与最新已批准 Revision 中更严格的一方（§5.5），`approval_policy_snapshot` 作追溯记录与最低约束，用户新加的锁对在途任务的后续提交立即可见。
 
@@ -488,7 +490,7 @@ approval_policy   启动时刻的审批策略（追溯记录与最低约束）
 
 每个可产生副作用的步骤使用 `(operation_id, step_id, attempt)` 和幂等键记录。重试可以重复模型计算，但不能重复提交 Proposal、ChangeSet 或派生数据写入；超过重试策略后显式失败，不降级成模板结果或跳过校验。
 
-执行归属是运行不变量（D42）：每次领取递增 attempt，attempt 就是执行实例的围栏令牌。过期或被接替的实例不得再写工作区、不得改变任务状态、不得提交正式内容。归属检查必须与受保护写入原子化：工作区写入、状态收尾与执行侧提交各自在同一事务（或等价的原子条件）内校验当前 attempt；检查与写入分成两步，取消就会落在缝隙里。普通派生缓存（摘要、索引、上下文包）不要求执行围栏，但必须版本隔离：来源 Revision 明确，旧结果不得覆盖新结果或被当作当前结果。派生产出被采纳为任务结果、审批依据或完成证据（如审阅裁定）时，仍须校验执行归属与证据有效性：落盘走执行侧围栏，且只有其 Operation 以当前执行成功收尾后才算证据；旧执行的结果可留作诊断，不得未经检查影响当前运行。幂等解决的是重复执行，替代不了归属检查。取消与提交的顺序也是确定的：用户取消先完成，之后的收尾与提交被拒绝；提交先完成，取消不追溯删除已提交内容，只结束任务。这条规则面向单机多进程，不引入分布式协调。
+执行归属是运行不变量（D42）：每次领取递增 attempt，attempt 就是执行实例的围栏令牌。过期或被接替的实例不得再写工作区、不得改变任务状态、不得提交正式内容。归属检查必须与受保护写入原子化：工作区写入、状态收尾与执行侧提交各自在同一事务（或等价的原子条件）内校验当前 attempt；检查与写入分成两步，取消就会落在缝隙里。普通派生缓存（摘要、索引、上下文包）不要求执行围栏，但必须版本隔离：来源 Revision 明确，旧结果不得覆盖新结果或被当作当前结果。派生产出被采纳为任务结果、审批依据或完成证据（如审阅裁定）时，仍须校验执行归属与证据有效性：落盘走执行侧围栏，且只有其 Operation 以当前执行成功收尾后才算证据；旧执行的结果可留作诊断，不得未经检查影响当前运行。幂等解决的是重复执行，替代不了归属检查。取消与提交的顺序也是确定的：用户取消先完成，之后的收尾与提交被拒绝；提交先完成，取消不追溯删除已提交内容，只结束任务。这条规则面向单机多进程，不引入分布式协调。进程退出（界面退出、终止信号）时在途执行收到取消：执行器停手，引擎用脱离取消的短上下文把任务放回 `queued` 并释放租约（记 `operation.transitioned` 事件；不算失败、不计重开预算），下次进入接着对话与工作区续跑；崩溃仍由租约到期回收，同一任务过期次数达到上限（`MaxLeaseExpiries`）才判失败，attempt 只作围栏不作计数。
 
 外部异步任务（D46）不加新状态：执行器在租约内先把请求记录（`external.request` 工作区工件：Operation、attempt、RequestID、提交时间，以及目标/执行器/输入/来源快照/配置身份）落盘，再向外部服务提交；崩溃或租约过期后的下一次执行按记录里的 RequestID 查询而不是重提；服务不认识该请求时以同一 ID 重提；服务不支持恢复或查询超时时以失败码 `result_unknown` 失败，不自动重试。用户动作零新 API：对账 = Resume（failed → queued，仍按 ID 查询）；重提 = Restart（后继继承请求记录；身份相同才先恢复一次，输入、来源快照或配置不同则使用新 ID；仍未知时按用户明确决定换新 ID 重提）。失败码随下一次状态变化清空。
 
@@ -660,18 +662,19 @@ compiled_prompt_digest
 pack_set_digest
 creator_profile_revision
 project_overlay_revision
-model_config_digest
 ```
+
+模型配置不在其中（D57）：Execution Profile 只回答“说什么、用哪些工具、按哪版协议”，“谁来说”由每次 attempt 的 `agent.run_started` 记录。
 
 缓存纪律：
 
 1. tools 名称、顺序、Description 和 Schema 必须字节确定；所有集合序列化前排序。
 2. Core + Worker Contract + 固定工具构成稳定缓存地板；Story Context、Operation Task 和工具结果只追加在动态尾部。
 3. 同一 Session 首次请求后，system、tools、thinking 参数和采样参数冻结；修改配置必须创建新 Session。
-4. `prompt_cache_key` 至少区分 Project、Worker Profile、Execution Profile Digest 和 Session 血统；具体 provider 字段继续由 agentcore/litellm 能力门控。
+4. `prompt_cache_key` 至少区分 Project、Worker Profile、Execution Profile Digest 和 Session 血统（Operation 加模型绑定摘要：换模型或思考强度即换 Session，不与旧前缀混用）；具体 provider 字段继续由 agentcore/litellm 能力门控。
 5. Pack 或 Prompt 的主动修改允许发生一次计划内缓存失效，但正常章节推进不能因为状态变化反复破坏前缀。
 
-每次模型调用记录 `execution_profile_digest`、实际 Prompt 来源、工具 Schema Digest、模型配置和 cache usage，使“这一章为什么这样写”和“为什么缓存失效”都能追溯。
+Execution Profile 记录实际 Prompt 来源与工具 Schema Digest，每次 attempt 的 `agent.run_started` 记录角色、provider、模型、生效思考强度与模型配置摘要，消息事件带 cache usage，使“这一章为什么这样写”“是谁写的”和“为什么缓存失效”都能追溯。
 
 ## 8. Creator Profile
 
@@ -949,7 +952,7 @@ README 只负责启动和使用入口，不维护另一份架构或完成度清�
 | D42 | 执行归属不变量 | **已决定并实现**（2026-09-07） | attempt 是执行实例的围栏令牌：工作区写入、候选提案首次落盘、状态收尾与执行侧提交各自在同一事务内校验当前 attempt，过期或已取消的执行被拒绝；普通派生缓存只要求版本隔离，被采纳为证据的派生产出（审阅裁定）同样走执行侧围栏并以成功收尾为准；取消先于收尾则收尾被拒，提交先于取消则内容保留（§6.2） |
 | D43 | 用户裁决是完成证据 | **已决定并实现**（2026-09-09） | 用户对具体发现声明接受当前版本，记录理由；阻塞发现链接它证明未满足的要求或意图维度，裁定门要求未满足项都有链接，接受发现即接受其核验项；裁决绑定被裁决裁定的证据基线（D48）而非全局 Revision，作者仅限用户、只追加（AppendOnly）、撤回以新记录表达；完成契约改为“通过证据或有效用户裁决”，证据层产出生效裁定；内容或所依据的要求再变化即失效，不伪造机器结果（§6.4） |
 | D44 | 内核三层与应用编排纪律 | **已决定**（2026-09-08） | 系统分内核机制 / 创作领域 / 应用编排三层（§0.5）；内核机制发布后契约兼容，创作领域可增类型沿用提交算法，应用编排随产品演进；内核抽象只为真实使用者存在，应用编排层不做成通用框架、工作流引擎或插件系统 |
-| D45 | 执行快照泛化 | **已决定并实现**（2026-09-08） | 快照为 `executor / base_revision / input_digest / config_digest / approval_policy`；执行器身份是 `族@版本[/路由]`，领取按身份过滤、执行前核对；Execution Profile 按内容寻址、含核心协议与模型配置摘要，快照不再存两份；引擎不认识 Prompt Registry；删除从未创建的 `UpdateCreatorProfile` 与 `RebuildDerivedData`（§6.2） |
+| D45 | 执行快照泛化 | **已决定并实现**（2026-09-08；D57 于 2026-09-21 收窄） | 快照为 `executor / base_revision / input_digest / config_digest / approval_policy`；执行器身份是 `族@版本[/路由]`，领取按身份过滤、执行前核对；Execution Profile 按内容寻址、含核心协议摘要，快照不再存两份；引擎不认识 Prompt Registry；删除从未创建的 `UpdateCreatorProfile` 与 `RebuildDerivedData`（§6.2）。D57 后 LLM 族身份是常量 `llm.agent@1`，模型配置摘要从 Execution Profile 移除 |
 | D46 | 外部任务契约 | **已决定并实现**（2026-09-08） | 不加新状态：请求记录先于提交落为工作区工件，恢复按 RequestID 查询，服务不认识则同 ID 重提，无法回答即失败码 `result_unknown`；对账 = Resume、重提 = Restart（后继继承记录，但只有目标、执行器、输入（含基线）、配置与来源快照身份相同才可复用；不同或用户决定重提的未知结果使用新 ID）；失败码随下一次状态变化清空（§6.2） |
 | D47 | 产出与工件契约 | **已决定并实现**（2026-09-08） | Outcome 为 proposal / verdict / artifacts 三合一（前两者互斥，至少一项）；工件内容寻址、原子发布、元数据走执行侧围栏并先于提案落盘；`attachment` 是工件进入权威的唯一方式；GC 只显式触发；审阅裁定仍是派生文档（§6、§6.6） |
 | D48 | 证据基线 | **已决定并实现**（2026-09-08） | 审阅裁定与生成工件携带 EvidenceBasis（文档最后变化 revision、作用域成员摘要、工件摘要）；基线由装配层构造进类型化输入、产出继承、内核收尾时核对属实；有效性只看基线是否成立，不看整本 Revision；相关 Canon 生效位置由事实版本和作用域覆盖，执行配置变化不追溯失效；派生文档键不变，有效裁定跨 Revision 检索；基线不进模型提示词（§6.4） |
@@ -991,6 +994,20 @@ Runtime 直接运行单次 `AgentLoop`：串行工具执行、同步持久化消
 
 真实实证暴露的缺口：第 2 章的 Agent 会话结束后在收尾被拒，Run 立即转 `failed`；Run 是终态，协调器里已有的 Resume/后继机制永远走不到，用户续跑只能新建 Run 从头重写，草稿与对话全部作废。执行失败是会话级事件，不是整轮创作的失败。
 
-协调器对 `failed` 的 Operation 在预算内（常量 `autoReopenBudget = 3`，最多自动重开 3 次）不落盘任何 Run 状态，下一轮由 `ensureChainedOperation` 现有的 Resume（恢复对话与工作区）或后继（被否决候选）路径重开；capability 在重开的会话提示里注入上一次失败原因（取自 `operation.transitioned` 事件），模型先修正再继续。预算用尽转入 `waiting_user`，说明次数与最近原因，草稿保留；用户续跑等于再授予一次尝试，仍失败则再次停下。
+协调器对 `failed` 的 Operation 在预算内（常量 `autoReopenBudget = 3`，最多自动重开 3 次；次数按事件日志里的失败次数计，即 `Tasks.Failures`，不按 attempt——attempt 是执行围栏，进程退出释放的执行不算失败）不落盘任何 Run 状态，下一轮由 `ensureChainedOperation` 现有的 Resume（恢复对话与工作区）或后继（被否决候选）路径重开；capability 在重开的会话提示里注入上一次失败原因（取自 `operation.transitioned` 事件），模型先修正再继续。预算用尽转入 `waiting_user`，说明次数与最近原因，草稿保留；用户续跑等于再授予一次尝试，仍失败则再次停下。
 
 它与 provider 的调用级重试不叠加（§6.2）：调用级重试处理单次调用，重开处理已结束的会话。预算先为协调器常量，不进 RunStrategy 与预设摘要，出现真实调节需求再按 §14 提升为字段。`fail` 决策与卡死判定仍转 `failed`；不新增任务状态与 schema。
+
+### D57：模型绑定是运行时属性（2026-09-21）
+
+真机暴露的缺口：执行器身份 `llm.agent@1/<模型配置摘要>` 在任务创建时冻结进快照，换模型等于换身份，暂停后排队的任务再也匹配不到执行器（`/c` 报 executor is not configured）；改配置还要整体重建应用，活动流随之断掉；思考强度与角色映射没有任何入口。
+
+决定：**模型绑定（连接、模型、思考强度，按角色可覆盖）是 Runtime 的运行时属性，不是任务身份的一部分。**
+
+- LLM 族执行器身份是常量 `llm.agent@1`；Execution Profile 不含模型配置摘要，只剩 Prompt / 工具 / 协议。“说什么”与“谁来说”分离。
+- Runtime 常驻、可重绑定（`Bind`）；未绑定时不领取 LLM 任务、拒绝快速创作，任务照常入队。队列中的任务在每次 attempt 开始时取当前绑定；在途 attempt 保持原绑定跑完，要立刻换：暂停再继续。
+- 每次 attempt 追加 `agent.run_started`（角色、provider、模型、生效思考强度、模型配置摘要），历史由事件解释。例外：语义合规检查由 Operation Engine 在 Execute 之后单独调用，只能用调用时刻的默认绑定，其事件已含 Usage{Provider, Model} 可追溯。
+- 思考强度是意图：存配置、切模型不抹掉；执行时按该模型能力解析生效值（不支持则自动），事件记生效值。同一模型缓存键混入绑定摘要，换绑定即换 Session。
+- 角色映射是 worker profile 的 `ModelRole`（architect / writer / editor）；未配的角色跟随默认。配置文件顶层 `provider / model / thinking` 加 `roles{role:{provider, model, thinking}}`；环境变量（含 `AINOVEL_THINKING`）在启动时仍优先于文件。
+- 切换入口：`app/binding.Service`（工作台 `/model [角色]` 面板与 headless `model` 命令共用），先保存文件再重绑，任一失败状态不变。
+- `schemaVersion` 2 → 3（`execution_profiles` 删列、旧执行器串不可领取），按 D38 不迁移。

@@ -8,7 +8,9 @@ import (
 	"fmt"
 
 	"github.com/voocel/agentcore"
+	agentllm "github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 )
 
 // Schema 是一次结构化调用的输出约束。
@@ -28,20 +30,24 @@ type Call struct {
 	SessionID string
 }
 
-// Structured 发起一次严格 JSON Schema 约束的调用并把响应严格解码到 out。
-// 返回本次调用的 usage 供调用方落审计事件。
-func Structured(ctx context.Context, chat agentcore.ChatModel, call Call, out any) (*agentcore.Usage, error) {
-	if chat == nil {
+// Structured 用绑定的模型发起一次严格 JSON Schema 约束的调用并把响应严格解码到 out。
+// 思考强度按绑定意图与模型能力折算。返回本次调用的 usage 供调用方落审计事件。
+func Structured(ctx context.Context, binding models.Binding, call Call, out any) (*agentcore.Usage, error) {
+	if binding.Chat == nil {
 		return nil, fmt.Errorf("structured call model is required: %w", model.ErrInvalid)
 	}
-	response, err := chat.Generate(ctx, []agentcore.Message{
-		agentcore.SystemMsg(call.System),
-		agentcore.UserMsg(call.Input),
-	}, nil,
+	options := []agentcore.CallOption{
 		agentcore.WithJSONSchema(call.Schema.Name, call.Schema.Description, call.Schema.JSON, true),
 		agentcore.WithCallPromptCacheKey(call.CacheKey),
 		agentcore.WithCallSessionID(call.SessionID),
-	)
+	}
+	if thinking := EffectiveThinking(binding); thinking != "" {
+		options = append(options, agentcore.WithThinking(thinking))
+	}
+	response, err := binding.Chat.Generate(ctx, []agentcore.Message{
+		agentcore.SystemMsg(call.System),
+		agentcore.UserMsg(call.Input),
+	}, nil, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -52,4 +58,19 @@ func Structured(ctx context.Context, chat agentcore.ChatModel, call Call, out an
 		return nil, fmt.Errorf("decode structured response %q: %w", call.Schema.Name, err)
 	}
 	return response.Message.Usage, nil
+}
+
+// EffectiveThinking 把思考强度意图折算成该模型接受的生效值：不支持的档位退回
+// 自动（空），完全不支持思考的模型只有自动。意图保留在配置里，换回支持的模型即恢复。
+func EffectiveThinking(binding models.Binding) agentcore.ThinkingLevel {
+	level, _ := ThinkingPolicy(binding.Chat).Resolve(binding.Thinking)
+	return level
+}
+
+// ThinkingPolicy 是模型可接受的思考档位；不支持思考的模型只剩自动。
+func ThinkingPolicy(chat agentcore.ChatModel) agentllm.ThinkingPolicy {
+	if provider, ok := chat.(agentllm.CapabilityProvider); ok && provider.Capabilities().Thinking.Supported == agentllm.SupportNo {
+		return agentllm.ThinkingPolicy{Available: []agentcore.ThinkingLevel{agentllm.ThinkingAuto}}
+	}
+	return agentllm.ThinkingPolicyFor(chat)
 }

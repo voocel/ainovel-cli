@@ -29,12 +29,12 @@ var allowedImports = map[string][]string{
 	"domain/change":           {"domain/model"},
 	"domain/derive":           {"domain/model"},
 	"infra/workspace":         {"domain/model", "infra/store"},
-	"infra/llm":               {"domain/model"},
+	"infra/llm":               {"domain/model", "infra/llm/models"},
 	"infra/llm/models":        {"domain/model"},
 	"infra/jsonc":             {"domain/model"},
 	"infra/capability/pack":   {"domain/model", "infra/jsonc"},
 	"infra/capability/prompt": {"domain/model", "infra/store"},
-	"infra/capability":        {"infra/activity", "domain/model", "infra/store", "domain/change", "infra/capability/prompt", "infra/workspace", "infra/llm"},
+	"infra/capability":        {"infra/activity", "domain/model", "infra/store", "domain/change", "infra/capability/prompt", "infra/workspace", "infra/llm", "infra/llm/models"},
 	"domain/operation":        {"domain/model", "domain/change"},
 	"app/project":             {"domain/model", "infra/store", "domain/change"},
 	"app/diag":                {"domain/model", "infra/store"},
@@ -48,10 +48,12 @@ var allowedImports = map[string][]string{
 	"app/novel":       {"domain/model", "infra/store", "domain/change", "domain/creation", "app/project", "app/resource", "app/task"},
 	"app/decision":    {"domain/model", "infra/store", "domain/change", "app/project", "app/resource", "app/task"},
 	"app/workbench":   {"infra/activity", "domain/model", "infra/store", "domain/creation", "app/decision", "app/novel", "app/project"},
-	"bootstrap":       {"app/diag", "domain/model", "infra/store", "domain/change", "domain/creation", "app/decision", "app/evidence", "app/novel", "domain/operation", "app/profile", "app/project", "app/resource", "app/task", "app/workbench", "infra/activity", "infra/capability", "infra/config", "infra/llm/models"},
-	"infra/config":    {},
-	"entry/headless":  {"app/diag", "domain/model", "bootstrap", "domain/creation", "app/decision", "app/novel", "app/profile", "app/project", "app/resource", "app/task", "infra/jsonc"},
-	"entry/tui":       {"app/diag", "infra/activity", "domain/model", "bootstrap", "app/decision", "app/novel", "app/project", "app/workbench", "infra/config", "infra/jsonc"},
+	// 模型绑定用例只认配置与模型适配器，不认任务与作品。
+	"app/binding":    {"infra/config", "infra/llm", "infra/llm/models", "infra/capability/prompt"},
+	"bootstrap":      {"app/binding", "app/diag", "domain/model", "infra/store", "domain/change", "domain/creation", "app/decision", "app/evidence", "app/novel", "domain/operation", "app/profile", "app/project", "app/resource", "app/task", "app/workbench", "infra/activity", "infra/capability"},
+	"infra/config":   {},
+	"entry/headless": {"app/binding", "app/diag", "domain/model", "bootstrap", "domain/creation", "app/decision", "app/novel", "app/profile", "app/project", "app/resource", "app/task", "infra/jsonc"},
+	"entry/tui":      {"app/binding", "app/diag", "infra/activity", "domain/model", "bootstrap", "app/decision", "app/novel", "app/project", "app/workbench", "infra/config", "infra/jsonc"},
 }
 
 // Tests may open a real store for assembly; entry production code may not.
@@ -60,9 +62,9 @@ var allowedTestImports = map[string][]string{
 	"domain/change":    {"infra/store"},
 	"domain/operation": {"infra/store"},
 	"domain/creation":  {"infra/store"},
-	"bootstrap":        {"infra/capability/prompt", "domain/derive"},
-	"entry/headless":   {"infra/store"},
-	"entry/tui":        {"infra/store"},
+	"bootstrap":        {"infra/capability/prompt", "domain/derive", "infra/config", "infra/llm/models"},
+	"entry/headless":   {"infra/store", "infra/config", "infra/llm/models"},
+	"entry/tui":        {"infra/store", "infra/llm/models"},
 }
 
 func TestInternalPackagesRespectDependencyDirection(t *testing.T) {

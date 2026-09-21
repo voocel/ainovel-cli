@@ -50,8 +50,8 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, project.ID, now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "deepseek-chat-config",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start first operation: %v", err)
@@ -70,8 +70,8 @@ func TestCreateProjectAndStartOperationFreezeExecutionProfile(t *testing.T) {
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []resources.CreatorProfileRef{{ID: "user-1", Scope: "global"}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "deepseek-chat-config",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start second operation: %v", err)
@@ -176,8 +176,8 @@ func TestPackDirectoryUpdateOnlyAffectsNewOperations(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-1", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`), Packs: []resources.PackRef{{ID: installed.Manifest.ID}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start first operation: %v", err)
@@ -206,8 +206,8 @@ func TestPackDirectoryUpdateOnlyAffectsNewOperations(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-1", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`), Packs: []resources.PackRef{{ID: installed.Manifest.ID}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start second operation: %v", err)
@@ -273,8 +273,8 @@ func TestProjectAssetsAndOverlayAutoAssembleIntoOperations(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-assets", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(5 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(5 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start operation without asset params: %v", err)
@@ -301,8 +301,8 @@ func TestProjectAssetsAndOverlayAutoAssembleIntoOperations(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-assets", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(7 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(7 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start pinned operation: %v", err)
@@ -346,8 +346,8 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []resources.CreatorProfileRef{{ID: "user-1", Scope: "global"}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start before confirmation: %v", err)
@@ -371,8 +371,8 @@ func TestConfirmedPreferenceCarriesToAnotherBook(t *testing.T) {
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []resources.CreatorProfileRef{{ID: "user-1", Scope: "global"}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(4 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start after confirmation: %v", err)
@@ -454,9 +454,7 @@ func TestLearnsPreferenceCandidateFromUserManuscriptEditsBeforeConfirmation(t *t
 
 type preferenceTestExecutor struct{}
 
-func (preferenceTestExecutor) Identity() string { return prompt.ExecutorIdentity("model") }
-
-func (preferenceTestExecutor) ModelConfigDigest() string { return "model" }
+func (preferenceTestExecutor) Identity() string { return prompt.ExecutorIdentity }
 
 func (preferenceTestExecutor) Execute(context.Context, model.Operation) (model.OperationOutcome, error) {
 	return model.OperationOutcome{}, errors.New("story execution is not used in preference test")
@@ -625,8 +623,8 @@ func TestOperationLifecycleKeepsExplicitState(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-lifecycle", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start operation: %v", err)
@@ -665,14 +663,14 @@ func TestRestartOperationFreezesNewSnapshotAndSeedsWorkspace(t *testing.T) {
 		RunID: ensureTestRun(t, ctx, authorityStore, "book-restart", now),
 		Kind:  model.OperationWriteChapter, WorkerProfileID: "writer.compose",
 		Input:               json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		ApprovalPolicy: model.ApprovalManual, CreatedAt: now.Add(time.Minute),
+		CoreProtocolVersion: "core-v1",
+		ApprovalPolicy:      model.ApprovalManual, CreatedAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("start operation: %v", err)
 	}
 	running, err := authorityStore.ClaimOperationForExecutor(
-		ctx, started.ID, "worker-1", prompt.ExecutorIdentity("model"), time.Minute, now.Add(2*time.Minute),
+		ctx, started.ID, "worker-1", prompt.ExecutorIdentity, time.Minute, now.Add(2*time.Minute),
 	)
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
@@ -746,8 +744,8 @@ func TestReloadPromptAppliesCreatorProfileWithoutCreatingOperation(t *testing.T)
 		ProjectID: "book-prompt", Kind: model.OperationWriteChapter,
 		WorkerProfileID: "writer.compose", Input: json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`),
 		CreatorProfiles:     []resources.CreatorProfileRef{{ID: "user-1", Scope: "global"}},
-		CoreProtocolVersion: "core-v1", ModelConfigDigest: "model",
-		CreatedAt: now.Add(2 * time.Minute),
+		CoreProtocolVersion: "core-v1",
+		CreatedAt:           now.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("reload prompt: %v", err)

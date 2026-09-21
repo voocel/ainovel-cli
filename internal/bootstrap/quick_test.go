@@ -610,9 +610,7 @@ func newQuickTestApp(t *testing.T, executor *scriptedQuickExecutor) *testApp {
 	return api
 }
 
-func (e *scriptedQuickExecutor) Identity() string { return prompt.ExecutorIdentity("model") }
-
-func (e *scriptedQuickExecutor) ModelConfigDigest() string { return "model" }
+func (e *scriptedQuickExecutor) Identity() string { return prompt.ExecutorIdentity }
 
 func (e *scriptedQuickExecutor) Execute(ctx context.Context, operation model.Operation) (model.OperationOutcome, error) {
 	e.calls++

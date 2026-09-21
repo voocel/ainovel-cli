@@ -742,12 +742,35 @@ func milestoneProposal(proposal model.Proposal) bool {
 }
 
 // fail 收尾失败并按原因打码（D46）：结果未知不是普通失败，用户对账或重提前不会自动重试。
+// fail 落盘执行失败。进程正在退出（ctx 已取消）时不是失败：任务放回队列、释放租约，
+// 下次进入接着对话与工作区续跑，不消耗失败预算。
 func (e *Engine) fail(ctx context.Context, operation model.Operation, cause error, now time.Time) (RunResult, error) {
+	if ctx.Err() != nil {
+		return e.release(ctx, operation, cause)
+	}
 	failed, err := e.store.FailOperation(ctx, operation.ID, operation.Attempt, model.FailureCodeFor(cause), cause.Error(), now)
 	if err != nil {
 		return RunResult{}, errors.Join(cause, err)
 	}
 	return RunResult{Operation: failed}, cause
+}
+
+// releaseTimeout 是释放写入的上限：取消后执行器已停手，释放只是一次本地写入。
+const releaseTimeout = 5 * time.Second
+
+// releasedMessage 记在任务上，诊断与续跑提示都能看到中断原因。
+const releasedMessage = "进程退出，任务已放回队列等待续跑"
+
+// release 用脱离取消的短上下文把任务 running → queued（attempt 围栏内），旧执行的
+// 对话与工作区保留；释放失败就交给租约到期回收。
+func (e *Engine) release(ctx context.Context, operation model.Operation, cause error) (RunResult, error) {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	released, err := e.store.ConcludeOperation(detached, operation.ID, operation.Attempt, model.OperationQueued, releasedMessage, time.Now().UTC())
+	if err != nil {
+		return RunResult{}, errors.Join(cause, err)
+	}
+	return RunResult{Operation: released}, cause
 }
 
 // verifyBasis 核对证据基线在启动快照上属实（D48）：文档 revision、要求作用域摘要与

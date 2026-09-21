@@ -20,22 +20,46 @@ import (
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
-func newTestDeps(t *testing.T, configured bool) (Deps, *bootstrap.App) {
-	t.Helper()
+// testExecutor 是测试里的 LLM 执行器：接受绑定但不调模型，执行一律失败。
+type testExecutor struct{ bound bool }
+
+func (e *testExecutor) Identity() string { return "llm.agent@1" }
+func (e *testExecutor) Execute(context.Context, domainmodel.Operation) (domainmodel.OperationOutcome, error) {
+	return domainmodel.OperationOutcome{}, errors.New("test executor does not call models")
+}
+func (e *testExecutor) Bind(models.Bindings) { e.bound = true }
+func (e *testExecutor) Bound() bool          { return e.bound }
+
+// newTestDeps 装配测试应用：configured 时注入 testExecutor 并绑定一个不联网的
+// 模型配置（deepseek 连接 + 假密钥），页脚与右栏按这个模型名断言。
+func newTestDeps(tb testing.TB, configured bool) (Deps, *bootstrap.App) {
+	tb.Helper()
 	ctx := context.Background()
-	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	authorityStore, err := store.Open(ctx, filepath.Join(tb.TempDir(), "ainovel.db"))
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		tb.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { authorityStore.Close() })
-	api := bootstrap.New(authorityStore, bootstrap.Options{})
-	return Deps{
-		API: api, Configured: configured, ConfigDir: t.TempDir(), UserID: "tester",
-		Rebuild: func(appconfig.Config) (*bootstrap.App, error) { return api, nil },
-	}, api
+	tb.Cleanup(func() { authorityStore.Close() })
+	configDir := tb.TempDir()
+	options := bootstrap.Options{ConfigDir: configDir, Interactive: true}
+	if configured {
+		options.Executors.LLM = &testExecutor{}
+	}
+	api := bootstrap.New(authorityStore, options)
+	if configured {
+		if err := api.Models.Apply(testConfig()); err != nil {
+			tb.Fatalf("bind test model: %v", err)
+		}
+	}
+	return Deps{API: api, ConfigDir: configDir, UserID: "tester"}, api
+}
+
+func testConfig() appconfig.Config {
+	return appconfig.Config{}.WithProvider("deepseek", "deepseek-v4-flash", appconfig.ProviderConfig{APIKey: "test"})
 }
 
 func typeText(t *testing.T, m model, text string) model {
@@ -157,12 +181,12 @@ func TestHomeCreateEntersWorkbenchAndSurfacesRunError(t *testing.T) {
 	if strings.Contains(m.bench.projectID, "book-") == false {
 		t.Fatalf("project id = %q, want generated book id", m.bench.projectID)
 	}
-	// 执行异步命令：无执行器的服务会返回明确错误，工作台要把它呈现出来。
+	// 执行异步命令：执行器每次都失败，重试预算耗尽后停下等用户，原因进决定卡。
 	message := findMsg[quickDoneMsg](t, cmd)
 	updated, _ := m.Update(message)
 	m = updated.(model)
-	if m.bench.writing || m.bench.err == "" {
-		t.Fatalf("run error not surfaced: writing=%v err=%q", m.bench.writing, m.bench.err)
+	if m.bench.writing || m.bench.decision == nil || !strings.Contains(m.bench.decision.reason, "test executor does not call models") {
+		t.Fatalf("run failure not surfaced: writing=%v err=%q decision=%+v", m.bench.writing, m.bench.err, m.bench.decision)
 	}
 }
 
@@ -336,7 +360,6 @@ func TestDecisionRequiresExplicitApproveAndReasonRejects(t *testing.T) {
 	m.bench = newWorkbenchState("book-1", 1)
 	m.bench.loaded = true
 	present := func() {
-		m.bench.content = contentReview
 		m.bench.presentDecision(&decisionState{
 			reason: "第 1 章写好了，等你确认", continueAfter: true,
 			proposal: domainmodel.Proposal{ID: "p-1", Reason: "第一章候选"}, hasProposal: true,
@@ -493,9 +516,9 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 	// 快照刷新会把光标锚定在第一个章行（此处直接注入快照，手动对齐）。
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0)
 	view := m.View()
-	for _, want := range []string{"大纲", "卷一", "● 01", "◐ 02", "本章"} {
+	for _, want := range []string{"作品目录", "卷一", "✓ 01", "◇ 02"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("three-pane view missing %q", want)
+			t.Fatalf("workbench view missing %q", want)
 		}
 	}
 	m, _ = submit(t, m, "/v")
@@ -536,6 +559,7 @@ func TestOutlineFoldingCollapsesSubtreeAndAnchorsCursor(t *testing.T) {
 		Outline: outline,
 	}
 	m.bench.cursor = anchorOutlineCursor(m.outlineRows(), "", 0) // 第一个章行（行 2）
+	m.bench.pane = benchPaneOutline
 
 	// 光标移到卷一头行并折叠：整棵子树（弧一 + 两章）从可见行消失。
 	m, _ = press(t, m, tea.KeyUp)
@@ -545,7 +569,7 @@ func TestOutlineFoldingCollapsesSubtreeAndAnchorsCursor(t *testing.T) {
 	}
 	m, _ = press(t, m, tea.KeyEnter)
 	view := m.View()
-	if !strings.Contains(view, "▸ 卷一") || !strings.Contains(view, "2 章") || !strings.Contains(view, "◐") {
+	if !strings.Contains(view, "▸ 卷一") || !strings.Contains(view, "2 章") || !strings.Contains(view, "◇") {
 		t.Fatalf("collapsed header must summarize subtree:\n%s", view)
 	}
 	if strings.Contains(view, "第一章") || strings.Contains(view, "弧一") {
@@ -591,7 +615,7 @@ func TestFoldPreferencePersistsAcrossReopen(t *testing.T) {
 			{Node: domainmodel.PlanNode{ID: "c1", Kind: domainmodel.PlanChapter, ParentID: "a1", Title: "第一章"}, Number: 1},
 		},
 	}
-	m.bench.cursor = 0 // 卷一头行
+	m.bench.cursor, m.bench.pane = 0, benchPaneOutline // 卷一头行
 	m, _ = press(t, m, tea.KeyEnter)
 	if !m.bench.collapsed["v1"] {
 		t.Fatalf("enter on header must fold: %v", m.bench.collapsed)
@@ -648,44 +672,53 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	}
 
 	l := m.benchLayout()
-	// 点击第 2 章（行 3）。
-	click(5, l.outlineRowsY+3)
+	// 点击第 2 章（目录行 3）。
+	click(5, l.outlineY+3)
 	if m.bench.cursor != 3 || m.bench.pane != benchPaneOutline {
 		t.Fatalf("click chapter: cursor=%d pane=%d", m.bench.cursor, m.bench.pane)
 	}
 	// 点击卷二头行（行 4）折叠：光标落在头行，弧二与第三章消失。
-	click(5, l.outlineRowsY+4)
+	click(5, l.outlineY+4)
 	if !m.bench.collapsed["v2"] || m.bench.cursor != 4 || strings.Contains(m.View(), "第三章") {
 		t.Fatalf("click header must collapse: collapsed=%v cursor=%d", m.bench.collapsed, m.bench.cursor)
 	}
-	// 大纲上滚轮：光标上移到第 2 章（行 3）。
-	wheel(5, l.outlineRowsY, true)
+	// 目录上滚轮：光标上移到第 2 章（行 3）。
+	wheel(5, l.outlineY, true)
 	if m.bench.cursor != 3 {
 		t.Fatalf("wheel over outline: cursor=%d", m.bench.cursor)
 	}
-	// 创作中主区滚轮向上翻活动历史（暂停跟随）。
+	// 点击「活动」标签切视图；活动视图里滚轮向上冻结跟随，向下到底恢复。
 	m.bench.writing = true
-	for i := 0; i < 3; i++ {
-		hub.Publish(activity.Event{
-			ProjectID: "book-mouse", RunID: "run-1", OperationID: "op-1",
-			Kind: activity.ToolStart, Tool: "authority_read", CallID: fmt.Sprintf("c%d", i),
-			At: time.Now().UTC(),
-		})
+	for i := 0; i < 40; i++ {
+		for _, kind := range []activity.Kind{activity.ToolStart, activity.ToolEnd} {
+			hub.Publish(activity.Event{
+				ProjectID: "book-mouse", RunID: "run-1", OperationID: "op-1",
+				Kind: kind, Tool: "authority_read", CallID: fmt.Sprintf("c%d", i), At: time.Now().UTC(),
+			})
+		}
 	}
 	updated, _ := m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	wheel(l.mainX+2, l.activityY+1, true)
-	if m.bench.feedOffset != 1 {
-		t.Fatalf("wheel over the activity strip must page history: offset=%d", m.bench.feedOffset)
+	tabs := m.benchTabs(l)
+	click(tabs[1].x0, l.tabsY)
+	if m.bench.view != viewActivity {
+		t.Fatalf("tab click must switch view: %d", m.bench.view)
 	}
-	wheel(l.mainX+2, l.activityY+1, false)
-	if m.bench.feedOffset != 0 {
-		t.Fatalf("wheel down must resume follow: offset=%d", m.bench.feedOffset)
+	wheel(l.mainX+2, l.contentY+3, true)
+	if m.bench.activityHeld == nil {
+		t.Fatal("wheel up over the activity view must pause following")
 	}
-	// 正文区滚轮只动正文，不碰大纲与现场。
+	for i := 0; i < 5 && m.bench.activityHeld != nil; i++ {
+		wheel(l.mainX+2, l.contentY+3, false)
+	}
+	if m.bench.activityHeld != nil {
+		t.Fatal("wheel down to the bottom must resume following")
+	}
+	// 正文视图里滚轮只动正文，不碰目录。
+	click(tabs[0].x0, l.tabsY)
 	wheel(l.mainX+5, l.contentY+3, true)
-	if m.bench.feedOffset != 0 || m.bench.cursor != 3 {
-		t.Fatalf("wheel over prose leaked: offset=%d cursor=%d", m.bench.feedOffset, m.bench.cursor)
+	if m.bench.cursor != 3 || m.bench.view != viewProse {
+		t.Fatalf("wheel over prose leaked: cursor=%d view=%d", m.bench.cursor, m.bench.view)
 	}
 }
 
@@ -735,7 +768,7 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 		ProjectID: "book-1", Intent: domainmodel.Intent{Premise: "写书", TargetChapters: 1},
 		Outline: []workbench.OutlineNode{{Node: plan[0]}, {Node: plan[1]}, {Node: plan[2], Number: 1}},
 	}
-	if scope, label := m.directiveScope(); scope != "plan_node:volume-1" || label != "对「第一卷」的要求" {
+	if scope, label := m.directiveScope(); scope != "plan_node:volume-1" || label != "「第一卷」" {
 		t.Fatalf("scope follows the selected outline row: %s %s", scope, label)
 	}
 	m, cmd := press(t, m, tea.KeyEnter)
@@ -865,10 +898,17 @@ func TestWorkbenchRendersStreamingProsePreview(t *testing.T) {
 
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	view := m.View()
-	for _, want := range []string{"正文预览", "最终以确认稿为准", "少年在山野间奔跑，晨雾未散。"} {
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"实时预览 · 最终以入稿版本为准", "正文 ▏ 少年在山野间奔跑，晨雾未散。"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("view missing %q:\n%s", want, view)
+			t.Fatalf("scene missing %q:\n%s", want, view)
+		}
+	}
+	m, _ = press(t, m, tea.KeyF2)
+	view = ansi.Strip(m.View())
+	for _, want := range []string{"正文预览 · 未入稿", "少年在山野间奔跑，晨雾未散。"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("activity view missing %q:\n%s", want, view)
 		}
 	}
 }
@@ -896,9 +936,9 @@ func TestActivityShowsThinkingExcerptAndErrorReason(t *testing.T) {
 
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	view := m.View()
+	view := ansi.Strip(m.View())
 	for _, want := range []string{
-		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "构思中", "需要回到第三章补一处伏笔",
+		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "思考 ▏ 需要回到第三章补一处伏笔",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
@@ -982,31 +1022,32 @@ func TestActivityFeedScrollPausesFollowAndResumes(t *testing.T) {
 			Kind: kind, Tool: "workspace_list", CallID: callID, At: time.Now().UTC(),
 		})
 	}
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 40; i++ {
 		publish(activity.ToolStart, fmt.Sprintf("c%d", i))
 		publish(activity.ToolEnd, fmt.Sprintf("c%d", i))
 	}
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
 
-	m = pressTimes(t, m, tea.KeyTab, 1) // 焦点到事件区
+	m, _ = press(t, m, tea.KeyF2) // 活动视图
 	m = pressTimes(t, m, tea.KeyUp, 3)
-	if m.bench.feedOffset != 3 {
-		t.Fatalf("feed offset after scrolling up = %d", m.bench.feedOffset)
+	if m.bench.activityHeld == nil {
+		t.Fatal("scrolling up must hold the timeline")
 	}
-	if view := m.View(); !strings.Contains(view, "已暂停跟随") {
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "已暂停跟随") {
 		t.Fatalf("paused-follow indicator missing:\n%s", view)
 	}
-	// 新活动到达：偏移按增量补偿，窗口锚定不动。
-	publish(activity.ToolStart, "c20")
+	// 新活动到达：持有的快照不变，读者所在处不动。
+	before := strings.Join(m.activityView(80, 20), "\n")
+	publish(activity.ToolStart, "c40")
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	if m.bench.feedOffset != 4 {
-		t.Fatalf("feed offset after new entry = %d, want anchored 4", m.bench.feedOffset)
+	if after := strings.Join(m.activityView(80, 20), "\n"); after != before {
+		t.Fatal("new activity moved the held timeline")
 	}
-	m = pressTimes(t, m, tea.KeyDown, 4)
-	if m.bench.feedOffset != 0 {
-		t.Fatalf("feed offset after scrolling back = %d, want following again", m.bench.feedOffset)
+	m = pressTimes(t, m, tea.KeyDown, 3)
+	if m.bench.activityHeld != nil || !strings.Contains(ansi.Strip(m.View()), "跟随最新") {
+		t.Fatal("scrolling back to the bottom must resume following")
 	}
 }
 
@@ -1067,22 +1108,17 @@ func TestOutlineViewportFollowsCursorAndPaneFocusCycles(t *testing.T) {
 	if !strings.Contains(view, "25  第25回") || !strings.Contains(view, "前面还有") {
 		t.Fatalf("outline viewport must follow cursor:\n%s", view)
 	}
-	m = pressTimes(t, m, tea.KeyTab, 2)
-	m.switchContent(contentManuscript)
-	if m.bench.pane != benchPaneMain {
-		t.Fatalf("pane after tab = %d", m.bench.pane)
-	}
 	m, _ = press(t, m, tea.KeyDown)
-	if m.bench.cursor != 25 || m.bench.previewOffset != 1 {
-		t.Fatalf("main focus must page preview: cursor=%d offset=%d", m.bench.cursor, m.bench.previewOffset)
+	if m.bench.cursor != 25 || m.bench.proseOffset != 1 {
+		t.Fatalf("main focus must scroll prose: cursor=%d offset=%d", m.bench.cursor, m.bench.proseOffset)
 	}
-	m = pressTimes(t, m, tea.KeyShiftTab, 2)
+	m, _ = press(t, m, tea.KeyTab)
 	if m.bench.pane != benchPaneOutline {
-		t.Fatalf("pane = %d, want outline again", m.bench.pane)
+		t.Fatalf("pane = %d, want outline", m.bench.pane)
 	}
 	m, _ = press(t, m, tea.KeyDown)
-	if m.bench.cursor != 26 || m.bench.previewOffset != 0 {
-		t.Fatalf("outline focus must move cursor and reset offsets: cursor=%d offset=%d", m.bench.cursor, m.bench.previewOffset)
+	if m.bench.cursor != 26 || m.bench.proseOffset != 0 {
+		t.Fatalf("outline focus must move cursor and reset offsets: cursor=%d offset=%d", m.bench.cursor, m.bench.proseOffset)
 	}
 }
 
@@ -1106,12 +1142,13 @@ func TestManualSelectionPinsMainPaneDuringWriting(t *testing.T) {
 			{ID: "ch-2", Number: 2, Title: "转折", Blocks: []domainmodel.ManuscriptBlock{{ID: "b1", Text: "第二章内容"}}},
 		},
 	}
+	m.bench.pane = benchPaneOutline
 	m, _ = press(t, m, tea.KeyDown)
 	if !m.bench.pinned || m.bench.cursor != 1 {
 		t.Fatalf("selection during writing must pin: pinned=%v cursor=%d", m.bench.pinned, m.bench.cursor)
 	}
 	view := m.View()
-	if !strings.Contains(view, "创作继续进行中") || !strings.Contains(view, "第二章内容") {
+	if !strings.Contains(view, "第二章内容") {
 		t.Fatalf("pinned main pane must show selected chapter:\n%s", view)
 	}
 	m, _ = press(t, m, tea.KeyEsc)

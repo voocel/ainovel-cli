@@ -171,7 +171,6 @@ type ExecutionProfileRecord struct {
 	ProjectID           string          `json:"project_id"`
 	WorkerProfile       string          `json:"worker_profile"`
 	CoreProtocolVersion string          `json:"core_protocol_version"`
-	ModelConfigDigest   string          `json:"model_config_digest"`
 	PromptDigest        string          `json:"prompt_digest"`
 	ToolSchemaDigest    string          `json:"tool_schema_digest"`
 	StablePrefix        string          `json:"stable_prefix"`
@@ -190,7 +189,7 @@ func (r ExecutionProfileRecord) Identity() (string, error) {
 func (r ExecutionProfileRecord) Validate() error {
 	for name, value := range map[string]string{
 		"project": r.ProjectID, "worker profile": r.WorkerProfile, "core protocol version": r.CoreProtocolVersion,
-		"model config digest": r.ModelConfigDigest, "prompt digest": r.PromptDigest, "tool schema digest": r.ToolSchemaDigest,
+		"prompt digest": r.PromptDigest, "tool schema digest": r.ToolSchemaDigest,
 		"stable prefix": r.StablePrefix, "dynamic tail": r.DynamicTail,
 	} {
 		if strings.TrimSpace(value) == "" {

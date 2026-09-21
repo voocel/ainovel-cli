@@ -4,9 +4,12 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,30 +21,33 @@ import (
 
 // Deps 由组合根注入：TUI 不装配服务，也不接触 Store。
 type Deps struct {
-	API        *bootstrap.App
-	Configured bool
-	ConfigDir  string
-	UserID     string
-	// InitialConfig 用于向导预填；ConfigError 是启动时的配置/装配失败原因，
-	// 交互模式降级进向导修复而不是退出。
-	InitialConfig appconfig.Config
-	ConfigError   string
-	// Rebuild 在配置向导完成后重建带执行器的服务。
-	Rebuild func(appconfig.Config) (*bootstrap.App, error)
+	API       *bootstrap.App
+	ConfigDir string
+	UserID    string
+	// ConfigError 是启动时的配置/绑定失败原因：交互模式降级进向导修复而不是退出。
+	ConfigError string
 	// Verify 供可选的连接测试使用；保存不调用它。nil 仅用于测试。
 	Verify func(context.Context, appconfig.Config) error
 	Input  io.Reader
 	Output io.Writer
 }
 
-func Run(ctx context.Context, deps Deps) error {
-	if deps.API == nil {
+// shutdownGrace 是退出时等在途创作释放任务的上限：取消后执行器立即停手，释放只是
+// 一次本地写入；超时就交给租约到期回收。
+const shutdownGrace = 10 * time.Second
+
+func Run(parent context.Context, deps Deps) error {
+	if deps.API == nil || deps.API.Models == nil {
 		return fmt.Errorf("TUI application is required: %w", domainmodel.ErrInvalid)
 	}
+	// 界面退出即取消在途创作：任务放回队列，下次进入接着写，而不是留着租约让人等。
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	m := newModel(ctx, deps)
 	// AltScreen 全屏渲染是“进入应用”的关键：不开则界面内联在滚动缓冲区里，
 	// 看起来像普通输出。鼠标捕获与键盘操作共同由下面的选项启用。
 	program := tea.NewProgram(
-		newModel(ctx, deps),
+		m,
 		tea.WithContext(ctx), tea.WithInput(deps.Input), tea.WithOutput(deps.Output),
 		tea.WithAltScreen(),
 		// 鼠标热区（M3，用户拍板滚轮+点击）：代价是终端原生划选复制需按住
@@ -49,7 +55,37 @@ func Run(ctx context.Context, deps Deps) error {
 		tea.WithMouseCellMotion(),
 	)
 	_, err := program.Run()
+	cancel()
+	m.inflight.wait(shutdownGrace)
+	if errors.Is(err, tea.ErrProgramKilled) && parent.Err() != nil {
+		err = nil // 终止信号触发的退出是正常收束
+	}
 	return err
+}
+
+// inflight 跟踪进程内正在驱动创作的后台命令：退出时先取消再等它们把任务放回队列。
+type inflight struct{ wg sync.WaitGroup }
+
+func (f *inflight) track(cmd tea.Cmd) tea.Cmd {
+	f.wg.Add(1)
+	return func() tea.Msg {
+		defer f.wg.Done()
+		return cmd()
+	}
+}
+
+func (f *inflight) wait(grace time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		f.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(grace):
+		return false
+	}
 }
 
 type page int
@@ -61,14 +97,14 @@ const (
 )
 
 type model struct {
-	ctx    context.Context
-	deps   Deps
-	api    *bootstrap.App
-	config appconfig.Config
-	page   page
-	wizard wizardState
-	home   homeState
-	bench  workbenchState
+	ctx      context.Context
+	deps     Deps
+	api      *bootstrap.App
+	inflight *inflight // 进程内在途的创作驱动命令，退出时等它们释放任务
+	page     page
+	wizard   wizardState
+	home     homeState
+	bench    workbenchState
 	// gen 是工作台代际号：每次打开作品递增，异步消息携带发出时的代际，
 	// 消费前不匹配即丢弃，保证结果不会串到另一部作品（Codex 复审 #1）。
 	gen    int
@@ -77,11 +113,11 @@ type model struct {
 }
 
 func newModel(ctx context.Context, deps Deps) model {
-	m := model{ctx: ctx, deps: deps, api: deps.API, config: deps.InitialConfig, width: minWidth, height: minHeight}
+	m := model{ctx: ctx, deps: deps, api: deps.API, width: minWidth, height: minHeight, inflight: &inflight{}}
 	m.home = newHomeState()
-	if !deps.Configured {
+	if !deps.API.Models.Current("").Bound || deps.ConfigError != "" {
 		m.page = pageWizard
-		m.wizard = newWizardState(deps.InitialConfig, deps.ConfigError, false)
+		m.wizard = newWizardState(deps.API.Models.Config(), deps.ConfigError, false)
 		return m
 	}
 	// 启动流程：配置完成一律落欢迎页；上次打开的作品在作品库中预选，
@@ -174,8 +210,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 // 终端门槛（页面设计 §2）：达标后所有页面按固定几何排版，不做窄屏降级；
 // 不达标只提示最大化窗口，键盘仍可返回或退出。
 const (
-	minWidth  = 150
-	minHeight = 40
+	minWidth  = 120
+	minHeight = 36
 )
 
 func (m model) tooSmall() bool { return m.width < minWidth || m.height < minHeight }

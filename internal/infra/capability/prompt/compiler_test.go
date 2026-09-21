@@ -164,7 +164,6 @@ func testCompileRequest(t *testing.T) CompileRequest {
 		StoryContext: json.RawMessage(`{"chapter":1,"facts":["hero-origin"]}`),
 		Task:         json.RawMessage(`{"chapter_plan_id":"chapter-plan-1"}`),
 		BaseRevision: 4, ProjectOverlayRevision: 4,
-		ModelConfigDigest: "model-config",
 	}
 }
 
@@ -184,16 +183,17 @@ func TestProfileDigestIsContentAddressed(t *testing.T) {
 	if err := record.Validate(); err != nil {
 		t.Fatalf("record validate: %v", err)
 	}
+	// 模型不在 Execution Profile 里（D57）：任务差异只来自 Prompt、工具与协议。
 	changed := testCompileRequest(t)
-	changed.ModelConfigDigest = "other-model"
+	changed.Task = json.RawMessage(`{"chapter_number":2}`)
 	other, err := Compile(changed)
 	if err != nil {
-		t.Fatalf("compile other model: %v", err)
+		t.Fatalf("compile other task: %v", err)
 	}
 	if other.ProfileDigest == compiled.ProfileDigest || other.PromptDigest != compiled.PromptDigest {
-		t.Fatal("model config must change the profile identity without touching the prompt cache identity")
+		t.Fatal("task input must change the profile identity without touching the prompt cache identity")
 	}
-	if ExecutorIdentity("m") != "llm.agent@1/m" {
-		t.Fatalf("executor identity = %q", ExecutorIdentity("m"))
+	if ExecutorIdentity != "llm.agent@1" {
+		t.Fatalf("executor identity = %q", ExecutorIdentity)
 	}
 }

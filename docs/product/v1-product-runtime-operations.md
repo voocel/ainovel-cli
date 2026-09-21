@@ -18,11 +18,11 @@
 
 配置分为三层：
 
-- Provider 账户：协议、Base URL、密钥和连接能力；密钥不进入 Project Authority 或日志；
-- 模型档案：模型名、上下文窗口、结构化输出能力、推理强度和价格信息；
-- 角色映射：Writer、Planner、Editor 及独立语义分析使用哪个模型档案。
+- Provider 账户（连接）：协议、Base URL、密钥和已保存的模型列表；密钥不进入 Project Authority 或日志；
+- 默认绑定：当前连接、模型与思考强度；
+- 角色映射：策划（architect）、作者（writer）、编辑（editor）各自可改用另一连接的模型与思考强度，未设置的角色跟随默认；独立语义分析用默认绑定。
 
-首次运行提供最小引导和真实连接测试。配置修改只影响新 Operation 或显式 restart；历史 Execution Profile 始终能够解释当时使用的模型与参数。
+首次运行提供最小引导和真实连接测试。连接、模型与思考强度随时可换（见下文），切换只影响之后开始的任务尝试；每次尝试记录实际使用的模型与思考强度，历史始终能解释当时用的是谁。
 
 不提供隐式 Provider 切换或伪成功。凭证缺失、能力不支持和连接失败都明确显示，用户决定修改配置或重试。
 
@@ -42,9 +42,39 @@
 
 顶层 `provider` 引用 `providers` 中的连接名称，名称可以自定义。每个连接独立保存 `type`、`api_key`、`base_url` 和 `models`；`type` 决定底层协议，OpenAI 的 `api` 可选 `chat` 或 `responses`，接口形式参与执行配置摘要。
 
-引导支持新建和选择已保存连接，重名会明确提示。编辑时保留其他连接，修改名称表示另存一个连接，旧连接保留。旧 v1 扁平配置继续可读，下次保存迁移为连接映射；通过同目录临时文件同步、原子替换并设定 `0600` 权限保存。
+引导支持新建和选择已保存连接，重名会明确提示。编辑时保留其他连接，修改名称表示另存一个连接，旧连接保留。配置只有连接映射这一种形态，没有扁平旧格式的读取或迁移；通过同目录临时文件同步、原子替换并设定 `0600` 权限保存。
 
-环境变量只覆盖当前连接；`AINOVEL_PROVIDER` 选择连接，`AINOVEL_PROVIDER_TYPE` 和 `AINOVEL_API` 覆盖协议和接口，密钥与地址不会从另一连接继承。连接名在模型装配前解析，创作内核不依赖这些配置结构。
+环境变量只覆盖当前连接；`AINOVEL_PROVIDER` 选择连接，`AINOVEL_PROVIDER_TYPE` 和 `AINOVEL_API` 覆盖协议和接口，`AINOVEL_THINKING` 覆盖默认思考强度，密钥与地址不会从另一连接继承。连接名在模型装配前解析，创作内核不依赖这些配置结构。
+
+### 随时切换连接、模型与思考强度（已实现）
+
+模型绑定是运行时属性，不是任务身份的一部分：切换不重建应用、不断活动流，也不让排队的任务失效。
+
+- 生效时机：切换立即保存到配置文件并重绑运行时；排队中的任务在下一次尝试直接用新绑定，正在执行的尝试用原来的模型跑完。要让当前任务立刻换模型：`/pause` 再 `/continue`。
+- 思考强度是意图：`auto`（沿用模型默认）、`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。它保存在配置里、换模型不抹掉；执行时按该模型的能力解析成生效档位，模型不支持思考就按自动执行。角色的思考强度可设 `inherit` 跟随默认。
+- 角色映射：`roles.writer / architect / editor` 各自记录连接、模型与思考强度；只指定模型时思考强度跟随默认。清除覆盖即跟随默认。
+- 环境变量仍在下次启动时优先于文件：界面里切换保存的是文件，启动时若设了 `AINOVEL_MODEL` 等变量，以变量为准。
+- 工作台：`/model [architect|writer|editor]` 打开内嵌面板（角色 / 连接 / 模型 / 思考强度），←→ 切选项、Tab 或 ↑↓ 换行、Enter 应用、Esc 取消；应用后底栏说明生效时机。底栏模型摘要在思考强度非自动时附「思考 高」，有角色覆盖时附「角色 N」。
+- Headless：`model` 输出默认与各角色的当前绑定；`model list` 列出全部连接与已保存模型（带编号）；`model use [--role R] [--connection C] <模型|编号>` 切换；`model use --role R --inherit` 清除角色覆盖；`model effort [--role R] <档位|inherit>` 调思考强度。模型名可能自带 `/`，所以连接用 `--connection` 指定。
+- 历史追溯：每次尝试追加 `agent.run_started` 事件（角色、provider、模型、生效思考强度、配置摘要）；语义合规检查用检查时刻的默认绑定，其用量事件带 provider 与模型。
+
+配置文件形态：
+
+```jsonc
+{
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "thinking": "high",
+  "providers": {
+    "deepseek": {"type": "deepseek", "api_key": "…", "models": ["deepseek-chat", "deepseek-reasoner"]},
+    "proxy":    {"type": "openai", "api": "responses", "api_key": "…", "base_url": "…", "models": ["gpt-5"]}
+  },
+  "roles": {
+    "writer":    {"provider": "proxy", "model": "gpt-5", "thinking": "medium"},
+    "architect": {"provider": "deepseek", "model": "deepseek-reasoner"}
+  }
+}
+```
 
 ## 4. 运行中心
 

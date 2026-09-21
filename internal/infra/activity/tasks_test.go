@@ -15,7 +15,11 @@ func TestTaskLifecycleAndUsageAreIsolated(t *testing.T) {
 	h.Publish(e)
 	e.Kind, e.Usage = Usage, UsageTotals{Input: 100, Output: 20, CacheRead: 60}
 	h.Publish(e)
-	e.Kind, e.Err = TaskEnd, "未提交结果"
+	for _, kind := range []Kind{TurnStart, ToolStart, ToolStart, Retry, TurnStart} {
+		e.Kind = kind
+		h.Publish(e)
+	}
+	e.Kind, e.Err, e.At = TaskEnd, "未提交结果", e.At.Add(90*time.Second)
 	h.Publish(e)
 	s, _ := h.Snapshot("book")
 	if s.Tasks[0].Kind != "write_chapter" || s.Tasks[1].Kind != "review_range" {
@@ -23,6 +27,9 @@ func TestTaskLifecycleAndUsageAreIsolated(t *testing.T) {
 	}
 	if len(s.Tasks) != 2 || s.Tasks[0].Done || !s.Tasks[1].Done || s.Tasks[1].Usage.Input != 100 || s.Tasks[0].Usage.Input != 0 || s.Tasks[1].Err == "" {
 		t.Fatalf("incorrect tasks: %+v", s.Tasks)
+	}
+	if review := s.Tasks[1]; review.Turns != 2 || review.Calls != 2 || review.Retries != 1 || s.Tasks[0].Turns != 0 || s.Worked != 90*time.Second {
+		t.Fatalf("task counters: %+v worked=%s", review, s.Worked)
 	}
 	s.Tasks[0].Label = "mutated"
 	e.Kind, e.Err, e.Attempt = TaskStart, "", 2

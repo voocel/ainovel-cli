@@ -11,9 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/app/binding"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
+	"github.com/voocel/ainovel-cli/internal/app/task"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
+	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 )
 
@@ -163,5 +167,69 @@ func TestProjectAdjudicationCommands(t *testing.T) {
 		"project", "adjudication", "add", "--project", "book-1", "--user", "user-1", "--reason", "接受", "--finding", "review/0",
 	}, &output, &errorsOutput); !errors.Is(err, model.ErrInvalid) {
 		t.Fatalf("adjudication add for an unknown verdict err = %v", err)
+	}
+}
+
+// rebindingExecutor 让 headless 测试无需真实模型即可切换绑定。
+type rebindingExecutor struct{ bound bool }
+
+func (e *rebindingExecutor) Identity() string { return "llm.agent@1" }
+func (e *rebindingExecutor) Execute(context.Context, model.Operation) (model.OperationOutcome, error) {
+	return model.OperationOutcome{}, errors.New("not executed")
+}
+func (e *rebindingExecutor) Bind(models.Bindings) { e.bound = true }
+func (e *rebindingExecutor) Bound() bool          { return e.bound }
+
+func TestModelCommandsSwitchBindingsAndPersist(t *testing.T) {
+	ctx := context.Background()
+	authorityStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "ainovel.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer authorityStore.Close()
+	configDir := t.TempDir()
+	api := bootstrap.New(authorityStore, bootstrap.Options{ConfigDir: configDir, Executors: task.ExecutorSet{LLM: &rebindingExecutor{}}})
+	cfg := appconfig.Config{}.WithProvider("deepseek", "deepseek-chat", appconfig.ProviderConfig{APIKey: "k"})
+	cfg = cfg.WithProvider("proxy", "gpt-5", appconfig.ProviderConfig{Type: "openai", APIKey: "p"})
+	cfg = cfg.WithProvider("deepseek", "deepseek-chat", cfg.Providers["deepseek"])
+	if err := api.Models.Apply(cfg); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		var output, errorsOutput bytes.Buffer
+		if err := Run(ctx, api, args, &output, &errorsOutput); err != nil {
+			t.Fatalf("%v: %v; stderr=%s", args, err, errorsOutput.String())
+		}
+		return output.String()
+	}
+	var choices []binding.Choice
+	if err := json.Unmarshal([]byte(run("model", "list")), &choices); err != nil || len(choices) != 2 || !choices[0].Current {
+		t.Fatalf("model list = %v %v", choices, err)
+	}
+	var selection binding.Selection
+	if err := json.Unmarshal([]byte(run("model", "use", "2")), &selection); err != nil || selection.Connection != "proxy" || selection.Model != "gpt-5" {
+		t.Fatalf("model use by index = %+v %v", selection, err)
+	}
+	if err := json.Unmarshal([]byte(run("model", "use", "--role", "writer", "--connection", "deepseek", "deepseek-reasoner")), &selection); err != nil || selection.Role != "writer" || selection.Model != "deepseek-reasoner" {
+		t.Fatalf("model use role = %+v %v", selection, err)
+	}
+	if err := json.Unmarshal([]byte(run("model", "effort", "--role", "writer", "high")), &selection); err != nil || selection.Thinking != "high" {
+		t.Fatalf("model effort = %+v %v", selection, err)
+	}
+	var all []binding.Selection
+	if err := json.Unmarshal([]byte(run("model")), &all); err != nil || len(all) != 4 || all[0].Model != "gpt-5" {
+		t.Fatalf("model = %+v %v", all, err)
+	}
+	if err := json.Unmarshal([]byte(run("model", "use", "--role", "writer", "--inherit")), &selection); err != nil || !selection.Inherited {
+		t.Fatalf("model use --inherit = %+v %v", selection, err)
+	}
+	saved, err := appconfig.LoadConfig(configDir)
+	if err != nil || saved.Provider != "proxy" || saved.Model != "gpt-5" || len(saved.Roles) != 0 {
+		t.Fatalf("saved = %#v %v", saved, err)
+	}
+	var output, errorsOutput bytes.Buffer
+	if err := Run(ctx, api, []string{"model", "effort", "extreme"}, &output, &errorsOutput); err == nil || !strings.Contains(err.Error(), "未知思考强度") {
+		t.Fatalf("invalid effort accepted: %v", err)
 	}
 }

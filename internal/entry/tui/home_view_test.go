@@ -121,7 +121,7 @@ func TestEntryFormsKeepActiveInputAndFeedbackVisible(t *testing.T) {
 	for _, size := range [][2]int{{150, 40}, {180, 50}} {
 		m := homeFixture(t, size[0], size[1], 0)
 		m.page = pageWizard
-		m.wizard = newWizardState(m.config, "连接失败", true)
+		m.wizard = newWizardState(m.api.Models.Config(), "连接失败", true)
 		m.wizard.inputs[2].SetValue("secret-key-should-not-appear")
 		for step := range wizardFields {
 			m.wizard.step = step

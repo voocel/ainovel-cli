@@ -7,7 +7,7 @@ import (
 
 // schemaVersion 是当前唯一支持的库结构版本。v1 没有历史数据，结构演进直接改
 // schema 并升版本号；不保留迁移阶梯，版本不符即拒绝打开。
-const schemaVersion = 2
+const schemaVersion = 3
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -193,7 +193,6 @@ var schema = []string{
 		project_id TEXT NOT NULL,
 		worker_profile TEXT NOT NULL,
 		core_protocol_version TEXT NOT NULL,
-		model_config_digest TEXT NOT NULL,
 		prompt_digest TEXT NOT NULL,
 		tool_schema_digest TEXT NOT NULL,
 		stable_prefix TEXT NOT NULL,

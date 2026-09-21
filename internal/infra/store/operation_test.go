@@ -334,7 +334,7 @@ func TestExpiredLeaseFailsOperationAtAttemptLimit(t *testing.T) {
 	}
 
 	// 每一轮都是"领取 → lease 过期 → 回收"，模拟模型调用持续超时。
-	for attempt := 1; attempt <= MaxOperationAttempts; attempt++ {
+	for attempt := 1; attempt <= MaxLeaseExpiries; attempt++ {
 		claimAt := now.Add(time.Duration(attempt) * 10 * time.Minute)
 		claimed, err := s.ClaimNextOperation(ctx, "worker-1", time.Minute, claimAt)
 		if err != nil {
@@ -351,7 +351,7 @@ func TestExpiredLeaseFailsOperationAtAttemptLimit(t *testing.T) {
 			t.Fatalf("get after attempt %d: %v", attempt, err)
 		}
 		want := model.OperationQueued
-		if attempt >= MaxOperationAttempts {
+		if attempt >= MaxLeaseExpiries {
 			want = model.OperationFailed
 		}
 		if stored.State != want {
@@ -423,7 +423,7 @@ func TestClaimReportsDependenciesThatCannotSucceed(t *testing.T) {
 	}
 }
 
-const testExecutor = "llm.agent@1/model"
+const testExecutor = "llm.agent@1"
 
 func testOperation(id string, priority int, createdAt time.Time) model.Operation {
 	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)

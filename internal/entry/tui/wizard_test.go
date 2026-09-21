@@ -65,7 +65,7 @@ func TestWizardValidatesAddressAndRedactsProviderErrors(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	deps.Verify = func(context.Context, appconfig.Config) error { return errors.New("rejected key secret-value") }
 	m := newModel(context.Background(), deps)
-	m.wizard = newWizardState(appconfig.Config{Provider: "openai", Model: "custom", APIKey: "secret-value", BaseURL: "bad-address"}, "", false)
+	m.wizard = newWizardState(appconfig.Config{}.WithProvider("openai", "custom", appconfig.ProviderConfig{APIKey: "secret-value", BaseURL: "bad-address"}), "", false)
 	next, cmd := m.submitWizard()
 	m = next.(model)
 	if cmd == nil || m.wizard.verifying || m.wizard.step != 3 {
@@ -86,7 +86,7 @@ func TestWizardResponsiveControlsAndCollapsedAddress(t *testing.T) {
 	m := newModel(context.Background(), deps)
 	for _, size := range [][2]int{{150, 40}, {180, 50}} {
 		m.width, m.height = size[0], size[1]
-		m.wizard = newWizardState(appconfig.Config{Provider: "custom", Model: "my-model", BaseURL: "https://example.com/v1"}, "", false)
+		m.wizard = newWizardState(appconfig.Config{}.WithProvider("custom", "my-model", appconfig.ProviderConfig{Type: "openai", BaseURL: "https://example.com/v1"}), "", false)
 		m.wizard.custom = true
 		view := m.View()
 		if lipgloss.Width(view) > m.width || lipgloss.Height(view) != m.height || !strings.Contains(view, "保存并开始") {
@@ -227,7 +227,7 @@ func TestWizardSaveDoesNotRequireConnectionTest(t *testing.T) {
 		calls := 0
 		deps.Verify = func(context.Context, appconfig.Config) error { calls++; return errors.New("offline") }
 		m := newModel(context.Background(), deps)
-		m.wizard = newWizardState(appconfig.Config{Provider: "openai", Model: "custom", APIKey: "key"}, "", false)
+		m.wizard = newWizardState(appconfig.Config{}.WithProvider("openai", "custom", appconfig.ProviderConfig{APIKey: "key"}), "", false)
 		if testFirst {
 			next, cmd := m.submitWizard()
 			m = next.(model)

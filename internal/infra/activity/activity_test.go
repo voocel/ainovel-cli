@@ -137,6 +137,7 @@ func TestUsageAccumulatesPerRunAndToolEndRecordsDoneAt(t *testing.T) {
 	hub.Publish(end)
 	usage := toolEvent(Usage, "")
 	usage.Usage = UsageTotals{Input: 100, Output: 20, CacheRead: 60, Cost: 0.25}
+	usage.Model, usage.Provider, usage.TaskKind = "deepseek-v4-flash", "deepseek", "write_chapter"
 	hub.Publish(usage)
 	hub.Publish(usage)
 	snapshot, _ := hub.Snapshot("book-1")
@@ -146,11 +147,29 @@ func TestUsageAccumulatesPerRunAndToolEndRecordsDoneAt(t *testing.T) {
 	if snapshot.Usage != (UsageTotals{Input: 200, Output: 40, CacheRead: 120, Cost: 0.5}) {
 		t.Fatalf("usage totals = %#v", snapshot.Usage)
 	}
+	// 中途换模型：按首次使用顺序各记各的，最近一条用量决定当前模型。
+	switched := usage
+	switched.Model, switched.At = "deepseek-v4-pro", at().Add(time.Minute)
+	hub.Publish(switched)
+	snapshot, _ = hub.Snapshot("book-1")
+	if len(snapshot.Models) != 2 || snapshot.ActiveModel != "deepseek-v4-pro" {
+		t.Fatalf("models = %#v active=%q", snapshot.Models, snapshot.ActiveModel)
+	}
+	if first := snapshot.Models[0]; first.Model != "deepseek-v4-flash" || first.Messages != 2 || first.Usage.Input != 200 || first.FirstKind != "write_chapter" || first.LastAt != at() {
+		t.Fatalf("first model usage = %#v", first)
+	}
+	if second := snapshot.Models[1]; second.Messages != 1 || second.Usage.Cost != 0.25 || second.FirstAt != at().Add(time.Minute) {
+		t.Fatalf("second model usage = %#v", second)
+	}
+	snapshot.Models[0].Messages = 99
+	if fresh, _ := hub.Snapshot("book-1"); fresh.Models[0].Messages != 2 {
+		t.Fatal("snapshot copy shares the model list")
+	}
 	next := usage
 	next.RunID = "run-2"
 	hub.Publish(next)
-	if snapshot, _ = hub.Snapshot("book-1"); snapshot.Usage.Input != 100 || len(snapshot.Entries) != 0 {
-		t.Fatalf("new run must reset usage and entries: %#v", snapshot)
+	if snapshot, _ = hub.Snapshot("book-1"); snapshot.Usage.Input != 100 || len(snapshot.Entries) != 0 || len(snapshot.Models) != 1 {
+		t.Fatalf("new run must reset usage, entries and models: %#v", snapshot)
 	}
 }
 

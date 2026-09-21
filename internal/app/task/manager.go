@@ -23,7 +23,7 @@ type Manager struct {
 func New(s *store.Store, engine *operationengine.Engine, executors ExecutorSet, profiles Profiles) *Manager {
 	return &Manager{store: s, operations: engine, executors: executors, profiles: profiles}
 }
-func (s *Manager) HasLLM() bool { return s.executors.LLM != nil }
+func (s *Manager) HasLLM() bool { return s.executors.LLM != nil && ready(s.executors.LLM) }
 func (s *Manager) ExternalConfigDigest() string {
 	if configured, ok := s.executors.External.(interface{ ConfigDigest() string }); ok {
 		return configured.ConfigDigest()
@@ -39,9 +39,15 @@ type ExecutorSet struct {
 func (e ExecutorSet) all() []operationengine.Executor {
 	var result []operationengine.Executor
 	for _, executor := range []operationengine.Executor{e.LLM, e.External} {
-		if executor != nil {
+		if executor != nil && ready(executor) {
 			result = append(result, executor)
 		}
 	}
 	return result
+}
+
+// ready 过滤尚未绑定模型的执行器（可选接口）：未绑定时任务只入队不领取。
+func ready(executor operationengine.Executor) bool {
+	bound, ok := executor.(interface{ Bound() bool })
+	return !ok || bound.Bound()
 }

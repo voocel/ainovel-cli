@@ -357,17 +357,11 @@ func (m model) finishWizard(verified wizardVerifiedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) saveWizard(config appconfig.Config) (tea.Model, tea.Cmd) {
-	api, err := m.deps.Rebuild(config)
-	if err != nil {
+	// 绑定成功才落盘；Runtime 常驻，重绑不重建应用，队列任务下次尝试即用新模型。
+	if err := m.api.Models.Switch(config); err != nil {
 		m.wizard.err = wizardError(err, config)
 		return m, nil
 	}
-	if err := appconfig.SaveConfig(m.deps.ConfigDir, config); err != nil {
-		m.wizard.err = wizardError(err, config)
-		return m, nil
-	}
-	m.api = api
-	m.config = config
 	m.page = pageHome
 	m.home = newHomeState()
 	return m, m.loadLibraryCmd()

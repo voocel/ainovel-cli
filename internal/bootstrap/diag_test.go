@@ -28,11 +28,11 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 	runID := ensureTestRun(t, ctx, s, project.ID, now)
 	input := json.RawMessage(`{"chapter_plan_id":"chapter-plan-1","chapter_number":1}`)
 	op := model.Operation{ID: secret + "-task", RunID: runID, Target: model.AuthorityTarget{Kind: model.AuthorityProject, ID: project.ID}, Kind: model.OperationWriteChapter, State: model.OperationQueued,
-		Snapshot: model.ExecutionSnapshot{Executor: "llm.agent@1/test", BaseRevision: project.Revision, InputDigest: model.Digest(input), ConfigDigest: secret, ApprovalPolicy: model.ApprovalManual}, Input: input, CreatedAt: now, UpdatedAt: now}
+		Snapshot: model.ExecutionSnapshot{Executor: "llm.agent@1", BaseRevision: project.Revision, InputDigest: model.Digest(input), ConfigDigest: secret, ApprovalPolicy: model.ApprovalManual}, Input: input, CreatedAt: now, UpdatedAt: now}
 	if _, err := s.CreateOperation(ctx, op); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimOperationForExecutor(ctx, op.ID, "worker", "llm.agent@1/test", time.Hour, now)
+	claimed, err := s.ClaimOperationForExecutor(ctx, op.ID, "worker", "llm.agent@1", time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}

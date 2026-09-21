@@ -25,7 +25,7 @@ type recordingProfiles struct {
 
 func (p *recordingProfiles) Compile(_ context.Context, command profile.CompileCommand) (prompt.Compiled, error) {
 	p.last = command
-	c := prompt.Compiled{ProjectID: command.ProjectID, WorkerProfile: command.WorkerProfileID + "@1", CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest}
+	c := prompt.Compiled{ProjectID: command.ProjectID, WorkerProfile: command.WorkerProfileID + "@1", CoreProtocolVersion: command.CoreProtocolVersion}
 	for _, ref := range command.Packs {
 		c.Sources = append(c.Sources, prompt.Source{Layer: "pack_defaults", ID: ref.ID + "@1", Revision: ref.Revision})
 	}
@@ -59,7 +59,7 @@ func restartManager(t *testing.T) (*Manager, *recordingProfiles, StartOperationC
 	}
 	p := &recordingProfiles{compiled: make(map[string]prompt.Compiled)}
 	m := New(s, nil, ExecutorSet{}, p)
-	return m, p, StartOperationCommand{ProjectID: "book", RunID: "run", OperationID: "source", Kind: model.OperationWriteChapter, Input: json.RawMessage(`{"chapter_plan_id":"chapter","chapter_number":1}`), WorkerProfileID: "writer", CoreProtocolVersion: "core-v1", ModelConfigDigest: "model-a", ApprovalPolicy: model.ApprovalAuto, CreatedAt: now}
+	return m, p, StartOperationCommand{ProjectID: "book", RunID: "run", OperationID: "source", Kind: model.OperationWriteChapter, Input: json.RawMessage(`{"chapter_plan_id":"chapter","chapter_number":1}`), WorkerProfileID: "writer", CoreProtocolVersion: "core-v1", ApprovalPolicy: model.ApprovalAuto, CreatedAt: now}
 }
 
 func TestCreationRestartKeepsExplicitExecutionSettings(t *testing.T) {
@@ -72,7 +72,7 @@ func TestCreationRestartKeepsExplicitExecutionSettings(t *testing.T) {
 	if _, err = m.CancelOperation(ctx, first.ID, base.CreatedAt); err != nil {
 		t.Fatal(err)
 	}
-	base.WorkerProfileID, base.ModelConfigDigest = "new-writer", "model-b"
+	base.WorkerProfileID = "new-writer"
 	input, err := model.DecodeTaskInput(base.Kind, base.Input)
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +81,10 @@ func TestCreationRestartKeepsExplicitExecutionSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.last.WorkerProfileID != base.WorkerProfileID || p.last.ModelConfigDigest != base.ModelConfigDigest {
+	if p.last.WorkerProfileID != base.WorkerProfileID {
 		t.Fatalf("dropped explicit execution settings: %#v", p.last)
 	}
-	if successor.Snapshot.Executor != prompt.ExecutorIdentity("model-b") {
+	if successor.Snapshot.Executor != prompt.ExecutorIdentity {
 		t.Fatalf("wrong executor: %#v", successor.Snapshot)
 	}
 }

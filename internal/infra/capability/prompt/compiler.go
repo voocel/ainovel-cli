@@ -29,9 +29,8 @@ type block struct {
 }
 
 func Compile(request CompileRequest) (Compiled, error) {
-	if strings.TrimSpace(request.ProjectID) == "" || strings.TrimSpace(request.CoreProtocolVersion) == "" ||
-		strings.TrimSpace(request.ModelConfigDigest) == "" {
-		return Compiled{}, fmt.Errorf("project, protocol and model are required: %w", model.ErrInvalid)
+	if strings.TrimSpace(request.ProjectID) == "" || strings.TrimSpace(request.CoreProtocolVersion) == "" {
+		return Compiled{}, fmt.Errorf("project and protocol are required: %w", model.ErrInvalid)
 	}
 	if request.CoreProtocolVersion != "core-v1" {
 		return Compiled{}, fmt.Errorf("unsupported core protocol version %q: %w", request.CoreProtocolVersion, model.ErrInvalid)
@@ -138,8 +137,8 @@ func Compile(request CompileRequest) (Compiled, error) {
 	// 稳定身份；任务差异由 Execution Profile 记录的内容身份覆盖。
 	compiled := Compiled{
 		ProjectID: request.ProjectID, WorkerProfile: request.Worker.ID + "@" + request.Worker.Version,
-		CoreProtocolVersion: request.CoreProtocolVersion, ModelConfigDigest: request.ModelConfigDigest,
-		StablePrefix: stablePrefix, DynamicTail: dynamicTail, Tools: tools, Sources: sources,
+		CoreProtocolVersion: request.CoreProtocolVersion,
+		StablePrefix:        stablePrefix, DynamicTail: dynamicTail, Tools: tools, Sources: sources,
 		PromptDigest: model.Digest([]byte(stablePrefix)), ToolSchemaDigest: toolDigest,
 	}
 	record, err := compiled.record(time.Time{})

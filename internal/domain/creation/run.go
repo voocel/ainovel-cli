@@ -208,13 +208,17 @@ func (s *Coordinator) Drive(
 			if result.ID != "" {
 				operation = result
 			}
+			// 进程退出等取消不是创作失败：引擎已把任务放回队列，Run 保持 running 可续跑。
+			if err != nil && ctx.Err() != nil {
+				return Outcome{Run: run, Revision: decision.Revision}, err
+			}
 			// stale 不是失败（§6.3）：基线在执行期间变化时由下一轮安全迁移到后继。
 			if err != nil && operation.State != model.OperationStale {
 				if operation.State != model.OperationFailed {
 					settled, settleErr := s.settleRun(ctx, run, model.RunFailed, failureReason(work, operation.ID), 0, clock.next())
 					return Outcome{Run: settled, Revision: decision.Revision}, errors.Join(err, settleErr)
 				}
-				outcome, reopen, err := s.reopenOrWait(ctx, run, decision.Revision, work, operation, clock.next())
+				outcome, reopen, err := s.reopenOrWait(ctx, tasks, run, decision.Revision, work, operation, clock.next())
 				if reopen {
 					continue
 				}
@@ -240,7 +244,7 @@ func (s *Coordinator) Drive(
 			settled, err := s.settleRun(ctx, run, model.RunPaused, "创作已暂停，恢复该任务后再继续", 0, clock.next())
 			return Outcome{Run: settled, Revision: decision.Revision}, err
 		case model.OperationFailed:
-			outcome, reopen, err := s.reopenOrWait(ctx, run, decision.Revision, work, operation, clock.next())
+			outcome, reopen, err := s.reopenOrWait(ctx, tasks, run, decision.Revision, work, operation, clock.next())
 			if reopen {
 				continue
 			}
@@ -251,8 +255,7 @@ func (s *Coordinator) Drive(
 		case model.OperationStale:
 			// 控制收紧或基线漂移导致失效：下一轮由 ensureChainedOperation 安全迁移到后继。
 		case model.OperationRunning:
-			return Outcome{}, fmt.Errorf(
-				"operation %q is held by another worker lease: %w", operation.ID, model.ErrStateConflict)
+			return Outcome{}, fmt.Errorf("operation %q: %w", operation.ID, model.ErrOperationHeld)
 		}
 	}
 }
@@ -272,6 +275,7 @@ func (s *Coordinator) failRun(
 // autoReopenBudget 是执行失败的会话级重开策略（D56）：一个 Operation 最多自动重开
 // 这么多次。重开走 ensureChainedOperation 的 Resume/后继路径，对话、工作区与失败
 // 原因全部带回给模型；用尽落 waiting_user，用户续跑再授予一次尝试，绝不无限重跑。
+// 预算按失败次数计（Tasks.Failures），不按 attempt：进程退出释放的执行不算失败。
 // 结果未知与提交受阻不自动重开；provider 的调用级重试不在此计数。
 const autoReopenBudget = 3
 
@@ -279,6 +283,7 @@ const autoReopenBudget = 3
 // 用尽则把 Run 停在 waiting_user 并说明原因，草稿与上下文保留。
 func (s *Coordinator) reopenOrWait(
 	ctx context.Context,
+	tasks Tasks,
 	run model.CreationRun,
 	revision model.Revision,
 	work WorkItem,
@@ -291,11 +296,15 @@ func (s *Coordinator) reopenOrWait(
 		settled, err := s.settleRun(ctx, run, model.RunWaitingUser, reason, 0, at)
 		return Outcome{Run: settled, Revision: revision}, false, err
 	}
-	if operation.Attempt <= autoReopenBudget {
+	failures, err := tasks.Failures(ctx, operation.ID)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if failures <= autoReopenBudget {
 		return Outcome{}, true, nil
 	}
 	reason := fmt.Sprintf("%s：已自动重试 %d 次仍未成功，停下等你处理（最近一次原因：%s）。续跑会带着已有草稿再试一次；可展开 %s 的事件记录查看原始诊断",
-		work.Reasons.Failure, operation.Attempt-1, operation.Error, operation.ID)
+		work.Reasons.Failure, failures-1, operation.Error, operation.ID)
 	settled, err := s.settleRun(ctx, run, model.RunWaitingUser, reason, 0, at)
 	return Outcome{Run: settled, Revision: revision}, false, err
 }

@@ -25,12 +25,11 @@ type StartOperationCommand struct {
 	Priority    int
 	DependsOn   []string
 	Input       json.RawMessage
-	// LLM 执行族的编译输入：Worker、资产引用、协议版本与模型配置摘要。
+	// LLM 执行族的编译输入：Worker、资产引用与协议版本；模型是运行时绑定，不进快照（D57）。
 	WorkerProfileID     string
 	Packs               []resource.PackRef
 	CreatorProfiles     []resource.CreatorProfileRef
 	CoreProtocolVersion string
-	ModelConfigDigest   string
 	// ConfigDigest 是外部执行族的自身配置摘要，冻结进快照（D45）。
 	ConfigDigest   string
 	ApprovalPolicy model.ApprovalPolicy
@@ -48,7 +47,6 @@ type RestartOperationCommand struct {
 	Packs               []resource.PackRef
 	CreatorProfiles     []resource.CreatorProfileRef
 	CoreProtocolVersion string
-	ModelConfigDigest   string
 	ApprovalPolicy      model.ApprovalPolicy
 	RunID               string
 	// Input 非空时替代前任输入：后继按当前快照重算的任务输入（含新命中的要求）。
@@ -88,13 +86,12 @@ func (s *Manager) prepareOperation(ctx context.Context, command StartOperationCo
 		compiled, err := s.profiles.Compile(ctx, profile.CompileCommand{
 			ProjectID: command.ProjectID, Revision: revision, Kind: command.Kind, WorkerProfileID: command.WorkerProfileID,
 			Input: command.Input, Packs: command.Packs, CreatorProfiles: command.CreatorProfiles,
-			CoreProtocolVersion: command.CoreProtocolVersion, ModelConfigDigest: command.ModelConfigDigest,
-			CreatedAt: command.CreatedAt,
+			CoreProtocolVersion: command.CoreProtocolVersion, CreatedAt: command.CreatedAt,
 		})
 		if err != nil {
 			return model.Operation{}, err
 		}
-		snapshot.Executor, snapshot.ConfigDigest = prompt.ExecutorIdentity(compiled.ModelConfigDigest), compiled.ProfileDigest
+		snapshot.Executor, snapshot.ConfigDigest = prompt.ExecutorIdentity, compiled.ProfileDigest
 	case model.ExecutorExternal:
 		if s.executors.External == nil || strings.TrimSpace(command.ConfigDigest) == "" {
 			return model.Operation{}, fmt.Errorf("%s requires a configured executor and its config digest: %w", command.Kind, model.ErrInvalid)
@@ -190,10 +187,7 @@ func (s *Manager) RestartOperation(ctx context.Context, command RestartOperation
 			return model.Operation{}, err
 		}
 		successor.WorkerProfileID = prompt.WorkerID(compiled.WorkerProfile)
-		successor.CoreProtocolVersion, successor.ModelConfigDigest = compiled.CoreProtocolVersion, compiled.ModelConfigDigest
-		if s.executors.LLM != nil {
-			successor.ModelConfigDigest = ""
-		}
+		successor.CoreProtocolVersion = compiled.CoreProtocolVersion
 		successor.Packs, err = packRefsFromSources(compiled.Sources)
 		if err != nil {
 			return model.Operation{}, err
@@ -207,9 +201,6 @@ func (s *Manager) RestartOperation(ctx context.Context, command RestartOperation
 		}
 		if command.CoreProtocolVersion != "" {
 			successor.CoreProtocolVersion = command.CoreProtocolVersion
-		}
-		if command.ModelConfigDigest != "" {
-			successor.ModelConfigDigest = command.ModelConfigDigest
 		}
 		if command.Packs != nil {
 			successor.Packs = command.Packs
@@ -265,13 +256,12 @@ func (s *Manager) validateRestartTarget(
 		ProjectID: existing.Target.ID, Revision: existing.Snapshot.BaseRevision,
 		Kind: successor.Kind, WorkerProfileID: successor.WorkerProfileID,
 		Input: successor.Input, Packs: successor.Packs, CreatorProfiles: successor.CreatorProfiles,
-		CoreProtocolVersion: successor.CoreProtocolVersion, ModelConfigDigest: successor.ModelConfigDigest,
-		CreatedAt: existing.CreatedAt,
+		CoreProtocolVersion: successor.CoreProtocolVersion, CreatedAt: existing.CreatedAt,
 	})
 	if err != nil {
 		return err
 	}
-	if compiled.ProfileDigest != existing.Snapshot.ConfigDigest || prompt.ExecutorIdentity(compiled.ModelConfigDigest) != existing.Snapshot.Executor {
+	if compiled.ProfileDigest != existing.Snapshot.ConfigDigest || existing.Snapshot.Executor != prompt.ExecutorIdentity {
 		return fmt.Errorf("operation %q uses different execution settings: %w", existing.ID, model.ErrIdempotencyConflict)
 	}
 	return nil

@@ -14,6 +14,9 @@ type Tasks interface {
 	Restart(context.Context, string, string, WorkItem, time.Time) (model.Operation, error)
 	Resume(context.Context, string, time.Time) (model.Operation, error)
 	Run(context.Context, string, string, time.Duration, time.Time) (model.Operation, error)
+	// Failures 数该任务落过几次 failed（事件日志口径）：D56 的重开预算只数失败，
+	// 不数 attempt——attempt 是执行围栏，含进程退出时释放的执行。
+	Failures(context.Context, string) (int, error)
 }
 
 // Store persists runs and exposes the task identities needed for successor
