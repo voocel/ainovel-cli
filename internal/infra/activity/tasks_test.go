@@ -8,15 +8,19 @@ import (
 
 func TestTaskLifecycleAndUsageAreIsolated(t *testing.T) {
 	h := NewHub()
-	e := Event{ProjectID: "book", RunID: "run", OperationID: "write", Kind: TaskStart, TaskLabel: "写作", At: time.Now(), Attempt: 1}
+	e := Event{ProjectID: "book", RunID: "run", OperationID: "write", Kind: TaskStart, TaskKind: "write_chapter", TaskLabel: "写作", At: time.Now(), Attempt: 1}
 	h.Publish(e)
 	e.OperationID, e.TaskLabel = "review", "审阅"
+	e.TaskKind = "review_range"
 	h.Publish(e)
 	e.Kind, e.Usage = Usage, UsageTotals{Input: 100, Output: 20, CacheRead: 60}
 	h.Publish(e)
 	e.Kind, e.Err = TaskEnd, "未提交结果"
 	h.Publish(e)
 	s, _ := h.Snapshot("book")
+	if s.Tasks[0].Kind != "write_chapter" || s.Tasks[1].Kind != "review_range" {
+		t.Fatal("task roles lost their execution identity")
+	}
 	if len(s.Tasks) != 2 || s.Tasks[0].Done || !s.Tasks[1].Done || s.Tasks[1].Usage.Input != 100 || s.Tasks[0].Usage.Input != 0 || s.Tasks[1].Err == "" {
 		t.Fatalf("incorrect tasks: %+v", s.Tasks)
 	}

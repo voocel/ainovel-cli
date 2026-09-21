@@ -20,5 +20,14 @@ func TestSubmissionSchemaSeparatesSingleAndMultipleDrafts(t *testing.T) {
 		if schema.Properties[tc.field] == nil || schema.Properties[tc.version] == nil || schema.Properties[tc.forbidden] != nil {
 			t.Fatalf("ambiguous schema: %s", tool.InputSchema)
 		}
+		if schema.Properties["confirm_canon"] == nil {
+			t.Fatal("missing explicit canon confirmation")
+		}
+		var patches struct {
+			MinItems int `json:"minItems"`
+		}
+		if err := json.Unmarshal(schema.Properties["patches"], &patches); err != nil || patches.MinItems != 0 {
+			t.Fatal("confirmation-only submission must allow an empty patches list")
+		}
 	}
 }

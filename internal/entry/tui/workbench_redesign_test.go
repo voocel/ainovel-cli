@@ -119,6 +119,26 @@ func TestFooterEmptyFeedbackKeepsRuleContinuousAndBottomBlank(t *testing.T) {
 	}
 }
 
+func TestCompletedWorkbenchOffersGoalCommandWithoutCapturingLetters(t *testing.T) {
+	m := studioModel(t, 150, 40)
+	m.bench.writing = false
+	run := *m.bench.snap.Run
+	run.State = domainmodel.RunCompleted
+	m.bench.snap.Run = &run
+	if action := m.benchActions()[0]; action.key != "/goal" {
+		t.Fatalf("completed run offers wrong action: %+v", action)
+	}
+	l := m.benchLayout()
+	clicked := clickBench(m, 2, l.footerY+3)
+	if clicked.bench.input.Value() != "/goal " || clicked.bench.writing {
+		t.Fatal("goal action must prepare input without starting a run")
+	}
+	typed := typeText(t, m, "g")
+	if typed.bench.input.Value() != "g" || typed.bench.writing {
+		t.Fatal("ordinary letter must stay in the composer")
+	}
+}
+
 func TestFooterActionClickPreservesUnsubmittedInput(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	l := m.benchLayout()

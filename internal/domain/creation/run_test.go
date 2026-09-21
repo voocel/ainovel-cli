@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,45 @@ import (
 )
 
 type goalFunc func(context.Context, model.CreationRun) (creation.Decision, error)
+
+type failingTasks struct {
+	creation.Tasks
+	code  model.FailureCode
+	calls int
+}
+
+func (f *failingTasks) Start(_ context.Context, _ string, work creation.WorkItem, _ time.Time) (model.Operation, error) {
+	return model.Operation{ID: work.ID, State: model.OperationQueued}, nil
+}
+
+func (f *failingTasks) Run(_ context.Context, id, _ string, _ time.Duration, _ time.Time) (model.Operation, error) {
+	f.calls++
+	return model.Operation{ID: id, State: model.OperationFailed, Attempt: f.calls, FailureCode: f.code, Error: "original failure"}, errors.New("original failure")
+}
+
+func TestDriverDoesNotReopenFailuresRequiringIntervention(t *testing.T) {
+	for _, code := range []model.FailureCode{model.FailureSubmissionBlocked, model.FailureResultUnknown, ""} {
+		t.Run(string(code), func(t *testing.T) {
+			st, run := fixture(t)
+			goal := goalFunc(func(context.Context, model.CreationRun) (creation.Decision, error) {
+				return creation.Decision{Revision: 1, Step: creation.Step{Work: &creation.WorkItem{ID: "write"}}}, nil
+			})
+			tasks := &failingTasks{code: code}
+			driver := creation.New(st, map[model.GoalKind]creation.Goal{run.Goal.Kind: goal}, time.Now)
+			outcome, err := driver.Drive(context.Background(), run, tasks, creation.DriveCommand{})
+			wantCalls := 1
+			if code == "" {
+				wantCalls = 4
+			}
+			if err != nil || outcome.Run.State != model.RunWaitingUser || tasks.calls != wantCalls {
+				t.Fatalf("failure policy: calls=%d outcome=%+v err=%v", tasks.calls, outcome, err)
+			}
+			if !strings.Contains(outcome.Run.StateReason, "original failure") {
+				t.Fatalf("diagnostic lost: %+v", outcome.Run)
+			}
+		})
+	}
+}
 
 func (g goalFunc) ValidateGoal(json.RawMessage) error { return nil }
 func (g goalFunc) Next(ctx context.Context, run model.CreationRun) (creation.Decision, error) {

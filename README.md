@@ -95,7 +95,13 @@ Pack 开发目录通过 `pack install --dir` 安装；`pack export --id <id> --f
 
 Creator Profile 学习不是直接猜风格：先用 `profile learn --project <book> --from <revision> --to <revision>` 比较用户实际改稿，`profile candidates` 查看候选，最后 `profile confirm` 才让规则跨书生效。
 
-Canon 事实使用受控 `kind` 与 predicate namespace；`new_value` 是当前事实，修改已有事实必须提供匹配上一 Revision 的 `old_value`。AI Writer 提交正文时必须在同一个 Proposal 中提交各章 Canon Delta，用户导入投影时系统会依据基线自动补齐 Canon 的 `old_value`。
+Canon 事实使用受控 `kind` 与 predicate namespace；`new_value` 是当前事实，正式 Proposal 修改已有事实必须携带匹配基线的 `old_value`。AI 提交工具允许省略旧值，由程序从任务冻结的 Revision 补齐；不变的事实通过 `confirm_canon` 按 ID 明确确认，不再要求模型重抄原文。显式提供的旧值仍须精确匹配，标点也不能改动。AI Writer 提交正文时仍须在同一个 Proposal 中提交各章 Canon Delta，用户导入投影同样依据基线补齐旧值。
+
+同一次执行中，`proposal_submit` 或 `verdict_submit` 连续三次返回相同错误时，会以 `submission_blocked` 停止本次执行、保留工作区并记录原始原因；协调器转入等待用户，不再自动重开同一失败。中间成功读取资料或编辑草稿不会清零提交错误次数，不同错误或成功提交会重置计数。该保护不替代创作运行的自动修订预算，也不放宽提交校验。外部结果未知（`result_unknown`）同样不自动重开，需用户明确决定。
+
+审阅工具通过 `review_key` + `review_version` 引用已保存的问题列表，宿主装配完整裁定，不要求模型重复抄写 findings；版本不符直接报错，审阅范围、意图核验与阻塞问题仍执行原有严格校验。已冻结的旧工具协议继续接受并核验显式 findings。
+
+写作与审阅在提交校验通过、工具结果落盘后正常结束模型循环，再由 Operation Engine 完成权威提交；不再额外请求模型输出结束语。提交校验失败仍允许模型修正，落盘失败则明确报错。恢复时复用已保存的对话与草稿，历史消息用量不计入新一次执行。
 
 ## 模块边界
 

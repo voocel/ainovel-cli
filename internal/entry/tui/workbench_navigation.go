@@ -86,7 +86,7 @@ func (m *model) findChapter(query string, next bool) bool {
 		return false
 	}
 	number, numericErr := strconv.Atoi(query)
-	outline := m.bench.snap.Outline
+	outline := m.directoryEntries()
 	start := 0
 	if next {
 		id, _ := m.selectedRowIdentity()

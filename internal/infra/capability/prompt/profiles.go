@@ -84,7 +84,7 @@ func BuiltinCapabilities() ([]CapabilityDefinition, error) {
 				Tools: []ToolSchema{
 					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
 					tool(ToolWorkspacePutReview, "把审阅过程记录写入当前 Operation Workspace", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"findings":{"type":"array","items":{"type":"object"}}},"required":["key","expected_version","findings"],"additionalProperties":false}`),
-					tool(ToolVerdictSubmit, "引用审阅工作区记录并提交覆盖请求范围的结构化裁定（D30）：pass 表示无阻塞发现；任务要求核验 Intent（verify_intent）时 pass 必须附逐项意图核验声明，意图未满足应给出阻塞发现；任务输入携带 directives 时必须逐条声明核验结果（directives）；每个未满足的要求或意图维度必须至少有一条阻塞发现通过 directive_id / intent 链接到它，用户据此裁决；blocked 必须给出阻塞发现", `{"type":"object","properties":{"status":{"type":"string","enum":["pass","blocked"]},"chapter_ids":{"type":"array","items":{"type":"string"},"minItems":1},"review_key":{"type":"string","minLength":1},"intent":{"type":"object","properties":{"required_present":{"type":"boolean"},"forbidden_absent":{"type":"boolean"},"ending_consistent":{"type":"boolean"}},"required":["required_present","forbidden_absent","ending_consistent"],"additionalProperties":false},"directives":{"type":"array","items":{"type":"object","properties":{"directive_id":{"type":"string"},"satisfied":{"type":"boolean"},"note":{"type":"string"}},"required":["directive_id","satisfied"],"additionalProperties":false}},"findings":{"type":"array","items":{"type":"object","properties":{"chapter_id":{"type":"string"},"severity":{"type":"string","enum":["blocking","note"]},"note":{"type":"string"},"directive_id":{"type":"string"},"intent":{"type":"string","enum":["required_present","forbidden_absent","ending_consistent"]}},"required":["chapter_id","severity","note"],"additionalProperties":false}}},"required":["status","chapter_ids","review_key","findings"],"additionalProperties":false}`),
+					tool(ToolVerdictSubmit, "以 review_key + review_version 引用已保存的审阅记录，不要重复传 findings；提交覆盖请求范围的结构化裁定（D30）：pass 表示无阻塞发现；任务要求核验 Intent（verify_intent）时 pass 必须附逐项意图核验声明，意图未满足应给出阻塞发现；任务输入携带 directives 时必须逐条声明核验结果（directives）；每个未满足的要求或意图维度必须至少有一条阻塞发现通过 directive_id / intent 链接到它，用户据此裁决；blocked 必须给出阻塞发现", `{"type":"object","properties":{"status":{"type":"string","enum":["pass","blocked"]},"chapter_ids":{"type":"array","items":{"type":"string"},"minItems":1},"review_key":{"type":"string","minLength":1},"review_version":{"type":"integer","minimum":1},"intent":{"type":"object","properties":{"required_present":{"type":"boolean"},"forbidden_absent":{"type":"boolean"},"ending_consistent":{"type":"boolean"}},"required":["required_present","forbidden_absent","ending_consistent"],"additionalProperties":false},"directives":{"type":"array","items":{"type":"object","properties":{"directive_id":{"type":"string"},"satisfied":{"type":"boolean"},"note":{"type":"string"}},"required":["directive_id","satisfied"],"additionalProperties":false}},"findings":{"type":"array","items":{"type":"object","properties":{"chapter_id":{"type":"string"},"severity":{"type":"string","enum":["blocking","note"]},"note":{"type":"string"},"directive_id":{"type":"string"},"intent":{"type":"string","enum":["required_present","forbidden_absent","ending_consistent"]}},"required":["chapter_id","severity","note"],"additionalProperties":false}}},"required":["status","chapter_ids","review_key","review_version"],"additionalProperties":false}`),
 				},
 				InputContract: json.RawMessage(`{"type":"object","required":["chapter_ids"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["verdict"]}`),
 				StopCondition: "已提交覆盖请求范围的结构化裁定（verdict_submit），或返回明确错误",
@@ -171,8 +171,8 @@ func writerTools() []ToolSchema {
 // 结构体的 json 标签逐字段一致。
 const patchesSchema = `{
 	"type": "array",
-	"minItems": 1,
-	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；entity: {id,kind,name,aliases}，kind 取 character/location/item/organization，角色、地点、物品、组织都是实体；manuscript: {id,plan_node_id,number,title,author,blocks:[{id,text}]}，author 固定为 ai；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id,effective_chapter_id}，subject_id 必须是已存在或同一 Proposal 中新建的 entity 的 id，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，更新已有事实必须沿用原 id 并携带与上一版本逐字一致的 old_value，不得为同一事实另起新 id，新事实不得带 old_value；随正文提交时 source_chapter_id 必须是本次提交的正文章节，重写章节必须重申报该章全部既有事实（原样确认、更新或删除），event 类事实跨章只追加、不得改动其他章的事件；effective_chapter_id 是状态类事实在故事中的生效章节，只在插叙/回忆时填写、缺省等于来源章，状态的生效位置不得早于现值，倒叙内容记为 event；intent: 完整 Intent 文档。",
+	"minItems": 0,
+	"description": "文档补丁列表。content 的形状由 document.kind 决定，禁止未列出的字段——plan: {id,kind,parent_id,order,title,summary}，kind 取 volume/arc/chapter/beat，volume 必须省略 parent_id、其余必填，document.id 必须等于 content.id，每个计划节点单独一个 patch，章节目标数按 kind=chapter 的节点个数统计；entity: {id,kind,name,aliases}，kind 取 character/location/item/organization，角色、地点、物品、组织都是实体；manuscript: {id,plan_node_id,number,title,author,blocks:[{id,text}]}，author 固定为 ai；canon: {id,kind,subject_id,predicate,new_value,old_value,source_chapter_id,effective_chapter_id}，subject_id 必须是已存在或同一 Proposal 中新建的 entity 的 id，kind 取 event/state/relationship/world_rule/foreshadow，predicate 必须落在对应受控前缀（event./state./relation./rule./foreshadow.）内，更新已有事实沿用原 id 并省略 old_value，宿主从冻结任务基线补齐；显式提供的 old_value 仍须逐字精确匹配，包括标点。不得为同一事实另起新 id，新事实不得带 old_value；随正文提交时 source_chapter_id 必须是本次提交的正文章节，重写章节必须重申报该章全部既有事实（不变的事实通过顶层 confirm_canon 按 ID 确认，其余更新或删除），event 类事实跨章只追加、不得改动其他章的事件；effective_chapter_id 是状态类事实在故事中的生效章节，只在插叙/回忆时填写、缺省等于来源章，状态的生效位置不得早于现值，倒叙内容记为 event；intent: 完整 Intent 文档。",
 	"items": {
 		"type": "object",
 		"properties": {
@@ -196,10 +196,11 @@ const patchesSchema = `{
 func proposalTool(extraRequired []string) ToolSchema {
 	required := append([]string{"reason", "patches"}, extraRequired...)
 	properties := map[string]any{
-		"reason":  map[string]any{"type": "string"},
-		"patches": json.RawMessage(patchesSchema),
+		"reason":        map[string]any{"type": "string"},
+		"patches":       json.RawMessage(patchesSchema),
+		"confirm_canon": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}, "uniqueItems": true, "description": "明确确认不变的既有事实 ID；宿主从任务基线复制原值，与 patches 中的事实不得重复。"},
 	}
-	description := `把最终候选提交为 Proposal，不直接修改权威状态。规划类提交每个计划节点一个 plan patch。`
+	description := `把最终候选提交为 Proposal，不直接修改权威状态。规划类提交每个计划节点一个 plan patch。更新既有 canon 时省略 old_value，由宿主从冻结任务基线补齐；若显式提供则必须精确匹配（包括标点）。未改变的事实用 confirm_canon:["事实ID"] 确认，宿主复制基线原文，无需重抄；不要同时在 patches 重复这些事实。`
 	for _, field := range extraRequired {
 		switch field {
 		case "workspace_key":

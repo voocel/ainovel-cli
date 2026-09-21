@@ -329,22 +329,22 @@ func workbenchNextStep(snapshot WorkbenchSnapshot) string {
 	}
 	if snapshot.Decision != nil {
 		if snapshot.Decision.HasProposal {
-			return "有稿件等你验收：按 y 确认通过，或输入修改意见让它重写。"
+			return "有稿件待验收。进入 F3 审阅后，输入 y 回车通过，或提交修改意见。"
 		}
 		return "创作在等你的决定：" + snapshot.Decision.Reason
 	}
 	if snapshot.Run == nil {
-		return "这本书还没开始创作。按 c 开始：先拟故事蓝图，再逐章写作与审阅。"
+		return "输入 /continue 回车开始创作。"
 	}
 	switch snapshot.Run.State {
 	case model.RunFailed:
-		return "上一轮创作没能完成。按 d 看原始诊断，按 c 重试继续。"
+		return "输入 /diag 查看诊断，/continue 重试。"
 	case model.RunCancelled:
-		return "上一轮创作已取消。按 c 开启新一轮，从现有内容继续。"
+		return "创作已取消。输入 /continue 从现有内容继续。"
 	case model.RunCompleted:
-		return "全书已完成。想继续写：按 g 提高目标章数，再按 c 继续。"
+		return "续写：/goal <总章数>，回车即继续。"
 	case model.RunPaused:
-		return "创作已暂停。按 c 继续。"
+		return "创作已暂停。输入 /continue 回车继续。"
 	}
 	return ""
 }

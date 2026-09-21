@@ -85,7 +85,7 @@ func TestStudioCommandPaletteAndEsc(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	l := m.benchLayout()
 	view := ansi.Strip(typeText(t, m, "/").View())
-	for _, want := range []string{"命令 · 回车执行", "/pause", "暂停推进", "还有 11 个"} {
+	for _, want := range []string{"命令 · 回车执行", "/pause", "暂停推进", "还有 12 个"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("overlay missing %q:\n%s", want, view)
 		}
@@ -172,7 +172,7 @@ func TestStudioColumnsMatchLayout(t *testing.T) {
 				t.Fatalf("%v row %d: inspector separator misplaced", size, y)
 			}
 		}
-		if !strings.HasPrefix(lines[l.bodyY], "概览 ─") || !strings.HasPrefix(lines[l.outlineTitleY], "▎大纲 ─") || !strings.HasPrefix(strings.TrimSpace(ansi.Cut(lines[l.detailY], l.inspectorX, l.width)), "本章 ─") || !strings.HasPrefix(strings.TrimSpace(ansi.Cut(lines[l.detailY+1], l.inspectorX, l.width)), "第 4 章") {
+		if !strings.HasPrefix(lines[l.bodyY], "概览 ─") || !strings.HasPrefix(lines[l.outlineTitleY], "▎大纲 ─") || !strings.Contains(strings.Join(m.teamFrame(l.inspectorWidth-2, l.bodyHeight).lines, "\n"), "第 4 章") {
 			t.Fatalf("%v left column misplaced:\n%s", size, strings.Join(lines[l.bodyY:l.footerY], "\n"))
 		}
 		main := func(y int) string { return strings.TrimSpace(ansi.Cut(lines[y], l.mainX, l.inspectorX-1)) }
@@ -271,7 +271,7 @@ func TestStudioDetailSummaryAndFullReport(t *testing.T) {
 	m.bench.snap.Manuscript = []domainmodel.ManuscriptChapter{{ID: "ch-4", Number: 4, Title: "门后的声音"}}
 	m.bench.snap.Findings = []workbench.WorkbenchFinding{{ID: "r/0", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "ch-4", Severity: domainmodel.FindingBlocking, Note: "门后的人身份前后矛盾"}}}
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"第 4 章 · 进行中", "事实 0 · 发现 1", "! 门后的人身份前后矛盾"} {
+	for _, want := range []string{"第 4 章 · 进行中", "需要留意", "! 门后的人身份前后矛盾"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("summary missing %q:\n%s", want, view)
 		}

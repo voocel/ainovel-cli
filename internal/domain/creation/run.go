@@ -272,7 +272,7 @@ func (s *Coordinator) failRun(
 // autoReopenBudget 是执行失败的会话级重开策略（D56）：一个 Operation 最多自动重开
 // 这么多次。重开走 ensureChainedOperation 的 Resume/后继路径，对话、工作区与失败
 // 原因全部带回给模型；用尽落 waiting_user，用户续跑再授予一次尝试，绝不无限重跑。
-// 它不与 provider 的调用级重试叠加：那是单次调用的事，这里处理的是已结束的会话。
+// 结果未知与提交受阻不自动重开；provider 的调用级重试不在此计数。
 const autoReopenBudget = 3
 
 // reopenOrWait 决定失败任务的去向：预算内返回 reopen=true 让驱动循环下一轮重开；
@@ -285,6 +285,12 @@ func (s *Coordinator) reopenOrWait(
 	operation model.Operation,
 	at time.Time,
 ) (Outcome, bool, error) {
+	if operation.FailureCode == model.FailureSubmissionBlocked || operation.FailureCode == model.FailureResultUnknown {
+		reason := fmt.Sprintf("%s：%s。已停止自动重试并保留工作区，请处理原因后显式续跑；可展开 %s 的事件记录查看原始诊断",
+			work.Reasons.Failure, operation.Error, operation.ID)
+		settled, err := s.settleRun(ctx, run, model.RunWaitingUser, reason, 0, at)
+		return Outcome{Run: settled, Revision: revision}, false, err
+	}
 	if operation.Attempt <= autoReopenBudget {
 		return Outcome{}, true, nil
 	}

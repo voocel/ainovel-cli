@@ -48,7 +48,7 @@ func TestInspectorLimitsLongContext(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	m.bench.snap.Directives = []domainmodel.Directive{{Scope: "project", Text: strings.Repeat("必须保留人物动机。", 100), Status: domainmodel.DirectiveActive}}
 	lines := m.detailSummary(30, 15)
-	if len(lines) > 15 || !strings.Contains(strings.Join(lines, "\n"), "尚有内容未展开") {
+	if len(lines) > 15 || !strings.Contains(strings.Join(lines, "\n"), "…") {
 		t.Fatal("long context must stay bounded with a visible omission hint")
 	}
 }

@@ -172,6 +172,7 @@ func (r *Runtime) toolExecutor(
 			var args struct {
 				Reason            string           `json:"reason"`
 				Patches           []model.Patch    `json:"patches"`
+				ConfirmCanon      []string         `json:"confirm_canon"`
 				WorkspaceKey      string           `json:"workspace_key"`
 				WorkspaceKeys     []string         `json:"workspace_keys"`
 				WorkspaceVersion  *int64           `json:"workspace_version"`
@@ -202,6 +203,11 @@ func (r *Runtime) toolExecutor(
 					return nil, err
 				}
 			}
+			patches, err := r.materializeCanon(ctx, operation, args.Patches, args.ConfirmCanon)
+			if err != nil {
+				return nil, err
+			}
+			args.Patches = patches
 			if err := r.validateSubmissionArtifact(ctx, operation, workspaceKeys, args.ReviewKey, args.Patches); err != nil {
 				return nil, err
 			}
@@ -223,7 +229,7 @@ func (r *Runtime) toolExecutor(
 			if err := r.changes.Validate(ctx, proposal); err != nil {
 				return nil, err
 			}
-			proposal, err := submit(proposal)
+			proposal, err = submit(proposal)
 			if err != nil {
 				return nil, err
 			}
@@ -234,12 +240,13 @@ func (r *Runtime) toolExecutor(
 	case prompt.ToolVerdictSubmit:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Status     string                        `json:"status"`
-				ChapterIDs []string                      `json:"chapter_ids"`
-				ReviewKey  string                        `json:"review_key"`
-				Intent     *model.IntentVerification     `json:"intent"`
-				Directives []model.DirectiveVerification `json:"directives"`
-				Findings   []model.ReviewFinding         `json:"findings"`
+				Status        string                        `json:"status"`
+				ChapterIDs    []string                      `json:"chapter_ids"`
+				ReviewKey     string                        `json:"review_key"`
+				ReviewVersion *int64                        `json:"review_version"`
+				Intent        *model.IntentVerification     `json:"intent"`
+				Directives    []model.DirectiveVerification `json:"directives"`
+				Findings      []model.ReviewFinding         `json:"findings"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
@@ -255,10 +262,10 @@ func (r *Runtime) toolExecutor(
 				ChapterIDs: args.ChapterIDs, ReviewKey: args.ReviewKey, Basis: input.Basis.Normalize(),
 				Intent: args.Intent, Directives: args.Directives, Findings: args.Findings,
 			}
-			if err := model.ValidateReviewVerdictForOperation(operation, verdict); err != nil {
+			if err := r.materializeReviewArtifact(ctx, operation, &verdict, args.ReviewVersion); err != nil {
 				return nil, err
 			}
-			if err := r.validateReviewArtifact(ctx, operation, verdict); err != nil {
+			if err := model.ValidateReviewVerdictForOperation(operation, verdict); err != nil {
 				return nil, err
 			}
 			verdict, err = submitVerdict(verdict)
@@ -274,10 +281,11 @@ func (r *Runtime) toolExecutor(
 	}
 }
 
-func (r *Runtime) validateReviewArtifact(
+func (r *Runtime) materializeReviewArtifact(
 	ctx context.Context,
 	operation model.Operation,
-	verdict model.ReviewVerdict,
+	verdict *model.ReviewVerdict,
+	version *int64,
 ) error {
 	artifact, err := r.store.GetWorkspaceArtifact(ctx, operation.ID, verdict.ReviewKey)
 	if err != nil {
@@ -286,9 +294,17 @@ func (r *Runtime) validateReviewArtifact(
 	if artifact.MediaType != model.ReviewArtifactMediaType {
 		return fmt.Errorf("workspace artifact %q is not a review record: %w", verdict.ReviewKey, model.ErrInvalid)
 	}
+	if version != nil && (*version <= 0 || *version != artifact.Version) {
+		return fmt.Errorf("review artifact %q version mismatch: requested %d, current %d: %w", verdict.ReviewKey, *version, artifact.Version, model.ErrStateConflict)
+	}
 	var findings []model.ReviewFinding
 	if err := decodeToolArgs(artifact.Content, &findings); err != nil {
 		return fmt.Errorf("decode verdict review artifact %q: %w", verdict.ReviewKey, err)
+	}
+	// 新协议引用确定版本；旧快照仍按原协议逐字验证，不能静默覆盖显式发现。
+	if version != nil && verdict.Findings == nil {
+		verdict.Findings = findings
+		return nil
 	}
 	stored, err := json.Marshal(findings)
 	if err != nil {

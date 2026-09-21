@@ -2,15 +2,20 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
 
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
 // Review context follows the proposal, independently of the outline selection.
 func (m model) detailSummary(width, rows int) []string {
+	return m.detailFrame(width, rows).lines
+}
+
+func (m model) detailFrame(width, rows int) inspectorFrame {
 	snap := m.bench.snap
 	number := m.selectedChapterNumber()
 	review := m.bench.content == contentReview && m.bench.decision != nil && m.bench.decision.hasProposal
@@ -18,7 +23,7 @@ func (m model) detailSummary(width, rows int) []string {
 	if review {
 		chapters, err := m.reviewChapters()
 		if err != nil {
-			return contextLines("读取异常", err.Error(), width)
+			return inspectorFrame{lines: inspectorLimit(contextLines("读取异常", err.Error(), width), rows)}
 		}
 		number = 0
 		if len(chapters) == 1 {
@@ -28,13 +33,13 @@ func (m model) detailSummary(width, rows int) []string {
 	}
 	if number == 0 {
 		if review {
-			return inspectorLimit(append([]string{sectionTitle("本次变更", width, false)}, changes...), rows)
+			return inspectorFrame{lines: inspectorLimit(append([]string{sectionTitle("本次变更", width, false)}, changes...), rows)}
 		}
 		lines := []string{sectionTitle("作品", width, false), fmt.Sprintf("目标 %d 章 · 已入稿 %d 章", m.currentTarget(), len(snap.Manuscript))}
 		if snap.Intent.EndingDirection != "" {
 			lines = append(lines, contextLines("结局方向", snap.Intent.EndingDirection, width)...)
 		}
-		return inspectorLimit(lines, rows)
+		return inspectorFrame{lines: inspectorLimit(lines, rows)}
 	}
 	state, chapterID := "已规划", ""
 	var selected domainmodel.PlanNode
@@ -53,14 +58,17 @@ func (m model) detailSummary(width, rows int) []string {
 	if review {
 		state = "候选待确认"
 	}
-	var requirements, findings, facts []string
+	var requirements, findings, fullFindings []string
+	findingCount, requirementCount := 0, 0
 	target := domainmodel.DirectiveTarget{ChapterNumber: number, PlanNodeIDs: domainmodel.PlanAncestry(plan, selected.ID)}
 	for _, directive := range snap.Directives {
 		if directive.Covers(target) {
-			requirements = append(requirements, contextLines("["+m.directiveScopeLabel(directive.Scope)+"]", directive.Text, width)...)
+			requirementCount++
+			if requirementCount <= 2 {
+				requirements = append(requirements, inspectorExcerpt("["+m.directiveScopeLabel(directive.Scope)+"] "+directive.Text, width-2, 2)...)
+			}
 		}
 	}
-	findingCount, factCount := 0, 0
 	for _, finding := range snap.Findings {
 		if chapterID != "" && finding.ChapterID == chapterID {
 			findingCount++
@@ -68,34 +76,68 @@ func (m model) detailSummary(width, rows int) []string {
 			if finding.Severity == domainmodel.FindingBlocking {
 				marker = "!"
 			}
-			findings = append(findings, contextLines(marker, finding.Note, width)...)
-		}
-	}
-	for _, fact := range snap.Canon {
-		if chapterID != "" && fact.SourceChapterID == chapterID {
-			factCount++
-			label := "·"
-			if slices.Contains(snap.PendingCanon, fact.ID) {
-				label = "待核验"
+			fullFindings = append(fullFindings, marker+" "+finding.Note)
+			if findingCount <= 2 {
+				findings = append(findings, inspectorExcerpt(marker+" "+finding.Note, width-2, 2)...)
 			}
-			facts = append(facts, contextLines(label, factLabel(fact.Value), width)...)
 		}
 	}
-	lines := []string{sectionTitle("本章", width, false), styleTitle.Render(fmt.Sprintf("第 %d 章", number)) + benchTheme.Muted.Render(" · "+state), benchTheme.Muted.Render(fmt.Sprintf("事实 %d · 发现 %d", factCount, findingCount))}
+	lines := []string{benchTheme.Title.Render("本章"), styleTitle.Render(fmt.Sprintf("第 %d 章", number)) + benchTheme.Muted.Render(" · "+state)}
+	var hits []inspectorHit
+	link := func(label, detail string) {
+		label = fitLine(label, width-2)
+		hits = append(hits, inspectorHit{start: len(lines), end: len(lines) + 1, x: 2, width: lipgloss.Width(label), detail: detail})
+		lines = append(lines, "  "+benchTheme.Accent.Render(label))
+	}
 	add := func(title string, content []string, limit int) {
 		if len(content) > 0 {
-			lines = append(lines, sectionTitle(title, width, false))
-			lines = append(lines, inspectorLimit(content, limit)...)
+			heading := benchTheme.Muted.Render(title)
+			if strings.HasPrefix(title, "需要留意") {
+				heading = benchTheme.Warning.Render(title)
+			}
+			lines = append(lines, "", heading)
+			for _, line := range inspectorLimit(content, limit) {
+				style := benchTheme.Text
+				if title == "本章目标" {
+					style = benchTheme.Muted
+				}
+				lines = append(lines, "  "+style.Render(line))
+			}
 		}
 	}
-	add("本次变更", changes, 5)
-	add("待解决问题", findings, 4)
-	add("生效要求", requirements, 6)
-	if selected.Summary != "" {
-		add("本章目标", contextLines("", selected.Summary, width), 4)
+	add("本次变更", changes, 7)
+	if findingCount > 0 {
+		add(fmt.Sprintf("需要留意 · %d 项", findingCount), findings, 4)
+		link("查看完整问题 →", fmt.Sprintf("第 %d 章 · 完整问题\n\n", number)+strings.Join(fullFindings, "\n\n"))
 	}
-	add("本章事实", facts, 4)
-	return inspectorLimit(lines, rows)
+	if requirementCount > 0 {
+		add(fmt.Sprintf("你的要求 · %d 项生效", requirementCount), requirements, 4)
+	}
+	if selected.Summary != "" {
+		add("本章目标", inspectorExcerpt(selected.Summary, width-2, 4), 4)
+		link("查看完整目标 →", fmt.Sprintf("第 %d 章 · 本章目标\n\n", number)+selected.Summary)
+	}
+	visible := len(lines)
+	if visible > rows {
+		visible = max(0, rows-1) // The final row becomes the omission hint, not an action.
+	}
+	frame := inspectorFrame{lines: inspectorLimit(lines, rows)}
+	for _, hit := range hits {
+		if hit.start < visible {
+			frame.hits = append(frame.hits, hit)
+		}
+	}
+	return frame
+}
+
+// Excerpts preserve source wording; deeper reading belongs in the full-screen view.
+func inspectorExcerpt(text string, width, limit int) []string {
+	lines := readingLines(text, max(1, width))
+	if len(lines) > limit {
+		lines = lines[:limit]
+		lines[limit-1] = strings.TrimSuffix(truncate(lines[limit-1], max(1, width-1)), "…") + "…"
+	}
+	return lines
 }
 
 func inspectorLimit(lines []string, limit int) []string {

@@ -93,3 +93,59 @@ func TestEmptyOutlineDoesNotDisableOutputPaging(t *testing.T) {
 		t.Fatal("pre-outline output cannot be paged")
 	}
 }
+
+func TestOutputKeepsAllChaptersAndOnlyThreeTabs(t *testing.T) {
+	m := studioModel(t, 150, 40)
+	m.bench.snap.Manuscript = []domainmodel.ManuscriptChapter{{ID: "chapter-one", Number: 1}, {ID: "chapter-two", Number: 2}}
+	m.bench.activity.Output = []activity.OutputBlock{
+		{ID: 1, Scope: activity.Scope{ChapterNumber: 1}, Text: []byte("第一章")},
+		{ID: 2, Scope: activity.Scope{ChapterNumber: 2}, Text: []byte("第二章")},
+		{ID: 3, Scope: activity.Scope{ChapterIDs: []string{"chapter-one", "chapter-two"}}, Text: []byte("跨章审阅")},
+		{ID: 4, Text: []byte("没有章节归属")},
+	}
+	m.selectOutline(0)
+	m.switchContent(contentOutput)
+	blocks, _ := m.outputBlocks()
+	if len(blocks) != 4 {
+		t.Fatalf("chapter selection filtered output: %+v", blocks)
+	}
+	m.bench.outputFrozen, m.bench.outputHeld = true, blocks
+	m.selectOutline(1)
+	m.switchContent(contentOutput)
+	blocks, _ = m.outputBlocks()
+	if !m.bench.outputFrozen || len(blocks) != 4 {
+		t.Fatal("chapter selection changed frozen output")
+	}
+	m, _ = submit(t, m, "/follow")
+	if m.bench.outputFrozen || m.bench.pinned {
+		t.Fatal("follow did not restore live output")
+	}
+	l := m.benchLayout()
+	m = clickBench(m, l.mainX+1+len(contentLabels)*contentTabWidth+2, l.contentY)
+	m, _ = press(t, m, tea.KeyF4)
+	blocks, _ = m.outputBlocks()
+	if m.bench.content != contentOutput || len(blocks) != 4 {
+		t.Fatal("removed controls still affect output")
+	}
+	tabs := m.contentTabs(100)
+	for _, label := range []string{"F1 实时输出", "F2 正文", "F3 审阅"} {
+		if !strings.Contains(tabs, label) {
+			t.Fatalf("missing tab %q", label)
+		}
+	}
+	for _, label := range []string{"F4", "当前章节", "本轮全部"} {
+		if strings.Contains(tabs, label) {
+			t.Fatalf("removed control remains: %q", label)
+		}
+	}
+}
+
+func TestManuscriptUsesAvailableColumnWidth(t *testing.T) {
+	m := studioModel(t, 240, 50)
+	m.bench.snap.Manuscript = []domainmodel.ManuscriptChapter{{Number: 1, Blocks: []domainmodel.ManuscriptBlock{{Text: strings.Repeat("正文", 100)}}}}
+	m.selectOutline(0)
+	lines := m.prosePanel(140, 10)
+	if lipgloss.Width(lines[3]) <= 96 {
+		t.Fatal("manuscript still uses the old narrow measure")
+	}
+}

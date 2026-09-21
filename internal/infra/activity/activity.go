@@ -56,6 +56,8 @@ type Event struct {
 	RunID       string
 	OperationID string
 	TaskLabel   string // 面向用户的任务名称，不参与执行语义。
+	TaskKind    string // Validated operation kind, used to identify the executing role.
+	Scope       Scope
 	Kind        Kind
 	Tool        string // ToolStart/ToolEnd/ToolDelta：规范工具名
 	CallID      string // 同一次工具调用的配对键：delta 与执行起止靠它对上
@@ -214,9 +216,13 @@ func (h *Hub) Snapshot(projectID string) (Snapshot, bool) {
 	copied := *snapshot
 	copied.Entries = append([]Entry(nil), snapshot.Entries...)
 	copied.Tasks = append([]Task(nil), snapshot.Tasks...)
+	for i := range copied.Tasks {
+		copied.Tasks[i].Scope = copied.Tasks[i].Scope.clone()
+	}
 	copied.Prose = append([]byte(nil), snapshot.Prose...)
 	copied.Output = append([]OutputBlock(nil), snapshot.Output...)
 	for i := range copied.Output {
+		copied.Output[i].Scope = copied.Output[i].Scope.clone()
 		copied.Output[i].Text = append([]byte(nil), snapshot.Output[i].Text...)
 	}
 	return copied, true

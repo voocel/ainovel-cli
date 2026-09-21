@@ -36,6 +36,7 @@ F3 审阅：查看当前待确认方案；输入 y 批准，或写下修改意�
 /export <路径>             导出已确认正文（.txt 或 .epub）
 /stop · /diag              结束本轮、查看诊断
 /<章号或标题> · /next      跳章或搜索、下一个匹配
+/current                   定位正在写作／待确认／最近入稿的章节
 /help                      本页
 
 命令支持唯一前缀；有歧义时保留输入并列出可选命令。
@@ -58,7 +59,6 @@ const (
 	benchFooterRows   = 5
 	benchPad          = 2 // 正文栏左右留白
 	benchOverviewRows = 4 // 概览卡：标题线 + 阶段/字数/全书
-	proseMeasure      = 96
 )
 
 type benchLayout struct {
@@ -69,8 +69,8 @@ type benchLayout struct {
 	// 行：顶栏 3 | 正文区 | 底栏 5。
 	bodyY, bodyHeight, footerY int
 	// 左栏：概览卡（benchOverviewRows）、空行、大纲（标题线、上截断指示、outlineRows 行、
-	// 下截断指示）、本章摘要（标题线起于 detailY）。指示行恒预留，首个大纲行的 y 是常量。
-	outlineTitleY, outlineRowsY, outlineRows, detailY, detailRows int
+	// 下截断指示）。指示行恒预留，首个大纲行的 y 是常量。
+	outlineTitleY, outlineRowsY, outlineRows int
 	// 中栏：执行事件、单行分隔线、内容标签与正文。
 	proseRows, activityY, activityRows int
 	contentY                           int
@@ -90,10 +90,8 @@ func (m model) benchLayout() benchLayout {
 	l.bodyY = benchHeaderRows
 	l.bodyHeight = m.height - benchHeaderRows - benchFooterRows
 	l.footerY = l.bodyY + l.bodyHeight
-	l.detailRows = l.bodyHeight - 10 - m.taskRows()
-	l.detailY = l.bodyY + 10 + m.taskRows()
 	l.outlineTitleY = l.bodyY + benchOverviewRows + 1
-	l.outlineRowsY = l.outlineTitleY + 2
+	l.outlineRowsY = l.outlineTitleY + 3
 	l.outlineRows = l.footerY - l.outlineRowsY - 1
 	percent := m.bench.splitPercent
 	if percent == 0 {
@@ -218,36 +216,12 @@ func (m model) leftColumn(l benchLayout) []string {
 
 // The inspector keeps decision context next to the manuscript, independent of reading focus.
 func (m model) inspectorColumn(l benchLayout) []string {
-	width := l.inspectorWidth - 2
-	lines := []string{sectionTitle("创作控制", width, false)}
-	lines = append(lines, benchTheme.Muted.Render("确认方式  ")+approvalLabel(m.bench.snap.Approval))
-	if m.bench.hasRun() {
-		lines = append(lines, fmt.Sprintf("修订预算  %d 次", m.bench.run().Strategy.AutoRepairBudget))
-	} else {
-		lines = append(lines, "尚未开始本轮创作")
-	}
-	lines = append(lines, "", sectionTitle("待办", width, false))
-	if d := m.bench.decision; d != nil {
-		lines = append(lines, benchTheme.Warning.Render(m.reviewTarget()))
-		lines = append(lines, inspectorLimit(contextLines("", d.reason, width), 2)...)
-		if d.hasProposal {
-			lines = append(lines, benchTheme.Accent.Render("/review 审阅  /note 另提要求"))
-		} else {
-			lines = append(lines, benchTheme.Accent.Render("/continue 继续  /budget 预算"))
-		}
-	} else {
-		lines = append(lines, "暂无待决定事项", fitLine(oneLine(m.bench.snap.NextStep), width))
-	}
-	for len(lines) < 10 {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.taskPanel(width)...)
-	lines = append(lines, m.detailSummary(width, l.detailRows)...)
-	return indentBlock(lines, l.inspectorWidth, l.bodyHeight)
+	frame := m.teamFrame(l.inspectorWidth-2, l.bodyHeight)
+	return indentBlock(frame.lines, l.inspectorWidth, l.bodyHeight)
 }
 
-// mainColumn 正文居中排版，下方是固定高度的活动条；输入命令时命令浮层叠在中栏底部，
-// 只覆盖行内容，不改变任何几何。
+// mainColumn stacks execution events, a divider, tabs and full-width content.
+// Command suggestions overlay the bottom of the content without changing geometry.
 func (m model) mainColumn(l benchLayout) []string {
 	lines := indentBlock(m.activityStrip(l.mainWidth-2, l.activityRows), l.mainWidth, l.activityRows)
 	lines = append(lines, benchRule(l.mainWidth))
@@ -379,7 +353,6 @@ func (m model) chapterProse() (string, string, string) {
 
 // prosePanel 中栏：标题（焦点在正文时带 ▎）、状态、正文；直播时跟随尾部，冻结时停在冻结位。
 func (m model) prosePanel(width, height int) []string {
-	width = min(width, proseMeasure)
 	title, state, text := m.chapterProse()
 	if m.bench.writing {
 		state += " · 创作继续进行中"
@@ -397,7 +370,7 @@ func (m model) prosePanel(width, height int) []string {
 func (m model) scrollProse(delta int) tea.Model {
 	l := m.benchLayout()
 	_, _, text := m.chapterProse()
-	last := max(0, len(m.bench.proseCache.wrap(text, min(l.inner, proseMeasure)))-max(1, l.proseRows-3))
+	last := max(0, len(m.bench.proseCache.wrap(text, l.inner))-max(1, l.proseRows-3))
 	m.bench.previewOffset = min(last, max(0, m.bench.previewOffset+delta))
 	return m
 }
@@ -540,6 +513,8 @@ func (m model) benchActions() []benchAction {
 		if b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
 			actions = append(actions, benchAction{"/p", "暂停推进"})
 		}
+	case b.hasRun() && b.run().State == domainmodel.RunCompleted:
+		actions = append(actions, benchAction{"/goal", "提高目标续写"})
 	default:
 		actions = append(actions, benchAction{"/c", "继续创作"})
 	}

@@ -243,6 +243,18 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("persist previous message: %v", err)
 	}
+	previousReply := agentcore.Message{
+		Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("草稿已保存")},
+		Usage: &agentcore.Usage{Input: 100, Output: 20, TotalTokens: 120}, Timestamp: previous.Timestamp,
+	}
+	payload, _ = json.Marshal(previousReply)
+	if _, err := authorityStore.AppendOperationEvent(ctx, domainmodel.OperationEvent{
+		OperationID: first.ID, StepID: "agent.message", Attempt: first.Attempt,
+		IdempotencyKey: "agent-message:1:2", Kind: "agent.message_committed",
+		Payload: payload, CreatedAt: previousReply.Timestamp,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := authorityStore.TransitionOperation(
 		ctx, first.ID, domainmodel.OperationRunning, domainmodel.OperationFailed, "simulated process failure", now.Add(4*time.Second),
 	); err != nil {
@@ -279,6 +291,9 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	if outcome.Proposal == nil || outcome.Proposal.Patches[0].Document.ID != chapter.ID {
 		t.Fatalf("outcome = %#v", outcome)
 	}
+	if len(model.requests) != 2 {
+		t.Fatalf("successful submission made extra model calls: %d", len(model.requests))
+	}
 	firstRequest := model.Request(0)
 	foundPrevious, foundRecovery, foundFailure := false, false, false
 	for _, message := range firstRequest {
@@ -289,6 +304,25 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	if !foundPrevious || !foundRecovery || !foundFailure {
 		t.Fatalf("restored request missing history, recovery instruction or failure reason: %#v", firstRequest)
 	}
+	events, err := authorityStore.ListOperationEvents(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind != "agent.run_ended" || event.Attempt != second.Attempt {
+			continue
+		}
+		var end struct{ Usage agentcore.Usage }
+		if err := json.Unmarshal(event.Payload, &end); err != nil {
+			t.Fatal(err)
+		}
+		// 当前测试模型没有计费用量，恢复的历史消息不能再计费。
+		if end.Usage.Input != 0 || end.Usage.Output != 0 || end.Usage.TotalTokens != 0 {
+			t.Fatalf("restored usage counted again: %+v", end.Usage)
+		}
+		return
+	}
+	t.Fatal("missing resumed run summary")
 }
 
 func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
@@ -329,31 +363,35 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 		"key": "review/findings", "expected_version": 0, "findings": findings,
 	})
 	incomplete, _ := json.Marshal(map[string]any{
-		"status": "pass", "chapter_ids": []string{"chapter-1"},
+		"review_version": 1,
+		"status":         "pass", "chapter_ids": []string{"chapter-1"},
 		"review_key": "review/findings", "findings": findings,
 	})
 	noIntent, _ := json.Marshal(map[string]any{
-		"status": "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
+		"review_version": 1,
+		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
 		"review_key": "review/findings", "findings": findings,
 	})
 	mismatched, _ := json.Marshal(map[string]any{
-		"status": "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
+		"review_version": 1,
+		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
 		"review_key": "review/findings",
 		"intent":     map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
 		"findings":   []map[string]any{{"chapter_id": "chapter-2", "severity": "note", "note": "与工件不一致"}},
 	})
 	noDirectives, _ := json.Marshal(map[string]any{
-		"status": "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
+		"review_version": 1,
+		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
 		"review_key": "review/findings",
 		"intent":     map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
 		"findings":   findings,
 	})
 	complete, _ := json.Marshal(map[string]any{
 		"status": "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
-		"review_key": "review/findings",
-		"intent":     map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
-		"directives": []map[string]any{{"directive_id": "hook", "satisfied": true}},
-		"findings":   findings,
+		"review_key":     "review/findings",
+		"review_version": 1,
+		"intent":         map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
+		"directives":     []map[string]any{{"directive_id": "hook", "satisfied": true}},
 	})
 	model := &verdictRuntimeModel{
 		review: review, steps: []json.RawMessage{incomplete, noIntent, mismatched, noDirectives, complete},
@@ -384,6 +422,22 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if err != nil || artifact.MediaType != domainmodel.ReviewArtifactMediaType {
 		t.Fatalf("review artifact = %#v, %v", artifact, err)
 	}
+	for _, version := range []int64{0, 2} {
+		candidate := verdict
+		candidate.Findings = nil
+		if err := runtime.materializeReviewArtifact(ctx, operation, &candidate, &version); !errors.Is(err, domainmodel.ErrStateConflict) {
+			t.Fatalf("invalid review version %d accepted: %v", version, err)
+		}
+	}
+	// 已冻结的旧协议仍可提交一致的 findings，不能偷偷改写显式内容。
+	legacy := verdict
+	if err := runtime.materializeReviewArtifact(ctx, operation, &legacy, nil); err != nil {
+		t.Fatalf("legacy review rejected: %v", err)
+	}
+	legacy.Findings = nil
+	if err := runtime.materializeReviewArtifact(ctx, operation, &legacy, nil); !errors.Is(err, domainmodel.ErrInvalid) {
+		t.Fatalf("unversioned omission accepted: %v", err)
+	}
 	// 活动通道（页面设计 §4）：执行过程以带归属的事件发布——四次被拒的提交
 	// 呈现为出错条目（模型自纠可见），最终提交成功收尾。
 	feed, ok := hub.Snapshot("book-review")
@@ -407,8 +461,8 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if rejected != 4 || accepted != 1 {
 		t.Fatalf("verdict_submit activity: rejected=%d accepted=%d entries=%#v", rejected, accepted, feed.Entries)
 	}
-	// 每条 assistant 消息的用量累计进本轮快照（状态行的 token 与费用）：七次模型回应。
-	if feed.Usage.Input != 70 || feed.Usage.Output != 21 || feed.Usage.Cost < 0.069 || feed.Usage.Cost > 0.071 {
+	// 成功提交直接正常收尾，不再请求第七次模型回应。
+	if model.requests != 6 || feed.Usage.Input != 60 || feed.Usage.Output != 18 || feed.Usage.Cost < 0.059 || feed.Usage.Cost > 0.061 {
 		t.Fatalf("usage totals = %#v", feed.Usage)
 	}
 }
@@ -1044,7 +1098,7 @@ func TestRuntimePlanSubmissionEnforcesRequestedChapters(t *testing.T) {
 	if outcome.Proposal == nil || len(outcome.Proposal.Patches) != 3 {
 		t.Fatalf("outcome = %#v, want corrected 3-patch proposal", outcome)
 	}
-	if model.requests < 3 {
+	if model.requests != 2 {
 		t.Fatalf("model requests = %d, want overshoot rejected then corrected resubmission", model.requests)
 	}
 }
@@ -1230,6 +1284,15 @@ func TestWriterSubmissionRequiresRedeclaringChapterFacts(t *testing.T) {
 	confirmed := `{"id":"fact-1","kind":"event","subject_id":"hero","predicate":"event.done","old_value":true,"new_value":true,"source_chapter_id":"chapter-1"}`
 	if err := submit(canon(confirmed), canon(fresh)); err != nil {
 		t.Fatalf("redeclared submission err = %v", err)
+	}
+	// A rewrite can explicitly confirm every existing fact without retyping any
+	// value or duplicating the versioned workspace manuscript.
+	args, _ := json.Marshal(map[string]any{
+		"reason": "确认事实不变", "workspace_key": "chapter/chapter-1", "workspace_version": 1,
+		"patches": []domainmodel.Patch{}, "confirm_canon": []string{"fact-1"},
+	})
+	if _, err := submitTool(ctx, args); err != nil {
+		t.Fatalf("reference draft with confirmed canon: %v", err)
 	}
 	deleted := domainmodel.Patch{Document: domainmodel.DocumentRef{Kind: domainmodel.DocumentCanon, ID: "fact-1"}, Operation: domainmodel.PatchDelete}
 	if err := submit(deleted, canon(fresh)); err != nil {

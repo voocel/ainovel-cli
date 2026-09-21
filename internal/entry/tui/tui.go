@@ -109,6 +109,7 @@ func (m *model) openBench(projectID string) tea.Cmd {
 	if err != nil {
 		m.bench.notice = "界面偏好文件异常，本次不更新偏好：" + err.Error()
 	} else {
+		_, m.bench.directoryInitialized = state.Collapsed[projectID]
 		for _, id := range state.Collapsed[projectID] {
 			m.bench.collapsed[id] = true
 		}

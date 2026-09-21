@@ -34,23 +34,24 @@ const (
 type workbenchState struct {
 	projectID string
 	// gen 是本次打开的代际号：全部异步消息带着它出生，不匹配即丢弃。
-	gen           int
-	refresh       *benchRefresh
-	rowsCache     *outlineCache
-	proseCache    *wrappedText
-	wordCache     *wordCache
-	search        string
-	content       benchContent
-	splitPercent  int
-	outputCache   *outputLayoutCache
-	outputHeld    []activity.OutputBlock
-	outputFrozen  bool
-	outputOffset  int
-	outputDropped uint64
-	reviewOffset  int
-	snap          workbench.WorkbenchSnapshot
-	loaded        bool
-	cursor        int // 大纲可见行索引（含卷/弧头行；快照刷新后按身份重新锚定）
+	gen                  int
+	refresh              *benchRefresh
+	rowsCache            *outlineCache
+	proseCache           *wrappedText
+	wordCache            *wordCache
+	search               string
+	directoryInitialized bool
+	content              benchContent
+	splitPercent         int
+	outputCache          *outputLayoutCache
+	outputHeld           []activity.OutputBlock
+	outputFrozen         bool
+	outputOffset         int
+	outputDropped        uint64
+	reviewOffset         int
+	snap                 workbench.WorkbenchSnapshot
+	loaded               bool
+	cursor               int // 大纲可见行索引（含卷/弧头行；快照刷新后按身份重新锚定）
 	// collapsed 是折叠的卷/弧节点（键 PlanNode.ID）；快照每轮整体替换，
 	// 折叠状态只能活在这里，跨刷新存活。
 	collapsed map[string]bool
@@ -332,13 +333,11 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 		// （首次加载落在第一个章行）。
 		anchorID, anchorChapter := m.selectedRowIdentity()
 		bench.snap, bench.loaded = message.snap, true
+		m.initializeDirectory()
 		bench.cursor = anchorOutlineCursor(m.outlineRows(), anchorID, anchorChapter)
 		if !bench.pinned {
-			for i, row := range m.outlineRows() {
-				if row.isChapter() && (row.node.State == workbench.ChapterInProgress || row.node.State == workbench.ChapterPending) {
-					bench.cursor = i
-					break
-				}
+			if number := m.currentChapter(); number > 0 {
+				m.revealCurrent(number)
 			}
 		}
 		// 恢复落点（页面设计 §4）：快照自带待决定事项，直接重建决定卡。
@@ -604,6 +603,10 @@ type benchCommand struct {
 }
 
 var benchCommands = []benchCommand{
+	{name: "current", label: "定位当前章节", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+		m.returnToCurrentChapter()
+		return m, nil
+	}},
 	{name: "stream", label: "实时输出", run: func(m model, _ string) (tea.Model, tea.Cmd) {
 		m.switchContent(contentOutput)
 		return m, nil
@@ -664,7 +667,7 @@ var benchCommands = []benchCommand{
 	{name: "view", label: "完整详情", run: func(m model, _ string) (tea.Model, tea.Cmd) {
 		return m.openBody(m.detailReport(max(1, m.width-4))), nil
 	}},
-	{name: "goal", usage: "<章数>", label: "目标章数", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
+	{name: "goal", usage: "<章数>", label: "调整总章数并继续", idleOnly: true, run: func(m model, arg string) (tea.Model, tea.Cmd) {
 		chapters, err := strconv.Atoi(arg)
 		if err != nil || chapters <= 0 {
 			m.bench.err = fmt.Sprintf("用法：/goal 章数（当前目标 %d 章）", m.currentTarget())
@@ -822,11 +825,12 @@ func (m model) scrollBenchPane(pane benchPane, delta int) tea.Model {
 }
 
 // toggleFold 折叠/展开一个卷/弧节点，并把偏好随手写进用户级 state.json
-// （布局偏好记忆，M3）；collapsed 是 map 引用，值接收者上的修改对外生效。
+// （布局偏好记忆，M3）；空列表也保存，表示用户明确选择全部展开。
 // 返回保存失败的提示（""=成功）：折叠本身已生效，丢的只是重启后的偏好，
 // 但丢失必须让用户知道而非静默。
-func (m model) toggleFold(id string) string {
-	bench := m.bench
+func (m *model) toggleFold(id string) string {
+	bench := &m.bench
+	bench.directoryInitialized = true
 	if bench.collapsed[id] {
 		delete(bench.collapsed, id)
 	} else {
@@ -845,11 +849,7 @@ func (m model) toggleFold(id string) string {
 		ids = append(ids, nodeID)
 	}
 	sort.Strings(ids)
-	if len(ids) == 0 {
-		delete(state.Collapsed, bench.projectID)
-	} else {
-		state.Collapsed[bench.projectID] = ids
-	}
+	state.Collapsed[bench.projectID] = ids
 	if err := appconfig.SaveState(m.deps.ConfigDir, state); err != nil {
 		return "折叠已生效，但布局偏好保存失败：" + err.Error()
 	}
@@ -880,8 +880,28 @@ func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.scrollBenchPane(l.paneAt(mouse.X, mouse.Y), delta), nil
 	case mouse.Action == tea.MouseActionPress && mouse.Button == tea.MouseButtonLeft:
+		if mouse.Y == l.outlineTitleY+1 && mouse.X < l.leftWidth {
+			if mouse.X >= 1 && mouse.X < 1+lipgloss.Width(directorySearchLabel) {
+				if bench.input.Value() != "" {
+					bench.notice = "请先提交或清空当前输入"
+				} else {
+					bench.input.SetValue("/")
+					bench.notice = "输入 /章号 或 /标题，回车定位；/next 下一个匹配"
+				}
+			} else if mouse.X >= l.leftWidth-1-lipgloss.Width(directoryCurrentLabel) && mouse.X < l.leftWidth-1 {
+				m.returnToCurrentChapter()
+			}
+			return m, nil
+		}
 		if mouse.X >= l.mainX && mouse.X < l.inspectorX-1 && l.inBody(mouse.Y) {
 			bench.pane = l.paneAt(mouse.X, mouse.Y)
+			if mouse.Y > l.activityY && mouse.Y < l.contentY-1 {
+				rows := m.activityRows(l.mainWidth-2, max(1, l.activityRows-2))
+				index := mouse.Y - l.activityY - 1
+				if index < len(rows) && rows[index].operationID != "" {
+					return m.openOperationDiagnostics(rows[index].operationID)
+				}
+			}
 			if mouse.Y == l.contentY && mouse.X >= l.mainX+1 {
 				index := (mouse.X - l.mainX - 1) / contentTabWidth
 				if index < len(contentLabels) {
@@ -891,15 +911,21 @@ func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if mouse.X >= l.inspectorX && l.inBody(mouse.Y) {
-			start := l.bodyY + 11
-			tasks := m.visibleTasks()
-			if mouse.Y >= start && mouse.Y < start+2*len(tasks) {
-				m.inspectTask(tasks[(mouse.Y-start)/2])
-				return m, nil
-			}
-			if mouse.Y >= l.bodyY+4 && mouse.Y < l.bodyY+8 && bench.decision != nil {
-				m.switchContent(contentReview)
-				return m, nil
+			frame := m.teamFrame(l.inspectorWidth-2, l.bodyHeight)
+			for _, hit := range frame.hits {
+				if x := mouse.X - l.inspectorX - 1; hit.width > 0 && (x < hit.x || x >= hit.x+hit.width) {
+					continue
+				}
+				if y := mouse.Y - l.bodyY; y >= hit.start && y < hit.end {
+					if hit.review {
+						m.switchContent(contentReview)
+					} else if hit.detail != "" {
+						return m.openBody(hit.detail), nil
+					} else {
+						m.inspectTask(hit.task)
+					}
+					return m, nil
+				}
 			}
 		}
 		if mouse.Y == l.footerY+3 && mouse.X < l.width-1 {
@@ -908,7 +934,11 @@ func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 					bench.notice = "输入框中有未提交内容，请先提交或清空"
 					return m, nil
 				}
-				bench.input.SetValue(action.key)
+				command := action.key
+				if action.key == "/goal" {
+					command += " "
+				}
+				bench.input.SetValue(command)
 				bench.inputScope, bench.inputLabel = m.directiveScope()
 				return m, nil
 			}
@@ -1147,6 +1177,7 @@ type outlineRow struct {
 	collapsed   bool // 头行且已折叠
 	chapters    int  // 折叠头行统计：子树章节数
 	pending     int  // 子树待确认（◐）章数
+	confirmed   int
 }
 
 func (r outlineRow) isChapter() bool { return r.node.Node.Kind == domainmodel.PlanChapter }
@@ -1168,7 +1199,7 @@ func outlineDepth(kind domainmodel.PlanNodeKind) (int, bool) {
 	}
 }
 
-type outlineNodeStats struct{ chapters, pending int }
+type outlineNodeStats struct{ chapters, pending, confirmed int }
 
 // outlineStats 统计每个卷/弧子树的章节数与待确认数（折叠头行的摘要）。
 func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
@@ -1183,6 +1214,9 @@ func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
 			for _, id := range ancestors {
 				s := stats[id]
 				s.chapters++
+				if entry.State == workbench.ChapterConfirmed {
+					s.confirmed++
+				}
 				if entry.State == workbench.ChapterPending {
 					s.pending++
 				}
@@ -1199,11 +1233,12 @@ func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
 // 整棵子树），末尾补未规划占位。行结构与宽度无关，导航/锚定/渲染共用。
 func (m model) buildOutlineRows() []outlineRow {
 	bench := m.bench
-	stats := outlineStats(bench.snap.Outline)
+	entries := m.directoryEntries()
+	stats := outlineStats(entries)
 	var rows []outlineRow
 	skipDepth := -1
 	ancestors := make(map[int]string)
-	for _, entry := range bench.snap.Outline {
+	for _, entry := range entries {
 		depth, ok := outlineDepth(entry.Node.Kind)
 		if !ok {
 			continue
@@ -1228,6 +1263,7 @@ func (m model) buildOutlineRows() []outlineRow {
 		row := outlineRow{node: entry, chapter: entry.Number, context: strings.Join(context, " / ")}
 		if depth < 2 {
 			ancestors[depth] = entry.Node.Title
+			row.chapters, row.pending, row.confirmed = stats[entry.Node.ID].chapters, stats[entry.Node.ID].pending, stats[entry.Node.ID].confirmed
 		}
 		if entry.Node.Kind != domainmodel.PlanChapter && bench.collapsed[entry.Node.ID] {
 			row.collapsed = true
@@ -1319,7 +1355,7 @@ func outlineWindow(total, capacity, selected int) (start, end int) {
 }
 
 // viewOutlinePane 渲染大纲树：卷/弧层级（回车折叠/展开）+ 章节徽标（§2 左栏）。
-// 行结构固定：标题、上截断指示（或空行）、outlineRows 行、下截断指示（或空行）。
+// 行结构固定：标题、定位工具栏、上截断指示、可见行、下截断指示或状态图例。
 func (m model) viewOutlinePane(l benchLayout) []string {
 	rows := m.outlineRows()
 	width := l.leftWidth - 1
@@ -1327,21 +1363,23 @@ func (m model) viewOutlinePane(l benchLayout) []string {
 	if m.bench.cursor >= 0 && m.bench.cursor < len(rows) && rows[m.bench.cursor].context != "" {
 		title = "大纲 · " + truncate(rows[m.bench.cursor].context, width-8)
 	}
-	lines := []string{sectionTitle(title, width, m.bench.pane == benchPaneOutline), ""}
+	toolbar := " " + benchTheme.Accent.Render(directorySearchLabel)
+	toolbar += strings.Repeat(" ", max(1, width-1-lipgloss.Width(directorySearchLabel)-lipgloss.Width(directoryCurrentLabel))) + benchTheme.Accent.Render(directoryCurrentLabel)
+	lines := []string{sectionTitle(title, width, m.bench.pane == benchPaneOutline), toolbar, ""}
 	start, end := outlineWindow(len(rows), l.outlineRows, m.bench.cursor)
 	if start > 0 {
-		lines[1] = styleHint.Render(fmt.Sprintf("  ↑ 前面还有 %d 行", start))
+		lines[2] = styleHint.Render(fmt.Sprintf("  ↑ 前面还有 %d 项", start))
 	}
 	for index := start; index < end; index++ {
 		lines = append(lines, m.outlineRowLine(rows[index], index == m.bench.cursor, width))
 	}
-	for len(lines) < 2+l.outlineRows {
+	for len(lines) < 3+l.outlineRows {
 		lines = append(lines, "")
 	}
 	// 下截断指示行恒占位，本章摘要的起始行才是常量。
-	bottom := ""
+	bottom := styleHint.Render("● 入稿  ◐ 待确认  ▸ 写作  ○ 计划")
 	if end < len(rows) {
-		bottom = styleHint.Render(fmt.Sprintf("  ↓ 后面还有 %d 行", len(rows)-end))
+		bottom = styleHint.Render(fmt.Sprintf("  ↓ 后面还有 %d 项", len(rows)-end))
 	}
 	return append(lines, bottom)
 }
@@ -1364,14 +1402,11 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 		if row.node.Node.Kind == domainmodel.PlanArc {
 			style, indent = styleSubtitle, " "
 		}
-		text := indent + fold + truncate(row.node.Node.Title, max(4, width-10))
-		summary, pending := "", ""
-		if row.collapsed {
-			summary = fmt.Sprintf(" · %d 章", row.chapters)
-			if row.pending > 0 {
-				pending = " ◐"
-			}
+		summary, pending := fmt.Sprintf(" %d/%d 章", row.confirmed, row.chapters), ""
+		if row.pending > 0 {
+			pending = " ◐"
 		}
+		text := indent + fold + truncate(row.node.Node.Title, max(1, width-2-lipgloss.Width(indent+fold+summary+pending)))
 		if selected {
 			return benchTheme.Selected.Render(fitLine("▎ "+text+summary+pending, width))
 		}
@@ -1398,11 +1433,17 @@ func (m model) outlineChapterLine(entry workbench.OutlineNode, selected bool, wi
 	case workbench.ChapterInProgress:
 		badge, style = "▸", styleFocus
 	}
-	line := fmt.Sprintf("%s %02d  %s", badge, entry.Number, truncate(entry.Node.Title, max(4, width-9)))
+	digits := max(2, len(strconv.Itoa(m.currentTarget())))
+	label := fmt.Sprintf("%0*d  %s", digits, entry.Number, truncate(entry.Node.Title, max(1, width-digits-6)))
+	line := badge + " " + label
 	if selected {
 		return benchTheme.Selected.Render(fitLine("▎ "+line, width))
 	}
-	return "  " + style.Render(fitLine(line, max(1, width-2)))
+	titleStyle := benchTheme.Text
+	if entry.State == workbench.ChapterPlanned {
+		titleStyle = benchTheme.Muted
+	}
+	return "  " + style.Render(badge) + " " + titleStyle.Render(label)
 }
 
 // toolActivityLabels 是工具名到创作语言的唯一翻译表（页面设计 §3）。
@@ -1439,36 +1480,86 @@ func (m model) activityFeed() (activity.Snapshot, bool) {
 	return feed, true
 }
 
-// activityLines 渲染事件级活动流（页面设计 §3）：一行一事件，带时钟与耗时；
-// 工具参数流只显示已接收数据量，不冒充正文字数；出错与重试可见，让"模型在自纠"
-// 可见而不可怕。跟随滚动（§2）：feedOffset=0 渲染尾部；用户上翻后窗口后移、暂停
-// 跟随，并提示底下还有多少新活动。指示行计入 limit，活动条高度恒定。
+// activityLines packs whole events into the viewport; failures occupy up to two rows.
 func (m model) activityLines(width, limit int) []string {
+	rows := m.activityRows(width, limit)
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, row.text)
+	}
+	return lines
+}
+
+type activityRow struct{ text, operationID string }
+
+func (m model) activityRows(width, limit int) []activityRow {
 	feed, ok := m.activityFeed()
-	if !ok {
+	if !ok || limit < 1 {
 		return nil
 	}
 	offset := min(m.bench.feedOffset, max(0, len(feed.Entries)-1))
 	end := len(feed.Entries) - offset
-	reserve := 0
+	available := limit
 	if offset > 0 {
-		reserve++
+		available--
 	}
-	if end > limit-reserve {
-		reserve++
+	start, used := end, 0
+	var groups [][]activityRow
+	for start > 0 {
+		entry := feed.Entries[start-1]
+		texts := []string{m.activityLine(entry, width)}
+		if entry.Err != "" {
+			label := toolActivityLabel(entry.Tool) + "遇到问题"
+			if entry.Kind == activity.Retry {
+				label = fmt.Sprintf("第 %d 次重试", entry.Attempt)
+			}
+			prefix := "! " + label + " · "
+			if !entry.At.IsZero() {
+				prefix = entry.At.Local().Format("15:04:05") + " " + prefix
+			}
+			elapsed := entryElapsed(entry)
+			wrapped := textLines(prefix+oneLine(entry.Err), max(1, width-lipgloss.Width(elapsed)-1))
+			texts = []string{alignRight(styleWarn.Render(wrapped[0]), benchTheme.Muted.Render(elapsed), width)}
+			rest := ""
+			if len(wrapped) > 1 {
+				rest = strings.Join(wrapped[1:], " ")
+			}
+			hint := "点击查看诊断"
+			texts = append(texts, styleWarn.Render("  "+truncate(rest, max(1, width-lipgloss.Width(hint)-5)))+benchTheme.Muted.Render(" · "+hint))
+		}
+		reserve := 0
+		if start > 1 {
+			reserve = 1
+		}
+		if used+len(texts)+reserve > available && len(groups) > 0 {
+			break
+		}
+		if len(texts)+reserve > available {
+			texts = texts[:min(len(texts), max(0, available-reserve))]
+		}
+		group := make([]activityRow, 0, len(texts))
+		for _, text := range texts {
+			row := activityRow{text: text}
+			if entry.Err != "" {
+				row.operationID = entry.OperationID
+			}
+			group = append(group, row)
+		}
+		groups = append(groups, group)
+		used += len(texts)
+		start--
 	}
-	start := max(0, end-max(1, limit-reserve))
-	var lines []string
+	var rows []activityRow
 	if start > 0 {
-		lines = append(lines, styleHint.Render(fmt.Sprintf("↑ 更早还有 %d 条", start)))
+		rows = append(rows, activityRow{text: styleHint.Render(fmt.Sprintf("↑ 更早还有 %d 条", start))})
 	}
-	for _, entry := range feed.Entries[start:end] {
-		lines = append(lines, m.activityLine(entry, width))
+	for i := len(groups) - 1; i >= 0; i-- {
+		rows = append(rows, groups[i]...)
 	}
 	if offset > 0 {
-		lines = append(lines, styleWarn.Render(fmt.Sprintf("⏸ 已暂停跟随 · 下方还有 %d 条新活动 · ↓ 回到最新", offset)))
+		rows = append(rows, activityRow{text: styleWarn.Render(fmt.Sprintf("⏸ 已暂停跟随 · 下方还有 %d 条新活动 · ↓ 回到最新", offset))})
 	}
-	return lines
+	return rows
 }
 
 // activityLine：时钟 图标 标签 [· 已接收 N]，右端是耗时（完成态取起止差，进行中实时计）。

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/voocel/agentcore"
@@ -26,8 +25,13 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if operation.Snapshot.Executor != r.Identity() {
 		return model.OperationOutcome{}, fmt.Errorf("operation executor %q does not match runtime %q: %w", operation.Snapshot.Executor, r.Identity(), model.ErrStateConflict)
 	}
-	r.publishTask(operation, activity.TaskStart, nil)
-	defer func() { r.publishTask(operation, activity.TaskEnd, resultErr) }()
+	task, err := model.DecodeTaskInput(operation.Kind, operation.Input)
+	if err != nil {
+		return model.OperationOutcome{}, err
+	}
+	scope := taskActivityScope(task)
+	r.publishTask(operation, activity.TaskStart, nil, scope)
+	defer func() { r.publishTask(operation, activity.TaskEnd, resultErr, scope) }()
 	compiled, err := r.prompts.Load(ctx, operation.Snapshot.ConfigDigest)
 	if err != nil {
 		return model.OperationOutcome{}, err
@@ -39,12 +43,10 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		}
 	}
 
-	var submissionMu sync.Mutex
+	// 工具串行执行；提交与停止判定在同一循环内，结果只在循环结束后读取。
 	var submitted *model.Proposal
 	var verdict *model.ReviewVerdict
 	tools, err := r.toolsFor(operation, compiled, func(proposal model.Proposal) (model.Proposal, error) {
-		submissionMu.Lock()
-		defer submissionMu.Unlock()
 		if submitted != nil {
 			same, err := sameSubmission(*submitted, proposal)
 			if err != nil {
@@ -59,8 +61,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		submitted = &copy
 		return copy, nil
 	}, func(candidate model.ReviewVerdict) (model.ReviewVerdict, error) {
-		submissionMu.Lock()
-		defer submissionMu.Unlock()
 		if verdict != nil {
 			same, err := sameVerdict(*verdict, candidate)
 			if err != nil {
@@ -85,14 +85,19 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 
 	messageIndex := 0
 	var endSummary *agentcore.RunSummary
-	agent := agentcore.NewAgent(
-		agentcore.WithModel(r.model),
-		agentcore.WithSystemBlocks([]agentcore.SystemBlock{{Text: compiled.StablePrefix, CacheControl: "ephemeral"}}),
-		agentcore.WithTools(tools...),
-		agentcore.WithMaxToolConcurrency(1),
-		agentcore.WithPromptCacheKey(cacheKey),
-		agentcore.WithCacheLastMessage("ephemeral"),
-		agentcore.WithMessageCommitter(func(message agentcore.AgentMessage) error {
+	executionCtx, stopExecution := context.WithCancelCause(ctx)
+	defer stopExecution(nil)
+	config := agentcore.LoopConfig{
+		Model:              r.model,
+		MaxToolConcurrency: 1,
+		Middlewares:        []agentcore.ToolMiddleware{submissionGuard(stopExecution)},
+		PromptCacheKey:     cacheKey,
+		CacheLastMessage:   "ephemeral",
+		// 提交结果先由循环持久化，再正常收尾，不额外请求模型，也不以取消冒充成功。
+		StopAfterTool: func(name string) bool {
+			return name == prompt.ToolProposalSubmit || name == prompt.ToolVerdictSubmit
+		},
+		CommitMessage: func(message agentcore.AgentMessage) error {
 			messageIndex++
 			payload, err := json.Marshal(message)
 			if err != nil {
@@ -104,10 +109,8 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 				Kind:           "agent.message_committed", Payload: payload, CreatedAt: message.GetTimestamp(),
 			})
 			return err
-		}),
-		agentcore.WithStopGuard(func(context.Context, agentcore.StopInfo) agentcore.StopDecision {
-			submissionMu.Lock()
-			defer submissionMu.Unlock()
+		},
+		StopGuard: func(context.Context, agentcore.StopInfo) agentcore.StopDecision {
 			if submitted != nil || verdict != nil {
 				return agentcore.StopDecision{Allow: true}
 			}
@@ -119,9 +122,9 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 			return agentcore.StopDecision{
 				InjectMessage: "任务尚未形成 Proposal。请继续使用工作区工具完成候选，并调用 proposal_submit；如无法完成，明确返回工具错误。",
 			}
-		}),
-	)
-	recoveredMessages, lastFailure, err := r.restoreMessages(ctx, operation, agent)
+		},
+	}
+	recoveredMessages, lastFailure, err := r.restoreMessages(ctx, operation)
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
@@ -130,35 +133,52 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		return model.OperationOutcome{}, err
 	}
 	prose := newProseTracker() // 随本次执行生灭：正文预览的参数流提取状态
-	agent.Subscribe(func(event agentcore.Event) {
-		if event.Type == agentcore.EventAgentEnd {
-			endSummary = event.Summary
-		}
-		r.publishActivity(operation, event, prose)
-	})
 	// 恢复提示只能追加在完整任务上下文之后，不得替换 Dynamic Tail：restart 的
 	// 新任务同样必须拿到 project_rules、story_context 与 operation_task。
 	promptText := compiled.DynamicTail
-	if recoveredMessages > 0 || len(workspaceArtifacts) > 0 || lastFailure != "" {
+	if len(recoveredMessages) > 0 || len(workspaceArtifacts) > 0 || lastFailure != "" {
 		promptText = fmt.Sprintf(
 			"%s\n\n继续已有 Operation 工作区：当前是第 %d 次尝试，已恢复 %d 条消息和 %d 个工件。先用 workspace_list 核对版本，从已有工件继续，不要从头重写。",
-			compiled.DynamicTail, operation.Attempt, recoveredMessages, len(workspaceArtifacts),
+			compiled.DynamicTail, operation.Attempt, len(recoveredMessages), len(workspaceArtifacts),
 		)
 	}
 	// 重开的会话必须知道上次为什么失败（D56）：否则只是换个尝试号重复同样的错。
 	if lastFailure != "" {
 		promptText += fmt.Sprintf("\n上一次尝试失败原因：%s。先针对这个原因修正，再继续。", lastFailure)
 	}
-	if err := agent.Prompt(ctx, promptText); err != nil {
-		return model.OperationOutcome{}, err
+	var usage agentcore.Usage
+	var executionErr error
+	loopContext := agentcore.AgentContext{
+		SystemBlocks: []agentcore.SystemBlock{{Text: compiled.StablePrefix, CacheControl: "ephemeral"}},
+		Messages:     recoveredMessages,
+		Tools:        tools,
 	}
-	agent.WaitForIdle()
-	state := agent.State()
+	// 始终读到通道关闭，包括取消路径，确保工具和消息落盘已结束。
+	for event := range agentcore.AgentLoop(executionCtx, []agentcore.AgentMessage{agentcore.UserMsg(promptText)}, loopContext, config) {
+		switch event.Type {
+		case agentcore.EventMessageEnd:
+			if message, ok := event.Message.(agentcore.Message); ok {
+				usage.Add(message.Usage)
+			}
+		case agentcore.EventError:
+			executionErr = event.Err
+		case agentcore.EventAgentEnd:
+			endSummary = event.Summary
+		}
+		r.publishActivity(operation, event, prose)
+	}
+	if cause := context.Cause(executionCtx); cause != nil {
+		executionErr = cause
+	}
+	var errorText string
+	if executionErr != nil {
+		errorText = executionErr.Error()
+	}
 	endPayload, err := json.Marshal(struct {
 		Summary *agentcore.RunSummary `json:"summary,omitempty"`
 		Usage   agentcore.Usage       `json:"usage"`
 		Error   string                `json:"error,omitempty"`
-	}{Summary: endSummary, Usage: state.TotalUsage, Error: state.Error})
+	}{Summary: endSummary, Usage: usage, Error: errorText})
 	if err != nil {
 		return model.OperationOutcome{}, fmt.Errorf("encode agent run summary: %w", err)
 	}
@@ -169,11 +189,9 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	}); err != nil {
 		return model.OperationOutcome{}, err
 	}
-	if state.Error != "" {
-		return model.OperationOutcome{}, fmt.Errorf("capability agent failed: %s", state.Error)
+	if executionErr != nil {
+		return model.OperationOutcome{}, fmt.Errorf("capability agent failed: %w", executionErr)
 	}
-	submissionMu.Lock()
-	defer submissionMu.Unlock()
 	if wantsVerdict {
 		if verdict == nil {
 			return model.OperationOutcome{}, endedWithout(endSummary, ErrNoVerdict)
@@ -190,11 +208,13 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	return model.OperationOutcome{Proposal: submitted}, nil
 }
 
-func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error) {
+func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error, scope activity.Scope) {
 	if r.activity == nil {
 		return
 	}
 	event := activity.Event{ProjectID: operation.Target.ID, RunID: operation.RunID, OperationID: operation.ID, Kind: kind, Attempt: operation.Attempt, At: r.now()}
+	event.Scope = scope
+	event.TaskKind = string(operation.Kind)
 	if spec, specErr := model.KindSpec(operation.Kind); specErr == nil {
 		event.TaskLabel = spec.Label
 	}
@@ -202,6 +222,23 @@ func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err
 		event.Err = clipActivityText(err.Error())
 	}
 	r.activity.Publish(event)
+}
+
+func taskActivityScope(task model.TaskInput) activity.Scope {
+	switch input := task.(type) {
+	case *model.WriteChapterInput:
+		return activity.Scope{ChapterNumber: input.ChapterNumber, PlanNodeID: input.ChapterPlanID}
+	case *model.RewriteChapterInput:
+		return activity.Scope{ChapterNumber: input.ChapterNumber, PlanNodeID: input.ChapterPlanID, ChapterIDs: []string{input.ChapterID}}
+	case *model.ReviewRangeInput:
+		return activity.Scope{ChapterIDs: input.ChapterIDs}
+	case *model.RewriteAffectedInput:
+		return activity.Scope{ChapterIDs: input.ChapterIDs}
+	case *model.ReviseCanonInput:
+		return activity.Scope{ChapterIDs: []string{input.ChapterID}}
+	default:
+		return activity.Scope{}
+	}
 }
 
 // publishActivity 把 agent 生命周期事件翻译成带归属的活动事件（页面设计 §3）。
@@ -354,13 +391,13 @@ func endedWithout(endSummary *agentcore.RunSummary, cause error) error {
 }
 
 // restoreMessages 把之前尝试已提交的对话导回本次会话，并取出最近一次失败原因。
-func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation, agent *agentcore.Agent) (int, string, error) {
+func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation) ([]agentcore.AgentMessage, string, error) {
 	if operation.Attempt <= 1 {
-		return 0, "", nil
+		return nil, "", nil
 	}
 	events, err := r.store.ListOperationEvents(ctx, operation.ID)
 	if err != nil {
-		return 0, "", err
+		return nil, "", err
 	}
 	messages := make([]agentcore.Message, 0)
 	var lastFailure string
@@ -372,7 +409,7 @@ func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation
 		case "agent.message_committed":
 			var message agentcore.Message
 			if err := json.Unmarshal(event.Payload, &message); err != nil {
-				return 0, "", fmt.Errorf("restore agent message at event %d: %w", event.Sequence, err)
+				return nil, "", fmt.Errorf("restore agent message at event %d: %w", event.Sequence, err)
 			}
 			messages = append(messages, message)
 		case "operation.transitioned":
@@ -380,18 +417,15 @@ func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation
 				To      model.OperationState `json:"to"`
 				Message string               `json:"message"`
 			}
-			if err := json.Unmarshal(event.Payload, &transition); err == nil && transition.To == model.OperationFailed && transition.Message != "" {
+			if err := json.Unmarshal(event.Payload, &transition); err != nil {
+				return nil, "", fmt.Errorf("restore operation transition at event %d: %w", event.Sequence, err)
+			}
+			if transition.To == model.OperationFailed && transition.Message != "" {
 				lastFailure = transition.Message
 			}
 		}
 	}
-	if len(messages) == 0 {
-		return 0, lastFailure, nil
-	}
-	if err := agent.ImportMessages(messages); err != nil {
-		return 0, "", fmt.Errorf("restore agent conversation: %w", err)
-	}
-	return len(messages), lastFailure, nil
+	return agentcore.ToAgentMessages(messages), lastFailure, nil
 }
 
 func sameVerdict(left, right model.ReviewVerdict) (bool, error) {

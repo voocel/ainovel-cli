@@ -11,6 +11,7 @@ type OutputBlock struct {
 	ID, Version                    uint64
 	OperationID, CallID, TaskLabel string
 	Kind                           Kind
+	Scope                          Scope
 	At                             time.Time
 	Text                           []byte
 	Truncated                      bool
@@ -49,6 +50,12 @@ func (s *Snapshot) foldOutput(event Event) {
 		s.Output = append(s.Output, OutputBlock{ID: s.Seq + 1, OperationID: event.OperationID, CallID: event.CallID,
 			TaskLabel: event.TaskLabel, Kind: event.Kind, At: event.At, turn: s.outputTurn})
 		index = len(s.Output) - 1
+		for _, task := range s.Tasks {
+			if task.OperationID == event.OperationID {
+				s.Output[index].Scope = task.Scope.clone()
+				break
+			}
+		}
 	}
 	b := &s.Output[index]
 	s.outputBytes -= len(b.Text)

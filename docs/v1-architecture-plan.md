@@ -462,6 +462,8 @@ Agent 可以通过受限工具读写所属 Operation Workspace，但不能直接
 
 提交工具是模型唯一能看见校验结果的地方：`proposal_submit` 在工具边界调用 Change Engine 的只读 `Validate`，按提案自身基线执行全部确定性结构校验（事实身份与 old_value、依赖、D41 来源与重申报、规划数量），冲突原样回给模型在同一会话内自纠；收尾的 `PrepareExecution` 只作兜底并处理基线漂移。工具边界不得另写引擎规则的子集。
 
+工具输入的机械装配不改变上述协议：`proposal_submit` 可从 Operation 冻结的 BaseRevision 补齐省略的 Canon `old_value`；`confirm_canon` 明确列出的事实从同一基线复制为确认型 put（old/new 相同），与显式 patches 不得重复。最终 Proposal 仍携带完整旧值并通过所有原有校验，不用最新版本覆盖冻结基线，不自动确认模型未列出的事实，显式错误旧值仍被拒绝。运行时在同一提交工具连续三次出现相同错误后明确失败并保留工作区，避免校验错误陷入无进展循环；不同错误或成功提交重置该工具的计数，普通读写工具不清零。
+
 工作区编辑以 `block_id + expected_workspace_version` 为主要定位和并发前提，不以逐字匹配整段 `old_string` 作为核心协议。Markdown 导出不要求用户看见内部 ID，但显式导入时必须携带基线版本并重建稳定映射；无法唯一定位时明确冲突，不猜测替换位置。
 
 Workspace 解决两个问题：一是中间草稿不污染正式 Revision 历史；二是进程崩溃或模型调用失败后可以从明确步骤恢复，而不是依赖会话记忆重跑。取消 Operation 时默认保留工作区并标记 `cancelled`，由用户显式选择丢弃；不静默删除，也不把半成品伪装成成功结果。
@@ -980,6 +982,12 @@ Restart 的后继创建与前任工作区继承必须在同一事务内提交，
 心跳续租同时校验 worker 与 attempt，旧执行不能为新 attempt 续租。工件同 ID 的幂等写入同时校验内容、证据及作品和生成任务归属，跨任务 ID 碰撞返回冲突。以上沿用既有状态和持久化格式，不增加任务状态或 schema 迁移。
 
 ### D56：执行失败的会话级重开策略（2026-09-16）
+
+2026-09-20 补充：自动重开不适用于 `submission_blocked` 与 `result_unknown`。Runtime 的类型化错误经 Operation Engine 写入 FailureCode，Coordinator 直接转 `waiting_user`，保留原因和工作区；用户显式续跑才再次执行。避免内层停止后被外层重试重新拉起。普通执行失败仍沿用下述有限重开策略。
+
+审阅提交采用版本引用：模型先保存 findings，再提交 `review_key` + `review_version` 与审阅判断；宿主核对版本并装配 findings，之后执行完整裁定校验。旧快照的显式 findings 必须与工件一致，不能被宿主静默覆盖。
+
+Runtime 直接运行单次 `AgentLoop`：串行工具执行、同步持久化消息，`proposal_submit` / `verdict_submit` 成功且结果消息落盘后通过 `StopAfterTool` 正常结束，再交给 Operation Engine 收尾。取消不作为成功信号，落盘错误保留原始错误链；实时事件消费到通道关闭，用量仅累计本次执行的新消息。无需额外 Agent 会话状态或自建调度层。
 
 真实实证暴露的缺口：第 2 章的 Agent 会话结束后在收尾被拒，Run 立即转 `failed`；Run 是终态，协调器里已有的 Resume/后继机制永远走不到，用户续跑只能新建 Run 从头重写，草稿与对话全部作废。执行失败是会话级事件，不是整轮创作的失败。
 

@@ -106,6 +106,11 @@ func (m model) outputLines(width int) []string {
 			if task == "" {
 				task = "创作任务"
 			}
+			if len(block.Scope.ChapterIDs) > 1 {
+				task += fmt.Sprintf(" · 跨章任务（%d 章）", len(block.Scope.ChapterIDs))
+			} else if block.Scope.ChapterNumber > 0 {
+				task += fmt.Sprintf(" · 第 %d 章", block.Scope.ChapterNumber)
+			}
 			header := task + " · " + kind
 			if !block.At.IsZero() {
 				header = block.At.Local().Format("15:04:05") + "  " + header

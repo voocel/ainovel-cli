@@ -2,15 +2,29 @@ package activity
 
 import "time"
 
+// Scope comes from the validated task input, never inferred from generated text.
+type Scope struct {
+	ChapterNumber int
+	PlanNodeID    string
+	ChapterIDs    []string
+}
+
+func (s Scope) clone() Scope {
+	s.ChapterIDs = append([]string(nil), s.ChapterIDs...)
+	return s
+}
+
 // Task is one real capability execution, not an inferred agent or queued job.
 type Task struct {
 	OperationID, Label string
+	Kind               string
 	Phase              Kind
 	Tool, Err          string
 	Attempt            int
 	Done               bool
 	StartedAt, EndedAt time.Time
 	Usage              UsageTotals
+	Scope              Scope
 }
 
 func (s *Snapshot) foldTask(e Event) {
@@ -37,6 +51,8 @@ func (s *Snapshot) foldTask(e Event) {
 		}
 		t := &s.Tasks[index]
 		t.Label, t.StartedAt, t.Attempt = e.TaskLabel, e.At, e.Attempt
+		t.Kind = e.TaskKind
+		t.Scope = e.Scope.clone()
 		t.Done, t.Err, t.Tool, t.EndedAt = false, "", "", time.Time{}
 	}
 	if index < 0 {

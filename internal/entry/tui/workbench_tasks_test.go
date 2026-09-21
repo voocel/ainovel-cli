@@ -19,14 +19,15 @@ func TestTaskPanelPrioritizesActiveAndLinksOwnOutput(t *testing.T) {
 		{ID: 1, Version: 1, OperationID: "active", Kind: activity.Thinking, Text: []byte("写作思考")},
 		{ID: 2, Version: 1, OperationID: "done", Kind: activity.Text, Text: []byte("审阅结果")},
 	}
-	if m.visibleTasks()[0].OperationID != "active" {
-		t.Fatal("completed task displaced active one")
-	}
 	l := m.benchLayout()
 	if lipgloss.Height(m.View()) != 40 || lipgloss.Width(m.View()) != 150 {
 		t.Fatal("task panel changed frame geometry")
 	}
-	m = clickBench(m, l.inspectorX+2, l.bodyY+11)
+	frame := m.teamFrame(l.inspectorWidth-2, l.bodyHeight)
+	if frame.hits[0].task.OperationID != "active" {
+		t.Fatal("completed task displaced active one")
+	}
+	m = clickBench(m, l.inspectorX+2, l.bodyY+frame.hits[0].start)
 	if !m.bench.outputFrozen || m.bench.content != contentOutput || len(m.bench.outputHeld) != 1 || m.bench.outputHeld[0].OperationID != "active" {
 		t.Fatal("task click did not isolate its output")
 	}

@@ -38,16 +38,24 @@ const (
 
 // FailureCode 给失败一个机器可判读的原因（D46）。result_unknown 表示外部结果不可知：
 // 任务已提交但拿不到结论，不自动重试；用户对账（Resume）或重提（Restart）都是显式决定。
+// submission_blocked 表示提交自纠已受阻，保留草稿，等待显式续跑。
 type FailureCode string
 
-const FailureResultUnknown FailureCode = "result_unknown"
+const (
+	FailureResultUnknown     FailureCode = "result_unknown"
+	FailureSubmissionBlocked FailureCode = "submission_blocked"
+)
 
 var ErrResultUnknown = errors.New("external result is unknown")
+var ErrSubmissionBlocked = errors.New("提交受阻")
 
-// FailureCodeFor 由失败原因推出失败码：只有结果未知需要打码。
+// FailureCodeFor 保留跨执行层传递的失败类别，供协调器决定是否自动续跑。
 func FailureCodeFor(cause error) FailureCode {
 	if errors.Is(cause, ErrResultUnknown) {
 		return FailureResultUnknown
+	}
+	if errors.Is(cause, ErrSubmissionBlocked) {
+		return FailureSubmissionBlocked
 	}
 	return ""
 }
@@ -259,7 +267,7 @@ func (o Operation) Validate() error {
 	}
 	switch o.FailureCode {
 	case "":
-	case FailureResultUnknown:
+	case FailureResultUnknown, FailureSubmissionBlocked:
 		if o.State != OperationFailed {
 			return fmt.Errorf("failure code %q requires the failed state: %w", o.FailureCode, ErrInvalid)
 		}

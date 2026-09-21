@@ -41,9 +41,13 @@ type diagnosticsSharedMsg struct {
 }
 
 func (m model) openDiagnostics() (tea.Model, tea.Cmd) {
+	return m.openOperationDiagnostics("")
+}
+
+func (m model) openOperationDiagnostics(operationID string) (tea.Model, tea.Cmd) {
 	m.bench.diagEpoch++
 	ctx, cancel := context.WithCancel(m.ctx)
-	m.bench.diag = &diagnosticsState{ctx: ctx, cancel: cancel, epoch: m.bench.diagEpoch, request: diag.Request{ProjectID: m.bench.projectID, RunID: m.bench.run().ID}, body: viewport.New(1, 1)}
+	m.bench.diag = &diagnosticsState{ctx: ctx, cancel: cancel, epoch: m.bench.diagEpoch, request: diag.Request{ProjectID: m.bench.projectID, RunID: m.bench.run().ID, OperationID: operationID}, body: viewport.New(1, 1)}
 	m.layoutDiagnostics()
 	return m, m.loadDiagnosticsCmd()
 }
