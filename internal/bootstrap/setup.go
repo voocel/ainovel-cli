@@ -35,7 +35,10 @@ func NeedsSetup() bool {
 type setupProvider struct {
 	name           string
 	label          string
+	providerType   string
 	baseURL        string // 预填的 base_url
+	defaultModel   string
+	models         []ModelConfig
 	needType       bool   // 自定义代理需要额外问 type 和 base_url
 	apiKeyOptional bool   // true 表示 API Key 允许留空
 }
@@ -44,13 +47,27 @@ type setupProvider struct {
 type ProviderPreset struct {
 	Name           string
 	Label          string
+	Type           string
 	BaseURL        string
+	DefaultModel   string
+	Models         []ModelConfig
 	NeedType       bool
 	APIKeyOptional bool
 }
 
 var setupProviders = []setupProvider{
 	{name: "openrouter", label: "OpenRouter", baseURL: "https://openrouter.ai/api/v1"},
+	{
+		name:         "atlascloud",
+		label:        "Atlas Cloud",
+		providerType: "openai",
+		baseURL:      "https://api.atlascloud.ai/v1",
+		defaultModel: "qwen/qwen3.5-flash",
+		models: []ModelConfig{
+			{Name: "qwen/qwen3.5-flash", ContextWindow: 1000000},
+			{Name: "deepseek-ai/deepseek-v4-pro", ContextWindow: 1048576},
+		},
+	},
 	{name: "anthropic", label: "Anthropic"},
 	{name: "gemini", label: "Gemini"},
 	{name: "openai", label: "OpenAI"},
@@ -68,8 +85,14 @@ func ProviderPresets() []ProviderPreset {
 	out := make([]ProviderPreset, 0, len(setupProviders))
 	for _, preset := range setupProviders {
 		out = append(out, ProviderPreset{
-			Name: preset.name, Label: preset.label, BaseURL: preset.baseURL,
-			NeedType: preset.needType, APIKeyOptional: preset.apiKeyOptional,
+			Name:           preset.name,
+			Label:          preset.label,
+			Type:           preset.providerType,
+			BaseURL:        preset.baseURL,
+			DefaultModel:   preset.defaultModel,
+			Models:         append([]ModelConfig(nil), preset.models...),
+			NeedType:       preset.needType,
+			APIKeyOptional: preset.apiKeyOptional,
 		})
 	}
 	return out
@@ -105,6 +128,8 @@ func RunSetup() (Config, error) {
 			return Config{}, err
 		}
 		pc.Type = providerType
+	} else if sp.providerType != "" {
+		pc.Type = sp.providerType
 	}
 
 	// Step 2: 输入 API Key
@@ -142,12 +167,16 @@ func RunSetup() (Config, error) {
 	}
 
 	// Step 4: 模型名（必填）
-	modelName, err := runTextInput("[4/4] 模型名称", "例如：gpt-4o / claude-sonnet-4 / gemini-2.5-pro")
+	modelHint := "例如：gpt-4o / claude-sonnet-4 / gemini-2.5-pro"
+	if sp.defaultModel != "" {
+		modelHint = sp.defaultModel
+	}
+	modelName, err := runTextInputWithDefault("[4/4] 模型名称", modelHint, sp.defaultModel)
 	if err != nil {
 		return Config{}, err
 	}
 	printStepDone("Model", modelName)
-	pc.Models = []ModelConfig{{Name: modelName}}
+	pc.Models = presetModelsWithSelection(sp.models, modelName)
 
 	cfg := Config{
 		Provider:  providerName,
@@ -180,6 +209,25 @@ func RunSetup() (Config, error) {
 	fmt.Fprintln(os.Stderr)
 
 	return cfg, nil
+}
+
+func presetModelsWithSelection(preset []ModelConfig, selected string) []ModelConfig {
+	selected = strings.TrimSpace(selected)
+	out := make([]ModelConfig, 0, len(preset)+1)
+	seen := make(map[string]bool, len(preset)+1)
+	for _, model := range preset {
+		name := strings.TrimSpace(model.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		model.Name = name
+		out = append(out, model)
+		seen[name] = true
+	}
+	if selected != "" && !seen[selected] {
+		out = append(out, ModelConfig{Name: selected})
+	}
+	return out
 }
 
 func saveExampleConfig() {

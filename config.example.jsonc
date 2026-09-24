@@ -35,6 +35,17 @@
         "headers": { "X-Custom-Client": "my-client" }
       }
     },
+    "atlascloud": {
+      // Atlas Cloud 使用 OpenAI-compatible Chat Completions API。
+      // 设为默认时，把顶层 provider 改为 "atlascloud"，model 改为下列任一模型。
+      "type": "openai",
+      "api_key": "atl-xxx",
+      "base_url": "https://api.atlascloud.ai/v1",
+      "models": [
+        { "name": "qwen/qwen3.5-flash", "context_window": 1000000 },
+        { "name": "deepseek-ai/deepseek-v4-pro", "context_window": 1048576 }
+      ]
+    },
     "anthropic": {
       "api_key": "sk-ant-xxx",
       "models": [{ "name": "claude-sonnet-4-6", "json_schema": true }]

@@ -132,3 +132,51 @@ func TestValidateBaseRejectsBadStreamIdleTimeout(t *testing.T) {
 		t.Fatalf("非法 stream_idle_timeout 应拒绝并包装 ErrConfig，得到: %v", err)
 	}
 }
+
+func TestProviderPresetsIncludeAtlasCloudOpenAICompatibleDefaults(t *testing.T) {
+	var atlas ProviderPreset
+	for _, preset := range ProviderPresets() {
+		if preset.Name == "atlascloud" {
+			atlas = preset
+			break
+		}
+	}
+	if atlas.Name == "" {
+		t.Fatal("ProviderPresets should include atlascloud")
+	}
+	if atlas.Label != "Atlas Cloud" || atlas.Type != "openai" {
+		t.Fatalf("atlascloud preset label/type = %q/%q", atlas.Label, atlas.Type)
+	}
+	if atlas.BaseURL != "https://api.atlascloud.ai/v1" {
+		t.Fatalf("atlascloud base url = %q", atlas.BaseURL)
+	}
+	if atlas.DefaultModel != "qwen/qwen3.5-flash" {
+		t.Fatalf("atlascloud default model = %q", atlas.DefaultModel)
+	}
+	wantModels := map[string]int{
+		"qwen/qwen3.5-flash":           1000000,
+		"deepseek-ai/deepseek-v4-pro": 1048576,
+	}
+	if len(atlas.Models) != len(wantModels) {
+		t.Fatalf("atlascloud models = %#v", atlas.Models)
+	}
+	for _, model := range atlas.Models {
+		if want, ok := wantModels[model.Name]; !ok || model.ContextWindow != want {
+			t.Fatalf("unexpected atlascloud model entry: %#v", model)
+		}
+	}
+}
+
+func TestPresetModelsWithSelectionPreservesCatalogAndAddsCustomSelection(t *testing.T) {
+	preset := []ModelConfig{{Name: "qwen/qwen3.5-flash", ContextWindow: 1000000}}
+	got := presetModelsWithSelection(preset, "custom-model")
+	if len(got) != 2 {
+		t.Fatalf("models = %#v", got)
+	}
+	if got[0].Name != "qwen/qwen3.5-flash" || got[0].ContextWindow != 1000000 {
+		t.Fatalf("preset model was not preserved: %#v", got[0])
+	}
+	if got[1].Name != "custom-model" || got[1].ContextWindow != 0 {
+		t.Fatalf("custom selected model not appended: %#v", got[1])
+	}
+}
