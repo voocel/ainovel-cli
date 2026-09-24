@@ -95,7 +95,11 @@ func (m model) formatDiagnostics() {
 		fmt.Fprintf(&b, " · %s", r.Summary.Reason)
 	}
 	fmt.Fprintf(&b, "\n采集 %s · 运行 %s", r.Header.CapturedAt.Format("01-02 15:04:05"), r.Header.Scope.RunID)
-	fmt.Fprintf(&b, "\n任务 %d · 尝试 %d · 重试任务 %d · 事件 %d\n", r.Metrics.Operations, r.Metrics.Attempts, r.Metrics.RetriedOperations, r.Metrics.Events)
+	fmt.Fprintf(&b, "\n任务 %d · 尝试 %d · 重试任务 %d · 事件 %d", r.Metrics.Operations, r.Metrics.Attempts, r.Metrics.RetriedOperations, r.Metrics.Events)
+	if r.Metrics.ToolErrors > 0 {
+		fmt.Fprintf(&b, " · 工具报错 %d", r.Metrics.ToolErrors) // 常驻计数：未立发现时也要看得见
+	}
+	b.WriteString("\n")
 	if r.Summary.LastEventAt != nil {
 		fmt.Fprintf(&b, "最近事件  %s\n", r.Summary.LastEventAt.Format("01-02 15:04:05"))
 	}

@@ -67,6 +67,7 @@ type Metrics struct {
 	Attempts          int                          `json:"attempts"`
 	RetriedOperations int                          `json:"retried_operations"`
 	Events            int                          `json:"events"`
+	ToolErrors        int                          `json:"tool_errors"`
 }
 
 type Coverage struct {

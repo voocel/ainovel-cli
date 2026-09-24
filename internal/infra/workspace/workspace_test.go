@@ -56,7 +56,7 @@ func TestReplaceChapterBlockUsesStableIDAndWorkspaceVersion(t *testing.T) {
 		ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: model.AuthorAI,
 		Blocks: []model.ManuscriptBlock{{ID: "p-1", Text: "旧段落"}, {ID: "p-2", Text: "保持不变"}},
 	}
-	artifact, err := workspace.PutChapter(ctx, operation.ID, "chapter/chapter-1", chapter, 0, claimed.Attempt, now.Add(2*time.Second))
+	artifact, err := workspace.PutChapter(ctx, operation.ID, "chapter/chapter-1", chapter, nil, claimed.Attempt, now.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("put chapter: %v", err)
 	}

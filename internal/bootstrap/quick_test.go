@@ -749,7 +749,7 @@ func (e *scriptedQuickExecutor) Execute(ctx context.Context, operation model.Ope
 			OperationID: operation.ID, Key: verdict.ReviewKey,
 			MediaType: model.ReviewArtifactMediaType, Content: findings,
 			UpdatedAt: e.now.Add(time.Duration(e.calls) * time.Second),
-		}, 0, operation.Attempt); err != nil {
+		}, nil, operation.Attempt); err != nil {
 			return model.OperationOutcome{}, err
 		}
 		payload, err := json.Marshal(verdict)

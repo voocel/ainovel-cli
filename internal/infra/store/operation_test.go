@@ -39,7 +39,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 		MediaType:   "text/markdown",
 		Content:     []byte("第一版正文"),
 		UpdatedAt:   createdAt.Add(3 * time.Second),
-	}, 0, claimed.Attempt)
+	}, nil, claimed.Attempt)
 	if err != nil {
 		t.Fatalf("put first artifact: %v", err)
 	}
@@ -48,7 +48,8 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	}
 	artifact.Content = []byte("第二版正文")
 	artifact.UpdatedAt = createdAt.Add(4 * time.Second)
-	artifact, err = s.PutWorkspaceArtifact(ctx, artifact, 1, claimed.Attempt)
+	firstVersion := int64(1)
+	artifact, err = s.PutWorkspaceArtifact(ctx, artifact, &firstVersion, claimed.Attempt)
 	if err != nil {
 		t.Fatalf("put second artifact: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	stale := artifact
 	stale.Content = []byte("过期写入")
 	stale.UpdatedAt = createdAt.Add(5 * time.Second)
-	if _, err := s.PutWorkspaceArtifact(ctx, stale, 1, claimed.Attempt); !errors.Is(err, model.ErrWorkspaceConflict) {
+	if _, err := s.PutWorkspaceArtifact(ctx, stale, &firstVersion, claimed.Attempt); !errors.Is(err, model.ErrWorkspaceConflict) {
 		t.Fatalf("stale artifact error = %v, want model.ErrWorkspaceConflict", err)
 	}
 	stored, err := s.GetWorkspaceArtifact(ctx, claimed.ID, artifact.Key)
@@ -86,7 +87,7 @@ func TestOperationQueueWorkspaceAndEvents(t *testing.T) {
 	}
 	if _, err := s.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{
 		OperationID: claimed.ID, Key: "late", MediaType: "text/plain", Content: []byte("late"), UpdatedAt: createdAt.Add(7 * time.Second),
-	}, 0, claimed.Attempt); !errors.Is(err, model.ErrStateConflict) {
+	}, nil, claimed.Attempt); !errors.Is(err, model.ErrStateConflict) {
 		t.Fatalf("terminal artifact error = %v, want model.ErrStateConflict", err)
 	}
 
@@ -486,7 +487,7 @@ func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
 		OperationID: "op", Key: "chapter/late", MediaType: "text/plain",
 		Content: []byte("旧实例的迟到写入"), UpdatedAt: start.Add(4 * time.Minute),
 	}
-	if _, err := s.PutWorkspaceArtifact(ctx, late, 0, first.Attempt); !errors.Is(err, model.ErrStateConflict) {
+	if _, err := s.PutWorkspaceArtifact(ctx, late, nil, first.Attempt); !errors.Is(err, model.ErrStateConflict) {
 		t.Fatalf("stale workspace write error = %v, want model.ErrStateConflict", err)
 	}
 	if err := s.AssertActiveAttempt(ctx, "op", first.Attempt); !errors.Is(err, model.ErrStateConflict) {
@@ -507,7 +508,7 @@ func TestSupersededAttemptCannotWriteOrConclude(t *testing.T) {
 	if err := s.AssertActiveAttempt(ctx, "op", second.Attempt); err != nil {
 		t.Fatalf("active attempt must pass: %v", err)
 	}
-	if _, err := s.PutWorkspaceArtifact(ctx, late, 0, second.Attempt); err != nil {
+	if _, err := s.PutWorkspaceArtifact(ctx, late, nil, second.Attempt); err != nil {
 		t.Fatalf("active workspace write: %v", err)
 	}
 	concluded, err := s.ConcludeOperation(ctx, "op", second.Attempt, model.OperationSucceeded, "", start.Add(5*time.Minute))

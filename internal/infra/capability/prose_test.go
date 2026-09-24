@@ -53,7 +53,7 @@ func assertSplitEquivalence(t *testing.T, path prosePath, full, want string) {
 }
 
 func TestProseExtractorPutChapter(t *testing.T) {
-	full := `{"key":"ch-1","expected_version":0,"chapter":{"id":"c1","plan_node_id":"p1",` +
+	full := `{"key":"ch-1","chapter":{"id":"c1","plan_node_id":"p1",` +
 		`"number":1,"title":"山野少年","blocks":[{"id":"b1","text":"少年在山野间奔跑。"},` +
 		`{"id":"b2","text":"暮色四合，他停下了脚步。"}]}}`
 	assertSplitEquivalence(t, putChapterPath, full,

@@ -21,7 +21,7 @@ func TestSuccessorPublicationIncludesWorkspaceAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{OperationID: running.ID, Key: model.ExternalRequestKey, MediaType: "application/json", Content: []byte(`{"request_id":"already-submitted"}`), UpdatedAt: now}, 0, running.Attempt); err != nil {
+	if _, err := s.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{OperationID: running.ID, Key: model.ExternalRequestKey, MediaType: "application/json", Content: []byte(`{"request_id":"already-submitted"}`), UpdatedAt: now}, nil, running.Attempt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.TransitionOperation(ctx, running.ID, model.OperationRunning, model.OperationFailed, "result unknown", now); err != nil {

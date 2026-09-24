@@ -93,7 +93,7 @@ func runningWriterWithDraft(t *testing.T, ctx context.Context) (*store.Store, mo
 		t.Fatal(err)
 	}
 	chapter := model.ManuscriptChapter{ID: "chapter-1", PlanNodeID: "chapter-plan-1", Number: 1, Title: "山门", Author: model.AuthorAI, Blocks: []model.ManuscriptBlock{{ID: "p1", Text: "保留这个草稿。"}}}
-	if _, err := workspace.New(s).PutChapter(ctx, op.ID, "draft", chapter, 0, op.Attempt, now); err != nil {
+	if _, err := workspace.New(s).PutChapter(ctx, op.ID, "draft", chapter, nil, op.Attempt, now); err != nil {
 		t.Fatal(err)
 	}
 	return s, op

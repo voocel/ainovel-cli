@@ -1,7 +1,6 @@
 package capability
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -93,14 +92,13 @@ func (r *Runtime) toolExecutor(
 	case prompt.ToolWorkspacePutChapter:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Key             string                  `json:"key"`
-				ExpectedVersion int64                   `json:"expected_version"`
-				Chapter         model.ManuscriptChapter `json:"chapter"`
+				Key     string                  `json:"key"`
+				Chapter model.ManuscriptChapter `json:"chapter"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
 			}
-			artifact, err := r.workspace.PutChapter(ctx, operation.ID, args.Key, args.Chapter, args.ExpectedVersion, operation.Attempt, r.now())
+			artifact, err := r.workspace.PutChapter(ctx, operation.ID, args.Key, args.Chapter, nil, operation.Attempt, r.now())
 			if err != nil {
 				return nil, err
 			}
@@ -128,9 +126,8 @@ func (r *Runtime) toolExecutor(
 	case prompt.ToolWorkspacePutCandidate:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Key             string          `json:"key"`
-				ExpectedVersion int64           `json:"expected_version"`
-				Content         json.RawMessage `json:"content"`
+				Key     string          `json:"key"`
+				Content json.RawMessage `json:"content"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
@@ -138,7 +135,7 @@ func (r *Runtime) toolExecutor(
 			artifact, err := r.store.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{
 				OperationID: operation.ID, Key: args.Key, MediaType: "application/json",
 				Content: args.Content, UpdatedAt: r.now(),
-			}, args.ExpectedVersion, operation.Attempt)
+			}, nil, operation.Attempt)
 			if err != nil {
 				return nil, err
 			}
@@ -147,9 +144,8 @@ func (r *Runtime) toolExecutor(
 	case prompt.ToolWorkspacePutReview:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Key             string                `json:"key"`
-				ExpectedVersion int64                 `json:"expected_version"`
-				Findings        []model.ReviewFinding `json:"findings"`
+				Key      string                `json:"key"`
+				Findings []model.ReviewFinding `json:"findings"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
@@ -161,7 +157,7 @@ func (r *Runtime) toolExecutor(
 			artifact, err := r.store.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{
 				OperationID: operation.ID, Key: args.Key,
 				MediaType: model.ReviewArtifactMediaType, Content: content, UpdatedAt: r.now(),
-			}, args.ExpectedVersion, operation.Attempt)
+			}, nil, operation.Attempt)
 			if err != nil {
 				return nil, err
 			}
@@ -240,30 +236,28 @@ func (r *Runtime) toolExecutor(
 	case prompt.ToolVerdictSubmit:
 		return func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 			var args struct {
-				Status        string                        `json:"status"`
-				ChapterIDs    []string                      `json:"chapter_ids"`
-				ReviewKey     string                        `json:"review_key"`
-				ReviewVersion *int64                        `json:"review_version"`
-				Intent        *model.IntentVerification     `json:"intent"`
-				Directives    []model.DirectiveVerification `json:"directives"`
-				Findings      []model.ReviewFinding         `json:"findings"`
+				Status     string                        `json:"status"`
+				ReviewKey  string                        `json:"review_key"`
+				Intent     *model.IntentVerification     `json:"intent"`
+				Directives []model.DirectiveVerification `json:"directives"`
 			}
 			if err := decodeToolArgs(raw, &args); err != nil {
 				return nil, err
 			}
-			// 裁定的 Revision 与证据基线由宿主从启动快照和任务输入盖入，模型不能
-			// 宣称基线；范围必须与任务请求完全一致，防止漏审或越界裁定。
+			// 宿主已知的事实由宿主盖入，不让模型复述再校验（D60）：Revision 与证据基线取自
+			// 启动快照和任务输入，章节范围就是任务请求的范围，发现取自工作区审阅记录的当前版本。
 			input, err := model.TaskInputAs[model.ReviewRangeInput](operation)
+			if err != nil {
+				return nil, err
+			}
+			findings, err := r.reviewFindings(ctx, operation, args.ReviewKey)
 			if err != nil {
 				return nil, err
 			}
 			verdict := model.ReviewVerdict{
 				Status: args.Status, Revision: operation.Snapshot.BaseRevision,
-				ChapterIDs: args.ChapterIDs, ReviewKey: args.ReviewKey, Basis: input.Basis.Normalize(),
-				Intent: args.Intent, Directives: args.Directives, Findings: args.Findings,
-			}
-			if err := r.materializeReviewArtifact(ctx, operation, &verdict, args.ReviewVersion); err != nil {
-				return nil, err
+				ChapterIDs: input.ChapterIDs, ReviewKey: args.ReviewKey, Basis: input.Basis.Normalize(),
+				Intent: args.Intent, Directives: args.Directives, Findings: findings,
 			}
 			if err := model.ValidateReviewVerdictForOperation(operation, verdict); err != nil {
 				return nil, err
@@ -281,43 +275,21 @@ func (r *Runtime) toolExecutor(
 	}
 }
 
-func (r *Runtime) materializeReviewArtifact(
-	ctx context.Context,
-	operation model.Operation,
-	verdict *model.ReviewVerdict,
-	version *int64,
-) error {
-	artifact, err := r.store.GetWorkspaceArtifact(ctx, operation.ID, verdict.ReviewKey)
+// reviewFindings 读取审阅记录当前版本的发现。同一执行内工作区只有本执行串行写入，
+// 当前版本就是模型刚写完的那份；提交后被改由收尾时的证据检查拒绝。
+func (r *Runtime) reviewFindings(ctx context.Context, operation model.Operation, key string) ([]model.ReviewFinding, error) {
+	artifact, err := r.store.GetWorkspaceArtifact(ctx, operation.ID, key)
 	if err != nil {
-		return fmt.Errorf("read verdict review artifact %q: %w", verdict.ReviewKey, err)
+		return nil, fmt.Errorf("read review record %q (write it with workspace_put_review first): %w", key, err)
 	}
 	if artifact.MediaType != model.ReviewArtifactMediaType {
-		return fmt.Errorf("workspace artifact %q is not a review record: %w", verdict.ReviewKey, model.ErrInvalid)
-	}
-	if version != nil && (*version <= 0 || *version != artifact.Version) {
-		return fmt.Errorf("review artifact %q version mismatch: requested %d, current %d: %w", verdict.ReviewKey, *version, artifact.Version, model.ErrStateConflict)
+		return nil, fmt.Errorf("workspace artifact %q is not a review record: %w", key, model.ErrInvalid)
 	}
 	var findings []model.ReviewFinding
 	if err := decodeToolArgs(artifact.Content, &findings); err != nil {
-		return fmt.Errorf("decode verdict review artifact %q: %w", verdict.ReviewKey, err)
+		return nil, fmt.Errorf("decode review record %q: %w", key, err)
 	}
-	// 新协议引用确定版本；旧快照仍按原协议逐字验证，不能静默覆盖显式发现。
-	if version != nil && verdict.Findings == nil {
-		verdict.Findings = findings
-		return nil
-	}
-	stored, err := json.Marshal(findings)
-	if err != nil {
-		return fmt.Errorf("encode stored review findings: %w", err)
-	}
-	submitted, err := json.Marshal(verdict.Findings)
-	if err != nil {
-		return fmt.Errorf("encode submitted review findings: %w", err)
-	}
-	if !bytes.Equal(stored, submitted) {
-		return fmt.Errorf("verdict findings do not match review artifact %q: %w", verdict.ReviewKey, model.ErrInvalid)
-	}
-	return nil
+	return findings, nil
 }
 
 func decodeToolArgs(raw json.RawMessage, target any) error {

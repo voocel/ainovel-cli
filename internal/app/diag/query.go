@@ -2,7 +2,6 @@ package diag
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -96,7 +95,7 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 		r.Summary.CreatedAt, r.Summary.UpdatedAt = &s.Run.CreatedAt, &s.Run.UpdatedAt
 	}
 	r.Summary.LastEventAt = s.LastEventAt
-	r.Metrics = Metrics{Operations: s.OperationCount, States: s.Counts, Attempts: s.AttemptCount, RetriedOperations: s.RetriedOperationCount, Events: s.EventCount}
+	r.Metrics = Metrics{Operations: s.OperationCount, States: s.Counts, Attempts: s.AttemptCount, RetriedOperations: s.RetriedOperationCount, Events: s.EventCount, ToolErrors: s.ToolErrorCount}
 	r.Findings = findings(s.Counts[model.OperationFailed], s.ExpiredLeaseCount, s.ResultUnknownCount, s.MissingCompletionEventCount)
 	r.NextOperationID, r.NextEventSequence = s.NextOperationID, s.NextEventSequence
 	for _, op := range s.Operations {
@@ -132,8 +131,6 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 			r.Coverage = append(r.Coverage, Coverage{"findings", "partial", fmt.Sprintf("%s：本页附 %d/%d 个任务的证据引用，其余任务需翻页查看。", f.Code, len(f.Evidence), f.Count)})
 		}
 	}
-	toolErrors := 0
-	var toolEvidence []Evidence
 	for _, event := range s.Events {
 		e := Event{OperationID: event.OperationID, Sequence: event.Sequence, Attempt: event.Attempt, Kind: event.Kind, CreatedAt: event.CreatedAt, PayloadTruncated: event.PayloadTruncated}
 		if request.OperationID != "" && !share {
@@ -147,27 +144,23 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 				if err != nil {
 					r.Coverage = append(r.Coverage, Coverage{"usage", "partial", fmt.Sprintf("事件 #%d 的用量摘要缺失或格式不支持。", event.Sequence)})
 				}
-			} else if event.Kind == "agent.message_committed" {
-				var message struct {
-					Role     string `json:"role"`
-					Metadata struct {
-						IsError bool `json:"is_error"`
-					} `json:"metadata"`
-				}
-				if err := json.Unmarshal(event.Payload, &message); err != nil {
-					r.Coverage = append(r.Coverage, Coverage{"tool_errors", "partial", fmt.Sprintf("事件 #%d 的消息格式无法解析。", event.Sequence)})
-				} else if message.Role == "tool" && message.Metadata.IsError {
-					toolErrors++
-					toolEvidence = append(toolEvidence, Evidence{"event.tool_error", event.OperationID, event.Attempt, event.Sequence})
-				}
 			}
 		}
 		r.Events = append(r.Events, e)
 	}
-	if toolErrors > 0 {
-		f := finding("execution.tool_error", toolErrors)
+	// 总数常驻 Metrics，任何范围都看得见。但单次自纠不是问题——任务成功了还报警就是误报，
+	// 所以运行级只在同一次尝试里反复撞同一堵墙时才立发现（与 repeated_unknown_result 同理）；
+	// 选定任务是用户主动要细节，有就给。
+	stuck := request.OperationID != ""
+	for _, group := range s.ToolErrors {
+		stuck = stuck || group.Count > 1
+	}
+	if s.ToolErrorCount > 0 && stuck {
+		f := finding("execution.tool_error", s.ToolErrorCount)
 		f.OperationID = request.OperationID
-		f.Evidence = toolEvidence
+		for _, group := range s.ToolErrors {
+			f.Evidence = append(f.Evidence, Evidence{"event.tool_error", group.OperationID, group.Attempt, group.LastSequence})
+		}
 		r.Findings = append(r.Findings, f)
 	}
 	r.Coverage = append(r.Coverage, Coverage{"database", "complete", "运行、任务状态与事件截止序号来自同一次只读事务；每次翻页重新采集。"})
@@ -190,8 +183,17 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 		detail = "为选定任务分配尾部事件窗口，合计最多 200 条；最近事件时间取各流末条记录，不对全历史按时间排序。"
 	}
 	r.Coverage = append(r.Coverage, Coverage{"events", status, detail})
+	toolStatus, toolDetail := "complete", "所选范围内的工具错误全量统计，按任务与 attempt 聚合；不受事件明细窗口影响。"
+	if s.UnreadableMessages > 0 {
+		toolStatus = "partial"
+		toolDetail = fmt.Sprintf("%d 条消息格式无法解析，未计入工具错误；不能把它们记为零。", s.UnreadableMessages)
+	}
+	if s.ToolErrorsTruncated {
+		toolStatus = "truncated"
+		toolDetail = fmt.Sprintf("工具错误总数完整，但只附前 %d 个任务 attempt 的证据引用。", len(s.ToolErrors))
+	}
 	r.Coverage = append(r.Coverage,
-		Coverage{"tool_errors", "partial", "仅分析选定任务当前事件页中的工具错误；未读取、过大或旧格式消息不计为零。"},
+		Coverage{"tool_errors", toolStatus, toolDetail},
 		Coverage{"usage", "partial", "仅展示已读取的 agent.run_ended attempt 结束增量；恢复消息不重复累计，不计算不完整历史的整轮总量。"},
 		Coverage{"models", "not_collected", "未采集实际模型；配置摘要仅表明执行配置是否相同。"},
 		Coverage{"content_commits", "not_collected", "未查询内容提交时间；最近事件时间不等于最后创作进展。"})

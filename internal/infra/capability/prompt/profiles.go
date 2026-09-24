@@ -19,6 +19,72 @@ const (
 	ToolVerdictSubmit         = "verdict_submit"
 )
 
+// 模型能读写的故事文档种类只有这一份枚举。此前 proposal_submit 写了枚举、authority_read
+// 是裸 string，模型就去猜 story_context / project_rules 这类不存在的种类。
+const storyDocumentKinds = `["intent", "plan", "entity", "canon", "manuscript"]`
+
+// authority_read 三个 Worker 各抄一份，且三份都没写取值域。集中一处并补齐说明。
+const authorityReadSchema = `{
+	"type": "object",
+	"properties": {
+		"kind": {"type": "string", "enum": ` + storyDocumentKinds + `,
+			"description": "故事文档种类，只能取列出的这几种"},
+		"id": {"type": "string", "description": "文档 ID；intent 用 root，其余用该文档自己的 id（如 ch-001）"},
+		"revision": {"type": "integer", "minimum": 1,
+			"description": "必填。要读的版本，不能超过任务基线 Revision；任务输入里给了基线就用它"}
+	},
+	"required": ["kind", "id", "revision"],
+	"additionalProperties": false
+}`
+
+// 审阅发现只经 workspace_put_review 写入，裁定由宿主从记录里取（D60），
+// 但最终仍过 ReviewVerdict.Validate，所以约束必须在写入这一侧讲清。
+const reviewFindingSchema = `{
+	"type": "object",
+	"properties": {
+		"chapter_id": {"type": "string",
+			"description": "必须是本次请求范围内的章节之一（任务输入的 chapter_ids）；跨章问题挂到最相关的那一章，没有 all 这种写法"},
+		"severity": {"type": "string", "enum": ["blocking", "note"],
+			"description": "blocking=有要求未满足，必须用 directive_id 或 intent 指出是哪一项；note=仅供参考的观察，禁止带 directive_id 或 intent"},
+		"note": {"type": "string", "description": "结论与依据"},
+		"directive_id": {"type": "string", "description": "仅 blocking 可用，且与 intent 二选一，不能同时给"},
+		"intent": {"type": "string", "enum": ["required_present", "forbidden_absent", "ending_consistent"],
+			"description": "仅 blocking 可用，且与 directive_id 二选一，不能同时给"}
+	},
+	"required": ["chapter_id", "severity", "note"],
+	"additionalProperties": false
+}`
+
+const verdictSubmitSchema = `{
+	"type": "object",
+	"properties": {
+		"status": {"type": "string", "enum": ["pass", "blocked"],
+			"description": "pass=审阅记录里没有 blocking 发现；blocked=至少一条"},
+		"review_key": {"type": "string", "minLength": 1, "description": "workspace_put_review 用过的 key"},
+		"intent": {"type": "object",
+			"description": "任务要求核验意图（verify_intent）时必填：三个维度各自是否满足",
+			"properties": {
+				"required_present": {"type": "boolean"},
+				"forbidden_absent": {"type": "boolean"},
+				"ending_consistent": {"type": "boolean"}
+			},
+			"required": ["required_present", "forbidden_absent", "ending_consistent"],
+			"additionalProperties": false},
+		"directives": {"type": "array",
+			"description": "逐条声明任务输入 directives 的核验结果，不多不少；任务没带 directives 就省略本字段，不要自拟",
+			"items": {"type": "object",
+				"properties": {
+					"directive_id": {"type": "string", "description": "逐字取自任务输入的 directives"},
+					"satisfied": {"type": "boolean"},
+					"note": {"type": "string", "description": "判断依据"}
+				},
+				"required": ["directive_id", "satisfied"],
+				"additionalProperties": false}}
+	},
+	"required": ["status", "review_key"],
+	"additionalProperties": false
+}`
+
 // CapabilityDefinition 是内置故事能力的唯一静态定义。Operation Kind、Worker
 // Profile、Prompt slots 与工具 Schema 在这里共同注册，调用层不再维护平行映射。
 type CapabilityDefinition struct {
@@ -39,8 +105,8 @@ func BuiltinCapabilities() ([]CapabilityDefinition, error) {
 				ID: "architect.design", Version: "1", ModelRole: "architect",
 				PromptSlots: []Slot{SlotArchitectStoryDesign, SlotArchitectArcExpand},
 				Tools: []ToolSchema{
-					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
-					tool(ToolWorkspacePutCandidate, "把结构化候选写入当前 Operation Workspace", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"content":{"type":"object"}},"required":["key","expected_version","content"],"additionalProperties":false}`),
+					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", authorityReadSchema),
+					tool(ToolWorkspacePutCandidate, "把结构化候选写入当前 Operation Workspace", `{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"object"}},"required":["key","content"],"additionalProperties":false}`),
 					proposalTool(nil),
 				},
 				InputContract: json.RawMessage(`{"type":"object","required":["intent"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["proposal_id"]}`),
@@ -82,9 +148,14 @@ func BuiltinCapabilities() ([]CapabilityDefinition, error) {
 				ID: "editor.review", Version: "1", ModelRole: "editor",
 				PromptSlots: []Slot{SlotEditorStoryReview, SlotEditorStyleReview},
 				Tools: []ToolSchema{
-					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
-					tool(ToolWorkspacePutReview, "把审阅过程记录写入当前 Operation Workspace", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"findings":{"type":"array","items":{"type":"object"}}},"required":["key","expected_version","findings"],"additionalProperties":false}`),
-					tool(ToolVerdictSubmit, "以 review_key + review_version 引用已保存的审阅记录，不要重复传 findings；提交覆盖请求范围的结构化裁定（D30）：pass 表示无阻塞发现；任务要求核验 Intent（verify_intent）时 pass 必须附逐项意图核验声明，意图未满足应给出阻塞发现；任务输入携带 directives 时必须逐条声明核验结果（directives）；每个未满足的要求或意图维度必须至少有一条阻塞发现通过 directive_id / intent 链接到它，用户据此裁决；blocked 必须给出阻塞发现", `{"type":"object","properties":{"status":{"type":"string","enum":["pass","blocked"]},"chapter_ids":{"type":"array","items":{"type":"string"},"minItems":1},"review_key":{"type":"string","minLength":1},"review_version":{"type":"integer","minimum":1},"intent":{"type":"object","properties":{"required_present":{"type":"boolean"},"forbidden_absent":{"type":"boolean"},"ending_consistent":{"type":"boolean"}},"required":["required_present","forbidden_absent","ending_consistent"],"additionalProperties":false},"directives":{"type":"array","items":{"type":"object","properties":{"directive_id":{"type":"string"},"satisfied":{"type":"boolean"},"note":{"type":"string"}},"required":["directive_id","satisfied"],"additionalProperties":false}},"findings":{"type":"array","items":{"type":"object","properties":{"chapter_id":{"type":"string"},"severity":{"type":"string","enum":["blocking","note"]},"note":{"type":"string"},"directive_id":{"type":"string"},"intent":{"type":"string","enum":["required_present","forbidden_absent","ending_consistent"]}},"required":["chapter_id","severity","note"],"additionalProperties":false}}},"required":["status","chapter_ids","review_key","review_version"],"additionalProperties":false}`),
+					tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", authorityReadSchema),
+					tool(ToolWorkspacePutReview, "把审阅过程记录写入当前 Operation Workspace。findings 只记真正的问题；"+
+						"逐项核验结论（含「已满足」）走 verdict_submit 的 directives / intent，不要写成 note 发现",
+						`{"type":"object","properties":{"key":{"type":"string"},`+
+							`"findings":{"type":"array","items":`+reviewFindingSchema+`}},`+
+							`"required":["key","findings"],"additionalProperties":false}`),
+					tool(ToolVerdictSubmit, "提交审阅裁定：引用 workspace_put_review 写好的审阅记录。章节范围与发现由宿主按任务输入和记录填入。"+
+						"每个未满足的要求或意图维度，都要在审阅记录里有一条 blocking 发现通过 directive_id / intent 链接到它", verdictSubmitSchema),
 				},
 				InputContract: json.RawMessage(`{"type":"object","required":["chapter_ids"]}`), OutputContract: json.RawMessage(`{"type":"object","required":["verdict"]}`),
 				StopCondition: "已提交覆盖请求范围的结构化裁定（verdict_submit），或返回明确错误",
@@ -157,11 +228,11 @@ func writerRangeTools() []ToolSchema {
 
 func writerTools() []ToolSchema {
 	return []ToolSchema{
-		tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", `{"type":"object","properties":{"kind":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer"}},"required":["kind","id","revision"],"additionalProperties":false}`),
+		tool(ToolAuthorityRead, "读取指定 Revision 的权威故事文档", authorityReadSchema),
 		tool(ToolWorkspaceList, "列出当前 Operation Workspace 的持久化工件和版本", `{"type":"object","properties":{},"additionalProperties":false}`),
 		tool(ToolWorkspaceRead, "读取当前 Operation Workspace 的工件", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}`),
-		tool(ToolWorkspacePutChapter, "以版本前提写入章节工作稿", `{"type":"object","properties":{"key":{"type":"string"},"expected_version":{"type":"integer"},"chapter":{"type":"object","properties":{"id":{"type":"string"},"plan_node_id":{"type":"string"},"number":{"type":"integer"},"title":{"type":"string"},"author":{"type":"string","enum":["ai"]},"blocks":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","plan_node_id","number","title","author","blocks"],"additionalProperties":false}},"required":["key","expected_version","chapter"],"additionalProperties":false}`),
-		tool(ToolWorkspaceReplaceBlock, "按稳定 block_id 和版本前提修改一个章节块", `{"type":"object","properties":{"key":{"type":"string"},"block_id":{"type":"string"},"text":{"type":"string"},"expected_version":{"type":"integer"}},"required":["key","block_id","text","expected_version"],"additionalProperties":false}`),
+		tool(ToolWorkspacePutChapter, "写入章节工作稿：整篇覆盖，同一章全程用同一个 key", `{"type":"object","properties":{"key":{"type":"string","description":"工作稿键，一章一个，全程不要改"},"chapter":{"type":"object","properties":{"id":{"type":"string"},"plan_node_id":{"type":"string"},"number":{"type":"integer"},"title":{"type":"string"},"author":{"type":"string","enum":["ai"]},"blocks":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}},"depends_on":{"type":"array","description":"本章依赖的权威文档（实体、既有事实等），照抄读到的形状即可","items":{"type":"object","properties":{"kind":{"type":"string","enum":`+storyDocumentKinds+`},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false}}},"required":["id","plan_node_id","number","title","author","blocks"],"additionalProperties":false}},"required":["key","chapter"],"additionalProperties":false}`),
+		tool(ToolWorkspaceReplaceBlock, "按稳定 block_id 和版本前提修改一个章节块", `{"type":"object","properties":{"key":{"type":"string"},"block_id":{"type":"string"},"text":{"type":"string"},"expected_version":{"type":"integer","minimum":0,"description":"必须等于该 key 的当前版本（workspace_list 返回）"}},"required":["key","block_id","text","expected_version"],"additionalProperties":false}`),
 		proposalTool([]string{"workspace_key"}),
 	}
 }
@@ -179,7 +250,7 @@ const patchesSchema = `{
 			"document": {
 				"type": "object",
 				"properties": {
-					"kind": {"type": "string", "enum": ["intent", "plan", "entity", "canon", "manuscript"]},
+					"kind": {"type": "string", "enum": ` + storyDocumentKinds + `},
 					"id": {"type": "string"}
 				},
 				"required": ["kind", "id"],

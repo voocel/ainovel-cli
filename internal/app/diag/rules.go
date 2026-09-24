@@ -43,8 +43,8 @@ func finding(code string, count int) Finding {
 		f.Observed = fmt.Sprintf("%d 个已结束的 LLM 任务缺少当前 attempt 的结束摘要", count)
 		f.Suggestion = "该部分用量与结束原因覆盖不完整；不能把缺失记录计为零。"
 	case "execution.tool_error":
-		f.Observed = fmt.Sprintf("当前事件页记录了 %d 次工具错误", count)
-		f.Suggestion = "工具错误可能已在后续自纠，最终结果以任务状态为准。"
+		f.Observed = fmt.Sprintf("所选范围记录了 %d 次工具错误", count)
+		f.Suggestion = "证据按任务与 attempt 聚合；工具错误可能已在后续自纠，最终结果以任务状态为准。"
 	default:
 		return Finding{Code: "unknown", Count: count, Severity: "info", Certainty: "unknown"}
 	}

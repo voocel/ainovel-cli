@@ -1020,3 +1020,26 @@ Runtime 直接运行单次 `AgentLoop`：串行工具执行、同步持久化消
 决定：**哪条策略管这份提案、它是否构成 milestone、正文受哪些约束、合规证据能否自动放行，都是变更协议（§5）的判断，住在 `domain/change`（`approval.go`）；Operation Engine 只决定何时做独立分析、任务落到哪个状态。** `operation.NewEngine` 改为注入 `*change.Engine`，`operation.Store` 只列执行引擎自己调用的方法。工具边界的 `Validate` 不含授权检查是刻意的：AI 提案触及 locked 文档时走 `awaiting_approval` 等用户裁决（D23），不是模型能自纠的结构错误。
 
 同日的非协议清理：`change/engine.go` 按 engine / validate / authorize / approval 拆分；`app/task.DefaultLease` 收敛三处硬编码的租约时长；`change.Engine.BasisHolds` 收敛两处基线有效性布尔判断；原子落盘与 EPUB 容器编码从 app 移入 `infra/export`；`app/workbench` 读模型不再下发按键文案，TUI 以单一处境枚举渲染；headless 与 main 共用一张命令表。以上不改变持久化格式、任务状态或授权规则。
+
+### D59：工具报错在运行级可见，重复才立发现（2026-09-22）
+
+实证发现：一轮 5 章的运行里模型撞了 28 次工具报错（其中一章一次尝试内连撞 8 次 `workspace version conflict`），而 `diag --project` 的 findings 只有 1 条失败任务，工具报错一条不报。根因有两层：运行级快照为省预算与避免正文进投影，事件载荷一律不读（`payload=NULL`），而工具报错的标记写在载荷里，于是运行级恒为零；另一层是 `TestDiagnosticsReadOnlyLocalDetailsAndShare` 刻意断言"单次自纠的成功任务不得在运行级报成问题"——避免误报的意图本身成立。
+
+决定：**报错标记的判定下推到 SQL 谓词，运行级在不读载荷的前提下全量统计**（`json_valid` 守卫必须排在 `json_extract` 之前：SQLite 只在 WHERE 与 CASE 条件里按序短路，非法载荷否则中断整条查询；无法解析的消息单独计数并落到 coverage，不记为零）。可见性与告警分离：**总数常驻 `Metrics.ToolErrors`，任何范围都看得见；`execution.tool_error` 只在同一次 attempt 内重复报错时才立发现**（沿用 D 系列既有的 `execution.repeated_unknown_result` 惯例——重复才是信号），选定任务时照旧给全部细节。证据按 `(任务, attempt)` 聚合，只带坐标不带正文，分享导出因此也能携带该计数。
+
+配套（非协议）：`workspace_replace_block` 的冲突错误改为可自纠的文案，给出当前版本而不是只说"冲突"。全量写入工具的 `expected_version` 随后被 D60 整体移除——补说明只是缓解，根因是那个参数本就不该存在。
+
+
+### D60：宿主已知的事实不做成模型参数（2026-09-22）
+
+实证：81 次工具报错按"这个事实谁本来就知道"归类，最大一类占 33%——宿主已经掌握、却要求模型提供的信息。其中 14 次版本冲突的分布是决定性的：`workspace_put_chapter`(10) / `put_review`(3) / `put_candidate`(1) 全部是**全量写入**工具，而真正需要版本前提的 `workspace_replace_block` **一次都没错**。全量覆盖不读旧内容，却被要求报出旧版本号，模型只能猜；按块编辑的版本来自刚才的读取，本来就在手上。
+
+同期证据还表明它防的并发不存在：同一任务的多次工作区写入"写入次数 == 不同时刻"（agent loop 串行），`writer holds attempt` 围栏实际拦截 0 次。跨执行实例的保护由 attempt 围栏承担（D42），与这个参数无关。
+
+决定：**宿主能自己确定的事实，不得做成模型参数——每多一个，就多一条"必须与 X 完全一致"的校验和一次猜错的机会。** `PutWorkspaceArtifact` 的 `expectedVersion` 改为可选（`*int64`）：`nil` 表示全量覆盖，写在当前版本之上；只有读改写路径传版本前提。`workspace_put_chapter` / `put_review` / `put_candidate` 的 `expected_version` 参数删除，`workspace_replace_block` 保留。这收窄的是 §7.3 的实现范围而非推翻它：那条讲的是"**编辑**以 `block_id + expected_workspace_version` 定位，不以逐字匹配 old_string 为协议"，从未要求全量覆盖也报版本。净效果是删代码——两个冲突分支与两段自纠文案随之移除。
+
+同一标准随后清理了 `verdict_submit`：`chapter_ids`（模型复述、再校验"必须与请求完全一致"）、`review_version`（宿主已知的记录版本）、内联 `findings`（要求模型逐字节复述已存记录，属"旧协议"兼容路径，按 no-compat 一并删除）三个参数移除，范围取自任务输入、发现取自审阅记录当前版本。同一函数里 `Revision` 与 `Basis` 早已由宿主盖入，现在整个裁定只剩真正需要模型判断的 `status` / `intent` / `directives`。收尾时的证据检查（记录在提交后被改则拒）保留，宿主填入后它天然成立。
+
+同一时期暴露的另一种形态是两份真理源漂移：`ManuscriptChapter` 有 `depends_on`，`workspace_put_chapter` 的 schema 没列且 `additionalProperties=false`，模型照抄读到的章节写回即被硬拒（单轮 18 次）。字段覆盖可以机械校验——`TestToolSchemaCoversDomainFields` 以反射比对领域结构体 json tag 与 schema properties，不需要人工登记映射；取值域 enum 不做同类自动检查，因为正确的 enum 常是领域取值的子集（如 `authority_read.kind` 只开放 5 种故事文档），推导不出来。
+
+仍未清的（同一标准，待动手）：工作稿 `key` 由模型自由命名（`ch-001-draft`、`chapter-4-draft`、`ch-010` 并存），回读时只能猜自己起的名字，单轮 10 次读不存在的 key；而 `workspace_put_chapter` 的 payload 已有 `chapter.id`，key 与之冗余。改它会连带 `proposal_submit` 的 `workspace_key(s)`，动的是提交路径，单独排期。另有一类不同根因：`proposal_submit` 的 `patches[].content` 是自由 object，entity/canon/plan 的形状与取值域全部写在一段约 800 字的散文描述里，约 14% 的报错出自这里。

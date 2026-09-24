@@ -192,13 +192,19 @@ func (v ReviewVerdict) Validate() error {
 			blocking++
 		case FindingNote:
 			if finding.DirectiveID != "" || finding.Intent != "" {
-				return fmt.Errorf("review finding %d links a verification item but is not blocking: %w", i, ErrInvalid)
+				// 工具边界的错误要能让模型当场自纠：指明改哪个字段，不要只说违反了规则。
+				return fmt.Errorf(
+					"review finding %d has severity %q but links a verification item; drop directive_id/intent, "+
+						"or use severity %q if the requirement is actually unmet (satisfied items belong in the verdict's directives/intent): %w",
+					i, FindingNote, FindingBlocking, ErrInvalid)
 			}
 		default:
 			return fmt.Errorf("unknown finding severity %q: %w", finding.Severity, ErrInvalid)
 		}
 		if finding.DirectiveID != "" && finding.Intent != "" {
-			return fmt.Errorf("review finding %d cannot link both a directive and an intent dimension: %w", i, ErrInvalid)
+			return fmt.Errorf(
+				"review finding %d links both directive %q and intent dimension %q; keep exactly one: %w",
+				i, finding.DirectiveID, finding.Intent, ErrInvalid)
 		}
 		if finding.Intent != "" && !validIntentDimension(finding.Intent) {
 			return fmt.Errorf("review finding %d links unknown intent dimension %q: %w", i, finding.Intent, ErrInvalid)
@@ -252,7 +258,9 @@ func ValidateReviewVerdictForOperation(operation Operation, verdict ReviewVerdic
 	}
 	for _, finding := range verdict.Findings {
 		if _, ok := requested[finding.ChapterID]; !ok {
-			return fmt.Errorf("finding chapter %q is outside the requested range: %w", finding.ChapterID, ErrInvalid)
+			// 报错要带上取值域，否则模型只能猜（曾出现用 "all" 表示跨章）。
+			return fmt.Errorf("finding chapter %q is outside the requested range %v; attach cross-chapter issues to the most relevant chapter: %w",
+				finding.ChapterID, input.ChapterIDs, ErrInvalid)
 		}
 	}
 	if input.VerifyIntent && verdict.Status == ReviewPass && !verdict.IntentSatisfied() {
@@ -268,7 +276,13 @@ func ValidateReviewVerdictForOperation(operation Operation, verdict ReviewVerdic
 		expected[directive.ID] = struct{}{}
 	}
 	if len(expected) != len(verdict.Directives) {
-		return fmt.Errorf("verdict does not exactly cover the requested directives: %w", ErrInvalid)
+		// 任务没带 directives 时模型常自拟几条；说清期望集合，不要只说"不匹配"。
+		requestedIDs := make([]string, 0, len(input.Directives))
+		for _, directive := range input.Directives {
+			requestedIDs = append(requestedIDs, directive.ID)
+		}
+		return fmt.Errorf("verdict declares %d directives but the task requested %d %v; declare exactly these (omit the field when the task requests none): %w",
+			len(verdict.Directives), len(requestedIDs), requestedIDs, ErrInvalid)
 	}
 	for _, directive := range verdict.Directives {
 		if _, ok := expected[directive.DirectiveID]; !ok {

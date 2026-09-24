@@ -12,13 +12,16 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
-// Operation Workspace 工件：乐观版本写入、读取、后继继承（D19、D55）。
-
-func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact model.WorkspaceArtifact, expectedVersion int64, writerAttempt int) (model.WorkspaceArtifact, error) {
+// Operation Workspace 工件：写入、读取、后继继承（D19、D55、D60）。
+//
+// expectedVersion 为 nil 表示全量覆盖——写入方不依赖旧内容，写在当前版本之上。
+// 只有读改写（按 block 编辑）才传版本前提：那时版本来自刚才的读取，不是猜的。
+// 跨执行实例的保护由 writerAttempt 围栏承担（D42），不靠这个前提。
+func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact model.WorkspaceArtifact, expectedVersion *int64, writerAttempt int) (model.WorkspaceArtifact, error) {
 	if strings.TrimSpace(artifact.OperationID) == "" || strings.TrimSpace(artifact.Key) == "" || strings.TrimSpace(artifact.MediaType) == "" || len(artifact.Content) == 0 {
 		return model.WorkspaceArtifact{}, fmt.Errorf("artifact operation, key, media type and content are required: %w", model.ErrInvalid)
 	}
-	if expectedVersion < 0 || artifact.UpdatedAt.IsZero() {
+	if (expectedVersion != nil && *expectedVersion < 0) || artifact.UpdatedAt.IsZero() {
 		return model.WorkspaceArtifact{}, fmt.Errorf("artifact expected version and time are invalid: %w", model.ErrInvalid)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -46,12 +49,20 @@ func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact model.Workspa
 	err = tx.QueryRowContext(ctx, `
 		SELECT version FROM operation_artifacts
 		WHERE operation_id = ? AND artifact_key = ?`, artifact.OperationID, artifact.Key).Scan(&current)
-	artifact.Digest = model.Digest(artifact.Content)
-	artifact.Version = expectedVersion + 1
+	exists := true
 	if errors.Is(err, sql.ErrNoRows) {
-		if expectedVersion != 0 {
-			return model.WorkspaceArtifact{}, model.ErrWorkspaceConflict
-		}
+		exists, current = false, 0
+	} else if err != nil {
+		return model.WorkspaceArtifact{}, fmt.Errorf("read workspace artifact version: %w", err)
+	}
+	if expectedVersion != nil && *expectedVersion != current {
+		return model.WorkspaceArtifact{}, fmt.Errorf(
+			"workspace key %q is at version %d, not %d; re-read it before editing: %w",
+			artifact.Key, current, *expectedVersion, model.ErrWorkspaceConflict)
+	}
+	artifact.Digest = model.Digest(artifact.Content)
+	artifact.Version = current + 1
+	if !exists {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO operation_artifacts (
 				operation_id, artifact_key, version, media_type, content, content_digest, updated_at_unix_ms
@@ -59,24 +70,14 @@ func (s *Store) PutWorkspaceArtifact(ctx context.Context, artifact model.Workspa
 			artifact.OperationID, artifact.Key, artifact.MediaType, artifact.Content, artifact.Digest, artifact.UpdatedAt.UnixMilli()); err != nil {
 			return model.WorkspaceArtifact{}, fmt.Errorf("insert workspace artifact: %w", err)
 		}
-	} else if err != nil {
-		return model.WorkspaceArtifact{}, fmt.Errorf("read workspace artifact version: %w", err)
 	} else {
-		if current != expectedVersion {
-			return model.WorkspaceArtifact{}, fmt.Errorf("expected workspace version %d, current %d: %w", expectedVersion, current, model.ErrWorkspaceConflict)
-		}
-		result, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE operation_artifacts
 			SET version = ?, media_type = ?, content = ?, content_digest = ?, updated_at_unix_ms = ?
 			WHERE operation_id = ? AND artifact_key = ? AND version = ?`,
 			artifact.Version, artifact.MediaType, artifact.Content, artifact.Digest, artifact.UpdatedAt.UnixMilli(),
-			artifact.OperationID, artifact.Key, expectedVersion)
-		if err != nil {
+			artifact.OperationID, artifact.Key, current); err != nil {
 			return model.WorkspaceArtifact{}, fmt.Errorf("update workspace artifact: %w", err)
-		}
-		count, err := result.RowsAffected()
-		if err != nil || count != 1 {
-			return model.WorkspaceArtifact{}, model.ErrWorkspaceConflict
 		}
 	}
 	payload, err := json.Marshal(map[string]any{"key": artifact.Key, "version": artifact.Version, "digest": artifact.Digest})

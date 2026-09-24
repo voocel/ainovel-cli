@@ -69,7 +69,7 @@ func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) 
 		Blocks: []domainmodel.ManuscriptBlock{{ID: "p-1", Text: "他抵达山门……"}},
 	}
 	chapterArgs, _ := json.Marshal(map[string]any{
-		"key": "chapter/chapter-1", "expected_version": 0,
+		"key":     "chapter/chapter-1",
 		"chapter": chapter,
 	})
 	if _, err := putChapter(ctx, chapterArgs); err != nil {
@@ -229,7 +229,7 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 		Blocks: []domainmodel.ManuscriptBlock{{ID: "block-1", Text: "已经写入工作区的半成品。"}},
 	}
 	artifact, err := workspace.New(authorityStore).PutChapter(
-		ctx, first.ID, "chapter/chapter-1", chapter, 0, first.Attempt, now.Add(2*time.Second),
+		ctx, first.ID, "chapter/chapter-1", chapter, nil, first.Attempt, now.Add(2*time.Second),
 	)
 	if err != nil {
 		t.Fatalf("write recoverable draft: %v", err)
@@ -357,45 +357,22 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
-	// 递进式纠错：漏审范围被拒 → 终审 pass 缺意图核验声明被拒 → 与工件不一致被拒
-	// → 漏掉要求核验被拒 → 完整裁定通过。
+	// 递进式纠错：终审 pass 缺意图核验声明被拒 → 漏掉要求核验被拒 → 完整裁定通过。
+	// 章节范围与发现由宿主从任务输入和审阅记录填入（D60），模型不再复述，
+	// "漏审范围""与记录不一致"这两类错误在结构上已不可能发生。
 	findings := []map[string]any{{"chapter_id": "chapter-2", "severity": "note", "note": "第二章节奏偏慢"}}
 	review, _ := json.Marshal(map[string]any{
-		"key": "review/findings", "expected_version": 0, "findings": findings,
+		"key": "review/findings", "findings": findings,
 	})
-	incomplete, _ := json.Marshal(map[string]any{
-		"review_version": 1,
-		"status":         "pass", "chapter_ids": []string{"chapter-1"},
-		"review_key": "review/findings", "findings": findings,
-	})
-	noIntent, _ := json.Marshal(map[string]any{
-		"review_version": 1,
-		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
-		"review_key": "review/findings", "findings": findings,
-	})
-	mismatched, _ := json.Marshal(map[string]any{
-		"review_version": 1,
-		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
-		"review_key": "review/findings",
-		"intent":     map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
-		"findings":   []map[string]any{{"chapter_id": "chapter-2", "severity": "note", "note": "与工件不一致"}},
-	})
-	noDirectives, _ := json.Marshal(map[string]any{
-		"review_version": 1,
-		"status":         "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
-		"review_key": "review/findings",
-		"intent":     map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
-		"findings":   findings,
-	})
+	intent := map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true}
+	noIntent, _ := json.Marshal(map[string]any{"status": "pass", "review_key": "review/findings"})
+	noDirectives, _ := json.Marshal(map[string]any{"status": "pass", "review_key": "review/findings", "intent": intent})
 	complete, _ := json.Marshal(map[string]any{
-		"status": "pass", "chapter_ids": []string{"chapter-1", "chapter-2"},
-		"review_key":     "review/findings",
-		"review_version": 1,
-		"intent":         map[string]any{"required_present": true, "forbidden_absent": true, "ending_consistent": true},
-		"directives":     []map[string]any{{"directive_id": "hook", "satisfied": true}},
+		"status": "pass", "review_key": "review/findings", "intent": intent,
+		"directives": []map[string]any{{"directive_id": "hook", "satisfied": true}},
 	})
 	model := &verdictRuntimeModel{
-		review: review, steps: []json.RawMessage{incomplete, noIntent, mismatched, noDirectives, complete},
+		review: review, steps: []json.RawMessage{noIntent, noDirectives, complete},
 		now: now.Add(2 * time.Second),
 	}
 	runtime := boundRuntime(authorityStore, model)
@@ -423,23 +400,7 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if err != nil || artifact.MediaType != domainmodel.ReviewArtifactMediaType {
 		t.Fatalf("review artifact = %#v, %v", artifact, err)
 	}
-	for _, version := range []int64{0, 2} {
-		candidate := verdict
-		candidate.Findings = nil
-		if err := runtime.materializeReviewArtifact(ctx, operation, &candidate, &version); !errors.Is(err, domainmodel.ErrStateConflict) {
-			t.Fatalf("invalid review version %d accepted: %v", version, err)
-		}
-	}
-	// 已冻结的旧协议仍可提交一致的 findings，不能偷偷改写显式内容。
-	legacy := verdict
-	if err := runtime.materializeReviewArtifact(ctx, operation, &legacy, nil); err != nil {
-		t.Fatalf("legacy review rejected: %v", err)
-	}
-	legacy.Findings = nil
-	if err := runtime.materializeReviewArtifact(ctx, operation, &legacy, nil); !errors.Is(err, domainmodel.ErrInvalid) {
-		t.Fatalf("unversioned omission accepted: %v", err)
-	}
-	// 活动通道（页面设计 §4）：执行过程以带归属的事件发布——四次被拒的提交
+	// 活动通道（页面设计 §4）：执行过程以带归属的事件发布——两次被拒的提交
 	// 呈现为出错条目（模型自纠可见），最终提交成功收尾。
 	feed, ok := hub.Snapshot("book-review")
 	if !ok || feed.RunID != operation.RunID || feed.OperationID != operation.ID {
@@ -459,18 +420,18 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 			accepted++
 		}
 	}
-	if rejected != 4 || accepted != 1 {
+	if rejected != 2 || accepted != 1 {
 		t.Fatalf("verdict_submit activity: rejected=%d accepted=%d entries=%#v", rejected, accepted, feed.Entries)
 	}
-	// 成功提交直接正常收尾，不再请求第七次模型回应。
-	if model.requests != 6 || feed.Usage.Input != 60 || feed.Usage.Output != 18 || feed.Usage.Cost < 0.059 || feed.Usage.Cost > 0.061 {
+	// 成功提交直接正常收尾，不再请求第五次模型回应。
+	if model.requests != 4 || feed.Usage.Input != 40 || feed.Usage.Output != 12 || feed.Usage.Cost < 0.039 || feed.Usage.Cost > 0.041 {
 		t.Fatalf("usage totals = %#v", feed.Usage)
 	}
 	// 用量按服务端上报的模型归档（右栏按模型分列的依据）。
-	if len(feed.Models) != 1 || feed.Models[0].Model != "verdict-model" || feed.Models[0].Provider != "test" || feed.Models[0].Messages != 6 || feed.ActiveModel != "verdict-model" {
+	if len(feed.Models) != 1 || feed.Models[0].Model != "verdict-model" || feed.Models[0].Provider != "test" || feed.Models[0].Messages != 4 || feed.ActiveModel != "verdict-model" {
 		t.Fatalf("per-model usage = %#v active=%q", feed.Models, feed.ActiveModel)
 	}
-	if task := feed.Tasks[0]; task.Turns != 6 || task.Calls != 6 {
+	if task := feed.Tasks[0]; task.Turns != 4 || task.Calls != 4 {
 		t.Fatalf("task counters = %+v", task)
 	}
 }
@@ -944,7 +905,7 @@ func TestAffectedRewriteSubmissionCoversEveryWorkspaceChapter(t *testing.T) {
 		if _, err := authorityStore.PutWorkspaceArtifact(ctx, domainmodel.WorkspaceArtifact{
 			OperationID: operation.ID, Key: key, MediaType: workspace.ChapterMediaType,
 			Content: content, UpdatedAt: now,
-		}, 0, operation.Attempt); err != nil {
+		}, nil, operation.Attempt); err != nil {
 			t.Fatalf("put workspace chapter: %v", err)
 		}
 		patches = append(patches,
@@ -1022,7 +983,7 @@ func TestWriterSubmissionEnforcesDirectiveWordCounts(t *testing.T) {
 		if _, err := authorityStore.PutWorkspaceArtifact(ctx, domainmodel.WorkspaceArtifact{
 			OperationID: operation.ID, Key: "chapter/chapter-1", MediaType: workspace.ChapterMediaType,
 			Content: content, UpdatedAt: now,
-		}, version, operation.Attempt); err != nil {
+		}, &version, operation.Attempt); err != nil {
 			t.Fatalf("put workspace chapter: %v", err)
 		}
 		patches := []domainmodel.Patch{
@@ -1252,7 +1213,7 @@ func TestWriterSubmissionRequiresRedeclaringChapterFacts(t *testing.T) {
 	content, _ := json.Marshal(chapter)
 	if _, err := authorityStore.PutWorkspaceArtifact(ctx, domainmodel.WorkspaceArtifact{
 		OperationID: operation.ID, Key: "chapter/chapter-1", MediaType: workspace.ChapterMediaType, Content: content, UpdatedAt: now,
-	}, 0, operation.Attempt); err != nil {
+	}, nil, operation.Attempt); err != nil {
 		t.Fatalf("put workspace chapter: %v", err)
 	}
 	runtime := NewRuntime(authorityStore)

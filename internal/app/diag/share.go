@@ -42,6 +42,7 @@ type ShareMetrics struct {
 	Attempts          int            `json:"attempts"`
 	RetriedOperations int            `json:"retried_operations"`
 	Events            int            `json:"events"`
+	ToolErrors        int            `json:"tool_errors"`
 }
 type ShareFinding struct {
 	Code      string          `json:"code"`
@@ -114,7 +115,7 @@ func Share(report Report) ShareReport {
 		DatabaseIssue: databaseIssue(report.Header.DatabaseIssue),
 		BuildVersion:  safeBuild(report.Header.BuildVersion), Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		SchemaVersion: report.Header.SchemaVersion, Shareable: true, State: safeState(report.Summary.State),
-		Metrics:  ShareMetrics{report.Metrics.Operations, map[string]int{}, report.Metrics.Attempts, report.Metrics.RetriedOperations, report.Metrics.Events},
+		Metrics:  ShareMetrics{report.Metrics.Operations, map[string]int{}, report.Metrics.Attempts, report.Metrics.RetriedOperations, report.Metrics.Events, report.Metrics.ToolErrors},
 		Findings: []ShareFinding{}, Coverage: []ShareCoverage{}, Operations: []ShareOperation{}, Events: []ShareEvent{}}
 	if report.Header.Scope.ProjectID != "" {
 		s.Project = "book-1"

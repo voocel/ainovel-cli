@@ -56,7 +56,7 @@ type runtimeStore interface {
 	ListPlanNodes(context.Context, model.AuthorityTarget, model.Revision) ([]model.PlanNode, error)
 	GetWorkspaceArtifact(context.Context, string, string) (model.WorkspaceArtifact, error)
 	ListWorkspaceArtifacts(context.Context, string) ([]model.WorkspaceArtifact, error)
-	PutWorkspaceArtifact(context.Context, model.WorkspaceArtifact, int64, int) (model.WorkspaceArtifact, error)
+	PutWorkspaceArtifact(context.Context, model.WorkspaceArtifact, *int64, int) (model.WorkspaceArtifact, error)
 	AppendOperationEvent(context.Context, model.OperationEvent) (model.OperationEvent, error)
 	ListOperationEvents(context.Context, string) ([]model.OperationEvent, error)
 }

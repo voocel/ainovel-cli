@@ -91,6 +91,73 @@ func TestDiagScopePaginationAndPayloadBudget(t *testing.T) {
 	}
 }
 
+// 工具报错必须在运行级就能统计出来：运行级不读载荷，统计只能走 SQL 谓词。
+// 回归的样子是这里归零而选中任务时才有数——那正是用户看不到错误的那个缺口。
+func TestDiagCountsToolErrorsWithoutReadingPayloads(t *testing.T) {
+	s := openOperationStore(t)
+	seedDiagProject(t, s)
+	ctx := context.Background()
+	for _, id := range []string{"op-a", "op-b"} {
+		if _, err := s.CreateOperation(ctx, testOperation(id, 0, operationTime())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func(operationID string, sequence int, attempt int, payload string) {
+		t.Helper()
+		if _, err := s.db.Exec(`INSERT INTO operation_events(operation_id,sequence,step_id,attempt,idempotency_key,kind,payload,payload_digest,created_at_unix_ms)
+			VALUES (?,?,'',?,?,'agent.message_committed',?,'digest',?)`,
+			operationID, sequence, attempt, fmt.Sprint(operationID, sequence), []byte(payload), sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const toolError = `{"role":"tool","metadata":{"is_error":true},"content":"workspace version conflict"}`
+	commit("op-a", 1, 1, toolError)
+	commit("op-a", 2, 1, toolError)
+	commit("op-a", 3, 2, toolError)                                           // 同一任务的另一次尝试单独成组
+	commit("op-a", 4, 2, `{"role":"tool","metadata":{"is_error":false}}`)     // 成功的工具结果不计
+	commit("op-a", 5, 2, `{"role":"assistant","metadata":{"is_error":true}}`) // 非工具消息不计
+	commit("op-a", 6, 2, `not json at all`)                                   // 非法载荷不能中断查询，也不能记为零
+	commit("op-b", 7, 1, toolError)
+
+	snap, err := s.ReadDiagSnapshot(ctx, DiagRequest{ProjectID: "book-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.ToolErrorCount != 4 {
+		t.Fatalf("工具错误计数 = %d, want 4", snap.ToolErrorCount)
+	}
+	if snap.UnreadableMessages != 1 {
+		t.Fatalf("无法解析的消息数 = %d, want 1", snap.UnreadableMessages)
+	}
+	for _, event := range snap.Events {
+		if len(event.Payload) != 0 {
+			t.Fatal("运行级快照为统计工具错误读取了载荷")
+		}
+	}
+	got := map[string]DiagToolError{}
+	for _, group := range snap.ToolErrors {
+		got[fmt.Sprintf("%s#%d", group.OperationID, group.Attempt)] = group
+	}
+	want := map[string]struct {
+		count int
+		last  int64
+	}{
+		"op-a#1": {2, 2}, "op-a#2": {1, 3}, "op-b#1": {1, 7},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("聚合分组 = %+v, want %d 组", snap.ToolErrors, len(want))
+	}
+	for key, expected := range want {
+		group, ok := got[key]
+		if !ok {
+			t.Fatalf("缺少分组 %s；实际 %+v", key, snap.ToolErrors)
+		}
+		if group.Count != expected.count || group.LastSequence != expected.last {
+			t.Errorf("%s = 次数 %d 末条 %d, want %d / %d", key, group.Count, group.LastSequence, expected.count, expected.last)
+		}
+	}
+}
+
 func TestDiagEmptyProjectAndReadOnlyOpen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "diag.db")

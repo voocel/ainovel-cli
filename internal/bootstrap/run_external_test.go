@@ -157,7 +157,7 @@ func (e *externalGenerationExecutor) submit(ctx context.Context, operation model
 	if _, err := e.store.PutWorkspaceArtifact(ctx, model.WorkspaceArtifact{
 		OperationID: operation.ID, Key: model.ExternalRequestKey, MediaType: model.ExternalRequestMediaType,
 		Content: record, UpdatedAt: e.now,
-	}, expectedVersion, operation.Attempt); err != nil {
+	}, &expectedVersion, operation.Attempt); err != nil {
 		return "", err
 	}
 	return e.service.Submit(requestID, input.Target.ID), nil

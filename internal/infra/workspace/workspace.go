@@ -33,7 +33,7 @@ func (s *Service) PutChapter(
 	ctx context.Context,
 	operationID, key string,
 	chapter model.ManuscriptChapter,
-	expectedVersion int64,
+	expectedVersion *int64, // nil = 整篇覆盖；按块编辑才带版本前提
 	attempt int,
 	updatedAt time.Time,
 ) (model.WorkspaceArtifact, error) {
@@ -96,5 +96,5 @@ func (s *Service) ReplaceChapterBlock(
 	if !found {
 		return model.WorkspaceArtifact{}, fmt.Errorf("chapter block %q: %w", blockID, ErrBlockNotFound)
 	}
-	return s.PutChapter(ctx, operationID, key, chapter, expectedVersion, attempt, updatedAt)
+	return s.PutChapter(ctx, operationID, key, chapter, &expectedVersion, attempt, updatedAt)
 }

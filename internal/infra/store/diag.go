@@ -29,6 +29,10 @@ type DiagSnapshot struct {
 	ExpiredLeaseCount           int
 	ResultUnknownCount          int
 	MissingCompletionEventCount int
+	ToolErrorCount              int
+	ToolErrors                  []DiagToolError
+	ToolErrorsTruncated         bool
+	UnreadableMessages          int
 	RetriedOperationCount       int
 	RunEventBoundary            int64
 	LastEventAt                 *time.Time
@@ -66,6 +70,15 @@ type DiagEvent struct {
 	CreatedAt        time.Time
 	Payload          []byte
 	PayloadTruncated bool
+}
+
+// DiagToolError 把一次 attempt 内的工具报错聚合成一个坐标：报错标记在消息载荷里，
+// 但统计只走 SQL 谓词，载荷不进投影，因此运行级诊断也能给出结论。
+type DiagToolError struct {
+	OperationID  string
+	Attempt      int
+	LastSequence int64
+	Count        int
 }
 
 // ReadDiagSnapshot reads bounded details and scope-wide aggregates from a single
@@ -178,6 +191,9 @@ func (s *Store) ReadDiagSnapshot(ctx context.Context, req DiagRequest) (DiagSnap
 	var lastEvent sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM((SELECT COUNT(*) FROM operation_events e WHERE e.operation_id=o.id)),0),MAX((SELECT created_at_unix_ms FROM operation_events e WHERE e.operation_id=o.id ORDER BY sequence DESC LIMIT 1)) FROM operations o WHERE `+scope, args...).Scan(&out.EventCount, &lastEvent)
 	if err != nil {
+		return out, err
+	}
+	if err = readDiagToolErrors(ctx, tx, scope, args, &out); err != nil {
 		return out, err
 	}
 	if lastRun.Valid && (!lastEvent.Valid || lastRun.Int64 > lastEvent.Int64) && req.OperationID == "" {
