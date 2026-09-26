@@ -387,10 +387,9 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 		llm.WithStreamIdleTimeout(streamIdle),
 		llm.WithProviderExtra(providerExtra),
 		llm.WithExtra(pc.ExtraBody),
-		// 部分上游返回的 tool_use id 会带 '#'、':' 等字符，而请求校验只接受
-		// [A-Za-z0-9_-]；默认策略 RepairNone 会在发出前直接判非法（ErrorTypeValidation），
-		// 使整轮会话反复失败。此处开启归一化，tool_result 侧由同一映射成对改写。
-		llm.WithClientOptions(litellm.WithMessageRepair(litellm.RepairToolUseIDs)),
+		// 部分上游的 tool_use id 带 '#'、':' 等字符，发出前的校验只接受 [A-Za-z0-9_-]；
+		// 归一化后 tool_result 按同一映射成对改写。
+		llm.WithClientOptions(litellm.WithMessageRepair(litellm.RepairNormalizeToolUseIDs)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("provider %s (%s): %w: %w", providerKey, providerType, errs.ErrProvider, err)
