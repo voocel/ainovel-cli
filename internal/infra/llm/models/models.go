@@ -4,12 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/voocel/agentcore"
 	agentllm "github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
-	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/provider"
 )
 
 type Config struct {
@@ -18,8 +17,6 @@ type Config struct {
 	Model    string
 	APIKey   string
 	BaseURL  string
-	Timeout  time.Duration
-	Extra    map[string]any
 	// Thinking 是思考强度意图（空 = 沿用模型默认）；生效值由执行时按模型能力折算。
 	Thinking agentcore.ThinkingLevel
 }
@@ -61,31 +58,15 @@ func Bind(config Config) (Binding, error) {
 	return Binding{Provider: config.Provider, Model: config.Model, Thinking: config.Thinking, Digest: digest, Chat: chat}, nil
 }
 
+const requiredMaxTokens = 32000
+
 func New(config Config) (agentcore.ChatModel, error) {
 	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.Model) == "" {
 		return nil, fmt.Errorf("model provider and name are required: %w", model.ErrInvalid)
 	}
-	// 部分上游的 tool_use id 带 '#'、':' 等字符，发出前的校验只接受 [A-Za-z0-9_-]；
-	// 归一化后 tool_result 按同一映射成对改写。
-	options := []agentllm.ModelOption{
-		agentllm.WithClientOptions(litellm.WithMessageRepair(litellm.RepairNormalizeToolUseIDs)),
-	}
-	if config.API != "" {
-		options = append(options, agentllm.WithProviderExtra(map[string]any{"api": config.API}))
-	}
-	if config.APIKey != "" {
-		options = append(options, agentllm.WithAPIKey(config.APIKey))
-	}
-	if config.BaseURL != "" {
-		options = append(options, agentllm.WithBaseURL(config.BaseURL))
-	}
-	if config.Timeout != 0 {
-		options = append(options, agentllm.WithRequestTimeout(config.Timeout))
-	}
-	if len(config.Extra) != 0 {
-		options = append(options, agentllm.WithExtra(config.Extra))
-	}
-	model, err := agentllm.NewModel(config.Provider, config.Model, options...)
+	conn := provider.Config{APIKey: config.APIKey, BaseURL: config.BaseURL, API: config.API}
+	// 必须带输出上限的厂商（如 Anthropic）用这个值；Claude 4 起的模型都接受，写一章绰绰有余。
+	model, err := agentllm.NewModel(config.Provider, config.Model, conn, agentllm.WithMaxTokensIfRequired(requiredMaxTokens))
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +94,10 @@ func (config Config) Digest() (string, error) {
 		API      string                  `json:"api,omitempty"`
 		Model    string                  `json:"model"`
 		BaseURL  string                  `json:"base_url,omitempty"`
-		Timeout  time.Duration           `json:"timeout,omitempty"`
-		Extra    map[string]any          `json:"extra,omitempty"`
 		Thinking agentcore.ThinkingLevel `json:"thinking,omitempty"`
 	}{
 		Provider: config.Provider, API: config.API, Model: config.Model, BaseURL: config.BaseURL,
-		Timeout: config.Timeout, Extra: config.Extra, Thinking: config.Thinking,
+		Thinking: config.Thinking,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode model config digest: %w", err)

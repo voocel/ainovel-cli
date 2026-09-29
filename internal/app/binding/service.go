@@ -243,7 +243,8 @@ func Verify(ctx context.Context, config appconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	modelConfig.Timeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	return models.Verify(ctx, modelConfig)
 }
 

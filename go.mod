@@ -1,6 +1,6 @@
 module github.com/voocel/ainovel-cli
 
-go 1.25.5
+go 1.26
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -10,8 +10,8 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
-	github.com/voocel/agentcore v1.8.3
-	github.com/voocel/litellm v1.8.10
+	github.com/voocel/agentcore v1.8.4
+	github.com/voocel/litellm v1.9.2
 	modernc.org/sqlite v1.56.0
 )
 
