@@ -1001,7 +1001,7 @@ Restart 的后继创建与前任工作区继承必须在同一事务内提交，
 
 审阅提交采用版本引用：模型先保存 findings，再提交 `review_key` + `review_version` 与审阅判断；宿主核对版本并装配 findings，之后执行完整裁定校验。旧快照的显式 findings 必须与工件一致，不能被宿主静默覆盖。
 
-Runtime 直接运行单次 `AgentLoop`：串行工具执行、同步持久化消息，`proposal_submit` / `verdict_submit` 成功且结果消息落盘后通过 `StopAfterTool` 正常结束，再交给 Operation Engine 收尾。取消不作为成功信号，落盘错误保留原始错误链；实时事件消费到通道关闭，用量仅累计本次执行的新消息。无需额外 Agent 会话状态或自建调度层。
+Runtime 直接运行单次 `agentcore.Run`：串行工具执行，每条消息在 `Emit` 的 `MessageEnd` 里同步落盘（落盘失败即停止执行），`proposal_submit` / `verdict_submit` 成功后以 `Result.Terminate` 正常结束，未提交就想停时由 `OnStop` 提醒继续，再交给 Operation Engine 收尾。取消不作为成功信号，落盘错误保留原始错误链；`Run` 返回时事件已全部送达，用量仅累计本次执行的新消息。无需额外 Agent 会话状态或自建调度层。
 
 真实实证暴露的缺口：第 2 章的 Agent 会话结束后在收尾被拒，Run 立即转 `failed`；Run 是终态，协调器里已有的 Resume/后继机制永远走不到，用户续跑只能新建 Run 从头重写，草稿与对话全部作废。执行失败是会话级事件，不是整轮创作的失败。
 

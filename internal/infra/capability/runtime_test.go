@@ -8,7 +8,6 @@ import (
 	"maps"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +20,9 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 	"github.com/voocel/ainovel-cli/internal/infra/workspace"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/catalog"
+	"github.com/voocel/litellm/litellmtest"
 )
 
 func TestRuntimeToolsRespectAuthoritySnapshotAndWorkspaceBoundary(t *testing.T) {
@@ -237,25 +239,25 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write recoverable draft: %v", err)
 	}
-	previous := agentcore.UserMsg("这是崩溃前已经提交到会话日志的原始任务")
-	previous.Timestamp = now.Add(3 * time.Second)
+	previous := agentcore.UserText("这是崩溃前已经提交到会话日志的原始任务")
+	previous.Time = now.Add(3 * time.Second)
 	payload, _ := json.Marshal(previous)
 	if _, err := authorityStore.AppendOperationEvent(ctx, domainmodel.OperationEvent{
 		OperationID: first.ID, StepID: "agent.message", Attempt: first.Attempt,
 		IdempotencyKey: "agent-message:1:1", Kind: "agent.message_committed",
-		Payload: payload, CreatedAt: previous.Timestamp,
+		Payload: payload, CreatedAt: previous.Time,
 	}); err != nil {
 		t.Fatalf("persist previous message: %v", err)
 	}
 	previousReply := agentcore.Message{
-		Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("草稿已保存")},
-		Usage: &agentcore.Usage{Input: 100, Output: 20, TotalTokens: 120}, Timestamp: previous.Timestamp,
+		Role: litellm.RoleAssistant, Blocks: []litellm.Block{litellm.Text("草稿已保存")},
+		Usage: &agentcore.Usage{Usage: litellm.Usage{InputTokens: 100, OutputTokens: 20}}, Time: previous.Time,
 	}
 	payload, _ = json.Marshal(previousReply)
 	if _, err := authorityStore.AppendOperationEvent(ctx, domainmodel.OperationEvent{
 		OperationID: first.ID, StepID: "agent.message", Attempt: first.Attempt,
 		IdempotencyKey: "agent-message:1:2", Kind: "agent.message_committed",
-		Payload: payload, CreatedAt: previousReply.Timestamp,
+		Payload: payload, CreatedAt: previousReply.Time,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -277,8 +279,8 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 		"reason": "继续并提交已有工作稿", "workspace_key": artifact.Key, "workspace_version": artifact.Version,
 		"facts": []map[string]any{{"subject": "主角", "predicate": "event.chapter_outcome", "value": "完成已有工作稿"}},
 	})
-	model := &recoveryRuntimeModel{proposalArgs: proposalArgs, now: now.Add(7 * time.Second)}
-	runtime := boundRuntime(authorityStore, model)
+	model := recoveryScript(proposalArgs)
+	runtime := boundRuntime(authorityStore, testChat(model))
 	runtime.now = func() time.Time { return now.Add(8 * time.Second) }
 	outcome, err := runtime.Execute(ctx, second)
 	if err != nil {
@@ -287,15 +289,16 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 	if outcome.Proposal == nil || len(outcome.Proposal.Patches) != 2 || outcome.Proposal.Patches[0].Document.ID != chapter.ID {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	if len(model.requests) != 2 {
-		t.Fatalf("successful submission made extra model calls: %d", len(model.requests))
+	if len(model.Requests()) != 2 {
+		t.Fatalf("successful submission made extra model calls: %d", len(model.Requests()))
 	}
-	firstRequest := model.Request(0)
+	firstRequest := model.Requests()[0].Messages
 	foundPrevious, foundRecovery, foundFailure := false, false, false
 	for _, message := range firstRequest {
-		foundPrevious = foundPrevious || message.TextContent() == previous.TextContent()
-		foundRecovery = foundRecovery || strings.Contains(message.TextContent(), "先用 workspace_list")
-		foundFailure = foundFailure || strings.Contains(message.TextContent(), "上一次尝试失败原因：simulated process failure")
+		text := requestText(message)
+		foundPrevious = foundPrevious || text == previous.Text()
+		foundRecovery = foundRecovery || strings.Contains(text, "先用 workspace_list")
+		foundFailure = foundFailure || strings.Contains(text, "上一次尝试失败原因：simulated process failure")
 	}
 	if !foundPrevious || !foundRecovery || !foundFailure {
 		t.Fatalf("restored request missing history, recovery instruction or failure reason: %#v", firstRequest)
@@ -313,12 +316,33 @@ func TestRuntimeRestoresCommittedConversationAndWorkspace(t *testing.T) {
 			t.Fatal(err)
 		}
 		// 当前测试模型没有计费用量，恢复的历史消息不能再计费。
-		if end.Usage.Input != 0 || end.Usage.Output != 0 || end.Usage.TotalTokens != 0 {
+		if end.Usage.InputTokens != 0 || end.Usage.OutputTokens != 0 {
 			t.Fatalf("restored usage counted again: %+v", end.Usage)
 		}
 		return
 	}
 	t.Fatal("missing resumed run summary")
+}
+
+type eventStore struct {
+	runtimeStore
+	events []domainmodel.OperationEvent
+}
+
+func (s eventStore) ListOperationEvents(context.Context, string) ([]domainmodel.OperationEvent, error) {
+	return s.events, nil
+}
+
+// 旧版本落盘的消息形如 {"role":…,"content":[…]}：解成新消息没有内容，不能当空消息带进会话。
+func TestRestoreRejectsMessagesWithoutContent(t *testing.T) {
+	old := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"原始任务"}],"timestamp":"2026-08-18T13:00:00Z"}`)
+	runtime := &Runtime{store: eventStore{events: []domainmodel.OperationEvent{
+		{Sequence: 7, Attempt: 1, Kind: "agent.message_committed", Payload: old},
+	}}}
+	_, _, err := runtime.restoreMessages(context.Background(), domainmodel.Operation{ID: "op", Attempt: 2})
+	if !errors.Is(err, domainmodel.ErrInvalid) || !strings.Contains(err.Error(), "event 7") {
+		t.Fatalf("restore err = %v, want the stale message rejected", err)
+	}
 }
 
 func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
@@ -368,11 +392,19 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	complete, _ := json.Marshal(map[string]any{"status": "pass", "review_key": "review/findings", "checks": []map[string]any{
 		{"id": "directive:hook", "status": "pending"}, {"id": "intent:forbidden:0", "status": "satisfied"},
 	}})
-	model := &verdictRuntimeModel{
-		review: review, steps: []json.RawMessage{noChecks, unsettled, complete},
-		now: now.Add(2 * time.Second),
+	// 每次回应计 10 入 3 出，按单价折合 0.01。
+	replies := []litellmtest.Reply{callReply("put-review", "workspace_put_review", review)}
+	for i, step := range []json.RawMessage{noChecks, unsettled, complete} {
+		replies = append(replies, callReply(fmt.Sprintf("verdict-%d", i+1), "verdict_submit", step))
 	}
-	runtime := boundRuntime(authorityStore, model)
+	for i := range replies {
+		replies[i].Usage = litellm.Usage{InputTokens: 10, OutputTokens: 3}
+	}
+	model := litellmtest.New(replies...)
+	chat := testChat(model)
+	chat.Request.Model = "verdict-model"
+	chat.Pricing = &catalog.Pricing{Rates: catalog.Rates{Input: 0.0007, Output: 0.001}}
+	runtime := boundRuntime(authorityStore, chat)
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
 	hub := activity.NewHub()
 	runtime.SetActivitySink(hub)
@@ -421,7 +453,7 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 		t.Fatalf("verdict_submit activity: rejected=%d accepted=%d entries=%#v", rejected, accepted, feed.Entries)
 	}
 	// 成功提交直接正常收尾，不再请求第五次模型回应。
-	if model.requests != 4 || feed.Usage.Input != 40 || feed.Usage.Output != 12 || feed.Usage.Cost < 0.039 || feed.Usage.Cost > 0.041 {
+	if len(model.Requests()) != 4 || feed.Usage.Input != 40 || feed.Usage.Output != 12 || feed.Usage.Cost < 0.039 || feed.Usage.Cost > 0.041 {
 		t.Fatalf("usage totals = %#v", feed.Usage)
 	}
 	// 用量按服务端上报的模型归档（右栏按模型分列的依据）。
@@ -432,56 +464,6 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 		t.Fatalf("task counters = %+v", task)
 	}
 }
-
-type verdictRuntimeModel struct {
-	mu       sync.Mutex
-	requests int
-	review   json.RawMessage
-	steps    []json.RawMessage
-	now      time.Time
-}
-
-func (m *verdictRuntimeModel) Generate(
-	context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption,
-) (*agentcore.LLMResponse, error) {
-	return nil, errors.New("verdict runtime must use streaming")
-}
-
-func (m *verdictRuntimeModel) GenerateStream(
-	_ context.Context,
-	_ []agentcore.Message,
-	_ []agentcore.ToolSpec,
-	_ ...agentcore.CallOption,
-) (<-chan agentcore.StreamEvent, error) {
-	m.mu.Lock()
-	index := m.requests
-	m.requests++
-	m.mu.Unlock()
-	var message agentcore.Message
-	if index == 0 {
-		message = runtimeToolCallMessage("put-review", "workspace_put_review", m.review, m.now)
-	} else if index <= len(m.steps) {
-		message = runtimeToolCallMessage(fmt.Sprintf("verdict-%d", index), "verdict_submit",
-			m.steps[index-1], m.now.Add(time.Duration(index)*time.Second))
-	} else {
-		message = agentcore.Message{
-			Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("done")},
-			StopReason: agentcore.StopReasonStop, Timestamp: m.now.Add(time.Duration(index) * time.Second),
-		}
-	}
-	message.Usage = &agentcore.Usage{Provider: "test", Model: "verdict-model", Input: 10, Output: 3, Cost: &agentcore.Cost{Total: 0.01}}
-	stream := make(chan agentcore.StreamEvent, 4)
-	for _, call := range message.ToolCalls() {
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallStart, Message: message}
-		completed := call
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallEnd, Message: message, CompletedToolCall: &completed}
-	}
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: message}
-	close(stream)
-	return stream, nil
-}
-
-func (m *verdictRuntimeModel) SupportsTools() bool { return true }
 
 func createRuntimeTestRun(
 	t *testing.T,
@@ -508,63 +490,36 @@ func createRuntimeTestRun(
 	return run.ID
 }
 
-type recoveryRuntimeModel struct {
-	mu           sync.Mutex
-	requests     [][]agentcore.Message
-	proposalArgs json.RawMessage
-	now          time.Time
+// recoveryScript 先列工作区，再按 proposalArgs 提交，提交成功即收尾：多一次调用就越出脚本。
+func recoveryScript(proposalArgs json.RawMessage) *litellmtest.Provider {
+	return litellmtest.New(
+		callReply("list-workspace", "workspace_list", json.RawMessage(`{}`)),
+		callReply("submit-existing", "proposal_submit", proposalArgs),
+	)
 }
 
-func (m *recoveryRuntimeModel) Generate(
-	context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption,
-) (*agentcore.LLMResponse, error) {
-	return nil, errors.New("recovery runtime must use streaming")
+// callReply 是只调用一个工具的回应。
+func callReply(id, name string, args json.RawMessage) litellmtest.Reply {
+	return litellmtest.Respond(litellm.ToolUseBlock{ID: id, Name: name, Arguments: string(args)})
 }
 
-func (m *recoveryRuntimeModel) GenerateStream(
-	_ context.Context,
-	messages []agentcore.Message,
-	_ []agentcore.ToolSpec,
-	_ ...agentcore.CallOption,
-) (<-chan agentcore.StreamEvent, error) {
-	m.mu.Lock()
-	index := len(m.requests)
-	m.requests = append(m.requests, append([]agentcore.Message(nil), messages...))
-	m.mu.Unlock()
-	var message agentcore.Message
-	switch index {
-	case 0:
-		message = runtimeToolCallMessage("list-workspace", "workspace_list", json.RawMessage(`{}`), m.now)
-	case 1:
-		message = runtimeToolCallMessage("submit-existing", "proposal_submit", m.proposalArgs, m.now.Add(time.Second))
-	default:
-		message = agentcore.Message{
-			Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("done")},
-			StopReason: agentcore.StopReasonStop, Timestamp: m.now.Add(2 * time.Second),
+// requestText 是请求里一条消息的文本。
+func requestText(message litellm.Message) string {
+	var text strings.Builder
+	for _, block := range message.Blocks {
+		if b, ok := block.(litellm.TextBlock); ok {
+			text.WriteString(b.Text)
 		}
 	}
-	stream := make(chan agentcore.StreamEvent, 4)
-	for _, call := range message.ToolCalls() {
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallStart, Message: message}
-		completed := call
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallEnd, Message: message, CompletedToolCall: &completed}
-	}
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: message}
-	close(stream)
-	return stream, nil
+	return text.String()
 }
 
-func (m *recoveryRuntimeModel) SupportsTools() bool { return true }
-
-func (m *recoveryRuntimeModel) Request(index int) []agentcore.Message {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]agentcore.Message(nil), m.requests[index]...)
-}
+// delta 把一个流式增量包成 agent 事件。
+func delta(event litellm.Event) agentcore.Event { return agentcore.MessageDelta{Event: event} }
 
 // TestPublishActivityTranslatesStreamingToolDeltas 守卫真实事件时序（agentcore
-// 在整条消息完成后才执行工具）：toolcall delta 阶段就要有带工具名的进行中条目
-// 与字节进度，exec start 不重复建条、exec end 收尾。
+// 在整条回复完成后才执行工具）：参数流阶段就要有带工具名的进行中条目
+// 与字节进度，ToolStart 不重复建条、ToolEnd 收尾。
 func TestPublishActivityTranslatesStreamingToolDeltas(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	hub := activity.NewHub()
@@ -573,12 +528,10 @@ func TestPublishActivityTranslatesStreamingToolDeltas(t *testing.T) {
 		ID: "op-1", RunID: "run-1",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-live"},
 	}
-	prose := newProseTracker()
-	partial := runtimeToolCallMessage("call-1", "workspace_put_chapter", json.RawMessage(`{}`), now)
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventMessageUpdate, DeltaKind: agentcore.DeltaToolCall, ToolID: "call-1",
-		Delta: `{"chapter":{"id":"c1","blocks":[{"id":"p1","text":"正文`, Message: partial,
-	}, prose)
+	stream := newLiveStream()
+	call := agentcore.ToolCall{ID: "call-1", Name: "workspace_put_chapter"}
+	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: call.ID, Name: call.Name}}), stream)
+	runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: `{"chapter":{"id":"c1","blocks":[{"id":"p1","text":"正文`}), stream)
 	snapshot, ok := hub.Snapshot("book-live")
 	if !ok || len(snapshot.Entries) != 1 || snapshot.Entries[0].Tool != "workspace_put_chapter" ||
 		snapshot.Entries[0].Done || snapshot.Entries[0].Bytes == 0 {
@@ -588,16 +541,9 @@ func TestPublishActivityTranslatesStreamingToolDeltas(t *testing.T) {
 	if string(snapshot.Prose) != "正文" || snapshot.ProseCallID != "call-1" {
 		t.Fatalf("prose = %q callID = %q", snapshot.Prose, snapshot.ProseCallID)
 	}
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventMessageUpdate, DeltaKind: agentcore.DeltaToolCall, ToolID: "call-1",
-		Delta: `，一句接一句"}]}}`, Message: partial,
-	}, prose)
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventToolExecStart, Tool: "workspace_put_chapter", ToolID: "call-1",
-	}, prose)
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventToolExecEnd, Tool: "workspace_put_chapter", ToolID: "call-1",
-	}, prose)
+	runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: `，一句接一句"}]}}`}), stream)
+	runtime.publishActivity(operation, agentcore.ToolStart{Call: call}, stream)
+	runtime.publishActivity(operation, agentcore.ToolEnd{Call: call, Result: agentcore.TextResult("{}")}, stream)
 	snapshot, _ = hub.Snapshot("book-live")
 	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Done {
 		t.Fatalf("after exec = %#v", snapshot.Entries)
@@ -607,10 +553,10 @@ func TestPublishActivityTranslatesStreamingToolDeltas(t *testing.T) {
 	}
 }
 
-// TestPublishActivityAttributesDeltaByToolID 守卫交错归属（agentcore ≥1.8.3
-// 在 toolcall delta 上携带 ToolID）：并行调用并存时按 ID 精确定位所属调用，
-// 不再取"最后一个"——正文 delta 归属正文调用，哪怕消息里后面又开了别的调用。
-func TestPublishActivityAttributesDeltaByToolID(t *testing.T) {
+// TestPublishActivityAttributesDeltaByBlock 守卫交错归属：并行调用并存时按块序号
+// 精确定位所属调用，不取"最后一个"——正文增量归属正文调用，哪怕回复里后面又开了
+// 别的调用。
+func TestPublishActivityAttributesDeltaByBlock(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	hub := activity.NewHub()
 	runtime := &Runtime{now: func() time.Time { return now }, activity: hub}
@@ -618,19 +564,10 @@ func TestPublishActivityAttributesDeltaByToolID(t *testing.T) {
 		ID: "op-2", RunID: "run-2",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-mix"},
 	}
-	prose := newProseTracker()
-	partial := agentcore.Message{
-		Role: agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{
-			agentcore.ToolCallBlock(agentcore.ToolCall{ID: "call-a", Name: "workspace_put_chapter"}),
-			agentcore.ToolCallBlock(agentcore.ToolCall{ID: "call-b", Name: "authority_read"}),
-		},
-		Timestamp: now,
-	}
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventMessageUpdate, DeltaKind: agentcore.DeltaToolCall,
-		ToolID: "call-a", Delta: `{"chapter":{"blocks":[{"text":"甲稿正文`, Message: partial,
-	}, prose)
+	stream := newLiveStream()
+	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: "call-a", Name: "workspace_put_chapter"}}), stream)
+	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 1, Block: litellm.ToolUseBlock{ID: "call-b", Name: "authority_read"}}), stream)
+	runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: `{"chapter":{"blocks":[{"text":"甲稿正文`}), stream)
 	snapshot, ok := hub.Snapshot("book-mix")
 	if !ok || string(snapshot.Prose) != "甲稿正文" || snapshot.ProseCallID != "call-a" {
 		t.Fatalf("prose = %q callID = %q ok=%v", snapshot.Prose, snapshot.ProseCallID, ok)
@@ -641,9 +578,9 @@ func TestPublishActivityAttributesDeltaByToolID(t *testing.T) {
 	}
 }
 
-// TestPublishActivityThinkingTextAndErrorUnquoting 守卫 M3 两处翻译语义：
-// 思考增量作为推理摘要文本入快照；出错 Result 解掉 json.Marshal 的外层引号。
-func TestPublishActivityThinkingTextAndErrorUnquoting(t *testing.T) {
+// TestPublishActivityThinkingTextAndToolError 守卫两处翻译语义：思考增量作为
+// 推理文本入快照；出错的工具结果原文进条目。
+func TestPublishActivityThinkingTextAndToolError(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	hub := activity.NewHub()
 	runtime := &Runtime{now: func() time.Time { return now }, activity: hub}
@@ -651,30 +588,17 @@ func TestPublishActivityThinkingTextAndErrorUnquoting(t *testing.T) {
 		ID: "op-9", RunID: "run-9",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-9"},
 	}
-	prose := newProseTracker()
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventMessageUpdate, DeltaKind: agentcore.DeltaThinking, Delta: "回顾伏笔",
-	}, prose)
-	runtime.publishActivity(operation, agentcore.Event{
-		Type: agentcore.EventToolExecEnd, Tool: "workspace_put_chapter", ToolID: "c1",
-		IsError: true, Result: json.RawMessage(`"章节段落 \"p-9\" 不存在"`),
-	}, prose)
+	stream := newLiveStream()
+	runtime.publishActivity(operation, delta(litellm.ReasoningDelta{Text: "回顾伏笔"}), stream)
+	runtime.publishActivity(operation, agentcore.ToolEnd{
+		Call: agentcore.ToolCall{ID: "c1", Name: "workspace_put_chapter"}, Result: agentcore.ErrorResult(`章节段落 "p-9" 不存在`),
+	}, stream)
 	snapshot, ok := hub.Snapshot("book-9")
 	if !ok || snapshot.ThinkingNote != "回顾伏笔" {
 		t.Fatalf("thinking note = %q ok=%v", snapshot.ThinkingNote, ok)
 	}
 	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Err != `章节段落 "p-9" 不存在` {
 		t.Fatalf("entries = %#v", snapshot.Entries)
-	}
-}
-
-func runtimeToolCallMessage(id, name string, args json.RawMessage, at time.Time) agentcore.Message {
-	return agentcore.Message{
-		Role: agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.ToolCallBlock(agentcore.ToolCall{
-			ID: id, Name: name, Args: args,
-		})},
-		StopReason: agentcore.StopReasonToolUse, Timestamp: at,
 	}
 }
 
@@ -735,8 +659,10 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
-	model := &semanticResponseModel{}
-	runtime := boundRuntime(authorityStore, model)
+	reply := litellmtest.Text(`{"status":"pass","findings":[]}`)
+	reply.Usage = litellm.Usage{InputTokens: 10, OutputTokens: 3}
+	model := litellmtest.New(reply)
+	runtime := boundRuntime(authorityStore, testChat(model))
 	runtime.now = func() time.Time { return now.Add(2 * time.Second) }
 	hub := activity.NewHub()
 	runtime.SetActivitySink(hub)
@@ -751,8 +677,8 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("analyze semantic compliance: %v", err)
 	}
-	if report.Status != domainmodel.SemanticCompliancePass || !model.usedJSONSchema {
-		t.Fatalf("report = %#v, json schema = %v", report, model.usedJSONSchema)
+	if report.Status != domainmodel.SemanticCompliancePass || !usedJSONSchema(model) {
+		t.Fatalf("report = %#v, json schema = %v", report, usedJSONSchema(model))
 	}
 	// 收尾阶段的模型判断同样进活动流：画面上是"核对语义合规"起止，不是静止。
 	feed, ok := hub.Snapshot(operation.Target.ID)
@@ -768,47 +694,18 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	}
 	// usage 经 llm.Structured 回传后落审计事件，不能在收口时丢掉。
 	var checked struct {
-		Usage *agentcore.Usage `json:"usage"`
+		Usage litellm.Usage `json:"usage"`
 	}
-	if err := json.Unmarshal(events[1].Payload, &checked); err != nil || checked.Usage == nil || checked.Usage.Input != 10 || checked.Usage.Output != 3 {
+	if err := json.Unmarshal(events[1].Payload, &checked); err != nil || checked.Usage.InputTokens != 10 || checked.Usage.OutputTokens != 3 {
 		t.Fatalf("usage not recorded in compliance event: %s", events[1].Payload)
 	}
 }
 
-type semanticResponseModel struct {
-	usedJSONSchema bool
-	response       string
+// usedJSONSchema 报告模型的首次调用是否要了 JSON Schema 约束的输出。
+func usedJSONSchema(model *litellmtest.Provider) bool {
+	requests := model.Requests()
+	return len(requests) > 0 && requests[0].ResponseFormat != nil && requests[0].ResponseFormat.Type == litellm.ResponseFormatJSONSchema
 }
-
-func (m *semanticResponseModel) Generate(
-	_ context.Context,
-	_ []agentcore.Message,
-	_ []agentcore.ToolSpec,
-	opts ...agentcore.CallOption,
-) (*agentcore.LLMResponse, error) {
-	config := agentcore.ResolveCallConfig(opts)
-	m.usedJSONSchema = config.ResponseFormat != nil && config.ResponseFormat.Type == agentcore.ResponseFormatJSONSchema
-	response := m.response
-	if response == "" {
-		response = `{"status":"pass","findings":[]}`
-	}
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.TextBlock(response)},
-		Usage:   &agentcore.Usage{Input: 10, Output: 3}, Timestamp: time.Now(),
-	}}, nil
-}
-
-func (*semanticResponseModel) GenerateStream(
-	context.Context,
-	[]agentcore.Message,
-	[]agentcore.ToolSpec,
-	...agentcore.CallOption,
-) (<-chan agentcore.StreamEvent, error) {
-	return nil, errors.New("streaming is not used by semantic compliance")
-}
-
-func (*semanticResponseModel) SupportsTools() bool { return false }
 
 func TestRuntimeAnalyzesSemanticImpactWithStrictContract(t *testing.T) {
 	ctx := context.Background()
@@ -831,15 +728,15 @@ func TestRuntimeAnalyzesSemanticImpactWithStrictContract(t *testing.T) {
 	if _, err := authorityStore.CommitProposal(ctx, seed); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
-	model := &semanticResponseModel{response: `{
+	model := litellmtest.New(litellmtest.Text(`{
 		"status":"conflict",
 		"findings":[{"document":{"kind":"intent","id":"root"},"explanation":"新前提与旧前提冲突"}],
 		"options":[
 			{"strategy":"rewrite_affected","chapter_ids":["chapter-1"],"explanation":"重写受影响章节"},
 			{"strategy":"reinterpret_future","explanation":"在后文重新解释"},
 			{"strategy":"abandon","explanation":"放弃变更"}
-		]}`}
-	runtime := boundRuntime(authorityStore, model)
+		]}`))
+	runtime := boundRuntime(authorityStore, testChat(model))
 	proposal := domainmodel.Proposal{
 		ID: "semantic-change", Target: target, BaseRevision: 1,
 		Author: domainmodel.Author{Kind: domainmodel.AuthorUser, ID: "user-1"}, Reason: "修改前提",
@@ -855,8 +752,8 @@ func TestRuntimeAnalyzesSemanticImpactWithStrictContract(t *testing.T) {
 		t.Fatalf("analyze semantic impact: %v", err)
 	}
 	var report domainmodel.SemanticImpactReport
-	if err := json.Unmarshal(reportJSON, &report); err != nil || report.Status != domainmodel.SemanticImpactConflict || !model.usedJSONSchema {
-		t.Fatalf("report = %#v, schema = %v, error = %v", report, model.usedJSONSchema, err)
+	if err := json.Unmarshal(reportJSON, &report); err != nil || report.Status != domainmodel.SemanticImpactConflict || !usedJSONSchema(model) {
+		t.Fatalf("report = %#v, schema = %v, error = %v", report, usedJSONSchema(model), err)
 	}
 }
 
@@ -967,8 +864,8 @@ func TestRuntimePlanSubmissionEnforcesLengthBound(t *testing.T) {
 		map[string]any{"chapter": 1, "arc": 1, "title": "第一章", "summary": "出发"},
 		map[string]any{"chapter": 2, "arc": 1, "title": "第二章", "summary": "多余"})
 	exact := submission("按固定篇幅规划一章", map[string]any{"chapter": 1, "arc": 1, "title": "第一章", "summary": "出发"})
-	model := &planRuntimeModel{steps: []json.RawMessage{overshoot, exact}, now: now.Add(2 * time.Second)}
-	runtime := boundRuntime(authorityStore, model)
+	model := litellmtest.New(callReply("plan-submit-1", "proposal_submit", overshoot), callReply("plan-submit-2", "proposal_submit", exact))
+	runtime := boundRuntime(authorityStore, testChat(model))
 	runtime.now = func() time.Time { return now.Add(3 * time.Second) }
 	outcome, err := runtime.Execute(ctx, operation)
 	if err != nil {
@@ -977,56 +874,10 @@ func TestRuntimePlanSubmissionEnforcesLengthBound(t *testing.T) {
 	if outcome.Proposal == nil || len(outcome.Proposal.Patches) != 3 {
 		t.Fatalf("outcome = %#v, want corrected 3-patch proposal", outcome)
 	}
-	if model.requests != 2 {
-		t.Fatalf("model requests = %d, want overshoot rejected then corrected resubmission", model.requests)
+	if len(model.Requests()) != 2 {
+		t.Fatalf("model requests = %d, want overshoot rejected then corrected resubmission", len(model.Requests()))
 	}
 }
-
-type planRuntimeModel struct {
-	mu       sync.Mutex
-	requests int
-	steps    []json.RawMessage
-	now      time.Time
-}
-
-func (m *planRuntimeModel) Generate(
-	context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption,
-) (*agentcore.LLMResponse, error) {
-	return nil, errors.New("plan runtime must use streaming")
-}
-
-func (m *planRuntimeModel) GenerateStream(
-	_ context.Context,
-	_ []agentcore.Message,
-	_ []agentcore.ToolSpec,
-	_ ...agentcore.CallOption,
-) (<-chan agentcore.StreamEvent, error) {
-	m.mu.Lock()
-	index := m.requests
-	m.requests++
-	m.mu.Unlock()
-	var message agentcore.Message
-	if index < len(m.steps) {
-		message = runtimeToolCallMessage(fmt.Sprintf("plan-submit-%d", index+1), "proposal_submit",
-			m.steps[index], m.now.Add(time.Duration(index)*time.Second))
-	} else {
-		message = agentcore.Message{
-			Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("done")},
-			StopReason: agentcore.StopReasonStop, Timestamp: m.now.Add(time.Duration(index) * time.Second),
-		}
-	}
-	stream := make(chan agentcore.StreamEvent, 4)
-	for _, call := range message.ToolCalls() {
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallStart, Message: message}
-		completed := call
-		stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallEnd, Message: message, CompletedToolCall: &completed}
-	}
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: message}
-	close(stream)
-	return stream, nil
-}
-
-func (m *planRuntimeModel) SupportsTools() bool { return true }
 
 // runtimeSnapshot 按 D45 形状冻结快照；config 为已落盘的 Execution Profile 摘要，
 // 只走工具校验不执行模型的用例可以用任意非空值。
@@ -1257,8 +1108,17 @@ func seedRuntimeProject(t *testing.T, ctx context.Context, authorityStore *store
 	}
 }
 
+// testChat 是脚本化 Provider 上名为 "model" 的模型。
+func testChat(p litellm.Provider) agentcore.Model {
+	client, err := litellm.New(p)
+	if err != nil {
+		panic(err)
+	}
+	return agentcore.Model{Client: client, Request: litellm.Request{Model: "model"}}
+}
+
 // boundRuntime 是测试里的常驻 Runtime 加一套默认绑定；模型摘要固定为 "model"。
-func boundRuntime(authorityStore *store.Store, chat agentcore.ChatModel) *Runtime {
+func boundRuntime(authorityStore *store.Store, chat agentcore.Model) *Runtime {
 	runtime := NewRuntime(authorityStore)
 	runtime.Bind(models.Bindings{Default: models.Binding{Provider: "test", Model: "model", Digest: "model", Chat: chat}})
 	return runtime

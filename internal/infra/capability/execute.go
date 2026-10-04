@@ -11,7 +11,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
-	"github.com/voocel/ainovel-cli/internal/infra/llm"
+	"github.com/voocel/litellm"
 )
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
@@ -43,7 +43,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		return model.OperationOutcome{}, err
 	}
 	binding, _ := r.bindingFor(worker.ModelRole)
-	thinking := llm.EffectiveThinking(binding)
 	wantsVerdict := false
 	for _, definition := range compiled.Tools {
 		if definition.Name == prompt.ToolVerdictSubmit {
@@ -51,7 +50,7 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		}
 	}
 
-	// 工具串行执行；提交与停止判定在同一循环内，结果只在循环结束后读取。
+	// 工具串行执行（都不声明可并行）；提交与停止判定在同一循环内，结果只在循环结束后读取。
 	var submitted *model.Proposal
 	var verdict *model.ReviewVerdict
 	tools, err := r.toolsFor(operation, compiled, func(proposal model.Proposal) (model.Proposal, error) {
@@ -92,60 +91,18 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		return model.OperationOutcome{}, err
 	}
 
-	messageIndex := 0
-	var endSummary *agentcore.RunSummary
-	executionCtx, stopExecution := context.WithCancelCause(ctx)
-	defer stopExecution(nil)
-	config := agentcore.LoopConfig{
-		Model:              binding.Chat,
-		ThinkingLevel:      thinking,
-		MaxToolConcurrency: 1,
-		Middlewares:        []agentcore.ToolMiddleware{submissionGuard(stopExecution)},
-		PromptCacheKey:     cacheKey,
-		CacheLastMessage:   "ephemeral",
-		// 提交结果先由循环持久化，再正常收尾，不额外请求模型，也不以取消冒充成功。
-		StopAfterTool: func(name string) bool {
-			return name == prompt.ToolProposalSubmit || name == prompt.ToolVerdictSubmit
-		},
-		CommitMessage: func(message agentcore.AgentMessage) error {
-			messageIndex++
-			payload, err := json.Marshal(message)
-			if err != nil {
-				return fmt.Errorf("encode agent message: %w", err)
-			}
-			_, err = r.store.AppendOperationEvent(ctx, model.OperationEvent{
-				OperationID: operation.ID, StepID: "agent.message", Attempt: operation.Attempt,
-				IdempotencyKey: fmt.Sprintf("agent-message:%d:%d", operation.Attempt, messageIndex),
-				Kind:           "agent.message_committed", Payload: payload, CreatedAt: message.GetTimestamp(),
-			})
-			return err
-		},
-		StopGuard: func(context.Context, agentcore.StopInfo) agentcore.StopDecision {
-			if submitted != nil || verdict != nil {
-				return agentcore.StopDecision{Allow: true}
-			}
-			if wantsVerdict {
-				return agentcore.StopDecision{
-					InjectMessage: "任务尚未提交裁定。请完成审阅并调用 verdict_submit 提交覆盖请求范围的结构化裁定；如无法完成，明确返回工具错误。",
-				}
-			}
-			return agentcore.StopDecision{
-				InjectMessage: "任务尚未形成 Proposal。请继续使用工作区工具完成候选，并调用 proposal_submit；如无法完成，明确返回工具错误。",
-			}
-		},
-	}
 	recoveredMessages, lastFailure, err := r.restoreMessages(ctx, operation)
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
 	// 每次尝试记下实际使用的模型：快照不再冻结模型配置，历史由这条事件解释（D57）。
 	startPayload, err := json.Marshal(struct {
-		Role         string                  `json:"role"`
-		Provider     string                  `json:"provider"`
-		Model        string                  `json:"model"`
-		Thinking     agentcore.ThinkingLevel `json:"thinking,omitempty"`
-		ConfigDigest string                  `json:"config_digest"`
-	}{Role: worker.ModelRole, Provider: binding.Provider, Model: binding.Model, Thinking: thinking, ConfigDigest: binding.Digest})
+		Role         string `json:"role"`
+		Provider     string `json:"provider"`
+		Model        string `json:"model"`
+		Thinking     string `json:"thinking,omitempty"`
+		ConfigDigest string `json:"config_digest"`
+	}{Role: worker.ModelRole, Provider: binding.Provider, Model: binding.Model, Thinking: binding.Thinking, ConfigDigest: binding.Digest})
 	if err != nil {
 		return model.OperationOutcome{}, fmt.Errorf("encode agent run start: %w", err)
 	}
@@ -160,7 +117,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
-	prose := newProseTracker() // 随本次执行生灭：正文预览的参数流提取状态
 	// 恢复提示只能追加在完整任务上下文之后，不得替换 Dynamic Tail：restart 的
 	// 新任务同样必须拿到 project_rules、story_context 与 operation_task。
 	promptText := compiled.DynamicTail
@@ -174,27 +130,54 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if lastFailure != "" {
 		promptText += fmt.Sprintf("\n上一次尝试失败原因：%s。先针对这个原因修正，再继续。", lastFailure)
 	}
+
+	executionCtx, stopExecution := context.WithCancelCause(ctx)
+	defer stopExecution(nil)
+	stream := newLiveStream() // 随本次执行生灭：流式工具调用的身份与正文预览的提取状态
+	messageIndex := 0
 	var usage agentcore.Usage
-	var executionErr error
-	loopContext := agentcore.AgentContext{
-		SystemBlocks: []agentcore.SystemBlock{{Text: compiled.StablePrefix, CacheControl: "ephemeral"}},
-		Messages:     recoveredMessages,
-		Tools:        tools,
-	}
-	// 始终读到通道关闭，包括取消路径，确保工具和消息落盘已结束。
-	for event := range agentcore.AgentLoop(executionCtx, []agentcore.AgentMessage{agentcore.UserMsg(promptText)}, loopContext, config) {
-		switch event.Type {
-		case agentcore.EventMessageEnd:
-			if message, ok := event.Message.(agentcore.Message); ok {
-				usage.Add(message.Usage)
+	var end agentcore.RunEnd
+	config := agentcore.Config{
+		Model:      binding.Routed(cacheKey, ""),
+		System:     []litellm.Block{litellm.TextBlock{Text: compiled.StablePrefix, Cache: &litellm.CacheControl{}}},
+		Tools:      tools,
+		Middleware: []agentcore.ToolMiddleware{submissionGuard(stopExecution)},
+		Cache:      &litellm.CacheControl{},
+		// 每条进入会话的消息先落盘：落盘失败即停止本次执行，提交结果因此先于收尾持久化。
+		Emit: func(event agentcore.Event) error {
+			switch e := event.(type) {
+			case agentcore.MessageEnd:
+				messageIndex++
+				payload, err := json.Marshal(e.Message)
+				if err != nil {
+					return fmt.Errorf("encode agent message: %w", err)
+				}
+				if _, err := r.store.AppendOperationEvent(ctx, model.OperationEvent{
+					OperationID: operation.ID, StepID: "agent.message", Attempt: operation.Attempt,
+					IdempotencyKey: fmt.Sprintf("agent-message:%d:%d", operation.Attempt, messageIndex),
+					Kind:           "agent.message_committed", Payload: payload, CreatedAt: e.Message.Time,
+				}); err != nil {
+					return err
+				}
+				usage.Add(e.Message.Usage)
+			case agentcore.RunEnd:
+				end = e
 			}
-		case agentcore.EventError:
-			executionErr = event.Err
-		case agentcore.EventAgentEnd:
-			endSummary = event.Summary
-		}
-		r.publishActivity(operation, event, prose)
+			r.publishActivity(operation, event, stream)
+			return nil
+		},
+		// 提交工具成功即收尾（Terminate），不额外请求模型；未提交就想停则提醒继续。
+		OnStop: func(context.Context, agentcore.StopInfo) ([]agentcore.Message, error) {
+			switch {
+			case submitted != nil || verdict != nil:
+				return nil, nil
+			case wantsVerdict:
+				return []agentcore.Message{agentcore.UserText("任务尚未提交裁定。请完成审阅并调用 verdict_submit 提交覆盖请求范围的结构化裁定；如无法完成，明确返回工具错误。")}, nil
+			}
+			return []agentcore.Message{agentcore.UserText("任务尚未形成 Proposal。请继续使用工作区工具完成候选，并调用 proposal_submit；如无法完成，明确返回工具错误。")}, nil
+		},
 	}
+	_, executionErr := agentcore.Run(executionCtx, config, recoveredMessages, agentcore.UserText(promptText))
 	if cause := context.Cause(executionCtx); cause != nil {
 		executionErr = cause
 	}
@@ -203,10 +186,13 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		errorText = executionErr.Error()
 	}
 	endPayload, err := json.Marshal(struct {
-		Summary *agentcore.RunSummary `json:"summary,omitempty"`
-		Usage   agentcore.Usage       `json:"usage"`
-		Error   string                `json:"error,omitempty"`
-	}{Summary: endSummary, Usage: usage, Error: errorText})
+		Reason      agentcore.EndReason `json:"reason"`
+		Turns       int                 `json:"turns"`
+		ToolCalls   int                 `json:"tool_calls"`
+		FailedCalls int                 `json:"failed_calls"`
+		Usage       agentcore.Usage     `json:"usage"`
+		Error       string              `json:"error,omitempty"`
+	}{Reason: end.Reason, Turns: end.Turns, ToolCalls: end.ToolCalls, FailedCalls: end.FailedCalls, Usage: usage, Error: errorText})
 	if err != nil {
 		return model.OperationOutcome{}, fmt.Errorf("encode agent run summary: %w", err)
 	}
@@ -222,7 +208,7 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	}
 	if wantsVerdict {
 		if verdict == nil {
-			return model.OperationOutcome{}, endedWithout(endSummary, ErrNoVerdict)
+			return model.OperationOutcome{}, endedWithout(end, ErrNoVerdict)
 		}
 		payload, err := json.Marshal(*verdict)
 		if err != nil {
@@ -231,7 +217,7 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		return model.OperationOutcome{Verdict: payload}, nil
 	}
 	if submitted == nil {
-		return model.OperationOutcome{}, endedWithout(endSummary, ErrNoProposal)
+		return model.OperationOutcome{}, endedWithout(end, ErrNoProposal)
 	}
 	return model.OperationOutcome{Proposal: submitted}, nil
 }
@@ -269,11 +255,22 @@ func taskActivityScope(task model.TaskInput) activity.Scope {
 	}
 }
 
+// liveStream 是一次执行的流式状态：回复里开过的工具调用与正文预览的提取状态。
+// 块序号逐条回复重用，开块时覆盖，不必清空。
+type liveStream struct {
+	calls map[int]litellm.ToolUseBlock
+	prose *proseTracker
+}
+
+func newLiveStream() *liveStream {
+	return &liveStream{calls: make(map[int]litellm.ToolUseBlock), prose: newProseTracker()}
+}
+
 // publishActivity 把 agent 生命周期事件翻译成带归属的活动事件（页面设计 §3）。
 // 参数流上报字节进度；正文工具的参数流经 prose 增量提取后以 Prose 事件发布
 // 逐字预览（易失，权威正文仍以候选稿为准——三层校正链）。监听器同步执行，
 // 这里只做 O(增量) 的翻译与非阻塞发布。
-func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Event, prose *proseTracker) {
+func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Event, stream *liveStream) {
 	if r.activity == nil {
 		return
 	}
@@ -284,49 +281,48 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 	if spec, err := model.KindSpec(operation.Kind); err == nil {
 		out.TaskLabel = spec.Label
 	}
-	switch event.Type {
-	case agentcore.EventTurnStart:
+	switch e := event.(type) {
+	case agentcore.MessageStart:
 		out.Kind = activity.TurnStart
-	case agentcore.EventMessageEnd:
-		// 一条 assistant 消息结束（含中止）即本轮参数流终结：清空提取状态，
-		// 生命周期以消息为界，无需容量上限。消息带用量时一并发布（状态行累计）。
-		prose.finishMessage()
-		usage := messageUsage(event.Message)
+	case agentcore.MessageEnd:
+		// 一条消息结束（含中止）即本轮参数流终结：清空提取状态，生命周期以
+		// 消息为界，无需容量上限。消息带用量时一并发布（状态行累计）。
+		stream.prose.finishMessage()
+		usage := e.Message.Usage
 		if usage == nil {
 			return
 		}
 		out.Kind = activity.Usage
-		out.Usage = activity.UsageTotals{Input: usage.Input, Output: usage.Output, CacheRead: usage.CacheRead}
-		out.Model, out.Provider = usage.Model, usage.Provider
+		out.Usage = activity.UsageTotals{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
+		out.Model, out.Provider = e.Message.Model, e.Message.Provider
 		if usage.Cost != nil {
 			out.Usage.Cost = usage.Cost.Total
 		}
-	case agentcore.EventToolExecStart:
-		out.Kind, out.Tool, out.CallID = activity.ToolStart, event.Tool, event.ToolID
-	case agentcore.EventToolExecEnd:
-		out.Kind, out.Tool, out.CallID = activity.ToolEnd, event.Tool, event.ToolID
-		if event.IsError {
-			// 出错的 Result 是被 json.Marshal 过的字符串字面量：解掉外层引号
-			// 与转义再截断，用户看到的是原始错误文本。
-			raw := string(event.Result)
-			var text string
-			if json.Unmarshal(event.Result, &text) == nil {
-				raw = text
-			}
-			out.Err = clipActivityText(raw)
+	case agentcore.ToolStart:
+		out.Kind, out.Tool, out.CallID = activity.ToolStart, e.Call.Name, e.Call.ID
+	case agentcore.ToolEnd:
+		out.Kind, out.Tool, out.CallID = activity.ToolEnd, e.Call.Name, e.Call.ID
+		if e.Result.IsError {
+			out.Err = clipActivityText(e.Result.Text())
 		}
-	case agentcore.EventMessageUpdate:
-		switch event.DeltaKind {
-		case agentcore.DeltaToolCall:
-			if event.Delta == "" {
+	case agentcore.MessageDelta:
+		switch d := e.Event.(type) {
+		case litellm.BlockStart:
+			if call, ok := d.Block.(litellm.ToolUseBlock); ok {
+				stream.calls[d.Index] = call
+			}
+			return
+		case litellm.ToolUseDelta:
+			if d.Arguments == "" {
 				return
 			}
-			// 真实时序里参数流入先于工具执行（ToolExecStart 在整条消息完成后
-			// 才发生）：从部分消息取正在生成参数的工具名与调用 ID，让活动行
-			// 在落笔的第一时间就出现，而不是等参数全部生成完。
-			out.Kind, out.Bytes = activity.ToolDelta, len(event.Delta)
-			out.Tool, out.CallID = streamingToolCall(event)
-			text, stalled := prose.feed(out.Tool, out.CallID, event.Delta)
+			// 参数流入先于工具执行（ToolStart 在整条回复完成后才发生）：按块序号
+			// 取正在生成参数的工具名与调用 ID，让活动行在落笔的第一时间就出现。
+			// 个别网关开块时还不带名字，proseTracker 会先缓冲。
+			call := stream.calls[d.Index]
+			out.Kind, out.Bytes = activity.ToolDelta, len(d.Arguments)
+			out.Tool, out.CallID = call.Name, call.ID
+			text, stalled := stream.prose.feed(out.Tool, out.CallID, d.Arguments)
 			if text != "" {
 				r.activity.Publish(out) // 字节进度照旧
 				out.Kind, out.Bytes, out.Text = activity.Prose, 0, text
@@ -335,39 +331,25 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 				r.activity.Publish(out) // 先发前一种身份（字节进度或正文增量）
 				out.Kind, out.Bytes, out.Text = activity.ProseStall, 0, ""
 			}
-		case agentcore.DeltaThinking:
-			// 思考增量是 Provider 明确标记的推理文本（agentcore ReasoningDelta），
-			// 原样截尾展示为思考片段——不是摘要，不作可靠解释承诺（§3）。
-			out.Kind, out.Text = activity.Thinking, event.Delta
-		default:
-			if event.Delta == "" {
+		case litellm.ReasoningDelta:
+			// 思考增量是 Provider 明确标记的推理文本，原样截尾展示为思考片段——
+			// 不是摘要，不作可靠解释承诺（§3）。
+			out.Kind, out.Text = activity.Thinking, d.Text
+		case litellm.TextDelta:
+			if d.Text == "" {
 				return
 			}
-			out.Kind, out.Text = activity.Text, event.Delta
+			out.Kind, out.Text = activity.Text, d.Text
+		default:
+			return
 		}
-	case agentcore.EventRetry:
-		out.Kind = activity.Retry
-		if event.RetryInfo != nil {
-			out.Attempt = event.RetryInfo.Attempt
-			if event.RetryInfo.Err != nil {
-				out.Err = clipActivityText(event.RetryInfo.Err.Error())
-			}
-		}
+	case agentcore.Retry:
+		out.Kind, out.Attempt = activity.Retry, e.Attempt
+		out.Err = clipActivityText(e.Err.Error())
 	default:
 		return
 	}
 	r.activity.Publish(out)
-}
-
-// messageUsage 取 assistant 消息上的用量；agentcore 的消息既可能以值也可能以指针进事件。
-func messageUsage(message agentcore.AgentMessage) *agentcore.Usage {
-	switch m := message.(type) {
-	case agentcore.Message:
-		return m.Usage
-	case *agentcore.Message:
-		return m.Usage
-	}
-	return nil
 }
 
 // publishStage 把 Agent 循环之外的单次模型判断（如收尾时的语义合规）也发到活动流：
@@ -386,22 +368,6 @@ func (r *Runtime) publishStage(operation model.Operation, kind activity.Kind, st
 	r.activity.Publish(out)
 }
 
-// streamingToolCall 取正在生成参数的工具调用的名字与调用 ID：agentcore 在
-// toolcall delta 上携带 ToolID，按它在部分消息里精确定位，并行调用交错也不串。
-// 消息里暂未回填该 ID 时只返回 ID（名字后到，proseTracker 会先按 ID 缓冲）。
-func streamingToolCall(event agentcore.Event) (string, string) {
-	msg, ok := event.Message.(agentcore.Message)
-	if !ok || event.ToolID == "" {
-		return "", event.ToolID
-	}
-	for _, call := range msg.ToolCalls() {
-		if call.ID == event.ToolID {
-			return call.Name, call.ID
-		}
-	}
-	return "", event.ToolID
-}
-
 func clipActivityText(text string) string {
 	const limit = 200
 	runes := []rune(text)
@@ -412,15 +378,12 @@ func clipActivityText(text string) string {
 }
 
 // endedWithout 把缺少收尾提交的结局包装成可诊断错误，保留 agent 的结束原因。
-func endedWithout(endSummary *agentcore.RunSummary, cause error) error {
-	if endSummary != nil {
-		return fmt.Errorf("agent ended with %s after %d turns: %w", endSummary.EndReason, endSummary.TurnCount, cause)
-	}
-	return cause
+func endedWithout(end agentcore.RunEnd, cause error) error {
+	return fmt.Errorf("agent ended with %s after %d turns: %w", end.Reason, end.Turns, cause)
 }
 
 // restoreMessages 把之前尝试已提交的对话导回本次会话，并取出最近一次失败原因。
-func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation) ([]agentcore.AgentMessage, string, error) {
+func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation) ([]agentcore.Message, string, error) {
 	if operation.Attempt <= 1 {
 		return nil, "", nil
 	}
@@ -440,6 +403,10 @@ func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation
 			if err := json.Unmarshal(event.Payload, &message); err != nil {
 				return nil, "", fmt.Errorf("restore agent message at event %d: %w", event.Sequence, err)
 			}
+			// 旧版本写下的消息没有 blocks：解出来是空消息，宁可报错也不带进会话。
+			if len(message.Blocks) == 0 {
+				return nil, "", fmt.Errorf("restore agent message at event %d: no content blocks (written by an older version; restart the task): %w", event.Sequence, model.ErrInvalid)
+			}
 			messages = append(messages, message)
 		case "operation.transitioned":
 			var transition struct {
@@ -454,7 +421,7 @@ func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation
 			}
 		}
 	}
-	return agentcore.ToAgentMessages(messages), lastFailure, nil
+	return messages, lastFailure, nil
 }
 
 func sameVerdict(left, right model.ReviewVerdict) (bool, error) {

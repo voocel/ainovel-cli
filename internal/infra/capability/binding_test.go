@@ -8,35 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voocel/agentcore"
-	agentllm "github.com/voocel/agentcore/llm"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
+	"github.com/voocel/litellm/litellmtest"
 )
 
-// thinkingModel 记录循环传来的思考强度；noThinking 时对外声明不支持思考。
-type thinkingModel struct {
-	*planRuntimeModel
-	noThinking bool
-	seen       []agentcore.ThinkingLevel
-}
-
-func (m *thinkingModel) GenerateStream(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	m.seen = append(m.seen, agentcore.ResolveCallConfig(opts).ThinkingLevel)
-	return m.planRuntimeModel.GenerateStream(ctx, messages, tools, opts...)
-}
-
-func (m *thinkingModel) Capabilities() (agentllm.Capabilities, bool) {
-	if m.noThinking {
-		return agentllm.Capabilities{}, true
-	}
-	return agentllm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true}, true
-}
-
 // TestExecuteUsesRoleBindingAndRecordsRunStart：模型按 Worker 角色取绑定（D57），思考
-// 强度按模型能力折算后进循环，每次尝试首条事件记录实际使用的模型。
+// 强度按适配器能力折算后随请求发出，每次尝试首条事件记录实际使用的模型。
 func TestExecuteUsesRoleBindingAndRecordsRunStart(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
@@ -58,16 +38,15 @@ func TestExecuteUsesRoleBindingAndRecordsRunStart(t *testing.T) {
 	profile := seedRuntimeProfile(t, ctx, authorityStore, "book-plan", worker, task, 1)
 
 	for _, tc := range []struct {
-		name         string
-		noThinking   bool
-		wantThinking agentcore.ThinkingLevel
+		provider, want string
 	}{
-		{name: "supported level reaches the loop", wantThinking: agentcore.ThinkingHigh},
-		{name: "unsupported model falls back to auto", noThinking: true},
+		{provider: "openai", want: "high"},
+		// MiMo 发不出强度：退回自动，而不是每次调用都报错。
+		{provider: "mimo"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.provider, func(t *testing.T) {
 			operation := domainmodel.Operation{
-				ID: "plan-" + tc.name, Kind: domainmodel.OperationDevelopPlan,
+				ID: "plan-" + tc.provider, Kind: domainmodel.OperationDevelopPlan,
 				Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-plan"},
 				State:  domainmodel.OperationQueued, RunID: runID,
 				Snapshot: runtimeSnapshot(task, 1, domainmodel.ApprovalAuto, profile),
@@ -79,40 +58,51 @@ func TestExecuteUsesRoleBindingAndRecordsRunStart(t *testing.T) {
 			if operation, err = authorityStore.ClaimOperationForExecutor(ctx, operation.ID, "worker-1", prompt.ExecutorIdentity, time.Minute, now); err != nil {
 				t.Fatal(err)
 			}
-			defaultModel := &thinkingModel{planRuntimeModel: &planRuntimeModel{steps: []json.RawMessage{plan()}, now: now}}
-			architect := &thinkingModel{planRuntimeModel: &planRuntimeModel{steps: []json.RawMessage{plan()}, now: now}, noThinking: tc.noThinking}
+			bind := func(model string, p *litellmtest.Provider) models.Binding {
+				binding, err := models.Bind(models.Config{Provider: tc.provider, Model: model, APIKey: "k", Thinking: "high"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// 换成脚本化的客户端，请求模板（含思考强度）沿用绑定的。
+				binding.Chat.Client = testChat(p).Client
+				return binding
+			}
+			defaultModel := litellmtest.New(callReply("plan", prompt.ToolProposalSubmit, plan()))
+			architect := litellmtest.New(callReply("plan", prompt.ToolProposalSubmit, plan()))
 			runtime := NewRuntime(authorityStore)
 			if _, err := runtime.Execute(ctx, operation); !errors.Is(err, domainmodel.ErrInvalid) {
 				t.Fatalf("unbound runtime executed: %v", err)
 			}
 			runtime.Bind(models.Bindings{
-				Default: models.Binding{Provider: "test", Model: "default-model", Thinking: agentcore.ThinkingHigh, Digest: "d0", Chat: defaultModel},
-				Roles:   map[string]models.Binding{"architect": {Provider: "test", Model: "architect-model", Thinking: agentcore.ThinkingHigh, Digest: "d1", Chat: architect}},
+				Default: bind("default-model", defaultModel),
+				Roles:   map[string]models.Binding{"architect": bind("architect-model", architect)},
 			})
 			if _, err := runtime.Execute(ctx, operation); err != nil {
 				t.Fatalf("execute: %v", err)
 			}
-			if defaultModel.requests != 0 || architect.requests == 0 {
-				t.Fatalf("architect task must use the architect binding: default=%d architect=%d", defaultModel.requests, architect.requests)
+			if len(defaultModel.Requests()) != 0 || len(architect.Requests()) == 0 {
+				t.Fatalf("architect task must use the architect binding: default=%d architect=%d", len(defaultModel.Requests()), len(architect.Requests()))
 			}
-			if len(architect.seen) == 0 || architect.seen[0] != tc.wantThinking {
-				t.Fatalf("thinking level seen by the model = %v, want %q", architect.seen, tc.wantThinking)
+			sent := architect.Requests()[0]
+			if got := sent.Thinking; sent.Model != "architect-model" || (tc.want == "") != (got == nil) || got != nil && got.Effort != tc.want {
+				t.Fatalf("request model = %q thinking = %+v, want %q", sent.Model, got, tc.want)
 			}
 			events, err := authorityStore.ListOperationEvents(ctx, operation.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var started struct {
-				Role         string                  `json:"role"`
-				Provider     string                  `json:"provider"`
-				Model        string                  `json:"model"`
-				ConfigDigest string                  `json:"config_digest"`
-				Thinking     agentcore.ThinkingLevel `json:"thinking"`
+				Role         string `json:"role"`
+				Provider     string `json:"provider"`
+				Model        string `json:"model"`
+				ConfigDigest string `json:"config_digest"`
+				Thinking     string `json:"thinking"`
 			}
 			if len(events) < 2 || events[1].Kind != "agent.run_started" || json.Unmarshal(events[1].Payload, &started) != nil {
 				t.Fatalf("first agent event = %+v, want agent.run_started after the claim", events)
 			}
-			if started.Role != "architect" || started.Model != "architect-model" || started.Provider != "test" || started.ConfigDigest != "d1" || started.Thinking != tc.wantThinking {
+			bound, _ := runtime.bindingFor("architect")
+			if started.Role != "architect" || started.Model != "architect-model" || started.Provider != tc.provider || started.ConfigDigest != bound.Digest || started.Thinking != tc.want {
 				t.Fatalf("run_started payload = %+v", started)
 			}
 			if events[1].IdempotencyKey != "agent-start:1" || events[1].Attempt != 1 {

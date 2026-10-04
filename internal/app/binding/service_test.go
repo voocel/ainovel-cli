@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 )
@@ -30,7 +29,7 @@ func TestApplyBindsWithoutSavingAndKeepsIntentOnFailure(t *testing.T) {
 	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if binder.bindings == nil || binder.bindings.Default.Provider != "deepseek" || binder.bindings.Default.Model != "deepseek-chat" || binder.bindings.Default.Thinking != agentcore.ThinkingHigh {
+	if binder.bindings == nil || binder.bindings.Default.Provider != "deepseek" || binder.bindings.Default.Model != "deepseek-chat" || binder.bindings.Default.Thinking != "high" {
 		t.Fatalf("default binding = %+v", binder.bindings)
 	}
 	if loaded, err := appconfig.LoadConfig(dir); err != nil || loaded.Configured() {
@@ -64,7 +63,7 @@ func TestUseAndSetThinkingPersistAndRebind(t *testing.T) {
 	if err != nil || saved.Provider != "proxy" || saved.Model != "gpt-5" || saved.Thinking != "high" {
 		t.Fatalf("saved = %#v, %v", saved, err)
 	}
-	if binder.bindings.Default.Provider != "openai" || binder.bindings.Default.Model != "gpt-5" || binder.bindings.Default.Thinking != agentcore.ThinkingHigh {
+	if binder.bindings.Default.Provider != "openai" || binder.bindings.Default.Model != "gpt-5" || binder.bindings.Default.Thinking != "high" {
 		t.Fatalf("rebound default = %+v", binder.bindings.Default)
 	}
 	if err := service.Use("", "", "gpt-5-mini"); err != nil {
@@ -97,7 +96,7 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if got := service.Current("writer"); !got.Inherited || got.Model != "deepseek-chat" || got.Thinking != agentcore.ThinkingHigh {
+	if got := service.Current("writer"); !got.Inherited || got.Model != "deepseek-chat" || got.Thinking != "high" {
 		t.Fatalf("unset role must follow the default: %+v", got)
 	}
 	if err := service.SetThinking("writer", "low"); err == nil {
@@ -110,16 +109,16 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := binder.bindings.Roles["writer"]
-	if writer.Provider != "openai" || writer.Model != "gpt-5" || writer.Thinking != agentcore.ThinkingLow || binder.bindings.Default.Model != "deepseek-chat" {
+	if writer.Provider != "openai" || writer.Model != "gpt-5" || writer.Thinking != "low" || binder.bindings.Default.Model != "deepseek-chat" {
 		t.Fatalf("writer binding = %+v default = %+v", writer, binder.bindings.Default)
 	}
-	if got := service.Current("writer"); got.Inherited || got.Connection != "proxy" || got.Thinking != agentcore.ThinkingLow {
+	if got := service.Current("writer"); got.Inherited || got.Connection != "proxy" || got.Thinking != "low" {
 		t.Fatalf("writer selection = %+v", got)
 	}
 	if saved, _ := appconfig.LoadConfig(dir); saved.Roles["writer"] != (appconfig.RoleConfig{Provider: "proxy", Model: "gpt-5", Thinking: "low"}) {
 		t.Fatalf("saved roles = %#v", saved.Roles)
 	}
-	if err := service.SetThinking("writer", "inherit"); err != nil || service.Current("writer").Thinking != agentcore.ThinkingHigh {
+	if err := service.SetThinking("writer", "inherit"); err != nil || service.Current("writer").Thinking != "high" {
 		t.Fatalf("inherit thinking: %v %+v", err, service.Current("writer"))
 	}
 	if err := service.Use("writer", "", ""); err != nil {

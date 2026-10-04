@@ -6,32 +6,31 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/agentcore"
 )
 
 // thinkingLabel 是思考强度档位的中文名；空档位是自动（沿用模型默认）。
-func thinkingLabel(level agentcore.ThinkingLevel) string {
+func thinkingLabel(level string) string {
 	switch level {
 	case "":
 		return "自动"
 	case levelInherit:
 		return "跟随默认"
-	case agentcore.ThinkingOff:
+	case "off":
 		return "关闭"
-	case agentcore.ThinkingMinimal:
+	case "minimal":
 		return "最少"
-	case agentcore.ThinkingLow:
+	case "low":
 		return "低"
-	case agentcore.ThinkingMedium:
+	case "medium":
 		return "中"
-	case agentcore.ThinkingHigh:
+	case "high":
 		return "高"
-	case agentcore.ThinkingXHigh:
+	case "xhigh":
 		return "极高"
-	case agentcore.ThinkingMax:
+	case "max":
 		return "最高"
 	}
-	return string(level)
+	return level
 }
 
 // bindingLabel 是页脚与右栏的当前绑定摘要：模型 · 思考强度（非自动时）· 角色覆盖数。
@@ -52,7 +51,7 @@ func (m model) bindingLabel() string {
 const (
 	modelPanelRows = 6 // 标题线、四个字段、提示或错误
 	// levelInherit 是角色专用的档位：不设自己的强度，跟随默认绑定。
-	levelInherit agentcore.ThinkingLevel = "inherit"
+	levelInherit = "inherit"
 	// followDefault 是角色专用的连接选项：清除覆盖，跟随默认绑定。
 	followDefault = ""
 )
@@ -72,7 +71,7 @@ type modelPanel struct {
 	roles       []string // "" 是默认
 	connections []string // 角色时首项是 followDefault
 	models      []string
-	levels      []agentcore.ThinkingLevel // 角色时首项是 levelInherit
+	levels      []string // 角色时首项是 levelInherit
 	roleIdx     int
 	connIdx     int
 	modelIdx    int
@@ -88,7 +87,7 @@ var roleLabels = map[string]string{"": "默认", "architect": "策划 architect"
 func (p *modelPanel) role() string       { return p.roles[p.roleIdx] }
 func (p *modelPanel) connection() string { return pick(p.connections, p.connIdx) }
 func (p *modelPanel) model() string      { return pick(p.models, p.modelIdx) }
-func (p *modelPanel) level() agentcore.ThinkingLevel {
+func (p *modelPanel) level() string {
 	if p.levelIdx < len(p.levels) {
 		return p.levels[p.levelIdx]
 	}
@@ -159,12 +158,12 @@ func (m model) syncModelPanelModels(p *modelPanel, preferred string) {
 }
 
 func (m model) syncModelPanelLevels(p *modelPanel) {
-	p.levels = []agentcore.ThinkingLevel{""}
+	p.levels = []string{""}
 	if p.connection() != followDefault && p.model() != "" {
 		p.levels = m.api.Models.Levels(p.connection(), p.model())
 	}
 	if p.role() != "" {
-		p.levels = append([]agentcore.ThinkingLevel{levelInherit}, p.levels...)
+		p.levels = append([]string{levelInherit}, p.levels...)
 	}
 	p.levelIdx = min(p.levelIdx, len(p.levels)-1)
 }
@@ -229,7 +228,7 @@ func (m model) applyModelPanel(p *modelPanel) model {
 			return m
 		}
 		if p.levelIdx != p.initialLevel {
-			if err := m.api.Models.SetThinking(role, string(p.level())); err != nil {
+			if err := m.api.Models.SetThinking(role, p.level()); err != nil {
 				p.message = err.Error()
 				return m
 			}

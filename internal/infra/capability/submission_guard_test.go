@@ -2,32 +2,37 @@ package capability
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 )
+
+// returning 是总返回 result 的工具调用。
+func returning(result agentcore.Result) agentcore.ToolFunc {
+	return func(context.Context, agentcore.ToolCall) (agentcore.Result, error) { return result, nil }
+}
 
 func TestSubmissionGuardStopsRepeatingFailuresAcrossReads(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	guard := submissionGuard(cancel)
-	cause := errors.New("canon old_value mismatch")
 	for i := 0; i < 3; i++ {
-		_, err := guard(ctx, agentcore.ToolCall{Name: prompt.ToolProposalSubmit}, func(context.Context, json.RawMessage) (json.RawMessage, error) { return nil, cause })
-		if !errors.Is(err, cause) {
-			t.Fatal("original error lost")
+		result, err := guard(ctx, agentcore.ToolCall{Name: prompt.ToolProposalSubmit}, returning(agentcore.ErrorResult("canon old_value mismatch")))
+		if err != nil || !result.IsError || result.Text() != "canon old_value mismatch" {
+			t.Fatalf("failure must reach the model as it is: %+v, %v", result, err)
 		}
-		_, _ = guard(ctx, agentcore.ToolCall{Name: prompt.ToolAuthorityRead}, func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
+		_, _ = guard(ctx, agentcore.ToolCall{Name: prompt.ToolAuthorityRead}, returning(agentcore.TextResult("{}")))
 		if i < 2 && ctx.Err() != nil {
 			t.Fatal("did not allow correction")
 		}
 	}
-	if !errors.Is(context.Cause(ctx), cause) || !strings.Contains(context.Cause(ctx).Error(), "保留工作区草稿") {
-		t.Fatalf("missing actionable failure: %v", context.Cause(ctx))
+	cause := context.Cause(ctx)
+	if !errors.Is(cause, model.ErrSubmissionBlocked) || !strings.Contains(cause.Error(), "canon old_value mismatch") || !strings.Contains(cause.Error(), "保留工作区草稿") {
+		t.Fatalf("missing actionable failure: %v", cause)
 	}
 }
 
@@ -36,12 +41,11 @@ func TestSubmissionGuardResetsOnProgress(t *testing.T) {
 	defer cancel(nil)
 	guard := submissionGuard(cancel)
 	for _, message := range []string{"A", "A", "B", "B", "", "B", "B"} {
-		_, _ = guard(ctx, agentcore.ToolCall{Name: prompt.ToolProposalSubmit}, func(context.Context, json.RawMessage) (json.RawMessage, error) {
-			if message == "" {
-				return json.RawMessage(`{}`), nil
-			}
-			return nil, errors.New(message)
-		})
+		result := agentcore.TextResult("{}")
+		if message != "" {
+			result = agentcore.ErrorResult(message)
+		}
+		_, _ = guard(ctx, agentcore.ToolCall{Name: prompt.ToolProposalSubmit}, returning(result))
 		if ctx.Err() != nil {
 			t.Fatal("different failure or success must reset the counter")
 		}

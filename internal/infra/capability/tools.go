@@ -11,6 +11,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain/narrative"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/workspace"
+	"github.com/voocel/litellm"
 )
 
 func (r *Runtime) toolsFor(
@@ -30,7 +31,18 @@ func (r *Runtime) toolsFor(
 		if err != nil {
 			return nil, err
 		}
-		tools = append(tools, agentcore.NewFuncTool(definition.Name, definition.Description, schema, execute))
+		// 提交成功即收尾：结果先由循环落盘，不再请求模型。
+		terminate := definition.Name == prompt.ToolProposalSubmit || definition.Name == prompt.ToolVerdictSubmit
+		tools = append(tools, agentcore.Tool{
+			Name: definition.Name, Description: definition.Description, Schema: schema,
+			Run: func(ctx context.Context, args json.RawMessage) (agentcore.Result, error) {
+				result, err := execute(ctx, args)
+				if err != nil {
+					return agentcore.Result{}, err
+				}
+				return agentcore.Result{Content: []litellm.Block{litellm.Text(string(result))}, Terminate: terminate}, nil
+			},
+		})
 	}
 	return tools, nil
 }

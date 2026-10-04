@@ -1,9 +1,8 @@
 package models
 
 import (
+	"slices"
 	"testing"
-
-	"github.com/voocel/agentcore"
 )
 
 func TestDigestTracksExecutionConfigWithoutLeakingAPIKey(t *testing.T) {
@@ -30,18 +29,40 @@ func TestDigestTracksExecutionConfigWithoutLeakingAPIKey(t *testing.T) {
 func TestThinkingLevelChangesDigestAndBinds(t *testing.T) {
 	c := Config{Provider: "openai", Model: "custom", APIKey: "k"}
 	auto, _ := c.Digest()
-	c.Thinking = agentcore.ThinkingHigh
+	c.Thinking = "high"
 	high, _ := c.Digest()
 	if auto == high {
 		t.Fatal("thinking level must be part of the execution configuration")
 	}
 	binding, err := Bind(c)
-	if err != nil || binding.Chat == nil || binding.Digest != high || binding.Thinking != agentcore.ThinkingHigh || binding.Model != "custom" {
+	if err != nil || binding.Chat.Client == nil || binding.Digest != high || binding.Thinking != "high" || binding.Model != "custom" ||
+		binding.Chat.Request.Model != "custom" || binding.Chat.Request.Thinking == nil || binding.Chat.Request.Thinking.Effort != "high" {
 		t.Fatalf("binding = %#v, %v", binding, err)
 	}
 	roles := Bindings{Default: binding, Roles: map[string]Binding{"writer": {Model: "other"}}}
 	if roles.For("writer").Model != "other" || roles.For("editor").Model != "custom" {
 		t.Fatal("role lookup must fall back to the default binding")
+	}
+}
+
+// 适配器发不出的档位不列、不发：MiMo 不收强度，Grok 关不掉思考；意图仍进摘要。
+func TestLevelsFollowTheAdapter(t *testing.T) {
+	for provider, want := range map[string][]string{
+		"deepseek": ThinkingLevels,
+		"mimo":     {"", "off"},
+		"grok":     {"", "minimal", "low", "medium", "high", "xhigh", "max"},
+	} {
+		binding, err := Bind(Config{Provider: provider, Model: "m", APIKey: "k", Thinking: "off"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Levels(binding.Chat.Client); !slices.Equal(got, want) {
+			t.Errorf("%s: levels %q, want %q", provider, got, want)
+		}
+		sendsOff := binding.Chat.Request.Thinking != nil && binding.Chat.Request.Thinking.Disabled
+		if offered := slices.Contains(want, "off"); sendsOff != offered || (binding.Thinking == "off") != offered {
+			t.Errorf("%s: thinking off sent=%v binding=%q", provider, sendsOff, binding.Thinking)
+		}
 	}
 }
 

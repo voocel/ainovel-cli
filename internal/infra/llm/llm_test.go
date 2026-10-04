@@ -2,40 +2,31 @@ package llm_test
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"testing"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/llm"
 	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
-type scriptedChat struct {
-	response string
-	nilReply bool
-	config   agentcore.CallConfig
-	system   string
+// routedProvider 声明接受缓存与会话路由选项，像 OpenAI 那样。
+type routedProvider struct{ *litellmtest.Provider }
+
+func (routedProvider) Capabilities() litellm.Capabilities {
+	return litellm.Capabilities{ProviderOptions: []string{"prompt_cache_key", "session_id"}}
 }
 
-func (m *scriptedChat) Generate(_ context.Context, messages []agentcore.Message, _ []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.config = agentcore.ResolveCallConfig(opts)
-	m.system = messages[0].TextContent()
-	if m.nilReply {
-		return nil, nil
+func binding(t *testing.T, p litellm.Provider) models.Binding {
+	t.Helper()
+	client, err := litellm.New(p)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.TextBlock(m.response)},
-		Usage:   &agentcore.Usage{Input: 10, Output: 3},
-	}}, nil
+	return models.Binding{Chat: agentcore.Model{Client: client, Request: litellm.Request{Model: "m", Thinking: &litellm.Thinking{Effort: "high"}}}}
 }
-
-func (*scriptedChat) GenerateStream(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	return nil, errors.New("streaming is not used by structured calls")
-}
-
-func (*scriptedChat) SupportsTools() bool { return false }
 
 var call = llm.Call{
 	System:    "判定器",
@@ -46,32 +37,43 @@ var call = llm.Call{
 }
 
 func TestStructuredRequestsSchemaAndDecodesStrictly(t *testing.T) {
-	chat := &scriptedChat{response: `{"status":"pass"}`}
+	reply := litellmtest.Text(`{"status":"pass"}`)
+	reply.Usage = litellm.Usage{InputTokens: 10, OutputTokens: 3}
+	p := routedProvider{litellmtest.New(reply, litellmtest.Text(`{"status":"pass","extra":1}`))}
+	b := binding(t, p)
 	var out struct {
 		Status string `json:"status"`
 	}
-	usage, err := llm.Structured(context.Background(), models.Binding{Chat: chat}, call, &out)
-	if err != nil || out.Status != "pass" || usage == nil || usage.Input != 10 {
+	usage, err := llm.Structured(context.Background(), b, call, &out)
+	if err != nil || out.Status != "pass" || usage.InputTokens != 10 {
 		t.Fatalf("structured call: err=%v out=%+v usage=%+v", err, out, usage)
 	}
-	if chat.config.ResponseFormat == nil || chat.config.ResponseFormat.Type != agentcore.ResponseFormatJSONSchema {
-		t.Fatalf("JSON schema not requested: %+v", chat.config.ResponseFormat)
+	req := p.Requests()[0]
+	if f := req.ResponseFormat; f == nil || f.Type != litellm.ResponseFormatJSONSchema || f.JSONSchema.Strict == nil || !*f.JSONSchema.Strict {
+		t.Fatalf("strict JSON schema not requested: %+v", f)
 	}
-	if chat.config.PromptCacheKey != "cache-1" || chat.config.SessionID != "session-1" || chat.system != "判定器" {
-		t.Fatalf("call identity not forwarded: %+v system=%q", chat.config, chat.system)
+	var key, session string
+	_ = json.Unmarshal(req.ProviderOptions["prompt_cache_key"], &key)
+	_ = json.Unmarshal(req.ProviderOptions["session_id"], &session)
+	if key != "cache-1" || session != "session-1" || req.Messages[0].Role != litellm.RoleSystem || req.Thinking == nil || req.Thinking.Effort != "high" {
+		t.Fatalf("call identity not forwarded: options=%s messages=%+v thinking=%+v", req.ProviderOptions, req.Messages, req.Thinking)
 	}
-	chat.response = `{"status":"pass","extra":1}`
-	if _, err := llm.Structured(context.Background(), models.Binding{Chat: chat}, call, &out); err == nil {
+	if b.Chat.Request.ProviderOptions != nil {
+		t.Fatal("routing must not leak into the binding")
+	}
+	if _, err := llm.Structured(context.Background(), b, call, &out); err == nil {
 		t.Fatal("unknown field accepted")
 	}
 }
 
-func TestStructuredRejectsMissingModelAndEmptyReply(t *testing.T) {
+// 不列路由选项的厂商拒绝不认识的选项：一个也不能带过去。
+func TestStructuredOmitsOptionsTheProviderDoesNotList(t *testing.T) {
+	p := litellmtest.New(litellmtest.Text(`{}`))
 	var out struct{}
-	if _, err := llm.Structured(context.Background(), models.Binding{}, call, &out); !errors.Is(err, model.ErrInvalid) {
-		t.Fatalf("nil model error = %v", err)
+	if _, err := llm.Structured(context.Background(), binding(t, p), call, &out); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := llm.Structured(context.Background(), models.Binding{Chat: &scriptedChat{nilReply: true}}, call, &out); err == nil {
-		t.Fatal("nil response accepted")
+	if options := p.Requests()[0].ProviderOptions; len(options) != 0 {
+		t.Fatalf("options = %s", options)
 	}
 }

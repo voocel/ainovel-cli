@@ -15,38 +15,25 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/store"
 	"github.com/voocel/ainovel-cli/internal/infra/workspace"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
-
-type repeatingSubmissionModel struct {
-	recoveryRuntimeModel
-	calls int
-}
-
-func (m *repeatingSubmissionModel) GenerateStream(_ context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	m.calls++
-	if m.calls > 3 {
-		return nil, errors.New("guard did not stop model calls")
-	}
-	message := runtimeToolCallMessage(fmt.Sprintf("submit-%d", m.calls), prompt.ToolProposalSubmit,
-		json.RawMessage(`{"reason":"提交","workspace_key":"draft","workspace_version":99,"facts":[{"subject":"主角","predicate":"event.arrival","value":"抵达"}]}`), m.now)
-	stream := make(chan agentcore.StreamEvent, 3)
-	call := message.ToolCalls()[0]
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallStart, Message: message}
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventToolCallEnd, Message: message, CompletedToolCall: &call}
-	stream <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: message}
-	close(stream)
-	return stream, nil
-}
 
 func TestRuntimePersistsSubmissionFailureAndRetainsDraft(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	s, op := runningWriterWithDraft(t, ctx)
-	llm := &repeatingSubmissionModel{recoveryRuntimeModel: recoveryRuntimeModel{now: time.Now()}}
-	r := boundRuntime(s, llm)
+	// 第四次调用越出脚本：守卫没拦住就会以别的错误收场。
+	var replies []litellmtest.Reply
+	for i := 1; i <= 3; i++ {
+		replies = append(replies, callReply(fmt.Sprintf("submit-%d", i), prompt.ToolProposalSubmit,
+			json.RawMessage(`{"reason":"提交","workspace_key":"draft","workspace_version":99,"facts":[{"subject":"主角","predicate":"event.arrival","value":"抵达"}]}`)))
+	}
+	llm := litellmtest.New(replies...)
+	r := boundRuntime(s, testChat(llm))
 	_, err := r.Execute(ctx, op)
-	if !errors.Is(err, model.ErrSubmissionBlocked) || model.FailureCodeFor(err) != model.FailureSubmissionBlocked || !strings.Contains(err.Error(), "连续 3 次") || !strings.Contains(err.Error(), "version mismatch") || llm.calls != 3 {
-		t.Fatalf("failure was hidden or loop continued: calls=%d err=%v", llm.calls, err)
+	if !errors.Is(err, model.ErrSubmissionBlocked) || model.FailureCodeFor(err) != model.FailureSubmissionBlocked || !strings.Contains(err.Error(), "连续 3 次") || !strings.Contains(err.Error(), "version mismatch") || len(llm.Requests()) != 3 {
+		t.Fatalf("failure was hidden or loop continued: calls=%d err=%v", len(llm.Requests()), err)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("submission guard cancelled its caller")
@@ -65,6 +52,42 @@ func TestRuntimePersistsSubmissionFailureAndRetainsDraft(t *testing.T) {
 		}
 	}
 	t.Fatal("failure summary was not persisted")
+}
+
+// 模型没提交就想停：提醒它继续，而不是以"没有 Proposal"收场；每次回应的用量都计入收尾汇总。
+func TestRuntimeRemindsToSubmitBeforeStopping(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, op := runningWriterWithDraft(t, ctx)
+	stop := litellmtest.Text("草稿写好了。")
+	stop.Usage = litellm.Usage{InputTokens: 10, OutputTokens: 3}
+	submit := callReply("submit-existing", prompt.ToolProposalSubmit,
+		json.RawMessage(`{"reason":"完成","workspace_key":"draft","workspace_version":1,"facts":[{"subject":"主角","predicate":"event.arrival","value":"抵达山门"}]}`))
+	submit.Usage = litellm.Usage{InputTokens: 20, OutputTokens: 5}
+	llm := litellmtest.New(stop, submit)
+	outcome, err := boundRuntime(s, testChat(llm)).Execute(ctx, op)
+	if err != nil || outcome.Proposal == nil {
+		t.Fatalf("outcome = %+v, %v", outcome, err)
+	}
+	requests := llm.Requests()
+	if len(requests) != 2 || !strings.Contains(requestText(requests[1].Messages[len(requests[1].Messages)-1]), "任务尚未形成 Proposal") {
+		t.Fatalf("the model was not reminded to submit: %d requests", len(requests))
+	}
+	events, err := s.ListOperationEvents(ctx, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind != "agent.run_ended" {
+			continue
+		}
+		var end struct{ Usage agentcore.Usage }
+		if err := json.Unmarshal(event.Payload, &end); err != nil || end.Usage.InputTokens != 30 || end.Usage.OutputTokens != 8 {
+			t.Fatalf("run usage = %s, %v", event.Payload, err)
+		}
+		return
+	}
+	t.Fatal("missing run summary")
 }
 
 func runningWriterWithDraft(t *testing.T, ctx context.Context) (*store.Store, model.Operation) {
@@ -110,7 +133,7 @@ func (s failedResultStore) AppendOperationEvent(ctx context.Context, event model
 		if err := json.Unmarshal(event.Payload, &message); err != nil {
 			return model.OperationEvent{}, err
 		}
-		if message.Role == agentcore.RoleTool && message.Metadata["tool_name"] == prompt.ToolProposalSubmit {
+		if isSubmitResult(message) {
 			return model.OperationEvent{}, s.cause
 		}
 	}
@@ -123,8 +146,8 @@ func TestRuntimeSubmissionStopsOnlyAfterResultIsPersisted(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			s, op := runningWriterWithDraft(t, ctx)
-			llm := &recoveryRuntimeModel{now: time.Now(), proposalArgs: json.RawMessage(`{"reason":"完成","workspace_key":"draft","workspace_version":1,"facts":[{"subject":"主角","predicate":"event.arrival","value":"抵达山门"}]}`)}
-			r := boundRuntime(s, llm)
+			llm := recoveryScript(json.RawMessage(`{"reason":"完成","workspace_key":"draft","workspace_version":1,"facts":[{"subject":"主角","predicate":"event.arrival","value":"抵达山门"}]}`))
+			r := boundRuntime(s, testChat(llm))
 			cause := errors.New("result persistence failed")
 			if failCommit {
 				r.store = failedResultStore{runtimeStore: s, cause: cause}
@@ -137,8 +160,8 @@ func TestRuntimeSubmissionStopsOnlyAfterResultIsPersisted(t *testing.T) {
 			} else if err != nil || outcome.Proposal == nil {
 				t.Fatalf("submission failed: %+v %v", outcome, err)
 			}
-			if len(llm.requests) != 2 {
-				t.Fatalf("extra model calls: %d", len(llm.requests))
+			if len(llm.Requests()) != 2 {
+				t.Fatalf("extra model calls: %d", len(llm.Requests()))
 			}
 			events, err := s.ListOperationEvents(ctx, op.ID)
 			if err != nil {
@@ -151,23 +174,21 @@ func TestRuntimeSubmissionStopsOnlyAfterResultIsPersisted(t *testing.T) {
 					if err := json.Unmarshal(event.Payload, &message); err != nil {
 						t.Fatal(err)
 					}
-					if message.Role == agentcore.RoleTool && message.Metadata["tool_name"] == prompt.ToolProposalSubmit {
-						resultSaved = true
-					}
+					resultSaved = resultSaved || isSubmitResult(message)
 				}
 				if event.Kind == "agent.run_ended" {
 					var end struct {
-						Summary agentcore.RunSummary
-						Error   string
+						Reason agentcore.EndReason `json:"reason"`
+						Error  string              `json:"error"`
 					}
 					if err := json.Unmarshal(event.Payload, &end); err != nil {
 						t.Fatal(err)
 					}
-					want := agentcore.EndReasonStop
+					want := agentcore.EndDone
 					if failCommit {
-						want = agentcore.EndReasonError
+						want = agentcore.EndError
 					}
-					if end.Summary.EndReason != want || (end.Error != "") != failCommit {
+					if end.Reason != want || (end.Error != "") != failCommit {
 						t.Fatalf("wrong ending: %+v", end)
 					}
 					ended = true
@@ -178,4 +199,10 @@ func TestRuntimeSubmissionStopsOnlyAfterResultIsPersisted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// isSubmitResult 报告 message 是否是 recoveryScript 那次 proposal_submit 的结果。
+func isSubmitResult(message agentcore.Message) bool {
+	result, ok := message.ToolResult()
+	return ok && result.ToolUseID == "submit-existing"
 }

@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/llm"
+	"github.com/voocel/litellm"
 )
 
 // 三个语义判断都是三分法第二类（§11 第 7 条）：边界清晰的单次 LLM 函数。
@@ -230,7 +230,7 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 	}
 	eventPayload, err := json.Marshal(struct {
 		Report model.SemanticComplianceReport `json:"report"`
-		Usage  *agentcore.Usage               `json:"usage,omitempty"`
+		Usage  litellm.Usage                  `json:"usage"`
 	}{Report: report, Usage: usage})
 	if err != nil {
 		return model.SemanticComplianceReport{}, fmt.Errorf("encode semantic compliance event: %w", err)

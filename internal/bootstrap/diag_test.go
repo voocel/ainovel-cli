@@ -38,7 +38,7 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 	}
 	for i, event := range []struct{ kind, payload string }{
 		{"agent.message_committed", `{"role":"tool","metadata":{"is_error":true},"content":[{"type":"text","text":"PRIVATE_SENTINEL"}]}`},
-		{"agent.run_ended", `{"usage":{"input":12,"output":3,"cache_read":0,"cache_write":0,"total_tokens":15},"error":"PRIVATE_SENTINEL"}`},
+		{"agent.run_ended", `{"usage":{"input_tokens":12,"output_tokens":3},"error":"PRIVATE_SENTINEL"}`},
 	} {
 		if _, err := s.AppendOperationEvent(ctx, model.OperationEvent{OperationID: op.ID, Attempt: claimed.Attempt, StepID: event.kind, IdempotencyKey: event.kind, Kind: event.kind, Payload: []byte(event.payload), CreatedAt: now.Add(time.Duration(i) * time.Millisecond)}); err != nil {
 			t.Fatal(err)

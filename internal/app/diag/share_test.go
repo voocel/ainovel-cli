@@ -85,14 +85,18 @@ func TestRulesDoNotInferFailureFromWaitingOrRetries(t *testing.T) {
 }
 
 func TestUsageMissingIsNotZero(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"usage":{}}`, `{"usage":{"input":-1}}`, `{"usage":{"input":"1"}}`} {
+	for _, raw := range []string{`{}`, `{"usage":null}`, `{"usage":{"input_tokens":-1}}`, `{"usage":{"input_tokens":"1"}}`} {
 		if _, err := decodeUsage([]byte(raw)); err == nil {
 			t.Fatalf("invalid usage accepted: %s", raw)
 		}
 	}
-	u, err := decodeUsage([]byte(`{"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0,"total_tokens":0,"model":"private"}}`))
+	u, err := decodeUsage([]byte(`{"usage":{"cost":{"total":0},"model":"private"}}`))
 	if err != nil || u == nil || u.Input != 0 {
 		t.Fatalf("recorded zero not preserved: %v %v", u, err)
+	}
+	u, err = decodeUsage([]byte(`{"usage":{"input_tokens":30,"output_tokens":5,"cache_read_tokens":20}}`))
+	if err != nil || *u != (Usage{Input: 30, Output: 5, CacheRead: 20, TotalTokens: 35}) {
+		t.Fatalf("usage = %+v, %v", u, err)
 	}
 }
 

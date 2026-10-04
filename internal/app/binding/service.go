@@ -7,16 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/voocel/agentcore"
-	agentllm "github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
-	"github.com/voocel/ainovel-cli/internal/infra/llm"
 	"github.com/voocel/ainovel-cli/internal/infra/llm/models"
 )
 
@@ -27,11 +25,10 @@ type Binder interface {
 }
 
 type Service struct {
-	mu       sync.Mutex
-	dir      string
-	config   appconfig.Config
-	binder   Binder
-	bindings *models.Bindings // 最近一次成功绑定，供查询档位；nil = 未绑定
+	mu     sync.Mutex
+	dir    string
+	config appconfig.Config
+	binder Binder
 }
 
 func New(dir string, binder Binder) *Service {
@@ -40,14 +37,13 @@ func New(dir string, binder Binder) *Service {
 
 // Selection 是某个角色当前生效的绑定。
 type Selection struct {
-	Role       string                    `json:"role,omitempty"`
-	Connection string                    `json:"connection"`
-	Provider   string                    `json:"provider"`
-	Model      string                    `json:"model"`
-	Thinking   agentcore.ThinkingLevel   `json:"thinking,omitempty"`
-	Inherited  bool                      `json:"inherited,omitempty"` // 角色未覆盖，跟随默认
-	Bound      bool                      `json:"bound"`
-	Levels     []agentcore.ThinkingLevel `json:"levels,omitempty"` // 该模型可接受的思考档位，含自动（空）
+	Role       string `json:"role,omitempty"`
+	Connection string `json:"connection"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	Thinking   string `json:"thinking,omitempty"`
+	Inherited  bool   `json:"inherited,omitempty"` // 角色未覆盖，跟随默认
+	Bound      bool   `json:"bound"`
 }
 
 // Choice 是配置里一条可切换的「连接 / 模型」。
@@ -89,7 +85,7 @@ func (s *Service) switchLocked(config appconfig.Config) error {
 		return err
 	}
 	s.binder.Bind(bindings)
-	s.config, s.bindings = config, &bindings
+	s.config = config
 	return nil
 }
 
@@ -99,7 +95,6 @@ func (s *Service) bindLocked(config appconfig.Config) error {
 		return err
 	}
 	s.binder.Bind(bindings)
-	s.bindings = &bindings
 	return nil
 }
 
@@ -152,7 +147,7 @@ func (s *Service) SetThinking(role, level string) error {
 	next := s.config
 	switch {
 	case role == "":
-		next.Thinking = string(thinking)
+		next.Thinking = thinking
 	case !prompt.KnownModelRole(role):
 		return fmt.Errorf("未知角色 %q，可选：%s", role, strings.Join(prompt.ModelRoles, "、"))
 	default:
@@ -160,7 +155,7 @@ func (s *Service) SetThinking(role, level string) error {
 		if !ok {
 			return fmt.Errorf("角色 %q 跟随默认，先为它指定模型", role)
 		}
-		next = next.WithRole(role, rc.Provider, rc.Model, string(thinking))
+		next = next.WithRole(role, rc.Provider, rc.Model, thinking)
 	}
 	return s.switchLocked(next)
 }
@@ -169,11 +164,11 @@ func (s *Service) SetThinking(role, level string) error {
 func (s *Service) Current(role string) Selection {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	selection := Selection{Role: role, Connection: s.config.Provider, Model: s.config.Model, Thinking: agentcore.ThinkingLevel(s.config.Thinking)}
+	selection := Selection{Role: role, Connection: s.config.Provider, Model: s.config.Model, Thinking: s.config.Thinking}
 	if rc, ok := s.config.Roles[role]; ok && role != "" {
 		selection.Connection, selection.Model = rc.Provider, rc.Model
 		if rc.Thinking != "" {
-			selection.Thinking = agentcore.ThinkingLevel(rc.Thinking)
+			selection.Thinking = rc.Thinking
 		}
 	} else if role != "" {
 		selection.Inherited = true
@@ -181,27 +176,24 @@ func (s *Service) Current(role string) Selection {
 	if pc, err := s.config.Connection(selection.Connection); err == nil {
 		selection.Provider = pc.Type
 	}
-	if s.bindings != nil && s.binder != nil && s.binder.Bound() {
-		selection.Bound = true
-		selection.Levels = llm.ThinkingPolicy(s.bindings.For(role).Chat).Available
-	}
+	selection.Bound = s.binder != nil && s.binder.Bound()
 	return selection
 }
 
-// Levels 返回某连接/模型可接受的思考档位；构建失败时给全部档位，由执行时折算。
-func (s *Service) Levels(connection, model string) []agentcore.ThinkingLevel {
+// Levels 返回某连接/模型可选的思考档位；构建失败时给全部档位，由执行时折算。
+func (s *Service) Levels(connection, model string) []string {
 	s.mu.Lock()
 	config := s.config
 	s.mu.Unlock()
 	modelConfig, err := modelConfigFor(config, connection, model, "")
 	if err != nil {
-		return llm.ThinkingPolicy(nil).Available
+		return models.ThinkingLevels
 	}
 	chat, err := models.New(modelConfig)
 	if err != nil {
-		return llm.ThinkingPolicy(nil).Available
+		return models.ThinkingLevels
 	}
-	return llm.ThinkingPolicy(chat).Available
+	return models.Levels(chat.Client)
 }
 
 // Roles 是可单独绑定的角色：空串代表默认。
@@ -307,26 +299,19 @@ func modelConfigFor(config appconfig.Config, connection, model, thinking string)
 	}
 	return models.Config{
 		Provider: pc.Type, API: pc.API, Model: model, APIKey: pc.APIKey, BaseURL: pc.BaseURL,
-		Thinking: agentcore.ThinkingLevel(thinking),
+		Thinking: thinking,
 	}, nil
 }
 
-// parseThinking 接受 auto / inherit / 空与 agentcore 的全部档位。
-func parseThinking(level string) (agentcore.ThinkingLevel, error) {
+// parseThinking 接受 auto / inherit / 空（都是自动）与 models.ThinkingLevels 的档位。
+func parseThinking(level string) (string, error) {
 	level = strings.ToLower(strings.TrimSpace(level))
 	switch level {
-	case "", "auto", "inherit":
-		return agentllm.ThinkingAuto, nil
+	case "auto", "inherit":
+		return "", nil
 	}
-	for _, known := range agentllm.ThinkingLevelOrder {
-		if string(known) == level {
-			return known, nil
-		}
+	if slices.Contains(models.ThinkingLevels, level) {
+		return level, nil
 	}
-	names := make([]string, 0, len(agentllm.ThinkingLevelOrder)+1)
-	names = append(names, "auto")
-	for _, known := range agentllm.ThinkingLevelOrder {
-		names = append(names, string(known))
-	}
-	return "", fmt.Errorf("未知思考强度 %q，可选：%s", level, strings.Join(names, " / "))
+	return "", fmt.Errorf("未知思考强度 %q，可选：auto / %s", level, strings.Join(models.ThinkingLevels[1:], " / "))
 }

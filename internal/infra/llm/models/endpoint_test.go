@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
 )
 
 func TestVerifyUsesSelectedOpenAIEndpoint(t *testing.T) {
@@ -21,12 +22,16 @@ func TestVerifyUsesSelectedOpenAIEndpoint(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer test-key" {
 					t.Error("key not forwarded")
 				}
+				// 8 个 token 的探测容不下思考：绑定的思考强度不能带上。
+				if body, _ := io.ReadAll(r.Body); strings.Contains(string(body), "reasoning") {
+					t.Errorf("verify request carries thinking: %s", body)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":{"message":"test rejection","type":"authentication_error"}}`))
 			}))
 			defer server.Close()
-			err := Verify(context.Background(), Config{Provider: "openai", Model: "custom", API: endpoint, APIKey: "test-key", BaseURL: server.URL + "/v1"})
+			err := Verify(context.Background(), Config{Provider: "openai", Model: "custom", API: endpoint, APIKey: "test-key", BaseURL: server.URL + "/v1", Thinking: "high"})
 			expected := "/v1/chat/completions"
 			if endpoint == "responses" {
 				expected = "/v1/responses"
@@ -54,15 +59,14 @@ func TestNewSendsAnthropicValidRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := []agentcore.Message{
-		agentcore.UserMsg("hi"),
-		{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{
-			agentcore.ToolCallBlock(agentcore.ToolCall{ID: raw, Name: "read", Args: json.RawMessage(`{}`)}),
-		}},
-		agentcore.ToolResultMsg(raw, json.RawMessage(`"ok"`), false),
+	request := chat.Request
+	request.Messages = []litellm.Message{
+		litellm.UserText("hi"),
+		litellm.Assistant(litellm.ToolUseBlock{ID: raw, Name: "read", Arguments: `{}`}),
+		litellm.ToolResultText(raw, "ok"),
 	}
-	if _, err := chat.Generate(context.Background(), messages, nil); err != nil {
-		t.Fatalf("Generate: %v", err)
+	if _, err := chat.Client.Chat(context.Background(), request); err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
 	var body struct {
 		MaxTokens int `json:"max_tokens"`

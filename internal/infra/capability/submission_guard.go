@@ -2,7 +2,6 @@ package capability
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -20,26 +19,27 @@ func submissionGuard(cancel context.CancelCauseFunc) agentcore.ToolMiddleware {
 	}
 	failures := make(map[string]failure)
 	var mu sync.Mutex
-	return func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolExecuteFunc) (json.RawMessage, error) {
-		result, err := next(ctx, call.Args)
-		if call.Name != prompt.ToolProposalSubmit && call.Name != prompt.ToolVerdictSubmit {
+	return func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolFunc) (agentcore.Result, error) {
+		result, err := next(ctx, call)
+		if err != nil || call.Name != prompt.ToolProposalSubmit && call.Name != prompt.ToolVerdictSubmit {
 			return result, err
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if err == nil {
+		if !result.IsError {
 			delete(failures, call.Name)
 			return result, nil
 		}
+		message := result.Text()
 		f := failures[call.Name]
-		if f.message != err.Error() {
-			f = failure{message: err.Error()}
+		if f.message != message {
+			f = failure{message: message}
 		}
 		f.count++
 		failures[call.Name] = f
 		if f.count >= 3 {
-			cancel(fmt.Errorf("%w：%s 连续 %d 次返回相同错误，已停止本次执行并保留工作区草稿：%w", model.ErrSubmissionBlocked, call.Name, f.count, err))
+			cancel(fmt.Errorf("%w：%s 连续 %d 次返回相同错误，已停止本次执行并保留工作区草稿：%s", model.ErrSubmissionBlocked, call.Name, f.count, message))
 		}
-		return result, err
+		return result, nil
 	}
 }

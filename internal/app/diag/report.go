@@ -127,25 +127,23 @@ type Report struct {
 	NextEventSequence int64       `json:"next_event_sequence,omitempty"`
 }
 
+// decodeUsage reads the usage a run's end recorded, an agentcore.Usage, whose
+// JSON leaves zero counts out: a missing usage is not a zero one.
 func decodeUsage(payload []byte) (*Usage, error) {
 	var record struct {
 		Usage *struct {
-			Input       *int64 `json:"input"`
-			Output      *int64 `json:"output"`
-			CacheRead   *int64 `json:"cache_read"`
-			CacheWrite  *int64 `json:"cache_write"`
-			TotalTokens *int64 `json:"total_tokens"`
+			Input      int64 `json:"input_tokens"`
+			Output     int64 `json:"output_tokens"`
+			CacheRead  int64 `json:"cache_read_tokens"`
+			CacheWrite int64 `json:"cache_write_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(payload, &record); err != nil {
 		return nil, err
 	}
 	u := record.Usage
-	if u == nil || u.Input == nil || u.Output == nil || u.CacheRead == nil || u.CacheWrite == nil || u.TotalTokens == nil {
+	if u == nil || u.Input < 0 || u.Output < 0 || u.CacheRead < 0 || u.CacheWrite < 0 {
 		return nil, model.ErrInvalid
 	}
-	if *u.Input < 0 || *u.Output < 0 || *u.CacheRead < 0 || *u.CacheWrite < 0 || *u.TotalTokens < 0 {
-		return nil, model.ErrInvalid
-	}
-	return &Usage{*u.Input, *u.Output, *u.CacheRead, *u.CacheWrite, *u.TotalTokens}, nil
+	return &Usage{u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Input + u.Output}, nil
 }
