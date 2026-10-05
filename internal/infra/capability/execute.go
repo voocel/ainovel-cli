@@ -178,9 +178,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		},
 	}
 	_, executionErr := agentcore.Run(executionCtx, config, recoveredMessages, agentcore.UserText(promptText))
-	if cause := context.Cause(executionCtx); cause != nil {
-		executionErr = cause
-	}
 	var errorText string
 	if executionErr != nil {
 		errorText = executionErr.Error()
