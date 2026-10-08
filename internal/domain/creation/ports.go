@@ -13,7 +13,8 @@ type Tasks interface {
 	Start(context.Context, string, WorkItem, time.Time) (model.Operation, error)
 	Restart(context.Context, string, string, WorkItem, time.Time) (model.Operation, error)
 	Resume(context.Context, string, time.Time) (model.Operation, error)
-	Run(context.Context, string, string, time.Duration, time.Time) (model.Operation, error)
+	// Run 执行一项已入队的工作；work 随之传入，实现可向用户转述它的开工与结局。
+	Run(context.Context, WorkItem, model.Operation, string, time.Duration, time.Time) (model.Operation, error)
 	// Failures 数该任务落过几次 failed（事件日志口径）：D56 的重开预算只数失败，
 	// 不数 attempt——attempt 是执行围栏，含进程退出时释放的执行。
 	Failures(context.Context, string) (int, error)

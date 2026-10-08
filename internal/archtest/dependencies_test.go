@@ -43,7 +43,7 @@ var allowedImports = map[string][]string{
 	"app/diag":                {"domain/model", "infra/store", "infra/export"},
 	"app/resource":            {"domain/model", "infra/store", "domain/change", "app/project", "infra/capability/pack", "infra/capability/prompt"},
 	"app/profile":             {"domain/model", "infra/store", "app/project", "app/resource", "domain/derive", "infra/capability/prompt"},
-	"app/task":                {"domain/creation", "domain/model", "infra/store", "app/project", "app/resource", "app/profile", "domain/operation", "infra/capability/prompt"},
+	"app/task":                {"infra/activity", "domain/creation", "domain/model", "infra/store", "app/project", "app/resource", "app/profile", "domain/operation", "infra/capability/prompt"},
 	// The driver cannot depend on application snapshots, evidence interpretation,
 	// novel policies, presentation queries, or application assembly.
 	"domain/creation": {"domain/model"},

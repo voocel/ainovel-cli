@@ -45,6 +45,7 @@ type novelItem struct {
 	chapterID string                // rewrite/canon：目标正文章节
 	facts     []string              // canon：待核验的事实 ID；空表示该章未入账
 	chapters  []string              // review：窗口内正文章节
+	span      [2]int                // review：窗口的首末章号
 	reviewed  []string              // review：上一轮已审且正文未变、只作上下文的章（D68）
 	prior     []model.ReviewFinding // review：焦点章上一轮的阻塞意见
 	notes     []string              // rewrite：阻塞意见；extend：上一窗口的审阅意见
@@ -126,6 +127,7 @@ func (Policy) Next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 			item = novelItem{
 				kind: workReview, chapters: step.review, reviewed: step.reviewed, prior: step.prior,
 				requirements: ledger.window(step.review), revision: project.Revision, basis: basis,
+				span: [2]int{ledger.numbers[step.review[0]], ledger.numbers[step.review[len(step.review)-1]]},
 			}
 		case unmet == "":
 			return creation.Step{Done: fmt.Sprintf("全书 %d 章完成并通过审阅", length.Final)}, nil
@@ -405,42 +407,74 @@ func (item novelItem) work(run model.CreationRun, premise string, length Length)
 }
 
 func (item novelItem) reasons() creation.WorkReasons {
+	chapter := fmt.Sprintf("第 %d 章《%s》", item.number, item.plan.Title)
 	switch item.kind {
 	case workDevelopPlan:
 		return creation.WorkReasons{
+			Start:   "规划故事蓝图：搭起卷与故事弧，展开第一个故事弧的章节",
+			Done:    "故事蓝图已生效",
 			Waiting: "故事蓝图已拟好，等你确认后继续",
 			Failure: "故事蓝图这次没能完成",
 			Stuck:   "蓝图已定稿但没有产出任何章节节点，需要人工检查规划",
 		}
 	case workExtendPlan:
+		start := fmt.Sprintf("扩展蓝图：前 %d 章已审完，展开下一个故事弧", item.covered)
+		if item.concluded {
+			start = fmt.Sprintf("续写：第 %d 章已作为结局写成，在它之后展开新的篇章", item.covered)
+		}
 		return creation.WorkReasons{
+			Start:   start,
+			Done:    "后续章节的蓝图已生效",
 			Waiting: "后续章节的蓝图已拟好（可能含篇幅上限调整），等你确认后继续",
 			Failure: "后续章节的蓝图这次没能扩展完成",
 			Stuck:   "蓝图扩展任务已结束但章节数没有增加，需要人工检查规划",
 		}
 	case workReview:
+		window := fmt.Sprintf("第 %d–%d 章", item.span[0], item.span[1])
+		if item.span[0] == item.span[1] {
+			window = fmt.Sprintf("第 %d 章", item.span[0])
+		}
+		start := "审阅" + window + "：先审后写，问题不带到后面"
+		if len(item.reviewed) > 0 || len(item.prior) > 0 {
+			start = "复审" + window + "：核对上一轮的意见是否已解决"
+		}
+		if len(item.requirements) > 0 {
+			start += fmt.Sprintf("，并核验 %d 项要求", len(item.requirements))
+		}
 		return creation.WorkReasons{
+			Start:   start,
+			Done:    window + "审阅完成",
 			Waiting: "审阅在等你确认后继续",
 			Failure: "审阅这次没能完成",
 			Stuck:   "审阅已结束但窗口仍未通过或要求仍未兑现，需要人工检查",
 		}
 	case workVerifyCanon:
+		start := fmt.Sprintf("核验第 %d 章的 %d 条事实：正文在事实入账后改过", item.number, len(item.facts))
+		if len(item.facts) == 0 {
+			start = fmt.Sprintf("补记第 %d 章的事实：这一章还没有入账", item.number)
+		}
 		return creation.WorkReasons{
+			Start:   start,
+			Done:    fmt.Sprintf("第 %d 章的事实已核验入账", item.number),
 			Waiting: fmt.Sprintf("第 %d 章的事实核验已完成，等你确认后继续", item.number),
 			Failure: fmt.Sprintf("第 %d 章的事实核验这次没能完成", item.number),
 			Stuck:   fmt.Sprintf("第 %d 章的事实核验已结束但缺口仍在，需要人工检查", item.number),
 		}
 	case workRewrite:
 		return creation.WorkReasons{
-			Waiting: fmt.Sprintf("第 %d 章《%s》已按审阅意见重写，等你过目后继续", item.number, item.plan.Title),
-			Failure: fmt.Sprintf("第 %d 章《%s》按审阅意见重写失败", item.number, item.plan.Title),
-			Stuck:   fmt.Sprintf("第 %d 章《%s》的重写已结束但审阅意见没有解决，需要人工检查", item.number, item.plan.Title),
+			Start:   fmt.Sprintf("按审阅意见重写%s：%d 条阻塞意见", chapter, len(item.notes)),
+			Done:    chapter + "的重写稿已入稿",
+			Waiting: chapter + "已按审阅意见重写，等你过目后继续",
+			Failure: chapter + "按审阅意见重写失败",
+			Stuck:   chapter + "的重写已结束但审阅意见没有解决，需要人工检查",
 		}
 	default:
 		return creation.WorkReasons{
-			Waiting: fmt.Sprintf("第 %d 章《%s》初稿完成，等你审阅后继续", item.number, item.plan.Title),
-			Failure: fmt.Sprintf("第 %d 章《%s》这次没能写完", item.number, item.plan.Title),
-			Stuck:   fmt.Sprintf("第 %d 章《%s》的任务已结束但正文缺失，需要人工检查", item.number, item.plan.Title),
+			Start:   "写" + chapter,
+			Done:    chapter + "已入稿",
+			Waiting: chapter + "初稿完成，等你审阅后继续",
+			Failure: chapter + "这次没能写完",
+			Stuck:   chapter + "的任务已结束但正文缺失，需要人工检查",
 		}
 	}
 }

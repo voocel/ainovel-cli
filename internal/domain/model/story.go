@@ -152,6 +152,22 @@ const (
 	EntityOrganization EntityKind = "organization"
 )
 
+// Noun 是实体种类的故事语言名称。
+func (k EntityKind) Noun() string {
+	switch k {
+	case EntityCharacter:
+		return "人物"
+	case EntityLocation:
+		return "地点"
+	case EntityItem:
+		return "物品"
+	case EntityOrganization:
+		return "组织"
+	default:
+		return string(k)
+	}
+}
+
 type Entity struct {
 	ID      string     `json:"id"`
 	Kind    EntityKind `json:"kind"`

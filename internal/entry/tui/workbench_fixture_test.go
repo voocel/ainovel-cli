@@ -129,3 +129,25 @@ func wheelBench(m model, x, y int, up bool) model {
 	updated, _ := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: button})
 	return updated.(model)
 }
+
+// planningModel 是正在全书规划的作品：思考之后查过人物，大纲与设定正逐条流出，提交还在生成。
+func planningModel(t *testing.T, width, height int) model {
+	m := studioModel(t, width, height)
+	m.bench.snap.CurrentPhase = "正在规划故事蓝图"
+	at := time.Now().Add(-75 * time.Second)
+	m.bench.activity.OperationID = "planning"
+	m.bench.activity.Tasks = []activity.Task{{OperationID: "planning", Label: "全书规划", Kind: string(domainmodel.OperationDevelopPlan), StartedAt: at}}
+	m.bench.activity.Entries = []activity.Entry{
+		{ID: 1, OperationID: "planning", Kind: activity.ToolStart, Tool: "authority_read", Detail: "「陈渡」", Done: true, At: at.Add(20 * time.Second), DoneAt: at.Add(21 * time.Second)},
+		{ID: 2, OperationID: "planning", Kind: activity.ToolStart, Tool: "proposal_submit", Bytes: 18600, At: at.Add(30 * time.Second)},
+	}
+	m.bench.activity.Output = []activity.OutputBlock{
+		{ID: 10, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Thinking, At: at.Add(time.Second),
+			Text: []byte("先让信件本身成为悬念：没有邮戳、潮湿、收件人已经去世。")},
+		{ID: 11, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Item, Section: "大纲", At: at.Add(31 * time.Second),
+			Text: []byte("故事罗盘 · 终局：陈渡寄出最后一封信 · 篇幅上限 60 章\n第 1 卷 · 未寄出的信 —— 镇上最后一间邮局开始收到亡者来信\n第 1 个故事弧 · 雨夜 —— 第一封信抵达\n第 1 章 · 无人签收 —— 柜台最底下多了一封没有邮戳的信\n第 2 章 · 雨夜来客 —— 不留水迹的来客问有没有他的信")},
+		{ID: 12, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Item, Section: "设定", At: at.Add(60 * time.Second),
+			Text: []byte("陈渡（人物） 又名 邮差\n镇邮局（地点）\n「陈渡」state.job：镇上最后一位邮差")},
+	}
+	return m
+}

@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/voocel/agentcore"
@@ -75,5 +76,36 @@ func TestStructuredOmitsOptionsTheProviderDoesNotList(t *testing.T) {
 	}
 	if options := p.Requests()[0].ProviderOptions; len(options) != 0 {
 		t.Fatalf("options = %s", options)
+	}
+}
+
+// 流式调用按到达顺序把事件交给观察者：思考先于输出，最后是用量与结束。
+func TestStructuredStreamsEventsToObserver(t *testing.T) {
+	reply := litellmtest.Respond(litellm.ReasoningBlock{Text: "先看约束"}, litellm.Text(`{"status":"pass"}`))
+	reply.Usage = litellm.Usage{InputTokens: 7, OutputTokens: 2}
+	var kinds []string
+	observed := call
+	observed.Observe = func(event litellm.Event) error {
+		switch e := event.(type) {
+		case litellm.ReasoningDelta:
+			kinds = append(kinds, "reasoning:"+e.Text)
+		case litellm.TextDelta:
+			kinds = append(kinds, "text")
+		case litellm.UsageEvent:
+			kinds = append(kinds, "usage")
+		case litellm.DoneEvent:
+			kinds = append(kinds, "done")
+		}
+		return nil
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	usage, err := llm.Structured(context.Background(), binding(t, litellmtest.New(reply)), observed, &out)
+	if err != nil || out.Status != "pass" || usage.InputTokens != 7 {
+		t.Fatalf("structured call: err=%v out=%+v usage=%+v", err, out, usage)
+	}
+	if got := strings.Join(kinds, ","); got != "reasoning:先看约束,text,usage,done" {
+		t.Fatalf("observed events = %s", got)
 	}
 }

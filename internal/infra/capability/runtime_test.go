@@ -528,7 +528,7 @@ func TestPublishActivityTranslatesStreamingToolDeltas(t *testing.T) {
 		ID: "op-1", RunID: "run-1",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-live"},
 	}
-	stream := newLiveStream()
+	stream := newLiveStream(nil)
 	call := agentcore.ToolCall{ID: "call-1", Name: "workspace_put_chapter"}
 	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: call.ID, Name: call.Name}}), stream)
 	runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: `{"chapter":{"id":"c1","blocks":[{"id":"p1","text":"正文`}), stream)
@@ -564,7 +564,7 @@ func TestPublishActivityAttributesDeltaByBlock(t *testing.T) {
 		ID: "op-2", RunID: "run-2",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-mix"},
 	}
-	stream := newLiveStream()
+	stream := newLiveStream(nil)
 	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: "call-a", Name: "workspace_put_chapter"}}), stream)
 	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 1, Block: litellm.ToolUseBlock{ID: "call-b", Name: "authority_read"}}), stream)
 	runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: `{"chapter":{"blocks":[{"text":"甲稿正文`}), stream)
@@ -588,7 +588,7 @@ func TestPublishActivityThinkingTextAndToolError(t *testing.T) {
 		ID: "op-9", RunID: "run-9",
 		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-9"},
 	}
-	stream := newLiveStream()
+	stream := newLiveStream(nil)
 	runtime.publishActivity(operation, delta(litellm.ReasoningDelta{Text: "回顾伏笔"}), stream)
 	runtime.publishActivity(operation, agentcore.ToolEnd{
 		Call: agentcore.ToolCall{ID: "c1", Name: "workspace_put_chapter"}, Result: agentcore.ErrorResult(`章节段落 "p-9" 不存在`),
@@ -659,7 +659,7 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
-	reply := litellmtest.Text(`{"status":"pass","findings":[]}`)
+	reply := litellmtest.Respond(litellm.ReasoningBlock{Text: "底线是不伤无辜，候选正文没有越界"}, litellm.Text(`{"status":"pass","findings":[]}`))
 	reply.Usage = litellm.Usage{InputTokens: 10, OutputTokens: 3}
 	model := litellmtest.New(reply)
 	runtime := boundRuntime(authorityStore, testChat(model))
@@ -680,10 +680,18 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if report.Status != domainmodel.SemanticCompliancePass || !usedJSONSchema(model) {
 		t.Fatalf("report = %#v, json schema = %v", report, usedJSONSchema(model))
 	}
-	// 收尾阶段的模型判断同样进活动流：画面上是"核对语义合规"起止，不是静止。
+	// 收尾阶段的模型判断同样进活动流：画面上是"核对语义合规"这一步与它的思考，
+	// 结构化输出只报接收进度，用量记入本轮。
 	feed, ok := hub.Snapshot(operation.Target.ID)
-	if !ok || len(feed.Entries) != 1 || feed.Entries[0].Tool != "semantic_compliance" || !feed.Entries[0].Done || feed.Entries[0].Err != "" {
+	if !ok || len(feed.Entries) != 1 || feed.Entries[0].Tool != "semantic_compliance" || !feed.Entries[0].Done ||
+		feed.Entries[0].Err != "" || feed.Entries[0].Bytes != len(`{"status":"pass","findings":[]}`) {
 		t.Fatalf("compliance activity = %#v ok=%v", feed.Entries, ok)
+	}
+	if len(feed.Output) != 1 || feed.Output[0].Kind != activity.Thinking || string(feed.Output[0].Text) != "底线是不伤无辜，候选正文没有越界" {
+		t.Fatalf("compliance thinking = %#v", feed.Output)
+	}
+	if feed.Usage.Input != 10 || feed.Usage.Output != 3 || feed.Waiting || len(feed.Models) != 1 || feed.Models[0].Provider != "test" {
+		t.Fatalf("compliance usage = %#v models = %#v waiting = %v", feed.Usage, feed.Models, feed.Waiting)
 	}
 	events, err := authorityStore.ListOperationEvents(ctx, operation.ID)
 	if err != nil {
@@ -1122,4 +1130,31 @@ func boundRuntime(authorityStore *store.Store, chat agentcore.Model) *Runtime {
 	runtime := NewRuntime(authorityStore)
 	runtime.Bind(models.Bindings{Default: models.Binding{Provider: "test", Model: "model", Digest: "model", Chat: chat}})
 	return runtime
+}
+
+// TestPublishActivityStreamsItemsAndToolDetail 守卫结构化产出的直播：规划提交的参数
+// 一边生成，一边按条进入同一栏目的输出块；参数收齐时条目补上作用对象。
+func TestPublishActivityStreamsItemsAndToolDetail(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	hub := activity.NewHub()
+	runtime := &Runtime{now: func() time.Time { return now }, activity: hub}
+	operation := domainmodel.Operation{
+		ID: "op-plan", RunID: "run-plan", Kind: domainmodel.OperationDevelopPlan,
+		Target: domainmodel.AuthorityTarget{Kind: domainmodel.AuthorityProject, ID: "book-plan"},
+	}
+	stream := newLiveStream(nil)
+	call := agentcore.ToolCall{ID: "call-p", Name: "proposal_submit", Args: json.RawMessage(`{"reason":"首次规划"}`)}
+	runtime.publishActivity(operation, delta(litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: call.ID, Name: call.Name}}), stream)
+	for _, piece := range []string{`{"reason":"首次规划","chapters":[{"chapter":1,"title":"无人`, `签收"},{"chap`, `ter":2,"title":"雨夜来客"}],"entities":[{"name":"陈渡","kind":"character"}]}`} {
+		runtime.publishActivity(operation, delta(litellm.ToolUseDelta{Index: 0, Arguments: piece}), stream)
+	}
+	runtime.publishActivity(operation, agentcore.ToolStart{Call: call}, stream)
+	snapshot, _ := hub.Snapshot("book-plan")
+	if len(snapshot.Output) != 2 || snapshot.Output[0].Section != "大纲" || string(snapshot.Output[0].Text) != "第 1 章 · 无人签收\n第 2 章 · 雨夜来客" ||
+		snapshot.Output[1].Section != "设定" || string(snapshot.Output[1].Text) != "陈渡（人物）" {
+		t.Fatalf("item blocks = %#v", snapshot.Output)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Detail != "首次规划" || snapshot.Entries[0].Bytes == 0 {
+		t.Fatalf("entries = %#v", snapshot.Entries)
+	}
 }

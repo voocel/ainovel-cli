@@ -17,8 +17,7 @@ const (
 	benchHeaderRows   = 2   // 标题/状态 + 进度分隔线
 	benchFooterRows   = 3   // 分隔线（含反馈）+ 输入 + 提示
 	benchTabRows      = 2   // 标签 + 分隔线
-	sceneTailRows     = 5   // 现场条里最新输出块的尾部行数
-	sceneStepRows     = 3   // 现场条里的步骤行数（最后一行是当前步或等待计时）
+	sceneBodyRows     = 8   // 现场条正文：本轮时间线的最后几行，进行中的步骤与等待计时钉在最后
 	benchCardRows     = 4   // 决定卡：标题线、原因、变更摘要、操作
 	directoryNoteRows = 3   // 目录底部：空行 + 字数/要求数 + 推进方式
 	benchPad          = 2   // 主栏左右留白
@@ -27,8 +26,8 @@ const (
 	railMinWidth      = 32
 	railMaxWidth      = 48
 
-	// 创作现场：空行、标题线、输出尾部、步骤。
-	benchSceneRows = 2 + sceneTailRows + sceneStepRows
+	// 创作现场：空行、标题线、时间线尾巴。
+	benchSceneRows = 2 + sceneBodyRows
 )
 
 type benchLayout struct {

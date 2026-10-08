@@ -20,9 +20,9 @@ func (f *interruptedTasks) Start(_ context.Context, _ string, work creation.Work
 	return model.Operation{ID: work.ID, State: model.OperationQueued}, nil
 }
 
-func (f *interruptedTasks) Run(_ context.Context, id, _ string, _ time.Duration, _ time.Time) (model.Operation, error) {
+func (f *interruptedTasks) Run(_ context.Context, _ creation.WorkItem, operation model.Operation, _ string, _ time.Duration, _ time.Time) (model.Operation, error) {
 	f.cancel()
-	return model.Operation{ID: id, State: model.OperationQueued, Attempt: 1, Error: "进程退出"}, context.Canceled
+	return model.Operation{ID: operation.ID, State: model.OperationQueued, Attempt: 1, Error: "进程退出"}, context.Canceled
 }
 
 // 执行被取消中断时 Run 不落 failed，保持 running 等下次进入续跑。

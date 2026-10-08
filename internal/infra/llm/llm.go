@@ -27,9 +27,12 @@ type Call struct {
 	Schema    Schema
 	CacheKey  string
 	SessionID string
+	// Observe 按到达顺序收到流式事件（思考与输出增量、用量、结束）；返回错误即中止调用。
+	// 为空时只等完整结果。
+	Observe func(litellm.Event) error
 }
 
-// Structured 用绑定的模型（含其思考强度）发起一次严格 JSON Schema 约束的调用，
+// Structured 用绑定的模型（含其思考强度）发起一次严格 JSON Schema 约束的流式调用，
 // 并把响应严格解码到 out。返回本次调用的 usage 供调用方落审计事件。
 func Structured(ctx context.Context, binding models.Binding, call Call, out any) (litellm.Usage, error) {
 	format, err := litellm.NewResponseFormatJSONSchema(call.Schema.Name, call.Schema.Description, call.Schema.JSON)
@@ -41,7 +44,12 @@ func Structured(ctx context.Context, binding models.Binding, call Call, out any)
 	request := chat.Request
 	request.Messages = []litellm.Message{litellm.System(call.System), litellm.UserText(call.Input)}
 	request.ResponseFormat = format
-	response, err := chat.Client.Chat(ctx, request)
+	stream, err := chat.Client.Stream(ctx, request)
+	if err != nil {
+		return litellm.Usage{}, err
+	}
+	defer stream.Close()
+	response, err := litellm.Handle(stream, call.Observe)
 	if err != nil {
 		return litellm.Usage{}, err
 	}

@@ -41,7 +41,7 @@ type workbenchState struct {
 	refresh              *benchRefresh
 	rowsCache            *outlineCache
 	proseCache           *wrappedText
-	sceneCache           *wrappedText // 现场条尾部所看的输出块，整块排版按文本/宽度缓存
+	sceneCache           *outputLayoutCache // 现场条里输出块的紧凑排版，按块 ID/版本/宽度缓存
 	wordCache            *wordCache
 	outputCache          *outputLayoutCache
 	search               string
@@ -82,6 +82,10 @@ type workbenchState struct {
 	activity    activity.Snapshot
 	activityCh  <-chan struct{}
 	activityOff func()
+	// echoes 是用户自己的操作在本轮时间线上的回响（"› 你通过了……"）：交互状态归入口，
+	// 不经过活动通道；只属于 echoRun 这一轮，换轮即清。
+	echoRun string
+	echoes  []activity.Entry
 }
 
 // close 退订活动并释放本次工作台的作品与排版缓存。
@@ -96,6 +100,17 @@ func (b *workbenchState) close() {
 }
 
 func (b *workbenchState) hasRun() bool { return b.snap.Run != nil }
+
+// addEcho 把一次已生效的用户操作记到当前这轮的时间线上；还没有创作运行时无处可记。
+func (b *workbenchState) addEcho(text string) {
+	if !b.hasRun() {
+		return
+	}
+	if id := b.run().ID; b.echoRun != id {
+		b.echoRun, b.echoes = id, nil
+	}
+	b.echoes = append(b.echoes, activity.Entry{Kind: activity.Notice, Tone: toneUser, Text: text, Done: true, At: time.Now()})
+}
 
 func (b *workbenchState) run() domainmodel.CreationRun {
 	if b.snap.Run == nil {
@@ -201,14 +216,17 @@ type decisionDoneMsg struct {
 	gen           int
 	continueAfter bool
 	err           error
+	echo          string
 }
 
-// runControlMsg 是运行控制（暂停/取消/调预算/记要求）的统一回执。
+// runControlMsg 是运行控制（暂停/取消/调预算/记要求）的统一回执；echo 是成功后留在
+// 时间线上的那句"你做了什么"。
 type runControlMsg struct {
 	gen  int
 	err  error
 	next string // "continue" | "refresh"
 	note string
+	echo string
 }
 
 type pollMsg struct{ gen int }
@@ -223,7 +241,7 @@ func newWorkbenchState(projectID string, gen int) workbenchState {
 	return workbenchState{
 		projectID: projectID, gen: gen, input: newBenchInput(),
 		collapsed: make(map[string]bool),
-		refresh:   &benchRefresh{}, rowsCache: &outlineCache{}, proseCache: &wrappedText{}, sceneCache: &wrappedText{},
+		refresh:   &benchRefresh{}, rowsCache: &outlineCache{}, proseCache: &wrappedText{}, sceneCache: &outputLayoutCache{},
 		wordCache: &wordCache{}, outputCache: &outputLayoutCache{},
 	}
 }
@@ -416,6 +434,7 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 			bench.err = message.err.Error()
 			return m, m.refreshBenchCmd()
 		}
+		bench.addEcho(message.echo)
 		if message.continueAfter {
 			return m.continueRun()
 		}
@@ -430,6 +449,7 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		bench.presentDecision(nil)
+		bench.addEcho(message.echo)
 		if message.note != "" {
 			bench.notice = message.note
 		}
@@ -479,7 +499,7 @@ func (m model) handleQuickDone(message quickDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 // addDirectiveCmd 把要求原话按作用域入账；之后的任务按当前快照装配到它。
-func (m model) addDirectiveCmd(scope, text string) tea.Cmd {
+func (m model) addDirectiveCmd(scope, label, text string) tea.Cmd {
 	api, ctx, user := m.api, m.ctx, m.deps.UserID
 	gen, projectID := m.bench.gen, m.bench.projectID
 	return func() tea.Msg {
@@ -488,7 +508,8 @@ func (m model) addDirectiveCmd(scope, text string) tea.Cmd {
 			ProjectID: projectID, ChangeID: projectdoc.NewID("directive", now), UserID: user,
 			Scope: scope, Text: text, Reason: "工作台提出创作要求", CreatedAt: now,
 		})
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: "要求已记录 · 对应范围的后续任务会采用并核验；现有正文尚未修改"}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: "要求已记录 · 对应范围的后续任务会采用并核验；现有正文尚未修改",
+			echo: "你提了要求 · " + label + "：" + oneLine(text)}
 	}
 }
 
@@ -502,7 +523,8 @@ func (m model) adjudicateCmd(finding, reason string) tea.Cmd {
 			ProjectID: projectID, ChangeID: projectdoc.NewID("adjudication", now), UserID: user,
 			Finding: finding, Reason: reason, CreatedAt: now,
 		})
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: "已接受这条发现：续写时不再为它重写；相关内容再变化时裁决自动失效"}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: "已接受这条发现：续写时不再为它重写；相关内容再变化时裁决自动失效",
+			echo: "你接受了一条审阅发现：" + oneLine(reason)}
 	}
 }
 
@@ -511,6 +533,10 @@ func (m model) decideCmd(approve bool, reason string) (tea.Model, tea.Cmd) {
 	bench := &m.bench
 	proposal := bench.decision.proposal
 	continueAfter := bench.decision.continueAfter
+	echo := "你通过了" + m.reviewTarget()
+	if !approve {
+		echo = "你退回了" + m.reviewTarget() + "：" + oneLine(reason)
+	}
 	api, ctx, user := m.api, m.ctx, m.deps.UserID
 	gen := bench.gen
 	bench.presentDecision(nil)
@@ -521,7 +547,7 @@ func (m model) decideCmd(approve bool, reason string) (tea.Model, tea.Cmd) {
 		} else {
 			_, err = api.Decisions.Reject(ctx, proposal.ID, user, reason, time.Now().UTC())
 		}
-		return decisionDoneMsg{gen: gen, continueAfter: continueAfter, err: err}
+		return decisionDoneMsg{gen: gen, continueAfter: continueAfter, err: err, echo: echo}
 	}
 }
 
@@ -534,7 +560,7 @@ func (m model) pauseRunCmd() tea.Cmd {
 	}
 	return func() tea.Msg {
 		_, err := api.Runs.PauseCreationRun(ctx, runID, time.Now().UTC())
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: note}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: note, echo: "你暂停了创作"}
 	}
 }
 
@@ -547,7 +573,7 @@ func (m model) cancelRunCmd() tea.Cmd {
 	}
 	return func() tea.Msg {
 		_, err := api.Runs.CancelCreationRun(ctx, runID, time.Now().UTC())
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: note}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: note, echo: "你结束了本轮创作"}
 	}
 }
 
@@ -558,7 +584,7 @@ func (m model) applyBudgetCmd(budget int) tea.Cmd {
 		strategy := run.Strategy
 		strategy.AutoRepairBudget = budget
 		_, err := api.Runs.UpdateCreationRunStrategy(ctx, run.ID, strategy, time.Now().UTC())
-		return runControlMsg{gen: gen, err: err, next: "continue"}
+		return runControlMsg{gen: gen, err: err, next: "continue", echo: fmt.Sprintf("你把修订预算调到 %d 次", budget)}
 	}
 }
 
@@ -620,6 +646,32 @@ type outputWrappedBlock struct {
 }
 
 type outputLayoutCache struct{ blocks map[uint64]outputWrappedBlock }
+
+// lines 返回输出块按宽度排好的行：块 ID、版本与宽度都没变就复用。
+func (c *outputLayoutCache) lines(block activity.OutputBlock, width int, layout func() []string) []string {
+	if entry, ok := c.blocks[block.ID]; ok && entry.version == block.Version && entry.width == width {
+		return entry.lines
+	}
+	lines := layout()
+	if c.blocks == nil {
+		c.blocks = make(map[uint64]outputWrappedBlock)
+	}
+	c.blocks[block.ID] = outputWrappedBlock{version: block.Version, width: width, lines: lines}
+	return lines
+}
+
+// prune 丢掉已被活动缓冲淘汰的块：块 ID 单调递增，比当前最早一块还旧的不会再出现在
+// 实时快照里（冻结阅读持有的旧块命中不了就重排，缓存只是缓存）。
+func (c *outputLayoutCache) prune(output []activity.OutputBlock) {
+	if len(output) == 0 || len(c.blocks) <= 2*len(output) {
+		return
+	}
+	for id := range c.blocks {
+		if id < output[0].ID {
+			delete(c.blocks, id)
+		}
+	}
+}
 
 // wordCache 按快照版本缓存全书字数（几百章时不逐帧重算）。
 type wordCache struct {

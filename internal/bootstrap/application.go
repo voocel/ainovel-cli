@@ -102,6 +102,7 @@ func New(s *store.Store, options Options) *App {
 		Models:    binding.New(options.ConfigDir, binder),
 	}
 	if runtime != nil && options.Interactive {
+		tasks.SetActivitySink(runtime.ActivityHub())
 		app.Workbench.AttachActivityFeed(runtime.ActivityHub())
 	}
 	return app

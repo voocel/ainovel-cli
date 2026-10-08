@@ -174,7 +174,7 @@ func (m model) reviewContent() (string, error) {
 	if len(view.Entities) > 0 {
 		section("人物与地点")
 		for _, entity := range view.Entities {
-			line := entity.Name + styleHint.Render("（"+entityNoun[entity.Kind]+"）")
+			line := entity.Name + styleHint.Render("（"+entity.Kind.Noun()+"）")
 			if len(entity.Aliases) > 0 {
 				line += styleHint.Render(" 又名 ") + strings.Join(entity.Aliases, "、")
 			}
@@ -211,11 +211,6 @@ func writeOutlineItem(body *strings.Builder, depth int, title, summary string) {
 	if summary = strings.TrimSpace(summary); summary != "" {
 		body.WriteString(styleHint.Render(indent+"  "+oneLine(summary)) + "\n")
 	}
-}
-
-var entityNoun = map[domainmodel.EntityKind]string{
-	domainmodel.EntityCharacter: "人物", domainmodel.EntityLocation: "地点",
-	domainmodel.EntityItem: "物品", domainmodel.EntityOrganization: "组织",
 }
 
 // decisionActions 说清怎么通过、怎么调整：修改意见让 AI 按意见重做这份稿件；规划的

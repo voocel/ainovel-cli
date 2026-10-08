@@ -15,8 +15,7 @@ import (
 type proseSource struct {
 	overline, title, state string
 	text                   string
-	live                   bool   // 正在流式接收：尾部跟随并显示光标
-	blockID                uint64 // 正在直播的输出块，创作现场不再重复它
+	live                   bool // 正在流式接收：尾部跟随并显示光标
 	truncated              bool
 }
 
@@ -42,7 +41,7 @@ func (m model) proseSource() proseSource {
 			src.state = "◌ 未完成的草稿 · 未入稿"
 		}
 		if block, ok := m.liveProse(number); ok {
-			src.text, src.truncated, src.blockID = string(block.Text), block.Truncated, block.ID
+			src.text, src.truncated = string(block.Text), block.Truncated
 		} else if node.Detail != "" {
 			src.state = "◌ " + node.Detail
 		} else if src.live {
@@ -124,22 +123,24 @@ func (m model) candidateFor(number int) (domainmodel.ManuscriptChapter, bool) {
 	return domainmodel.ManuscriptChapter{}, false
 }
 
-// liveProse 取正在写的章的最新正文预览块：块自带章节归属时按章匹配，否则按当前章。
+// liveProse 取正在写的章的最新正文预览块。
 func (m model) liveProse(number int) (activity.OutputBlock, bool) {
 	feed, ok := m.activityFeed()
 	if !ok {
 		return activity.OutputBlock{}, false
 	}
 	for i := len(feed.Output) - 1; i >= 0; i-- {
-		block := feed.Output[i]
-		if block.Kind != activity.Prose {
-			continue
-		}
-		if block.Scope.ChapterNumber == number || (block.Scope.ChapterNumber == 0 && number == m.currentChapter()) {
+		if block := feed.Output[i]; m.proseOf(block, number) {
 			return block, true
 		}
 	}
 	return activity.OutputBlock{}, false
+}
+
+// proseOf 报告输出块是不是第 number 章的正文预览：块自带章节归属时按章匹配，否则按当前章。
+func (m model) proseOf(block activity.OutputBlock, number int) bool {
+	return block.Kind == activity.Prose && number > 0 &&
+		(block.Scope.ChapterNumber == number || block.Scope.ChapterNumber == 0 && number == m.currentChapter())
 }
 
 func chapterByNumber(chapters []domainmodel.ManuscriptChapter, number int) (domainmodel.ManuscriptChapter, bool) {

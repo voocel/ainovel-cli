@@ -27,10 +27,10 @@ func (f *failingTasks) Start(_ context.Context, _ string, work creation.WorkItem
 	return model.Operation{ID: work.ID, State: model.OperationQueued}, nil
 }
 
-func (f *failingTasks) Run(_ context.Context, id, _ string, _ time.Duration, _ time.Time) (model.Operation, error) {
+func (f *failingTasks) Run(_ context.Context, _ creation.WorkItem, operation model.Operation, _ string, _ time.Duration, _ time.Time) (model.Operation, error) {
 	f.calls++
 	// attempt 故意比失败次数大：预算只数失败，进程退出释放过的执行不算。
-	return model.Operation{ID: id, State: model.OperationFailed, Attempt: f.calls + 5, FailureCode: f.code, Error: "original failure"}, errors.New("original failure")
+	return model.Operation{ID: operation.ID, State: model.OperationFailed, Attempt: f.calls + 5, FailureCode: f.code, Error: "original failure"}, errors.New("original failure")
 }
 
 func (f *failingTasks) Failures(context.Context, string) (int, error) { return f.calls, nil }

@@ -842,7 +842,7 @@ func TestWorkbenchDirectivePromptRecordsRequirement(t *testing.T) {
 		t.Fatalf("directive did not submit: input=%q", m.bench.input.Value())
 	}
 	message := findMsg[runControlMsg](t, cmd)
-	if message.err != nil || message.next != "refresh" {
+	if message.err != nil || message.next != "refresh" || message.echo != "你提了要求 · 「第一卷」：每章结尾留钩子" {
 		t.Fatalf("add directive message = %#v", message)
 	}
 	project, err := api.Projects.Project(ctx, "book-1", 0)

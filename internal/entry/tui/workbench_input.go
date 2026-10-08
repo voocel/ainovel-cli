@@ -206,8 +206,8 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 			bench.err = "这份稿件已不再等待审阅；修改意见已保留，请 Esc 清空后重新选择操作"
 			return m, nil
 		}
-		scope, _ := m.composerScope()
-		next, cmd = m, m.addDirectiveCmd(scope, text)
+		scope, label := m.composerScope()
+		next, cmd = m, m.addDirectiveCmd(scope, label, text)
 	}
 	updated := next.(model)
 	if updated.bench.err == "" {
@@ -304,8 +304,8 @@ var benchCommands = []benchCommand{
 			m.bench.err = "用法：/note 要求内容；作用范围见输入框右侧"
 			return m, nil
 		}
-		scope, _ := m.composerScope()
-		return m, m.addDirectiveCmd(scope, arg)
+		scope, label := m.composerScope()
+		return m, m.addDirectiveCmd(scope, label, arg)
 	}},
 	{name: "pause", alias: "p", label: "暂停推进", run: func(m model, _ string) (tea.Model, tea.Cmd) {
 		if b := &m.bench; b.hasRun() && (b.run().State == domainmodel.RunRunning || b.run().State == domainmodel.RunWaitingUser) {
@@ -500,10 +500,8 @@ func (m model) handleBenchMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if l.sceneY >= 0 && mouse.Y > l.sceneY && mouse.Y < l.sceneY+benchSceneRows && mouse.X >= l.mainX {
-		if feed, ok := m.activityFeed(); ok {
-			if step, ok := sceneStepAt(feed, mouse.Y-l.sceneY); ok && step.Err != "" && step.OperationID != "" {
-				return m.openOperationDiagnostics(step.OperationID)
-			}
+		if step, ok := m.sceneStepAt(mouse.Y-l.sceneY, l.inner); ok && failed(step) && step.OperationID != "" {
+			return m.openOperationDiagnostics(step.OperationID)
 		}
 		return m, nil
 	}

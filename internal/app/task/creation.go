@@ -61,8 +61,11 @@ func (t creationTasks) Resume(ctx context.Context, id string, at time.Time) (mod
 	return t.manager.ResumeOperation(ctx, id, at)
 }
 
-func (t creationTasks) Run(ctx context.Context, id, workerID string, lease time.Duration, at time.Time) (model.Operation, error) {
-	result, err := t.manager.RunOperation(ctx, id, workerID, lease, at)
+// Run 执行前后各向现场转述一句：开工做什么、收尾落下了什么（narrate.go）。
+func (t creationTasks) Run(ctx context.Context, work creation.WorkItem, operation model.Operation, workerID string, lease time.Duration, at time.Time) (model.Operation, error) {
+	t.manager.announce(operation, work)
+	result, err := t.manager.RunOperation(ctx, operation.ID, workerID, lease, at)
+	t.manager.settle(work, result)
 	return result.Operation, err
 }
 

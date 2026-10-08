@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/voocel/agentcore"
@@ -12,6 +13,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/catalog"
 )
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
@@ -117,6 +119,9 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
+	if resumed := resumedProgress(len(recoveredMessages), len(workspaceArtifacts)); resumed != "" {
+		r.publishNotice(operation, activity.ToneRetry, resumed)
+	}
 	// 恢复提示只能追加在完整任务上下文之后，不得替换 Dynamic Tail：restart 的
 	// 新任务同样必须拿到 project_rules、story_context 与 operation_task。
 	promptText := compiled.DynamicTail
@@ -133,7 +138,7 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 
 	executionCtx, stopExecution := context.WithCancelCause(ctx)
 	defer stopExecution(nil)
-	stream := newLiveStream() // 随本次执行生灭：流式工具调用的身份与正文预览的提取状态
+	stream := newLiveStream(task) // 随本次执行生灭：流式工具调用的身份与参数流的提取状态
 	messageIndex := 0
 	var usage agentcore.Usage
 	var end agentcore.RunEnd
@@ -219,20 +224,52 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	return model.OperationOutcome{Proposal: submitted}, nil
 }
 
+// activityEvent 是这次执行发出的一条活动事件：归属、任务名与时刻统一在这里填。
+func (r *Runtime) activityEvent(operation model.Operation, kind activity.Kind) activity.Event {
+	event := activity.Event{
+		ProjectID: operation.Target.ID, RunID: operation.RunID, OperationID: operation.ID,
+		Kind: kind, At: r.now(),
+	}
+	if spec, err := model.KindSpec(operation.Kind); err == nil {
+		event.TaskLabel = spec.Label
+	}
+	return event
+}
+
 func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error, scope activity.Scope) {
 	if r.activity == nil {
 		return
 	}
-	event := activity.Event{ProjectID: operation.Target.ID, RunID: operation.RunID, OperationID: operation.ID, Kind: kind, Attempt: operation.Attempt, At: r.now()}
-	event.Scope = scope
-	event.TaskKind = string(operation.Kind)
-	if spec, specErr := model.KindSpec(operation.Kind); specErr == nil {
-		event.TaskLabel = spec.Label
-	}
+	event := r.activityEvent(operation, kind)
+	event.Attempt, event.Scope, event.TaskKind = operation.Attempt, scope, string(operation.Kind)
 	if err != nil {
 		event.Err = clipActivityText(err.Error())
 	}
 	r.activity.Publish(event)
+}
+
+func (r *Runtime) publishNotice(operation model.Operation, tone activity.Tone, text string) {
+	if r.activity == nil {
+		return
+	}
+	event := r.activityEvent(operation, activity.Notice)
+	event.Tone, event.Text = tone, text
+	r.activity.Publish(event)
+}
+
+// resumedProgress 说明这次执行从哪里接续：恢复的对话与工作稿；从头开始返回空串。
+func resumedProgress(messages, artifacts int) string {
+	var parts []string
+	if messages > 0 {
+		parts = append(parts, fmt.Sprintf("%d 条对话", messages))
+	}
+	if artifacts > 0 {
+		parts = append(parts, fmt.Sprintf("%d 份工作稿", artifacts))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "接着上次的进度继续：已恢复 " + strings.Join(parts, "、")
 }
 
 func taskActivityScope(task model.TaskInput) activity.Scope {
@@ -252,51 +289,42 @@ func taskActivityScope(task model.TaskInput) activity.Scope {
 	}
 }
 
-// liveStream 是一次执行的流式状态：回复里开过的工具调用与正文预览的提取状态。
+// liveStream 是一次执行的流式状态：回复里开过的工具调用与参数流的提取状态。
 // 块序号逐条回复重用，开块时覆盖，不必清空。
 type liveStream struct {
 	calls map[int]litellm.ToolUseBlock
-	prose *proseTracker
+	args  *argTracker
 }
 
-func newLiveStream() *liveStream {
-	return &liveStream{calls: make(map[int]litellm.ToolUseBlock), prose: newProseTracker()}
+func newLiveStream(task model.TaskInput) *liveStream {
+	return &liveStream{calls: make(map[int]litellm.ToolUseBlock), args: newArgTracker(streamSpecs(task))}
 }
 
 // publishActivity 把 agent 生命周期事件翻译成带归属的活动事件（页面设计 §3）。
-// 参数流上报字节进度；正文工具的参数流经 prose 增量提取后以 Prose 事件发布
-// 逐字预览（易失，权威正文仍以候选稿为准——三层校正链）。监听器同步执行，
-// 这里只做 O(增量) 的翻译与非阻塞发布。
+// 参数流上报字节进度，同时增量提取：正文以 Prose 事件逐字预览，大纲、设定与审阅
+// 意见按条以 Item 事件发布（易失，权威内容仍以候选稿为准——三层校正链）。监听器
+// 同步执行，这里只做 O(增量) 的翻译与非阻塞发布。
 func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Event, stream *liveStream) {
 	if r.activity == nil {
 		return
 	}
-	out := activity.Event{
-		ProjectID: operation.Target.ID, RunID: operation.RunID,
-		OperationID: operation.ID, At: r.now(),
-	}
-	if spec, err := model.KindSpec(operation.Kind); err == nil {
-		out.TaskLabel = spec.Label
-	}
+	out := r.activityEvent(operation, "")
 	switch e := event.(type) {
 	case agentcore.MessageStart:
 		out.Kind = activity.TurnStart
 	case agentcore.MessageEnd:
 		// 一条消息结束（含中止）即本轮参数流终结：清空提取状态，生命周期以
 		// 消息为界，无需容量上限。消息带用量时一并发布（状态行累计）。
-		stream.prose.finishMessage()
+		stream.args.finishMessage()
 		usage := e.Message.Usage
 		if usage == nil {
 			return
 		}
-		out.Kind = activity.Usage
-		out.Usage = activity.UsageTotals{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
+		out.Kind, out.Usage = activity.Usage, usageTotals(usage.Usage, usage.Cost)
 		out.Model, out.Provider = e.Message.Model, e.Message.Provider
-		if usage.Cost != nil {
-			out.Usage.Cost = usage.Cost.Total
-		}
 	case agentcore.ToolStart:
 		out.Kind, out.Tool, out.CallID = activity.ToolStart, e.Call.Name, e.Call.ID
+		out.Detail = toolDetail(e.Call.Name, e.Call.Args)
 	case agentcore.ToolEnd:
 		out.Kind, out.Tool, out.CallID = activity.ToolEnd, e.Call.Name, e.Call.ID
 		if e.Result.IsError {
@@ -315,19 +343,27 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 			}
 			// 参数流入先于工具执行（ToolStart 在整条回复完成后才发生）：按块序号
 			// 取正在生成参数的工具名与调用 ID，让活动行在落笔的第一时间就出现。
-			// 个别网关开块时还不带名字，proseTracker 会先缓冲。
+			// 个别网关开块时还不带名字，argTracker 会先缓冲。
 			call := stream.calls[d.Index]
-			out.Kind, out.Bytes = activity.ToolDelta, len(d.Arguments)
 			out.Tool, out.CallID = call.Name, call.ID
-			text, stalled := stream.prose.feed(out.Tool, out.CallID, d.Arguments)
+			text, lines, stalled := stream.args.feed(out.Tool, out.CallID, d.Arguments)
+			progress := out
+			progress.Kind, progress.Bytes = activity.ToolDelta, len(d.Arguments)
+			r.activity.Publish(progress)
 			if text != "" {
-				r.activity.Publish(out) // 字节进度照旧
-				out.Kind, out.Bytes, out.Text = activity.Prose, 0, text
+				prose := out
+				prose.Kind, prose.Text = activity.Prose, text
+				r.activity.Publish(prose)
 			}
-			if stalled {
-				r.activity.Publish(out) // 先发前一种身份（字节进度或正文增量）
-				out.Kind, out.Bytes, out.Text = activity.ProseStall, 0, ""
+			for _, line := range lines {
+				item := out
+				item.Kind, item.Section, item.Text = activity.Item, line.section, line.text
+				r.activity.Publish(item)
 			}
+			if !stalled {
+				return
+			}
+			out.Kind = activity.ProseStall
 		case litellm.ReasoningDelta:
 			// 思考增量是 Provider 明确标记的推理文本，原样截尾展示为思考片段——
 			// 不是摘要，不作可靠解释承诺（§3）。
@@ -349,30 +385,90 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 	r.activity.Publish(out)
 }
 
-// publishStage 把 Agent 循环之外的单次模型判断（如收尾时的语义合规）也发到活动流：
-// 收尾同样可能等模型十几秒，画面不能静止。
-func (r *Runtime) publishStage(operation model.Operation, kind activity.Kind, stage string, err error) {
-	if r.activity == nil {
-		return
-	}
-	out := activity.Event{
-		ProjectID: operation.Target.ID, RunID: operation.RunID, OperationID: operation.ID,
-		Kind: kind, Tool: stage, CallID: operation.ID + ":" + stage, At: r.now(),
-	}
-	if err != nil {
-		out.Err = clipActivityText(err.Error())
-	}
-	r.activity.Publish(out)
+// judgmentFeed 把 Agent 循环之外的单次模型判断（如收尾时的语义合规）接到现场：收尾
+// 同样可能等模型十几秒，画面不能静止。它是这次执行里的一步：思考照常直播，结构化输出
+// 只报接收进度（JSON 不是给人读的），用量记入本轮。
+type judgmentFeed struct {
+	runtime         *Runtime
+	operation       model.Operation
+	stage           string
+	pricing         *catalog.Pricing
+	usage           litellm.Usage
+	model, provider string
 }
 
-func clipActivityText(text string) string {
-	const limit = 200
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit]) + "…"
+// judgmentFeed 的价目与 Agent 循环同源（绑定上的 Pricing），费用口径一致。
+func (r *Runtime) judgmentFeed(operation model.Operation, stage string, pricing *catalog.Pricing) *judgmentFeed {
+	feed := &judgmentFeed{runtime: r, operation: operation, stage: stage, pricing: pricing}
+	feed.publish(feed.call(activity.ToolStart))
+	feed.publish(feed.event(activity.TurnStart))
+	return feed
 }
+
+func (f *judgmentFeed) observe(event litellm.Event) error {
+	switch e := event.(type) {
+	case litellm.ReasoningDelta:
+		thinking := f.event(activity.Thinking)
+		thinking.Text = e.Text
+		f.publish(thinking)
+	case litellm.TextDelta:
+		progress := f.call(activity.ToolDelta)
+		progress.Bytes = len(e.Text)
+		f.publish(progress)
+	case litellm.UsageEvent:
+		f.usage = e.Usage
+	case litellm.DoneEvent:
+		f.model, f.provider = e.Model, e.Provider
+	}
+	return nil
+}
+
+func (f *judgmentFeed) finish(err error) {
+	end := f.call(activity.ToolEnd)
+	if err != nil {
+		end.Err = clipActivityText(err.Error())
+	}
+	f.publish(end)
+	if f.usage == (litellm.Usage{}) {
+		return
+	}
+	var cost *catalog.Cost
+	if f.pricing != nil {
+		if priced, err := f.pricing.Cost(f.usage); err == nil {
+			cost = &priced
+		}
+	}
+	usage := f.event(activity.Usage)
+	usage.Usage, usage.Model, usage.Provider, usage.TaskKind = usageTotals(f.usage, cost), f.model, f.provider, string(f.operation.Kind)
+	f.publish(usage)
+}
+
+func (f *judgmentFeed) event(kind activity.Kind) activity.Event {
+	return f.runtime.activityEvent(f.operation, kind)
+}
+
+// call 是这次判断作为一步的事件：与 Agent 循环的工具调用同形，按 CallID 配对。
+func (f *judgmentFeed) call(kind activity.Kind) activity.Event {
+	event := f.event(kind)
+	event.Tool, event.CallID = f.stage, f.operation.ID+":"+f.stage
+	return event
+}
+
+func (f *judgmentFeed) publish(event activity.Event) {
+	if f.runtime.activity != nil {
+		f.runtime.activity.Publish(event)
+	}
+}
+
+func usageTotals(usage litellm.Usage, cost *catalog.Cost) activity.UsageTotals {
+	totals := activity.UsageTotals{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
+	if cost != nil {
+		totals.Cost = cost.Total
+	}
+	return totals
+}
+
+func clipActivityText(text string) string { return clipRunes(text, 200) }
 
 // endedWithout 把缺少收尾提交的结局包装成可诊断错误，保留 agent 的结束原因。
 func endedWithout(end agentcore.RunEnd, cause error) error {

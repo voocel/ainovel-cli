@@ -62,7 +62,7 @@ func (s *Snapshot) foldTask(e Event) {
 	}
 	t := &s.Tasks[index]
 	switch e.Kind {
-	case TaskStart, TurnStart, Thinking, Text, Prose, Retry, ToolStart, ToolDelta:
+	case TaskStart, TurnStart, Thinking, Text, Prose, Item, Retry, ToolStart, ToolDelta:
 		t.Phase = e.Kind
 		if e.Kind == ToolStart || e.Kind == ToolDelta {
 			t.Tool = e.Tool

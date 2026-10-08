@@ -88,8 +88,8 @@ func (s Step) Validate() error {
 	return nil
 }
 
-// WorkItem 是要驱动的 Operation：ID 是创作槽位（后继链的基名），Reasons 是各落点的
-// 创作语言文案。
+// WorkItem 是要驱动的 Operation：ID 是创作槽位（后继链的基名），Reasons 是这项工作在
+// 各节点上的创作语言文案。
 type WorkItem struct {
 	ID      string
 	Kind    model.OperationKind
@@ -97,7 +97,10 @@ type WorkItem struct {
 	Reasons WorkReasons
 }
 
+// WorkReasons 的开工与做成由任务驱动方转述给用户，其余是运行落点；内核只传递不解读。
 type WorkReasons struct {
+	Start   string // 开工：这一步做什么、为什么是现在
+	Done    string // 做成：这一步落下了什么
 	Waiting string // 等待用户裁决
 	Failure string // 执行失败；内核补上诊断指引
 	Stuck   string // 已成功却没有推进目标
@@ -245,7 +248,7 @@ func (s *Coordinator) drive(
 			return Outcome{}, err
 		}
 		if operation.State == model.OperationQueued {
-			ran, err := tasks.Run(ctx, operation.ID, command.WorkerID, command.LeaseDuration, clock.next())
+			ran, err := tasks.Run(ctx, work, operation, command.WorkerID, command.LeaseDuration, clock.next())
 			// 进程退出等取消不是创作失败：引擎已把任务放回队列，Run 保持 running 可续跑。
 			if err != nil && ctx.Err() != nil {
 				return Outcome{Run: run, Revision: decision.Revision}, err

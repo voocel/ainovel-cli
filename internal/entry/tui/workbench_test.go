@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -185,33 +186,43 @@ func TestProseViewStreamsLiveChapterAndSceneShowsThinking(t *testing.T) {
 	requireContains(t, frame(m), "◌ 正在构思", "思考 ▏")
 }
 
-// 现场条尾部与活动视图同一排版锚点：逐字追加时前几行纹丝不动、末行只在尾部生长，满行后整体上推一行。
+// 现场条与活动视图同一排版锚点：逐字追加时前几行纹丝不动、末行只在尾部生长，满行后整体上推一行。
 func TestSceneTailStreamsWithoutReflowing(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	l := m.benchLayout()
 	block := &m.bench.activity.Output[0]
-	tail := func() []string { // 每行竖线之后的文字
-		lines := m.outputTail(m.bench.activity, l.inner)
-		for i := range lines {
-			_, lines[i], _ = strings.Cut(ansi.Strip(lines[i]), "▏ ")
+	tail := func() []string { // 思考块各行竖线之后的文字
+		var lines []string
+		for _, row := range m.sceneRows(m.bench.activity, l.inner, sceneBodyRows) {
+			if _, text, ok := strings.Cut(ansi.Strip(row.line), "▏ "); ok {
+				lines = append(lines, text)
+			}
 		}
 		return lines
 	}
 	block.Text = []byte("先把雨声接过来。\n\n" + strings.Repeat("门后的人认出了他的脚步。", 40))
 	before := tail()
+	block.Version++
 	block.Text = append(block.Text, "雨"...)
 	after := tail()
-	if before[0] != after[0] || before[1] != after[1] || !strings.HasPrefix(after[2], before[2]) {
+	if len(before) != len(after) || !strings.HasPrefix(after[len(after)-1], before[len(before)-1]) {
 		t.Fatalf("appending a rune reflowed the tail:\n%q\n%q", before, after)
 	}
+	for i := range before[:len(before)-1] {
+		if before[i] != after[i] {
+			t.Fatalf("appending a rune moved line %d:\n%q\n%q", i, before, after)
+		}
+	}
 	for i := 0; i < 80 && tail()[0] == after[0]; i++ {
+		block.Version++
 		block.Text = append(block.Text, "雨"...)
 	}
 	pushed := tail()
-	if pushed[0] != after[1] || !strings.HasPrefix(pushed[1], after[2]) {
+	if pushed[0] != after[1] || !strings.HasPrefix(pushed[len(pushed)-2], after[len(after)-1]) {
 		t.Fatalf("a full line must push the tail up by exactly one line:\n%q\n%q", after, pushed)
 	}
-	// 段落之间的空行不占尾部：新段落从新行开始，三行仍全是文字。
+	// 段落之间的空行不占行：新段落从新行开始。
+	block.Version++
 	block.Text = append(block.Text, "\n\n门开了。"...)
 	for _, line := range tail() {
 		if line == "" {
@@ -220,20 +231,35 @@ func TestSceneTailStreamsWithoutReflowing(t *testing.T) {
 	}
 }
 
+// 现场条是本轮时间线的尾巴：从底部长起，进行中的步骤与等待计时钉在最后一行。
 func TestSceneStripReflectsWaitingIdleAndLeavesWithActivityView(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	m.bench.activity.Waiting, m.bench.activity.WaitingSince = true, time.Now().Add(-7*time.Second)
 	m.bench.activity.Entries[1].Done = true
+	m.bench.activity.Entries[1].DoneAt = m.bench.activity.Entries[1].At.Add(3 * time.Second)
 	requireContains(t, frame(m), "✓ 落笔章节工作稿", "等待模型回应 · 7 秒")
-	// 现场条与正文之间隔一行空白，思考尾部占三行，最后一行是当前步／等待计时。
 	l := m.benchLayout()
 	rows := strings.Split(frame(m), "\n")
-	if cell := ansi.Cut(rows[l.sceneY], l.mainX, l.railX); strings.TrimSpace(cell) != "" {
+	scene := rows[l.sceneY : l.sceneY+benchSceneRows]
+	if cell := ansi.Cut(scene[0], l.mainX, l.railX); strings.TrimSpace(cell) != "" {
 		t.Fatalf("scene strip must start with a blank row, got %q", cell)
 	}
-	if !strings.Contains(rows[l.sceneY+1], "AI 创作现场 · 第 4 章写作") || !strings.Contains(rows[l.sceneY+2], "思考 ▏") ||
-		!strings.Contains(rows[l.sceneY+4], "▏") || !strings.Contains(rows[l.sceneY+benchSceneRows-1], "等待模型回应") {
-		t.Fatalf("scene rows out of order:\n%s", strings.Join(rows[l.sceneY:l.sceneY+benchSceneRows], "\n"))
+	if !strings.Contains(scene[1], "AI 创作现场 · 第 4 章写作") || !strings.Contains(scene[benchSceneRows-1], "等待模型回应") ||
+		!strings.Contains(scene[benchSceneRows-2], "✓ 落笔章节工作稿") || !strings.Contains(scene[benchSceneRows-3], "✓ 查阅设定与前情") {
+		t.Fatalf("scene rows out of order:\n%s", strings.Join(scene, "\n"))
+	}
+	// 思考在步骤之上，栏目名只在块首；内容不满时上方留空，不画空竖线。
+	first := -1
+	for i, row := range scene[2:] {
+		if strings.Contains(row, "思考 ▏") {
+			first = i
+		}
+		if strings.TrimSpace(ansi.Cut(row, l.mainX, l.railX)) == "▏" {
+			t.Fatalf("empty gutter row leaked into the scene:\n%s", strings.Join(scene, "\n"))
+		}
+	}
+	if first < 0 || strings.TrimSpace(ansi.Cut(scene[2], l.mainX, l.railX)) != "" {
+		t.Fatalf("scene must grow from the bottom with thinking above the steps:\n%s", strings.Join(scene, "\n"))
 	}
 
 	done := studioModel(t, 150, 40)
@@ -527,16 +553,27 @@ func TestMouseHitsUseTheSharedLayout(t *testing.T) {
 	}
 	decided.bench.activity.Entries[1].Err = "写入失败"
 	decided.bench.activity.Entries[1].OperationID = "writing"
-	if _, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: l.sceneY + benchSceneRows - 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}); cmd == nil {
-		t.Fatal("clicking the failed current step must open diagnostics")
+	// 创作停下后末行是当下处境，报错步就在它上面一行。
+	if _, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: l.sceneY + benchSceneRows - 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}); cmd == nil {
+		t.Fatal("clicking the failed step must open diagnostics")
 	}
-	// 等待模型时末行是等待计时，报错步上移一行；点击等待行与其余行都不能越界或误命中。
+	// 等待计时又占一行，报错步再上移一行；点击等待行、处境行与其余行都不能越界或误命中。
 	decided.bench.activity.Waiting = true
 	for y := l.sceneY; y < l.sceneY+benchSceneRows; y++ {
 		_, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-		if hit := cmd != nil; hit != (y == l.sceneY+benchSceneRows-2) {
+		if hit := cmd != nil; hit != (y == l.sceneY+benchSceneRows-3) {
 			t.Fatalf("scene row %d hit=%v while waiting", y-l.sceneY, hit)
 		}
+	}
+	// 任务失败的旁白同样可以下钻诊断。
+	decided.bench.activity.Waiting = false
+	decided.bench.activity.Entries[1].Err = ""
+	decided.bench.activity.Entries = append(decided.bench.activity.Entries, activity.Entry{
+		ID: 9, OperationID: "writing", Kind: activity.Notice, Tone: activity.ToneFail, Text: "第 4 章《门后的声音》这次没能写完", Done: true,
+		At: decided.bench.activity.Entries[1].At.Add(time.Minute),
+	})
+	if _, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: l.sceneY + benchSceneRows - 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}); cmd == nil {
+		t.Fatal("clicking a failed task notice must open diagnostics")
 	}
 }
 
@@ -681,5 +718,50 @@ func TestStateBadgeFollowsRunningTask(t *testing.T) {
 	m.bench.snap.CurrentPhase = "正在审阅第 1–3 章"
 	if header := strings.Split(frame(m), "\n")[0]; !strings.Contains(header, "◉ 正在审阅第 1–3 章") || strings.Contains(header, "第 4 章") {
 		t.Fatalf("badge must name the running task:\n%s", header)
+	}
+}
+
+// 规划时现场逐条看到大纲与设定：块首被顶出时栏目名粘在可见的第一行，正在生成的提交钉在最后。
+func TestSceneStreamsStructuredItemsWithStickySection(t *testing.T) {
+	m := planningModel(t, 150, 40)
+	l := m.benchLayout()
+	scene := strings.Split(frame(m), "\n")[l.sceneY+2 : l.sceneY+benchSceneRows]
+	if !strings.Contains(scene[0], "大纲 ▏ ") {
+		t.Fatalf("the outline block was cut at the top but lost its section:\n%s", strings.Join(scene, "\n"))
+	}
+	requireContains(t, strings.Join(scene, "\n"), "设定 ▏ 陈渡（人物） 又名 邮差", "▏ 「陈渡」state.job：镇上最后一位邮差")
+	if last := scene[len(scene)-1]; !strings.Contains(last, "提交候选稿 · 已接收 18.2K") {
+		t.Fatalf("the submission in progress must stay on the last row: %q", last)
+	}
+	m.switchView(viewActivity)
+	requireContains(t, frame(m), "全书规划 · 大纲", "全书规划 · 设定", "✓ 查阅设定与前情 · 「陈渡」", "第 2 章 · 雨夜来客 —— 不留水迹的来客问有没有他的信")
+}
+
+func TestUserActionsEchoOnTheRunTimeline(t *testing.T) {
+	m := studioModel(t, 150, 40)
+	updated, _ := m.Update(runControlMsg{gen: m.bench.gen, next: "refresh", echo: "你暂停了创作"})
+	m = updated.(model)
+	updated, _ = m.Update(decisionDoneMsg{gen: m.bench.gen, err: errors.New("state conflict"), echo: "你通过了第 4 章 · 雨夜"})
+	m = updated.(model)
+	scene := frame(m)
+	requireContains(t, scene, "› 你暂停了创作")
+	if strings.Contains(scene, "你通过了") {
+		t.Fatal("a failed action must not echo")
+	}
+	// 回响按时间并入时间线：在它之后发生的步骤排在它下面。
+	m.bench.activity.Entries = append(m.bench.activity.Entries, activity.Entry{ID: 50, Kind: activity.Notice, Tone: activity.ToneInfo, Text: "已暂停", Done: true, At: time.Now().Add(time.Second)})
+	if view := frame(m); strings.Index(view, "› 你暂停了创作") > strings.Index(view, "· 已暂停") {
+		t.Fatalf("echo must sort by time:\n%s", view)
+	}
+	// 没有直播内容时（重开或刚续跑）回响仍在；换一轮就不再属于它。
+	m.bench.activity = activity.Snapshot{}
+	requireContains(t, frame(m), "› 你暂停了创作")
+	m.bench.snap.Run = &domainmodel.CreationRun{ID: "next", State: domainmodel.RunRunning}
+	if strings.Contains(frame(m), "你暂停了创作") {
+		t.Fatal("echoes belong to the run they were made in")
+	}
+	m.bench.addEcho("你把修订预算调到 3 次")
+	if len(m.bench.echoes) != 1 || m.bench.echoRun != "next" {
+		t.Fatalf("a new run starts a fresh echo list: %#v", m.bench.echoes)
 	}
 }

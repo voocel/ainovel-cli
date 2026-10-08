@@ -10,16 +10,19 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 )
 
-// activityFeed 取当前这轮创作的活动快照；上一轮的活动不冒充当前进展（易失层）。
+// activityFeed 取当前这轮创作的活动快照，并入用户在这一轮的操作回响；上一轮的活动
+// 不冒充当前进展（易失层）。
 func (m model) activityFeed() (activity.Snapshot, bool) {
-	feed := m.bench.activity
-	if feed.Seq == 0 || feed.RunID == "" {
-		return activity.Snapshot{}, false
+	b := &m.bench
+	feed := b.activity
+	if feed.Seq == 0 || feed.RunID == "" || b.hasRun() && feed.RunID != b.run().ID {
+		feed = activity.Snapshot{}
 	}
-	if m.bench.hasRun() && feed.RunID != m.bench.run().ID {
-		return activity.Snapshot{}, false
+	if len(b.echoes) > 0 && b.hasRun() && b.echoRun == b.run().ID {
+		feed.RunID = b.echoRun
+		feed.Entries = append(append([]activity.Entry(nil), feed.Entries...), b.echoes...)
 	}
-	return feed, true
+	return feed, feed.RunID != ""
 }
 
 // timelineFeed 活动视图的数据：上滚后持有当时的快照，新增量不改变读者所在处。
@@ -51,12 +54,15 @@ func toolActivityLabel(tool string) string {
 	return "推进创作步骤"
 }
 
-func outputKindLabel(kind activity.Kind) string {
-	switch kind {
+// outputKindLabel 输出块的栏目名：结构化产出用发布侧给的栏目（大纲、设定、审阅……）。
+func outputKindLabel(block activity.OutputBlock) string {
+	switch block.Kind {
 	case activity.Thinking:
 		return "思考"
 	case activity.Prose:
 		return "正文"
+	case activity.Item:
+		return block.Section
 	default:
 		return "说明"
 	}
@@ -75,15 +81,21 @@ func entryElapsed(entry activity.Entry) string {
 	}
 }
 
-// stepLine 一条生命周期条目：[时钟] 图标 标签 [· 已接收 N]，右端耗时。
+// stepLine 一步的一行：动作、作用对象（参数收齐后才知道）、进度或耗时。
 func (m model) stepLine(entry activity.Entry, width int, clock bool) string {
 	prefix := ""
 	if clock && !entry.At.IsZero() {
 		prefix = benchTheme.Muted.Render(entry.At.Local().Format("15:04:05")) + "  "
 	}
 	label := toolActivityLabel(entry.Tool)
+	detail := ""
+	if entry.Detail != "" {
+		detail = " · " + entry.Detail
+	}
 	var body, elapsed string
 	switch {
+	case entry.Kind == activity.Notice:
+		body = noticeLine(entry)
 	case entry.Kind == activity.Retry:
 		body = benchTheme.Warning.Render(fmt.Sprintf("↻ 连接不稳定，正在第 %d 次重试", entry.Attempt))
 	case entry.Kind == activity.ProseStall:
@@ -92,13 +104,13 @@ func (m model) stepLine(entry activity.Entry, width int, clock bool) string {
 		body = benchTheme.Warning.Render("! " + label + "遇到问题，模型正在自纠 · " + oneLine(entry.Err))
 		elapsed = entryElapsed(entry)
 	case entry.Done:
-		body = styleNotice.Render("✓ ") + label
+		body = styleNotice.Render("✓ ") + label + benchTheme.Muted.Render(detail)
 		elapsed = entryElapsed(entry)
 	case !m.bench.writing:
 		// 创作已停但这次调用没等到收尾（中途取消）：不能再显示为进行中。
-		body = benchTheme.Muted.Render("◦ " + label + " · 未收尾")
+		body = benchTheme.Muted.Render("◦ " + label + detail + " · 未收尾")
 	default:
-		line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " " + label
+		line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " " + label + detail
 		if entry.Bytes > 0 {
 			line += " · 已接收 " + formatDataSize(entry.Bytes)
 		}
@@ -106,6 +118,29 @@ func (m model) stepLine(entry activity.Entry, width int, clock bool) string {
 		elapsed = entryElapsed(entry)
 	}
 	return alignRight(prefix+body, benchTheme.Muted.Render(elapsed), width)
+}
+
+// toneUser 标记用户自己的操作回响：只活在工作台的交互状态里，发布侧从不产生。
+const toneUser activity.Tone = "user"
+
+// noticeLine 一条旁白：符号表明性质，开工一步加粗成为时间线上的段落起点。
+func noticeLine(entry activity.Entry) string {
+	switch entry.Tone {
+	case activity.ToneStep:
+		return benchTheme.Accent.Render("→ ") + benchTheme.Title.Render(entry.Text)
+	case activity.ToneDone:
+		return styleNotice.Render("✓ ") + entry.Text
+	case activity.ToneWait:
+		return benchTheme.Warning.Render("◇ " + entry.Text)
+	case activity.ToneFail:
+		return benchTheme.Error.Render("! " + entry.Text)
+	case activity.ToneRetry:
+		return benchTheme.Warning.Render("↻ ") + entry.Text
+	case toneUser:
+		return benchTheme.Accent.Render("› " + entry.Text)
+	default:
+		return benchTheme.Muted.Render("· " + entry.Text)
+	}
 }
 
 func (m model) waitingLine(feed activity.Snapshot) string {
@@ -116,66 +151,91 @@ func (m model) waitingLine(feed activity.Snapshot) string {
 	return styleFocus.Render(line)
 }
 
-// blockLines 一个输出块的排版：标题行（时钟 · 任务 · 类型）+ 正文 + 空行；按 ID/版本/宽度缓存。
-func (m model) blockLines(block activity.OutputBlock, width int) []string {
-	cache := m.bench.outputCache
-	if cache != nil {
-		if entry, ok := cache.blocks[block.ID]; ok && entry.version == block.Version && entry.width == width {
-			return entry.lines
+// itemLines 结构化产出一条一行，折行时悬挂缩进两格，条与条一眼分得开。
+func itemLines(text string, width int) []string {
+	var lines []string
+	for _, item := range strings.Split(text, "\n") {
+		for i, line := range readingLines(item, max(1, width-2)) {
+			if i > 0 {
+				line = "  " + line
+			}
+			lines = append(lines, line)
 		}
-	}
-	style := benchTheme.Text
-	kind := outputKindLabel(block.Kind)
-	switch block.Kind {
-	case activity.Thinking:
-		style = benchTheme.Muted
-	case activity.Prose:
-		kind = "正文预览 · 未入稿"
-	}
-	task := block.TaskLabel
-	if task == "" {
-		task = "创作任务"
-		if block.Scope.ChapterNumber > 0 {
-			task = fmt.Sprintf("第 %d 章", block.Scope.ChapterNumber)
-		}
-	}
-	if len(block.Scope.ChapterIDs) > 1 {
-		task += fmt.Sprintf(" · 跨章任务（%d 章）", len(block.Scope.ChapterIDs))
-	}
-	header := task + " · " + kind
-	if !block.At.IsZero() {
-		header = block.At.Local().Format("15:04:05") + "  " + header
-	}
-	lines := []string{benchTheme.Accent.Render(fitLine(header, width))}
-	if block.Truncated {
-		lines = append(lines, benchTheme.Warning.Render("… 本段前文已截断，仅保留最近输出"))
-	}
-	for _, line := range readingLines(string(block.Text), width) {
-		lines = append(lines, style.Render(line))
-	}
-	lines = append(lines, "")
-	if cache != nil {
-		if cache.blocks == nil {
-			cache.blocks = make(map[uint64]outputWrappedBlock)
-		}
-		cache.blocks[block.ID] = outputWrappedBlock{version: block.Version, width: width, lines: lines}
 	}
 	return lines
 }
 
-// timelineLines 本轮创作时间线：生命周期条目与输出块按时间合并。
-func (m model) timelineLines(feed activity.Snapshot, width int) []string {
-	type item struct {
-		at    time.Time
-		seq   int
-		lines []string
+func blockText(block activity.OutputBlock, width int) []string {
+	if block.Kind == activity.Item {
+		return itemLines(string(block.Text), width)
 	}
-	items := make([]item, 0, len(feed.Entries)+len(feed.Output))
-	for i, entry := range feed.Entries {
-		items = append(items, item{entry.At, i, []string{m.stepLine(entry, width, true)}})
+	return readingLines(string(block.Text), width)
+}
+
+// blockLines 一个输出块在活动视图里的排版：标题行（时钟 · 任务 · 栏目）+ 正文 + 空行。
+func (m model) blockLines(block activity.OutputBlock, width int) []string {
+	return m.bench.outputCache.lines(block, width, func() []string {
+		style := benchTheme.Text
+		kind := outputKindLabel(block)
+		switch block.Kind {
+		case activity.Thinking:
+			style = benchTheme.Muted
+		case activity.Prose:
+			kind = "正文预览 · 未入稿"
+		}
+		task := block.TaskLabel
+		if task == "" {
+			task = "创作任务"
+			if block.Scope.ChapterNumber > 0 {
+				task = fmt.Sprintf("第 %d 章", block.Scope.ChapterNumber)
+			}
+		}
+		if len(block.Scope.ChapterIDs) > 1 {
+			task += fmt.Sprintf(" · 跨章任务（%d 章）", len(block.Scope.ChapterIDs))
+		}
+		header := task + " · " + kind
+		if !block.At.IsZero() {
+			header = block.At.Local().Format("15:04:05") + "  " + header
+		}
+		lines := []string{benchTheme.Accent.Render(fitLine(header, width))}
+		if block.Truncated {
+			lines = append(lines, benchTheme.Warning.Render("… 本段前文已截断，仅保留最近输出"))
+		}
+		for _, line := range blockText(block, width) {
+			lines = append(lines, style.Render(line))
+		}
+		return append(lines, "")
+	})
+}
+
+// timelineItem 是时间线上的一项：一步，或一个输出块。
+type timelineItem struct {
+	at    time.Time
+	seq   int
+	entry *activity.Entry
+	block *activity.OutputBlock
+}
+
+// timeline 本轮创作时间线：输出块按开始时刻、收尾的步骤按收尾时刻排（先有产出，后有
+// "✓ 提交"）；进行中的步骤单列——它们是此刻正在发生的事，总在最后。活动视图与现场条
+// 共用这一个顺序。
+func timeline(feed activity.Snapshot) ([]timelineItem, []activity.Entry) {
+	items := make([]timelineItem, 0, len(feed.Entries)+len(feed.Output))
+	var open []activity.Entry
+	for i := range feed.Entries {
+		entry := &feed.Entries[i]
+		if entry.Kind == activity.ToolStart && !entry.Done {
+			open = append(open, *entry)
+			continue
+		}
+		at := entry.DoneAt
+		if at.IsZero() {
+			at = entry.At
+		}
+		items = append(items, timelineItem{at: at, seq: i, entry: entry})
 	}
-	for i, block := range feed.Output {
-		items = append(items, item{block.At, len(feed.Entries) + i, m.blockLines(block, width)})
+	for i := range feed.Output {
+		items = append(items, timelineItem{at: feed.Output[i].At, seq: len(feed.Entries) + i, block: &feed.Output[i]})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].at.Equal(items[j].at) {
@@ -183,12 +243,26 @@ func (m model) timelineLines(feed activity.Snapshot, width int) []string {
 		}
 		return items[i].at.Before(items[j].at)
 	})
+	return items, open
+}
+
+// timelineLines 活动视图的整条时间线。
+func (m model) timelineLines(feed activity.Snapshot, width int) []string {
+	m.bench.outputCache.prune(feed.Output)
+	items, open := timeline(feed)
 	var lines []string
 	if feed.OutputDropped > 0 {
 		lines = append(lines, benchTheme.Warning.Render(fmt.Sprintf("↑ %d 个早期输出块已超出实时保留范围", feed.OutputDropped)), "")
 	}
-	for _, entry := range items {
-		lines = append(lines, entry.lines...)
+	for _, item := range items {
+		if item.entry != nil {
+			lines = append(lines, m.stepLine(*item.entry, width, true))
+		} else {
+			lines = append(lines, m.blockLines(*item.block, width)...)
+		}
+	}
+	for _, entry := range open {
+		lines = append(lines, m.stepLine(entry, width, true))
 	}
 	if feed.Waiting {
 		lines = append(lines, m.waitingLine(feed))
@@ -267,32 +341,6 @@ func (m model) scrollActivity(delta int) model {
 	return m
 }
 
-// sceneSteps 创作现场末几行的步骤：等待模型时末行是等待计时，步骤少留一条。
-func sceneSteps(feed activity.Snapshot) []activity.Entry {
-	count := sceneStepRows
-	if feed.Waiting {
-		count--
-	}
-	steps := make([]activity.Entry, 0, count)
-	for i := max(0, len(feed.Entries)-count); i < len(feed.Entries); i++ {
-		steps = append(steps, feed.Entries[i])
-	}
-	for len(steps) < count {
-		steps = append([]activity.Entry{{}}, steps...)
-	}
-	return steps
-}
-
-// sceneStepAt 现场条第 row 行（相对现场条顶部）上的步骤，供点击报错行下钻诊断。
-// 步骤行紧跟在空行、标题线与输出尾部之后。
-func sceneStepAt(feed activity.Snapshot, row int) (activity.Entry, bool) {
-	steps := sceneSteps(feed)
-	if index := row - 2 - sceneTailRows; index >= 0 && index < len(steps) {
-		return steps[index], true
-	}
-	return activity.Entry{}, false
-}
-
 func (m model) sceneTitle(feed activity.Snapshot, ok bool) string {
 	if label := m.currentTaskLabel(feed, ok); label != "" {
 		return "AI 创作现场 · " + label
@@ -326,76 +374,112 @@ func (m model) idleSceneText() string {
 	}
 }
 
-// sceneLines 创作现场：空行隔开正文、标题线、最新输出块尾部、前几步、当前步（或等待计时）。
-// 尾部随每次增量刷新，让人始终看得见模型在输出；当前步固定在最后一行。
+// sceneRow 是现场条正文的一行；step 为真时这一行是 entry 这一步（点击报错行下钻诊断）。
+// 输出块的续行记着块的栏目头 head 与本行 body：块首被顶出现场时，栏目名粘到可见的第一行。
+type sceneRow struct {
+	line  string
+	entry activity.Entry
+	step  bool
+	head  string
+	body  string
+}
+
+// sceneRows 现场条正文：本轮时间线的最后 height 行，与活动视图同源同序，排得更紧——
+// 输出块以栏目名起头、竖线引出文字，段间空行不占行；进行中的步骤、等待计时与停下后的
+// 处境钉在最后，不满时从底部长起。只排版看得见的最后几块；正文视图正在显示的那一章，正文不在这里重复。
+func (m model) sceneRows(feed activity.Snapshot, width, height int) []sceneRow {
+	m.bench.sceneCache.prune(feed.Output)
+	items, open := timeline(feed)
+	var tail []sceneRow
+	for _, entry := range open {
+		tail = append(tail, sceneRow{line: m.stepLine(entry, width, false), entry: entry, step: true})
+	}
+	if feed.Waiting {
+		tail = append(tail, sceneRow{line: m.waitingLine(feed)})
+	}
+	if !m.bench.writing && m.bench.hasRun() {
+		// 创作停下后最后一行是当下处境：这一行永远说的是"此刻"。
+		tail = append(tail, sceneRow{line: benchTheme.Muted.Render(m.idleSceneText())})
+	}
+	shown := m.selectedChapterNumber()
+	var rows []sceneRow
+	for i := len(items) - 1; i >= 0 && len(rows)+len(tail) < height; i-- {
+		var chunk []sceneRow
+		if entry := items[i].entry; entry != nil {
+			chunk = []sceneRow{{line: m.stepLine(*entry, width, false), entry: *entry, step: true}}
+		} else if block := *items[i].block; !m.proseOf(block, shown) {
+			label := outputKindLabel(block)
+			head := benchTheme.Accent.Render(label) + " "
+			indent := strings.Repeat(" ", lipgloss.Width(label)+1)
+			for j, body := range m.sceneBlock(block, width-len(indent)) {
+				row := sceneRow{line: head + body, body: body}
+				if j > 0 {
+					row.line, row.head = indent+body, head
+				}
+				chunk = append(chunk, row)
+			}
+		}
+		rows = append(chunk, rows...)
+	}
+	rows = append(rows, tail...)
+	if len(rows) > height {
+		rows = rows[len(rows)-height:]
+		if first := &rows[0]; first.head != "" {
+			first.line = first.head + first.body
+		}
+	}
+	return append(make([]sceneRow, height-len(rows)), rows...)
+}
+
+// sceneBlock 输出块在现场条里竖线之后的部分：段间空行不占行。整块从头排版（与活动视图
+// 同一锚点）：换行点不随增量漂移，新字只在末行生长，满行后整体上推一行。
+func (m model) sceneBlock(block activity.OutputBlock, width int) []string {
+	return m.bench.sceneCache.lines(block, width, func() []string {
+		style := benchTheme.Text
+		if block.Kind == activity.Thinking {
+			style = benchTheme.Muted
+		}
+		bar := benchTheme.Border.Render("▏")
+		var lines []string
+		for _, row := range blockText(block, max(1, width-2)) {
+			if strings.TrimSpace(row) != "" {
+				lines = append(lines, bar+" "+style.Render(row))
+			}
+		}
+		return lines
+	})
+}
+
+// sceneLines 创作现场：空行隔开正文、标题线、时间线尾巴；没有实时活动时最后一行说明处境。
 func (m model) sceneLines(width int) []string {
 	feed, ok := m.activityFeed()
 	lines := []string{"", sectionTitle(benchTheme.Muted.Render(m.sceneTitle(feed, ok)), width)}
-	if ok {
-		lines = append(lines, m.outputTail(feed, width)...)
-	}
-	if !ok || len(feed.Entries) == 0 && !feed.Waiting {
+	if !ok || len(feed.Entries) == 0 && len(feed.Output) == 0 && !feed.Waiting {
 		for len(lines) < benchSceneRows-1 {
 			lines = append(lines, "")
 		}
 		return append(lines, benchTheme.Muted.Render(m.idleSceneText()))
 	}
-	for _, step := range sceneSteps(feed) {
-		if step.At.IsZero() {
-			lines = append(lines, "")
-			continue
-		}
-		lines = append(lines, m.stepLine(step, width, false))
-	}
-	if feed.Waiting {
-		lines = append(lines, m.waitingLine(feed))
+	for _, row := range m.sceneRows(feed, width, sceneBodyRows) {
+		lines = append(lines, row.line)
 	}
 	return lines
 }
 
-// outputTail 最新输出块的最后几行，带类型标签与竖线。
-// 正文视图正在直播的那块不重复，改看它之前的最新输出（通常是思考）。
-// 整块从头排版再取尾部（与活动视图同一锚点）：换行点不随增量漂移，
-// 新字只在末行生长，满行后整体上推一行；段落间的空行不占尾部。
-func (m model) outputTail(feed activity.Snapshot, width int) []string {
-	var shown uint64
-	if m.bench.view == viewProse {
-		shown = m.proseSource().blockID
-	}
-	index := len(feed.Output) - 1
-	for index >= 0 && feed.Output[index].ID == shown {
-		index--
-	}
-	if index < 0 {
-		return make([]string, sceneTailRows)
-	}
-	block := feed.Output[index]
-	label := outputKindLabel(block.Kind)
-	indent := lipgloss.Width(label) + 1
-	all := m.bench.sceneCache.wrap(string(block.Text), max(1, width-indent-2))
-	wrapped := make([]string, 0, sceneTailRows)
-	for i := len(all) - 1; i >= 0 && len(wrapped) < sceneTailRows; i-- {
-		if strings.TrimSpace(all[i]) != "" {
-			wrapped = append([]string{all[i]}, wrapped...)
+// failed 报告一步是否出了问题：工具报错或任务失败，点击可下钻诊断。
+func failed(entry activity.Entry) bool {
+	return entry.Err != "" || entry.Kind == activity.Notice && entry.Tone == activity.ToneFail
+}
+
+// sceneStepAt 现场条第 row 行（相对现场条顶部，含空行与标题线）上的步骤。
+func (m model) sceneStepAt(row, width int) (activity.Entry, bool) {
+	feed, ok := m.activityFeed()
+	if index := row - 2; ok && index >= 0 && index < sceneBodyRows {
+		if r := m.sceneRows(feed, width, sceneBodyRows)[index]; r.step {
+			return r.entry, true
 		}
 	}
-	for len(wrapped) < sceneTailRows {
-		wrapped = append(wrapped, "")
-	}
-	bar := benchTheme.Border.Render("▏")
-	style := benchTheme.Text
-	if block.Kind == activity.Thinking {
-		style = benchTheme.Muted
-	}
-	lines := make([]string, sceneTailRows)
-	for i, row := range wrapped {
-		head := strings.Repeat(" ", indent)
-		if i == 0 {
-			head = benchTheme.Accent.Render(label) + " "
-		}
-		lines[i] = head + bar + " " + style.Render(row)
-	}
-	return lines
+	return activity.Entry{}, false
 }
 
 // thinkingContent 本轮全部思考原文（/think 全屏）。

@@ -244,6 +244,7 @@ func (m model) applyModelPanel(p *modelPanel) model {
 		target = "跟随默认（" + target + "）"
 	}
 	m.bench.notice = fmt.Sprintf("已切换：%s → %s · 思考 %s · %s", roleLabels[role], target, thinkingLabel(current.Thinking), when)
+	m.bench.addEcho(fmt.Sprintf("你把%s换成 %s · 思考 %s", roleLabels[role], target, thinkingLabel(current.Thinking)))
 	m.bench.modelPanel = nil
 	return m
 }

@@ -18,6 +18,7 @@ type Manager struct {
 	operations *operationengine.Engine
 	executors  ExecutorSet
 	profiles   Profiles
+	activity   ActivitySink
 }
 
 func New(s *store.Store, engine *operationengine.Engine, executors ExecutorSet, profiles Profiles) *Manager {

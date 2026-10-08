@@ -25,6 +25,9 @@ const (
 	// ProseStall 宣告一次正文直播中断（预览提取失去完整性，每调用至多一次）：
 	// 成稿不受影响，但停更必须显式告知而非让预览静默冻结。
 	ProseStall Kind = "prose_stall"
+	// Item 是结构化产出里收完的一条（大纲的一章、一条设定、一条审阅意见）：Text 是
+	// 发布侧排好的一行故事语言，Section 是它所属的栏目。与正文预览一样只供展示。
+	Item Kind = "item"
 	// Text 是模型的说明性文字增量：折叠为辅助行，不进正文预览。
 	Text Kind = "text"
 	// Thinking 表示模型正在构思；仅保留 Provider 明确提供的原文尾部供展开阅读。
@@ -35,6 +38,21 @@ const (
 	TurnStart Kind = "turn_start"
 	// Usage 是一条 assistant 消息结束时的 token 用量：只累加进快照总计，不成条目。
 	Usage Kind = "usage"
+	// Notice 是 Agent 循环之外的一件事：这一步做什么、入稿、等你确认、失败与重开……
+	// Text 是发布侧写好的一句故事语言，Tone 是它的性质。
+	Notice Kind = "notice"
+)
+
+// Tone 是一条旁白的性质；符号与颜色由消费侧决定。
+type Tone string
+
+const (
+	ToneStep  Tone = "step"  // 开始一步
+	ToneDone  Tone = "done"  // 一步有了结果
+	ToneWait  Tone = "wait"  // 停下等用户决定
+	ToneFail  Tone = "fail"  // 这一步失败
+	ToneRetry Tone = "retry" // 重新尝试或接续上次
+	ToneInfo  Tone = "info"  // 其余说明
 )
 
 // UsageTotals 是本轮创作的 token 与费用累计（消费侧状态行展示）。
@@ -61,9 +79,12 @@ type Event struct {
 	Kind        Kind
 	Tool        string // ToolStart/ToolEnd/ToolDelta：规范工具名
 	CallID      string // 同一次工具调用的配对键：delta 与执行起止靠它对上
+	Detail      string // ToolStart：这次调用作用的对象，如「第 3 章」，由发布侧按参数写成
+	Section     string // Item：结构化产出所属的栏目，如「大纲」「设定」「审阅」
 	Err         string // ToolEnd 出错摘要 / Retry 原因
 	Attempt     int    // Retry：第几次
-	Text        string // Text/Prose：文字增量
+	Text        string // Text/Prose：文字增量；Item/Notice：写好的一行
+	Tone        Tone   // Notice：这条旁白的性质
 	Bytes       int    // ToolDelta：本次增量字节数
 	Usage       UsageTotals
 	Model       string // Usage：这条消息实际使用的模型与提供方（服务端上报）
@@ -80,7 +101,7 @@ type ModelUsage struct {
 	FirstKind       string // 首次使用时的任务种类
 }
 
-// Entry 是快照中的一行生命周期条目：一次工具调用（进行中或已收尾）或一次重试。
+// Entry 是快照中的一行生命周期条目：一次工具调用（进行中或已收尾）、一次重试或一条旁白。
 // Bytes 是这次调用已接收的参数字节数（不是正文字数）——按条目归属，
 // 一条消息里多个调用各自计数，互不串行。
 type Entry struct {
@@ -89,6 +110,9 @@ type Entry struct {
 	Kind        Kind
 	Tool        string
 	CallID      string
+	Detail      string
+	Text        string // Notice：旁白
+	Tone        Tone
 	Err         string
 	Attempt     int
 	Bytes       int
@@ -271,16 +295,25 @@ func (s *Snapshot) fold(event Event) {
 			Attempt: event.Attempt, Err: event.Err, Done: true, At: event.At,
 		})
 		return
+	case Notice:
+		s.append(Entry{
+			OperationID: event.OperationID, Kind: Notice,
+			Text: event.Text, Tone: event.Tone, Done: true, At: event.At,
+		})
+		return
 	}
 	// 任何增量或工具执行都说明模型已回应。
 	s.Waiting = false
 	switch event.Kind {
 	case ToolStart:
 		// 真实时序里参数流入先于执行：这次调用的进行中条目可能已由首个 delta
-		// 建立（按 CallID 配对），不重复追加、不清已接收进度。
-		if s.openIndex(event) < 0 {
+		// 建立（按 CallID 配对），不重复追加、不清已接收进度；参数收齐才知道作用对象。
+		index := s.openIndex(event)
+		if index < 0 {
 			s.appendCall(event)
+			index = len(s.Entries) - 1
 		}
+		s.Entries[index].Detail = event.Detail
 		s.Thinking = false
 	case ToolDelta:
 		// 参数开始流入即建立进行中条目并按条目累计字节；名字未知的增量
@@ -303,8 +336,8 @@ func (s *Snapshot) fold(event Event) {
 		} else {
 			// 起点条目已被丢弃：补一条完成条目，收尾事实不丢失。
 			s.append(Entry{
-				OperationID: event.OperationID, Kind: ToolStart, Tool: event.Tool,
-				CallID: event.CallID, Err: event.Err, Done: true, At: event.At, DoneAt: event.At,
+				OperationID: event.OperationID, Kind: ToolStart, Tool: event.Tool, CallID: event.CallID,
+				Detail: event.Detail, Err: event.Err, Done: true, At: event.At, DoneAt: event.At,
 			})
 		}
 	case Prose:
@@ -312,6 +345,8 @@ func (s *Snapshot) fold(event Event) {
 			s.ProseCallID, s.Prose = event.CallID, nil
 		}
 		s.Prose = appendProse(s.Prose, event.Text)
+		s.Thinking = false
+	case Item:
 		s.Thinking = false
 	case ProseStall:
 		// 一次性警示条目（同 Retry）：正文直播中断留痕于活动流。
@@ -373,7 +408,7 @@ func (s *Snapshot) openIndex(event Event) int {
 func (s *Snapshot) appendCall(event Event) {
 	s.append(Entry{
 		OperationID: event.OperationID, Kind: ToolStart,
-		Tool: event.Tool, CallID: event.CallID, At: event.At,
+		Tool: event.Tool, CallID: event.CallID, Detail: event.Detail, At: event.At,
 	})
 }
 
