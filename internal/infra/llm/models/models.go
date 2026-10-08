@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -115,7 +116,7 @@ func New(config Config) (agentcore.Model, error) {
 	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.Model) == "" {
 		return agentcore.Model{}, fmt.Errorf("model provider and name are required: %w", model.ErrInvalid)
 	}
-	p, err := provider.New(config.Provider, provider.Config{APIKey: config.APIKey, BaseURL: config.BaseURL, API: config.API})
+	p, err := provider.New(adapter(config), provider.Config{APIKey: config.APIKey, BaseURL: config.BaseURL, API: config.API})
 	if err != nil {
 		return agentcore.Model{}, err
 	}
@@ -129,6 +130,20 @@ func New(config Config) (agentcore.Model, error) {
 		chat.Request.MaxTokens = new(requiredMaxTokens)
 	}
 	return chat, nil
+}
+
+// adapter 是连接实际使用的 litellm 实现。用户只选格式；OpenAI 格式的连接指向官方地址、
+// 或走 Responses 接口时按 OpenAI 官方接口说话，其余地址是中转、网关或自部署，按通用的
+// Chat Completions（compat）说话：它们的思考放在 reasoning_content / reasoning 里，输出上限
+// 用 max_tokens，官方实现都不认。
+func adapter(config Config) string {
+	if config.Provider != "openai" || config.API == "responses" || config.BaseURL == "" {
+		return config.Provider
+	}
+	if u, err := url.Parse(config.BaseURL); err == nil && u.Hostname() == "api.openai.com" {
+		return config.Provider
+	}
+	return "compat"
 }
 
 // thinking 是思考强度的请求设置；自动是 nil，沿用厂商默认。

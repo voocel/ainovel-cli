@@ -140,11 +140,12 @@ func TestWizardCustomConnectionPreservesSavedConnections(t *testing.T) {
 	m.wizard.inputs[1].SetValue("custom-model")
 	m.wizard.inputs[2].SetValue("new-key")
 	m.wizard.inputs[3].SetValue("https://example.com/v1")
+	m.wizard.endpoint = "responses"
 	next, cmd := m.submitWizard()
 	m = next.(model)
 	msg := cmd().(wizardVerifiedMsg)
 	pc, err := msg.config.ActiveProvider()
-	if err != nil || msg.config.Provider != "我的代理" || pc.Type != "compat" || pc.API != "" || msg.config.Providers["existing"].APIKey != "keep-me" {
+	if err != nil || msg.config.Provider != "我的代理" || pc.Type != "openai" || pc.API != "responses" || msg.config.Providers["existing"].APIKey != "keep-me" {
 		t.Fatal("connection identity or credentials lost")
 	}
 	m, _ = press(t, m, tea.KeyEsc)
@@ -195,16 +196,16 @@ func TestWizardProtocolIsSelectionOnly(t *testing.T) {
 	next, _ = m.focusWizard(0)
 	m = next.(model)
 	m = typeText(t, m, "arbitrary-protocol")
-	if m.wizard.inputs[0].Value() != "compat" {
+	if m.wizard.inputs[0].Value() != "openai" {
 		t.Fatal("protocol accepted free text")
 	}
 	m, _ = press(t, m, tea.KeyRight)
-	if m.wizard.inputs[0].Value() != "openai" {
-		t.Fatal("right did not select openai")
+	if m.wizard.inputs[0].Value() != "anthropic" {
+		t.Fatal("right did not select anthropic")
 	}
 	m.width = 160
 	for _, hit := range m.wizardLayout().hits {
-		if hit.action == 23 {
+		if hit.action == 22 {
 			next, _ = m.Update(tea.MouseMsg{X: hit.x, Y: hit.y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 			m = next.(model)
 			break
@@ -217,6 +218,20 @@ func TestWizardProtocolIsSelectionOnly(t *testing.T) {
 		if control == 8 {
 			t.Fatal("non-OpenAI endpoint visible")
 		}
+	}
+	// 窄窗口里协议选项折行，每个选项都完整可见、可点。
+	m.width = 40
+	options := 0
+	for _, hit := range m.wizardLayout().hits {
+		if hit.action >= 20 && hit.action < 20+len(wizardProtocols) {
+			options++
+			if hit.x+hit.width > m.width-2 {
+				t.Fatalf("protocol option %d overflows a %d-column wizard: %+v", hit.action-20, m.width, hit)
+			}
+		}
+	}
+	if options != len(wizardProtocols) {
+		t.Fatalf("protocol options = %d, want %d", options, len(wizardProtocols))
 	}
 }
 

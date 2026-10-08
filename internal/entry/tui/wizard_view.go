@@ -58,14 +58,19 @@ func (m model) wizardLayout() wizardScreen {
 			}
 			if i == 0 {
 				add(benchTheme.Muted.Render("协议类型 · ← → 选择"))
+				// 选项放不下一行就折到下一行；热区与绘制同一套坐标（行首两格留白）。
 				x := 2
 				parts := []string{}
 				for j, protocol := range wizardProtocols {
 					style := benchTheme.Muted.Padding(0, 1)
-					if protocol == m.wizard.inputs[0].Value() {
+					if protocol.id == m.wizard.inputs[0].Value() {
 						style = benchTheme.Selected.Padding(0, 1)
 					}
-					segment := style.Render(protocol)
+					segment := style.Render(protocol.label)
+					if len(parts) > 0 && x-2+lipgloss.Width(segment) > w {
+						add(strings.Join(parts, " "))
+						x, parts = 2, nil
+					}
 					screen.hits = append(screen.hits, wizardHit{x, len(screen.lines), lipgloss.Width(segment), 20 + j})
 					parts = append(parts, segment)
 					x += lipgloss.Width(segment) + 1

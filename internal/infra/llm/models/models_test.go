@@ -75,3 +75,24 @@ func TestEndpointChangesDigest(t *testing.T) {
 		t.Fatal("endpoint change must invalidate execution configuration")
 	}
 }
+
+// 用户只选 OpenAI 格式：官方地址与 Responses 接口按官方实现，其余地址（中转、网关、
+// 自部署）按通用兼容接口，才读得到 reasoning_content 里的思考。
+func TestOpenAIFormatPicksTheAdapterByAddress(t *testing.T) {
+	for _, tc := range []struct {
+		config Config
+		want   string
+	}{
+		{Config{Provider: "openai"}, "openai"},
+		{Config{Provider: "openai", BaseURL: "https://api.openai.com/v1"}, "openai"},
+		{Config{Provider: "openai", BaseURL: "https://relay.example.com/v1"}, "compat"},
+		{Config{Provider: "openai", BaseURL: "https://relay.example.com/v1", API: "chat"}, "compat"},
+		{Config{Provider: "openai", BaseURL: "https://relay.example.com/v1", API: "responses"}, "openai"},
+		{Config{Provider: "anthropic", BaseURL: "https://relay.example.com"}, "anthropic"},
+		{Config{Provider: "deepseek"}, "deepseek"},
+	} {
+		if got := adapter(tc.config); got != tc.want {
+			t.Errorf("%+v: adapter = %q, want %q", tc.config, got, tc.want)
+		}
+	}
+}

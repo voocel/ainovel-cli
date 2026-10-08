@@ -95,7 +95,7 @@ func newWizardState(initial appconfig.Config, initialErr string, fromHome bool) 
 var wizardProviders = []struct{ label, id string }{
 	{"OpenAI", "openai"}, {"Anthropic", "anthropic"},
 	{"DeepSeek", "deepseek"}, {"Gemini", "gemini"},
-	{"OpenRouter", "openrouter"}, {"OpenAI 兼容 / 中转服务", "compat"},
+	{"OpenRouter", "openrouter"}, {"OpenAI 兼容 / 中转服务", "openai"},
 	{"自定义连接", ""}, {"Ollama · 本地模型", "ollama"},
 	{"Qwen", "qwen"}, {"GLM", "glm"}, {"Grok", "grok"},
 	{"MiniMax", "minimax"}, {"MiMo", "mimo"},
@@ -146,7 +146,7 @@ func (m model) chooseWizardProvider() (tea.Model, tea.Cmd) {
 	}
 	protocol := choice.id
 	if protocol == "" {
-		protocol = "compat"
+		protocol = "openai"
 	}
 	m.wizard.inputs[0].SetValue(protocol)
 	m.wizard.name.SetValue(choice.id)
@@ -213,7 +213,7 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m.chooseWizardProvider()
 			}
 			if hit.action >= 20 && hit.action < 20+len(wizardProtocols) {
-				m.wizard.inputs[0].SetValue(wizardProtocols[hit.action-20])
+				m.wizard.inputs[0].SetValue(wizardProtocols[hit.action-20].id)
 				m.wizard.endpoint = ""
 				return m.focusWizard(0)
 			}
@@ -247,12 +247,12 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			next := 0
 			for i, p := range wizardProtocols {
-				if p == m.wizard.inputs[0].Value() {
+				if p.id == m.wizard.inputs[0].Value() {
 					next = (i + delta + len(wizardProtocols)) % len(wizardProtocols)
 					break
 				}
 			}
-			m.wizard.inputs[0].SetValue(wizardProtocols[next])
+			m.wizard.inputs[0].SetValue(wizardProtocols[next].id)
 			m.wizard.endpoint = ""
 			return m, nil
 		}
@@ -427,6 +427,8 @@ func (m model) activateWizard(action int) (tea.Model, tea.Cmd) {
 	}
 }
 
-// wizardProtocols 是自定义连接可选的协议：compat 是通用的 Chat Completions（中转、网关、
-// 自部署，读 reasoning_content / reasoning 思考字段），openai 是 OpenAI 官方接口。
-var wizardProtocols = []string{"compat", "openai", "anthropic", "gemini"}
+// wizardProtocols 是自定义连接可选的接口格式，界面显示 label、配置保存 id。官方地址与
+// 中转的差别由装配按地址推出（models.adapter），不交给用户选。
+var wizardProtocols = []struct{ id, label string }{
+	{"openai", "OpenAI 格式"}, {"anthropic", "Claude 格式"}, {"gemini", "Gemini 格式"},
+}
