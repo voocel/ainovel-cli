@@ -48,10 +48,10 @@ func (c Config) Connection(name string) (ProviderConfig, error) {
 		return ProviderConfig{}, err
 	}
 	switch pc.Type {
-	case "openai", "anthropic", "gemini":
+	case "compat", "openai", "anthropic", "gemini":
 	case "deepseek", "openrouter", "qwen", "glm", "grok", "minimax", "mimo", "ollama", "bedrock":
 		if pc.Type != name {
-			return ProviderConfig{}, fmt.Errorf("自定义连接协议只支持 openai、anthropic、gemini")
+			return ProviderConfig{}, fmt.Errorf("自定义连接协议只支持 compat、openai、anthropic、gemini")
 		}
 	default:
 		return ProviderConfig{}, fmt.Errorf("不支持的协议类型 %q", pc.Type)

@@ -38,7 +38,7 @@
 
 ### 连接身份与协议
 
-自定义连接的协议通过三项选择控件设置：`openai`、`anthropic`、`gemini`，支持左右键和鼠标，不接受自由文本。只有 OpenAI 展示 `chat` / `responses` 选项。内置服务商保留自己的适配器标识；配置校验同样拒绝未知协议和将其他内置适配器作为自定义协议使用。
+自定义连接的协议通过四项选择控件设置：`compat`、`openai`、`anthropic`、`gemini`，支持左右键和鼠标，不接受自由文本。`compat` 是通用的 Chat Completions，也是「OpenAI 兼容 / 中转服务」与自定义连接的默认协议：中转、网关、自部署的模型多把思考放在 `reasoning_content` / `reasoning` 字段，只有它会读取，思考才能直播并随对话保存；`openai` 只对接 OpenAI 官方接口（不读这些字段），只有它展示 `chat` / `responses` 选项。内置服务商保留自己的适配器标识；配置校验同样拒绝未知协议和将其他内置适配器作为自定义协议使用。
 
 顶层 `provider` 引用 `providers` 中的连接名称，名称可以自定义。每个连接独立保存 `type`、`api_key`、`base_url` 和 `models`；`type` 决定底层协议，OpenAI 的 `api` 可选 `chat` 或 `responses`，接口形式参与执行配置摘要。
 

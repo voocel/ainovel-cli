@@ -345,6 +345,20 @@ func TestRestoreRejectsMessagesWithoutContent(t *testing.T) {
 	}
 }
 
+// 连接中途断开的回合以 StopError 记下，可以一个字都没有：续跑照常恢复，不当成旧版本消息。
+func TestRestoreKeepsFailedTurnsWithoutContent(t *testing.T) {
+	task := json.RawMessage(`{"role":"user","blocks":[{"type":"text","text":"写第 1 章"}]}`)
+	failed := json.RawMessage(`{"role":"assistant","blocks":null,"stop":"error","provider":"openai","model":"m"}`)
+	runtime := &Runtime{store: eventStore{events: []domainmodel.OperationEvent{
+		{Sequence: 3, Attempt: 1, Kind: "agent.message_committed", Payload: task},
+		{Sequence: 7, Attempt: 1, Kind: "agent.message_committed", Payload: failed},
+	}}}
+	messages, _, err := runtime.restoreMessages(context.Background(), domainmodel.Operation{ID: "op", Attempt: 2})
+	if err != nil || len(messages) != 2 || messages[1].Stop != agentcore.StopError {
+		t.Fatalf("restore = %d messages, err = %v", len(messages), err)
+	}
+}
+
 func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	// D30：审阅 Worker 以 verdict_submit 收尾——不产 Proposal、不造空 Patch；
 	// 裁定 Revision 由宿主绑定启动快照，越界或漏审的裁定在工具层被拒绝。

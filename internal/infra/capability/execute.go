@@ -496,8 +496,9 @@ func (r *Runtime) restoreMessages(ctx context.Context, operation model.Operation
 			if err := json.Unmarshal(event.Payload, &message); err != nil {
 				return nil, "", fmt.Errorf("restore agent message at event %d: %w", event.Sequence, err)
 			}
-			// 旧版本写下的消息没有 blocks：解出来是空消息，宁可报错也不带进会话。
-			if len(message.Blocks) == 0 {
+			// 失败或中止的回合可以一个字都没流出来（agentcore 照样记下它，组请求时跳过）；
+			// 其余没有 blocks 的是旧版本写下的，宁可报错也不带进会话。
+			if len(message.Blocks) == 0 && message.Stop != agentcore.StopError && message.Stop != agentcore.StopAborted {
 				return nil, "", fmt.Errorf("restore agent message at event %d: no content blocks (written by an older version; restart the task): %w", event.Sequence, model.ErrInvalid)
 			}
 			messages = append(messages, message)

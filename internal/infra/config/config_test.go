@@ -178,10 +178,10 @@ func TestEnvironmentProtocolOverridesPrecedeValidation(t *testing.T) {
 }
 
 func TestCustomConnectionProtocolValidation(t *testing.T) {
-	for _, protocol := range []string{"openai", "anthropic", "gemini", "typo", "deepseek"} {
+	for _, protocol := range []string{"compat", "openai", "anthropic", "gemini", "typo", "deepseek"} {
 		c := Config{}.WithProvider("my-proxy", "model", ProviderConfig{Type: protocol})
 		err := c.Validate()
-		valid := protocol == "openai" || protocol == "anthropic" || protocol == "gemini"
+		valid := protocol == "compat" || protocol == "openai" || protocol == "anthropic" || protocol == "gemini"
 		if (err == nil) != valid {
 			t.Fatalf("protocol %q: %v", protocol, err)
 		}

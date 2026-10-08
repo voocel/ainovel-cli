@@ -121,7 +121,7 @@ func TestWizardVerifiesThenSavesConfigAndEntersHome(t *testing.T) {
 	m, _ = press(t, m, tea.KeyEnter)
 	m = typeText(t, m, "my-connection")
 	m, _ = press(t, m, tea.KeyEnter)
-	m, _ = press(t, m, tea.KeyRight)
+	m = pressTimes(t, m, tea.KeyRight, 2) // compat → openai → anthropic
 	m, _ = press(t, m, tea.KeyEnter)
 	for _, value := range []string{"deepseek-chat", "sk-test"} {
 		m = typeText(t, m, value)
@@ -157,7 +157,7 @@ func TestWizardVerifyFailureLeavesConfigUnsaved(t *testing.T) {
 	m, _ = press(t, m, tea.KeyEnter)
 	m = typeText(t, m, "my-connection")
 	m, _ = press(t, m, tea.KeyEnter)
-	m, _ = press(t, m, tea.KeyRight)
+	m = pressTimes(t, m, tea.KeyRight, 2) // compat → openai → anthropic
 	m, _ = press(t, m, tea.KeyEnter)
 	for _, value := range []string{"bad-model", "sk-test"} {
 		m = typeText(t, m, value)
