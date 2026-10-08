@@ -1288,8 +1288,8 @@ func TestQuickWriteUserEditedChapterIsVerifiedBeforeNextWrite(t *testing.T) {
 		t.Fatalf("approve import: %v", err)
 	}
 	snapshot, err := api.Workbench.WorkbenchSnapshot(ctx, command.ProjectID)
-	if err != nil || len(snapshot.PendingCanon) != 1 || snapshot.PendingCanon[0] != "chapter-chapter-plan-1-outcome" {
-		t.Fatalf("pending canon after edit = %#v, %v", snapshot.PendingCanon, err)
+	if err != nil || len(snapshot.Briefs[1].Facts) != 1 || !snapshot.Briefs[1].Facts[0].Pending {
+		t.Fatalf("chapter 1 facts after edit = %#v, %v", snapshot.Briefs[1].Facts, err)
 	}
 	// 续写到 4 章：核验 1 + 重审（第 1 章变化使其窗口裁定失效）1 + 扩窗 1 + 第 4 章 1 + 末窗审阅 1 = 10 次。
 	command.Chapters, command.CreatedAt = 4, testTime().Add(2*time.Hour)

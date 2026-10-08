@@ -99,9 +99,9 @@ func TestProsePageFillsMainColumn(t *testing.T) {
 	}
 }
 
-func TestRunRailShowsLiveModelsAgentsAndTotalsOnWideTerminals(t *testing.T) {
+func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 	narrow := studioModel(t, 150, 40)
-	if l := narrow.benchLayout(); l.railWidth != 0 || strings.Contains(frame(narrow), "本轮运行") {
+	if l := narrow.benchLayout(); l.railWidth != 0 || strings.Contains(frame(narrow), "写作依据") {
 		t.Fatalf("150 columns must stay two-column: %+v", l)
 	}
 	wide := studioModel(t, 200, 50)
@@ -109,30 +109,55 @@ func TestRunRailShowsLiveModelsAgentsAndTotalsOnWideTerminals(t *testing.T) {
 	if l.railWidth != 42 || l.inner != mainTargetWidth || l.railX+l.railWidth != 200 {
 		t.Fatalf("200 columns must give the rail the slack beyond the main target width: %+v", l)
 	}
-	view := frame(wide)
+	rail := func(m model) string {
+		l := m.benchLayout()
+		var cells []string
+		for _, row := range strings.Split(frame(m), "\n")[l.bodyY:l.footerY] {
+			cells = append(cells, ansi.Cut(row, l.railX, l.railX+l.railWidth))
+		}
+		return strings.Join(cells, "\n")
+	}
+	// 正在写的章：规划、覆盖它的要求（没审过是一个点），底部本轮花费；运行明细不常驻。
+	view := rail(wide)
 	requireContains(t, view,
-		"本轮运行", "模型", "2 个 · 切换 1 次",
-		"● deepseek-v4-flash", "当前", "↑192K ↓49K · 缓存 95%", "$0.11 · 7 条消息 · ",
-		"· deepseek-v4-pro", "deepseek", "↑41K ↓9.0K · 缓存 12%", "$0.31 · 3 条消息 · ",
-		"代理", "第 3 轮", "◉ 作者 · 第 4 章", "工具调用 10 · 重试 1", "· 本任务 $0.11",
-		"✓ 策划 · 故事蓝图", "4m00s · $0.31",
-		"本轮合计", "2 个任务", "↑233K ↓58K · 缓存 80%", "$0.42 · 已用 4m", "工具调用 13 · 重试 1",
-		"/view 本章详情 · /diag 诊断",
+		"写作依据", "第 4 章 · 门后的声音", "◉ 写作中", "规划", "陈渡循着回信找到老宅",
+		"要求", "3 条", "· 禁止 主角死亡", "· 用声音与一个具体动作承接悬念 · 第 4 章",
+		"本轮", "$0.42 · 已用 4m", "↑233K ↓58K · 缓存 80%", "● deepseek-v4-flash", "$0.11", "· deepseek-v4-pro", "$0.31", "连接重试 1 次",
 	)
+	for _, gone := range []string{"代理", "工具调用", "条消息", "本轮运行"} {
+		if strings.Contains(view, gone) {
+			t.Fatalf("rail still shows run telemetry %q:\n%s", gone, view)
+		}
+	}
+	rows := strings.Split(frame(wide), "\n")
+	if footer := rows[len(rows)-1]; strings.Contains(footer, "↑233K") || !strings.Contains(footer, "deepseek-v4-flash") {
+		t.Fatalf("footer must not repeat the rail's totals:\n%s", footer)
+	}
+	// 依据来自权威快照：没有实时活动时照样完整，只是不显示本轮花费。
+	idle := wide
+	idle.bench.activity = activity.Snapshot{}
+	if view := rail(idle); !strings.Contains(view, "陈渡循着回信找到老宅") || strings.Contains(view, "本轮") {
+		t.Fatalf("idle rail must keep the brief and drop the usage:\n%s", view)
+	}
+	// 选中审过的章：要求带审阅结论，审阅意见与本章设定各成一段，计数标出要紧的。
+	reviewed := clickBench(wide, 6, l.outlineY+3)
+	requireContains(t, rail(reviewed),
+		"第 3 章 · 回信", "✓ ", " 字", "违反 1 · 2 条", "✓ 禁止 主角死亡", "! 保持悬疑氛围",
+		"审阅意见", "阻塞 1 · 2 条", "! 回信背面的笔迹提前揭示了门后人的身份", "· 雨声意象连续三章出现",
+		"本章设定", "待核验 1 · 2 条", "· 「陈渡」持有：一把陌生的钥匙", "◌ 「回信」笔迹：陈渡本人",
+	)
+	// 卷头行：这一部分的进度（点击头行会折叠，这里直接移光标）。
+	section := wide
+	section.bench.cursor = 0
+	requireContains(t, rail(section), "第一卷 · 未寄出的信", "3/4 章")
 	// 最窄的右栏（170 列，32 列宽）每一行都放得下，不出现截断省略号。
 	narrowRail := studioModel(t, 170, 45)
 	nl := narrowRail.benchLayout()
 	if nl.railWidth != railMinWidth || studioModel(t, 169, 45).benchLayout().railWidth != 0 {
 		t.Fatalf("rail must appear at exactly %d columns with the minimum width: %+v", railThreshold, nl)
 	}
-	for i, row := range strings.Split(frame(narrowRail), "\n")[nl.bodyY:nl.footerY] {
-		if cell := ansi.Cut(row, nl.railX, nl.railX+nl.railWidth); strings.Contains(cell, "…") {
-			t.Fatalf("rail row %d truncated at 32 columns: %q", i, cell)
-		}
-	}
-	rows := strings.Split(view, "\n")
-	if footer := rows[len(rows)-1]; strings.Contains(footer, "↑233K") || !strings.Contains(footer, "deepseek-v4-flash") {
-		t.Fatalf("footer must not repeat the rail's totals:\n%s", footer)
+	if view := rail(narrowRail); strings.Contains(view, "…") {
+		t.Fatalf("rail truncated at 32 columns:\n%s", view)
 	}
 	// 右栏只读：滚轮不滚正文，点击不命中任何区域。
 	wide.bench.snap.Manuscript[1].Blocks[0].Text = strings.Repeat(wide.bench.snap.Manuscript[1].Blocks[0].Text, 6)
@@ -145,9 +170,6 @@ func TestRunRailShowsLiveModelsAgentsAndTotalsOnWideTerminals(t *testing.T) {
 	if wide.bench.reading || wide.selectedChapterNumber() != 2 {
 		t.Fatal("click on the rail must not hit the decision card or scene strip")
 	}
-	// 没有活动时右栏说明处境，不留空白。
-	wide.bench.activity = activity.Snapshot{}
-	requireContains(t, frame(wide), "本轮运行", "准备中")
 }
 
 func TestProseViewStreamsLiveChapterAndSceneShowsThinking(t *testing.T) {

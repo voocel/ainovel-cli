@@ -83,7 +83,6 @@ type WorkbenchSnapshot struct {
 	Ownership []model.OwnershipRule `json:"ownership,omitempty"`
 	// Directives 只呈现 active 的用户创作要求（§4.9）。
 	Directives []model.Directive         `json:"directives,omitempty"`
-	Canon      []model.CanonFact         `json:"canon,omitempty"`
 	Manuscript []model.ManuscriptChapter `json:"manuscript,omitempty"`
 	Outline    []OutlineNode             `json:"outline"`
 	Candidates []ChapterCandidate        `json:"candidates,omitempty"`
@@ -96,8 +95,8 @@ type WorkbenchSnapshot struct {
 	// Adjudications 是仍然有效的接受记录（D43）。
 	Findings      []WorkbenchFinding   `json:"findings,omitempty"`
 	Adjudications []model.Adjudication `json:"adjudications,omitempty"`
-	// PendingCanon 是正文改动后待核验的事实 ID（D41）。
-	PendingCanon []string `json:"pending_canon,omitempty"`
+	// Briefs 是各已规划章节的依据（键为章号）：覆盖它的要求与结论、它记下的设定。
+	Briefs map[int]ChapterBrief `json:"briefs,omitempty"`
 	// Length 是篇幅口径（D63）：固定章数、故事罗盘与全书章数，与推导器同一规则。
 	Length novel.Length `json:"length"`
 }
@@ -116,7 +115,7 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 		ProjectID: project.ID, Revision: project.Revision,
 		Intent: project.Intent, Approval: project.Approval, Ownership: project.Ownership,
 		Directives: model.ActiveDirectives(project.Directives),
-		Canon:      project.Canon, Manuscript: project.Manuscript,
+		Manuscript: project.Manuscript,
 	}
 
 	run, hasRun, err := s.runs.LatestCreationRun(ctx, projectID)
@@ -133,11 +132,13 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 			return WorkbenchSnapshot{}, err
 		}
 	}
-	if snapshot.Findings, snapshot.Adjudications, err = s.validFindings(ctx, project); err != nil {
+	verdicts, err := s.reviews.ListVerdicts(ctx, project)
+	if err != nil {
 		return WorkbenchSnapshot{}, err
 	}
-	for _, gap := range novel.CanonGaps(project) {
-		snapshot.PendingCanon = append(snapshot.PendingCanon, gap.Pending...)
+	current := novel.CurrentVerdicts(verdicts)
+	if snapshot.Findings, snapshot.Adjudications, err = s.validFindings(ctx, project, current); err != nil {
+		return WorkbenchSnapshot{}, err
 	}
 	plan, proposed, err := proposedPlan(project.Plan, snapshot.Decision)
 	if err != nil {
@@ -145,6 +146,7 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 	}
 	snapshot.Outline = buildOutline(plan, proposed, project.Manuscript, snapshot.Candidates, writingPlanID)
 	snapshot.Length = novel.LengthOf(project, snapshot.Run)
+	snapshot.Briefs = chapterBriefs(project, snapshot.Length.Final, current)
 	return snapshot, nil
 }
 
@@ -282,11 +284,9 @@ type WorkbenchFinding struct {
 
 // validFindings 返回各章当前裁定里未被接受的审阅发现（按章节顺序、每份裁定一次），
 // 以及仍然有效的接受记录。"当前裁定"与协调器共用 novel.CurrentVerdicts，两处不分叉。
-func (s *Query) validFindings(ctx context.Context, project projectdoc.Snapshot) ([]WorkbenchFinding, []model.Adjudication, error) {
-	verdicts, err := s.reviews.ListVerdicts(ctx, project)
-	if err != nil {
-		return nil, nil, err
-	}
+func (s *Query) validFindings(
+	ctx context.Context, project projectdoc.Snapshot, current map[string]*novel.StoredVerdict,
+) ([]WorkbenchFinding, []model.Adjudication, error) {
 	adjudications, err := s.reviews.ValidAdjudications(ctx, project)
 	if err != nil {
 		return nil, nil, err
@@ -298,7 +298,6 @@ func (s *Query) validFindings(ctx context.Context, project projectdoc.Snapshot) 
 			effective = append(effective, record)
 		}
 	}
-	current := novel.CurrentVerdicts(verdicts)
 	written := make(map[string]string, len(project.Manuscript)) // plan node id → 正文章节 id
 	for _, chapter := range project.Manuscript {
 		written[chapter.PlanNodeID] = chapter.ID

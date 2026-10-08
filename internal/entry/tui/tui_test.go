@@ -522,9 +522,9 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 				Blocks: []domainmodel.ManuscriptBlock{{ID: "b2", Text: "候选正文二"}},
 			},
 		}},
-		Canon: []domainmodel.CanonFact{{
-			ID: "f1", Kind: domainmodel.CanonState, SubjectID: "hero", Predicate: "state.mood",
-			Value: []byte(`"平静"`), SourceChapterID: "chapter-1",
+		Briefs: map[int]workbench.ChapterBrief{1: {
+			Requirements: []workbench.BriefRequirement{{ID: "directive:d1", Text: "节奏放缓", Status: domainmodel.CheckSatisfied}},
+			Facts:        []workbench.BriefFact{{Text: "「沈舟」心境：平静"}},
 		}},
 		Findings: []workbench.WorkbenchFinding{{ID: "review/0", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "chapter-1", Severity: domainmodel.FindingNote, Note: "伏笔呼应完整"}}},
 		Run:      &run,
@@ -538,9 +538,7 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 		}
 	}
 	m, _ = submit(t, m, "/v")
-	if !m.bench.reading || !strings.Contains(m.bench.body.View(), "创作意图") {
-		t.Fatal("detail report must show intent")
-	}
+	requireContains(t, m.bench.body.View(), "要求", "✓ 节奏放缓", "（已兑现）", "审阅意见", "伏笔呼应完整", "本章设定", "「沈舟」心境：平静", "创作意图")
 	m, _ = press(t, m, tea.KeyEsc)
 	m.bench.pane = benchPaneOutline
 	// 选中第 2 章（待确认）回车 → 读候选稿并标注。

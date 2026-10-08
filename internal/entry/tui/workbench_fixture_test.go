@@ -37,13 +37,14 @@ func studioModel(t *testing.T, width, height int) model {
 		"来客没有撑伞。雨从他的帽檐滴下来，却没有在地板上留下水迹。\n\n“有我的信吗？”\n\n陈渡看向柜台后的旧挂钟。秒针停在同一个地方，已经整整三分钟。",
 		"那封回信只有一行字。\n\n别在天亮前敲门。\n\n陈渡把信翻过来，背面是自己的笔迹。他记不起写过这句话，正如他记不起，为什么口袋里会有一把陌生的钥匙。",
 	}
+	summaries := []string{"", "", "回信只有一行字，背面是陈渡自己的笔迹。", "陈渡循着回信找到老宅，门后有人叫出他的名字；开门留到章末。"}
 	for i, title := range []string{"无人签收", "雨夜来客", "回信", "门后的声音"} {
 		state := workbench.ChapterConfirmed
 		if i == 3 {
 			state = workbench.ChapterInProgress
 		}
 		m.bench.snap.Outline = append(m.bench.snap.Outline, workbench.OutlineNode{
-			Node: domainmodel.PlanNode{ID: fmt.Sprint("c", i+1), Kind: domainmodel.PlanChapter, ParentID: "v1", Title: title}, Number: i + 1, State: state,
+			Node: domainmodel.PlanNode{ID: fmt.Sprint("c", i+1), Kind: domainmodel.PlanChapter, ParentID: "v1", Title: title, Summary: summaries[i]}, Number: i + 1, State: state,
 		})
 		if i < 3 {
 			m.bench.snap.Manuscript = append(m.bench.snap.Manuscript, domainmodel.ManuscriptChapter{
@@ -51,6 +52,24 @@ func studioModel(t *testing.T, width, height int) model {
 				Blocks: []domainmodel.ManuscriptBlock{{ID: "b", Text: strings.Repeat(texts[i]+"\n\n", 3)}},
 			})
 		}
+	}
+	suspense := workbench.BriefRequirement{ID: "directive:d1", Text: "保持悬疑氛围，不要过早揭示门后人的身份"}
+	m.bench.snap.Briefs = map[int]workbench.ChapterBrief{
+		3: {
+			Requirements: []workbench.BriefRequirement{
+				{ID: "intent:forbidden:0", Text: "主角死亡", Forbidden: true, Status: domainmodel.CheckSatisfied},
+				{ID: suspense.ID, Text: suspense.Text, Status: domainmodel.CheckViolated},
+			},
+			Facts: []workbench.BriefFact{{Text: "「陈渡」持有：一把陌生的钥匙"}, {Text: "「回信」笔迹：陈渡本人", Pending: true}},
+		},
+		4: {Requirements: []workbench.BriefRequirement{
+			{ID: "intent:forbidden:0", Text: "主角死亡", Forbidden: true}, suspense,
+			{ID: "directive:d2", Text: "用声音与一个具体动作承接悬念", Scope: "第 4 章"},
+		}},
+	}
+	m.bench.snap.Findings = []workbench.WorkbenchFinding{
+		{ID: "f1", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "ch-3", Severity: domainmodel.FindingBlocking, Note: "回信背面的笔迹提前揭示了门后人的身份"}},
+		{ID: "f2", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "ch-3", Severity: domainmodel.FindingNote, Note: "雨声意象连续三章出现"}},
 	}
 	m.bench.cursor = 4 // 行 0 是卷头，第 4 章在行 4
 	at := time.Now().Add(-12 * time.Second)

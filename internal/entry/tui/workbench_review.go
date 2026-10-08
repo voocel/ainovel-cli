@@ -290,15 +290,8 @@ func (m model) firstBlockingFinding() (workbench.WorkbenchFinding, bool) {
 	return workbench.WorkbenchFinding{}, false
 }
 
-func factLabel(value []byte) string {
-	var text string
-	if json.Unmarshal(value, &text) == nil {
-		return text
-	}
-	return string(value)
-}
-
-// detailReport 完整详情（/view 全屏）：本章规划、已确认事实、审阅发现、创作意图与要求。
+// detailReport 完整详情（/view 全屏）：选中章的全部依据（与右栏同序，放不下的在这里读全），
+// 再是全书的创作意图与要求。
 func (m model) detailReport() string {
 	bench := m.bench
 	number := m.selectedChapterNumber()
@@ -308,44 +301,47 @@ func (m model) detailReport() string {
 	}
 	var view strings.Builder
 	view.WriteString(styleTitle.Render(title) + "\n")
+	section := func(name string) { view.WriteString("\n" + styleTitle.Render(name) + "\n") }
 	if node, ok := m.outlineChapter(number); ok && node.Node.Summary != "" {
-		view.WriteString("\n" + styleTitle.Render("本章规划") + "\n" + node.Node.Summary + "\n")
+		section("本章规划")
+		view.WriteString(node.Node.Summary + "\n")
 	}
-	chapterID := m.selectedChapterID()
-	var facts []string
-	for _, fact := range bench.snap.Canon {
-		if chapterID == "" || fact.SourceChapterID != chapterID {
-			continue
-		}
-		label := factLabel(fact.Value)
-		if slices.Contains(bench.snap.PendingCanon, fact.ID) {
-			label = styleWarn.Render("待核验 ") + label
-		}
-		facts = append(facts, label)
-	}
-	if len(facts) > 0 {
-		view.WriteString("\n" + styleTitle.Render("已确认事实") + "\n")
-		for _, fact := range facts {
-			view.WriteString(styleHint.Render("· ") + fact + "\n")
+	brief := bench.snap.Briefs[number]
+	if len(brief.Requirements) > 0 {
+		section("要求")
+		for _, requirement := range brief.Requirements {
+			view.WriteString(checkMark(requirement.Status) + " " + requirementText(requirement) + styleHint.Render("（"+checkWord(requirement.Status)+"）") + "\n")
 		}
 	}
-	findings := 0
-	for _, finding := range bench.snap.Findings {
-		if chapterID == "" || finding.ChapterID != chapterID {
-			continue
+	if chapterID := m.selectedChapterID(); chapterID != "" {
+		findings := 0
+		for _, finding := range bench.snap.Findings {
+			if finding.ChapterID != chapterID {
+				continue
+			}
+			if findings == 0 {
+				section("审阅意见")
+			}
+			marker := "· "
+			if finding.Severity == domainmodel.FindingBlocking {
+				marker = "! "
+			}
+			view.WriteString(styleHint.Render(marker) + finding.Note + "\n")
+			findings++
 		}
-		if findings == 0 {
-			view.WriteString("\n" + styleTitle.Render("审阅发现") + "\n")
+	}
+	if len(brief.Facts) > 0 {
+		section("本章设定")
+		for _, fact := range brief.Facts {
+			mark := styleHint.Render("· ")
+			if fact.Pending {
+				mark = styleWarn.Render("待核验 ")
+			}
+			view.WriteString(mark + fact.Text + "\n")
 		}
-		marker := "· "
-		if finding.Severity == domainmodel.FindingBlocking {
-			marker = "! "
-		}
-		view.WriteString(styleHint.Render(marker) + finding.Note + "\n")
-		findings++
 	}
 	intent := bench.snap.Intent
-	view.WriteString("\n" + styleTitle.Render("创作意图") + "\n")
+	section("创作意图")
 	if len(intent.Required) > 0 {
 		view.WriteString(styleHint.Render("必须 ") + strings.Join(intent.Required, "、") + "\n")
 	}
@@ -359,7 +355,7 @@ func (m model) detailReport() string {
 		view.WriteString(styleHint.Render(fmt.Sprintf("锁定 %d 处", len(bench.snap.Ownership))) + "\n")
 	}
 	if len(bench.snap.Directives) > 0 {
-		view.WriteString("\n" + styleTitle.Render("创作要求") + "\n")
+		section("创作要求")
 		for _, directive := range bench.snap.Directives {
 			view.WriteString(styleHint.Render("· ") + directive.Text + "（" + m.directiveScopeLabel(directive.Scope) + "）\n")
 		}

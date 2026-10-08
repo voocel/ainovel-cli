@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/voocel/ainovel-cli/internal/app/novel"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
@@ -110,5 +111,60 @@ func TestPendingProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 	decision.Stale = true
 	if plan, proposed, err = proposedPlan(project.Plan, decision); err != nil || len(plan) != 3 || len(proposed) != 0 {
 		t.Fatalf("stale proposal must not project: plan=%d proposed=%d err=%v", len(plan), len(proposed), err)
+	}
+}
+
+// 一章的依据：覆盖它的要求（意图、全书与本章要求）带着当前裁定的结论，没审过的章没有
+// 结论；这一章记下的设定用故事语言，正文改过的标待核验。
+func TestChapterBriefsCarryCoveringRequirementsAndChecks(t *testing.T) {
+	plan := []model.PlanNode{{ID: "v", Kind: model.PlanVolume, Order: 1, Title: "雨城"}}
+	for i := 1; i <= 3; i++ {
+		plan = append(plan, model.PlanNode{ID: fmt.Sprint("p", i), Kind: model.PlanChapter, ParentID: "v", Order: i, Title: fmt.Sprint("第", i, "章")})
+	}
+	project := projectdoc.Snapshot{
+		Plan:     plan,
+		Intent:   model.Intent{Required: []string{"保持悬疑"}, Forbidden: []string{"主角死亡"}},
+		Entities: []model.Entity{{ID: "hero", Kind: model.EntityCharacter, Name: "陈渡"}},
+		Directives: []model.Directive{
+			{ID: "d1", Scope: model.DirectiveScopeProject, Text: "每章结尾留钩子", Status: model.DirectiveActive},
+			{ID: "d2", Scope: model.DirectiveScopeChapters(2, 2), Text: "门后的人不露脸", Status: model.DirectiveActive},
+		},
+		Manuscript: []model.ManuscriptChapter{{ID: "c1", PlanNodeID: "p1", Number: 1}, {ID: "c2", PlanNodeID: "p2", Number: 2}},
+		Canon: []model.CanonFact{
+			{ID: "f1", SubjectID: "hero", Predicate: "职业", Value: json.RawMessage(`"邮差"`), SourceChapterID: "c1"},
+			{ID: "f2", SubjectID: "hero", Predicate: "持有", Value: json.RawMessage(`"一把陌生的钥匙"`), SourceChapterID: "c2"},
+		},
+		// 第 2 章正文在 f2 入账之后改过：f2 待核验。
+		Index: projectdoc.DocumentIndex{
+			model.DocumentRef{Kind: model.DocumentManuscript, ID: "c2"}.Key(): {Revision: 5},
+			model.DocumentRef{Kind: model.DocumentCanon, ID: "f2"}.Key():      {Revision: 3},
+		},
+	}
+	window := &novel.StoredVerdict{Key: "review-1", Verdict: model.ReviewVerdict{ChapterIDs: []string{"c1", "c2"}, Checks: []model.RequirementCheck{
+		{ID: "intent:required:0", Status: model.CheckSatisfied},
+		{ID: "directive:d1", Status: model.CheckPending},
+		{ID: "directive:d2", Status: model.CheckViolated},
+	}}}
+	briefs := chapterBriefs(project, 0, map[string]*novel.StoredVerdict{"c1": window, "c2": window})
+
+	line := func(r BriefRequirement) string {
+		return fmt.Sprintf("%s|%s|%t|%s", r.Text, r.Scope, r.Forbidden, r.Status)
+	}
+	var second, third []string
+	for _, r := range briefs[2].Requirements {
+		second = append(second, line(r))
+	}
+	for _, r := range briefs[3].Requirements {
+		third = append(third, line(r))
+	}
+	if want := []string{"保持悬疑||false|satisfied", "主角死亡||true|", "每章结尾留钩子||false|pending", "门后的人不露脸|第 2 章|false|violated"}; !slices.Equal(second, want) {
+		t.Fatalf("chapter 2 requirements = %q, want %q", second, want)
+	}
+	if want := []string{"保持悬疑||false|", "主角死亡||true|", "每章结尾留钩子||false|"}; !slices.Equal(third, want) {
+		t.Fatalf("an unreviewed chapter has no checks and only its covering requirements: %q", third)
+	}
+	if facts := briefs[2].Facts; len(facts) != 1 || facts[0].Text != "「陈渡」持有（第 2 章）：一把陌生的钥匙" || !facts[0].Pending ||
+		len(briefs[1].Facts) != 1 || briefs[1].Facts[0].Pending {
+		t.Fatalf("facts = %+v / %+v", briefs[1].Facts, briefs[2].Facts)
 	}
 }

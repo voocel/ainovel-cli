@@ -155,6 +155,8 @@ func (v Directive) DescribeScope(planLabel func(id string) string) string {
 		return v.Scope
 	case scope.planNodeID != "":
 		return planLabel(scope.planNodeID)
+	case scope.to > 0 && scope.from == scope.to:
+		return fmt.Sprintf("第 %d 章", scope.from)
 	case scope.to > 0:
 		return fmt.Sprintf("第 %d–%d 章", scope.from, scope.to)
 	case scope.from > 0:

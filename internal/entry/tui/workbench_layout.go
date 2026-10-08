@@ -22,7 +22,7 @@ const (
 	directoryNoteRows = 3   // 目录底部：空行 + 字数/要求数 + 推进方式
 	benchPad          = 2   // 主栏左右留白
 	mainTargetWidth   = 120 // 有右栏时主栏内宽先保到这里，余量给右栏
-	railThreshold     = 170 // 从这个宽度起显示右栏「本轮运行」
+	railThreshold     = 170 // 从这个宽度起显示右栏「写作依据」
 	railMinWidth      = 32
 	railMaxWidth      = 48
 
@@ -102,7 +102,7 @@ func (m model) viewBench() string {
 	left, main := m.directoryColumn(l), m.mainColumn(l)
 	var rail []string
 	if l.railWidth > 0 {
-		rail = m.runColumn(l)
+		rail = m.railColumn(l)
 	}
 	separator := benchTheme.Border.Render("│")
 	for i := 0; i < l.bodyHeight; i++ {

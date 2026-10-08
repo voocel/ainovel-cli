@@ -83,6 +83,28 @@ func requirements(project projectdoc.Snapshot, final int) (list []requirement, d
 	return list, dropped
 }
 
+// ChapterRequirement 是覆盖某一章的一项要求：与审阅闸门同一份清单、同一覆盖规则。
+type ChapterRequirement struct {
+	model.Requirement
+	Scope     string // 用户要求的作用域（故事语言）；意图条目与全书要求为空
+	Forbidden bool   // 意图里的禁止项
+}
+
+// RequirementsByChapter 按章号列出覆盖各已规划章节的要求；final 是全书章数（0 = 未收官）。
+func RequirementsByChapter(project projectdoc.Snapshot, final int) map[int][]ChapterRequirement {
+	list, _ := requirements(project, final)
+	planned := len(model.ChapterPlansInOrder(project.Plan))
+	byChapter := make(map[int][]ChapterRequirement, planned)
+	for _, r := range list {
+		for n := 1; n <= planned; n++ {
+			if r.covers(n) {
+				byChapter[n] = append(byChapter[n], ChapterRequirement{Requirement: r.Requirement, Scope: r.scope, Forbidden: r.universal})
+			}
+		}
+	}
+	return byChapter
+}
+
 // finalePrefix 是收官要求 ID 的前缀，后缀是终局与伏笔集合的摘要。
 const finalePrefix = "book:finale:"
 
