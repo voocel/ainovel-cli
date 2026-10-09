@@ -7,8 +7,8 @@ import (
 
 // schemaVersion 是当前唯一支持的库结构版本。v1 没有历史数据，结构演进直接改
 // schema 并升版本号；不保留迁移阶梯，版本不符即拒绝打开。存储的 JSON 载荷格式变化同样
-// 升版本（v6：D67 删除规划请求章数与运行策略的窗口字段，旧库的任务输入不再可读）。
-const schemaVersion = 6
+// 升版本（v7：事件带模型用量列）。
+const schemaVersion = 7
 
 // unsupportedSchema 说明库结构版本不符以及怎样重新开始：v1 不迁移旧库（D38），旧库改名
 // 保留备查，程序在原位置新建空库。
@@ -139,6 +139,7 @@ var schema = []string{
 	`CREATE INDEX operations_queue_by_executor
 		ON operations (state, executor, priority DESC, created_at_unix_ms, id)`,
 	`CREATE INDEX operations_by_run ON operations (run_id) WHERE run_id != ''`,
+	`CREATE INDEX operations_by_target ON operations (target_kind, target_id)`,
 	`CREATE TABLE operation_dependencies (
 		operation_id TEXT NOT NULL,
 		dependency_id TEXT NOT NULL,
@@ -167,6 +168,10 @@ var schema = []string{
 		attempt INTEGER NOT NULL CHECK (attempt >= 0),
 		idempotency_key TEXT NOT NULL,
 		kind TEXT NOT NULL,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cost REAL NOT NULL DEFAULT 0,
 		payload BLOB NOT NULL,
 		payload_digest TEXT NOT NULL,
 		created_at_unix_ms INTEGER NOT NULL,
@@ -174,6 +179,10 @@ var schema = []string{
 		UNIQUE (operation_id, idempotency_key),
 		FOREIGN KEY (operation_id) REFERENCES operations (id)
 	) STRICT`,
+	// 创作团队按尝试汇总用量与起止只读这个覆盖索引，不读事件载荷（消息载荷动辄几十 KB）。
+	`CREATE INDEX operation_events_usage ON operation_events (
+		operation_id, attempt, kind, created_at_unix_ms, input_tokens, output_tokens, cache_read_tokens, cost
+	)`,
 	// 工件元数据（D47）：内容按摘要寻址落在对象目录，行只记归属与身份。
 	`CREATE TABLE artifacts (
 		id TEXT PRIMARY KEY,

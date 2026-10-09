@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestEnsureSchemaIsIdempotentAndRejectsForeignVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen at current version must succeed: %v", err)
 	}
-	if _, err := second.db.ExecContext(ctx, "PRAGMA user_version = 7"); err != nil {
+	if _, err := second.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion+1)); err != nil {
 		t.Fatalf("mark foreign version: %v", err)
 	}
 	if err := second.Close(); err != nil {

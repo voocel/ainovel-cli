@@ -3,18 +3,16 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/ainovel-cli/internal/app/workbench"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
-	"github.com/voocel/ainovel-cli/internal/infra/activity"
 )
 
-// 右栏（页面设计 §3）上下两块，性质不同：上块「写作依据」是权威快照，跟着目录光标走——
-// 正在看的那一章（或卷、弧、全书）依据什么写：规划、覆盖它的要求与审阅结论、审阅意见、
-// 这一章记下的设定，重启、空闲时照样完整；下块「本轮」是易失的实时活动，钉在底部——创作
-// 团队里谁在干活、用哪个模型、各自用了多少与多久，最后是合计。运行明细在 /diag。
+// 右栏（页面设计 §3）上下两块：上块「写作依据」跟着目录光标走——正在看的那一章（或卷、
+// 弧、全书）依据什么写：规划、覆盖它的要求与审阅结论、审阅意见、这一章记下的设定；下块
+// 「创作团队」钉在底部——谁在干活、用哪个模型、这本书上各自用了多少与多久，最后是合计。
+// 两块都来自落盘数据，重启、空闲时照样完整。运行明细在 /diag。
 
 // railLimits 是一段文字最多占几行：先按宽松的排，放不下再收紧，仍放不下才指向 /view。
 type railLimits struct{ summary, item int }
@@ -24,11 +22,11 @@ var (
 	railCompact = railLimits{summary: 4, item: 2}
 )
 
-// railColumn 右栏：上块依据从顶部排，下块本轮钉在底部，中间留白。
+// railColumn 右栏：上块依据从顶部排，下块创作团队钉在底部，中间留白。
 func (m model) railColumn(l benchLayout) []string {
 	width := l.railWidth - 2
-	run := m.runCard(width)
-	room := l.bodyHeight - len(run)
+	crew := m.crewCard(width)
+	room := l.bodyHeight - len(crew)
 	lines := m.briefCard(width, railRoomy)
 	if len(lines) > room {
 		lines = m.briefCard(width, railCompact)
@@ -39,7 +37,7 @@ func (m model) railColumn(l benchLayout) []string {
 	for len(lines) < room {
 		lines = append(lines, "")
 	}
-	lines = append(lines, run...)
+	lines = append(lines, crew...)
 	for i := range lines {
 		lines[i] = " " + fitLine(lines[i], width)
 	}
@@ -256,120 +254,75 @@ func (m model) bookBrief(r *railText) {
 	}
 }
 
-// runCard 本轮：标题线右端是花费（有定价时）与用时；其下是创作团队，每个角色两行；最后是
-// 合计，连接重试过时再加一行。协调器按缺口派活，策划、作者、编辑一次一个接力，所以同一
-// 时刻至多一个角色亮着。没有实时活动时整块不出现。
-func (m model) runCard(width int) []string {
-	feed, ok := m.activityFeed()
-	if !ok {
+// crewCard 创作团队在这本书上的累计：标题线右端是花费（有定价时）与用时；其下每个角色
+// 两行；最后是合计。数字来自落盘的执行记录，重启后照样完整。协调器按缺口派活，策划、
+// 作者、编辑一次一个接力，所以同一时刻至多一个角色亮着。还没有执行记录时整块不出现。
+func (m model) crewCard(width int) []string {
+	usage := m.bench.snap.Usage
+	if len(usage.Roles) == 0 {
 		return nil
 	}
-	note := formatDuration(workedTime(feed))
-	if feed.Usage.Cost > 0 {
-		note = formatCost(feed.Usage.Cost) + " · " + note
+	note := formatDuration(usage.Worked)
+	if usage.Total.Cost > 0 {
+		note = formatCost(usage.Total.Cost) + " · " + note
 	}
-	lines := []string{"", railRule("本轮", benchTheme.Muted.Render(note), width)}
+	lines := []string{"", railRule("创作团队", benchTheme.Muted.Render(note), width)}
 	for _, role := range m.api.Models.Roles()[1:] {
-		lines = append(lines, m.crewLines(feed, role, width)...)
+		lines = append(lines, m.crewLines(role, width)...)
 	}
-	lines = append(lines, benchTheme.Muted.Render("合计 "+tokensLine(feed.Usage)))
-	retries := 0
-	for _, task := range feed.Tasks {
-		retries += task.Retries
-	}
-	if retries > 0 {
-		lines = append(lines, benchTheme.Warning.Render(fmt.Sprintf("连接重试 %d 次", retries)))
-	}
-	return lines
+	return append(lines, benchTheme.Muted.Render("合计 "+tokensLine(usage.Total)))
 }
 
-// crewLines 一个角色两行：首行是状态、名字、它此刻绑定的模型与本轮累计用时，在干活的角色
-// 名字亮起；次行是它名下任务的用量与缓存命中，有定价时右侧是花费。累计取活动快照的角色
-// 累计（随事件累加，不受任务清单保留上限影响），状态取它最后一项任务。角色以执行任务的
-// Worker 为准（活动事件带来），不从任务种类另推。
-func (m model) crewLines(feed activity.Snapshot, role string, width int) []string {
-	var stats activity.RoleUsage
-	for _, entry := range feed.Roles {
-		if entry.Role == role {
-			stats = entry
-		}
-	}
-	var last *activity.Task
-	for i := range feed.Tasks {
-		if feed.Tasks[i].Role == role {
-			last = &feed.Tasks[i]
-		}
-	}
-	model := benchTheme.Muted.Render(m.api.Models.Current(role).Model)
-	if last == nil && stats.Worked == 0 && stats.Usage == (activity.UsageTotals{}) {
+// crewLines 一个角色两行：首行是状态、名字、模型与累计用时，正在干活的角色名字亮起；
+// 次行是它名下的用量与缓存命中，有定价时右侧是花费。出过场的角色写它最近一次实际用的
+// 模型，没出场的写它此刻的绑定。
+func (m model) crewLines(role string, width int) []string {
+	stats, appeared := m.bench.snap.Usage.Roles[role]
+	if !appeared {
 		return []string{
-			benchTheme.Muted.Render("○ ") + benchTheme.Text.Render(roleNames[role]) + " " + model,
-			"  " + benchTheme.Muted.Render("本轮还没出场"),
+			benchTheme.Muted.Render("○ ") + benchTheme.Text.Render(roleNames[role]) + " " + benchTheme.Muted.Render(m.api.Models.Current(role).Model),
+			"  " + benchTheme.Muted.Render("还没出场"),
 		}
 	}
-	mark, name, worked := styleNotice.Render("✓"), benchTheme.Text.Render(roleNames[role]), stats.Worked
-	if last != nil {
-		mark = m.taskMark(*last)
-		if !last.Done {
-			worked += taskDuration(*last)
-			if m.bench.writing {
-				name = styleFocus.Render(roleNames[role])
-			}
-		}
+	name := benchTheme.Text.Render(roleNames[role])
+	if stats.State == domainmodel.OperationRunning && m.bench.writing {
+		name = styleFocus.Render(roleNames[role])
 	}
 	price := ""
 	if stats.Usage.Cost > 0 {
 		price = benchTheme.Muted.Render(formatCost(stats.Usage.Cost))
 	}
 	return []string{
-		alignRight(mark+" "+name+" "+model, benchTheme.Muted.Render(formatDuration(worked)), width),
+		alignRight(m.stateMark(stats.State)+" "+name+" "+benchTheme.Muted.Render(stats.Model), benchTheme.Muted.Render(formatDuration(stats.Worked)), width),
 		alignRight("  "+benchTheme.Muted.Render(tokensLine(stats.Usage)), price, width),
 	}
 }
 
-// taskMark 任务状态：完成、失败、进行中；创作停下而没等到收尾的是空心点。
-func (m model) taskMark(task activity.Task) string {
-	switch {
-	case task.Done && task.Err != "":
-		return benchTheme.Error.Render("!")
-	case task.Done:
-		return styleNotice.Render("✓")
-	case m.bench.writing:
-		return benchTheme.Accent.Render("◉")
-	default:
+// stateMark 角色最近一项任务的状态：进行中、失败、停下没收尾，其余（完成、等你确认、
+// 被后继取代）都算做完了这一步。
+func (m model) stateMark(state domainmodel.OperationState) string {
+	switch state {
+	case domainmodel.OperationRunning:
+		if m.bench.writing {
+			return benchTheme.Accent.Render("◉")
+		}
 		return benchTheme.Muted.Render("◦")
-	}
-}
-
-func taskDuration(task activity.Task) time.Duration {
-	switch {
-	case task.StartedAt.IsZero():
-		return 0
-	case task.Done:
-		return task.EndedAt.Sub(task.StartedAt)
+	case domainmodel.OperationFailed:
+		return benchTheme.Error.Render("!")
+	case domainmodel.OperationCancelled, domainmodel.OperationPaused:
+		return benchTheme.Muted.Render("◦")
 	default:
-		return time.Since(task.StartedAt)
+		return styleNotice.Render("✓")
 	}
 }
 
 // tokensLine 「↑输入 ↓输出 · 缓存 命中率」。
-func tokensLine(usage activity.UsageTotals) string {
+func tokensLine(usage domainmodel.Usage) string {
 	line := fmt.Sprintf("↑%s ↓%s", formatTokens(usage.Input), formatTokens(usage.Output))
 	if usage.CacheRead > 0 && usage.Input > 0 {
 		line += fmt.Sprintf(" · 缓存 %.0f%%", 100*float64(usage.CacheRead)/float64(usage.Input))
 	}
 	return line
-}
-
-// workedTime 本轮实际执行时长：已结束任务之和 + 进行中任务到现在。
-func workedTime(feed activity.Snapshot) time.Duration {
-	worked := feed.Worked
-	for _, task := range feed.Tasks {
-		if !task.Done && !task.StartedAt.IsZero() {
-			worked += time.Since(task.StartedAt)
-		}
-	}
-	return worked
 }
 
 // railRule 右栏两块的标题线：与「AI 创作现场」同一写法，右端可带说明。

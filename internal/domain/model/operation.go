@@ -328,5 +328,23 @@ type OperationEvent struct {
 	IdempotencyKey string          `json:"idempotency_key"`
 	Kind           string          `json:"kind"`
 	Payload        json.RawMessage `json:"payload"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// Usage 是这条事件自身花掉的模型用量：一条模型消息、一次单独的判断；其余事件为零。
+	// 用量按事件落列，汇总不必解析载荷。
+	Usage     Usage     `json:"usage,omitzero"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Usage 是模型调用的 token 与花费；Cost 只计有定价的部分。
+type Usage struct {
+	Input     int     `json:"input"`
+	Output    int     `json:"output"`
+	CacheRead int     `json:"cache_read"`
+	Cost      float64 `json:"cost,omitempty"`
+}
+
+func (u *Usage) Add(other Usage) {
+	u.Input += other.Input
+	u.Output += other.Output
+	u.CacheRead += other.CacheRead
+	u.Cost += other.Cost
 }

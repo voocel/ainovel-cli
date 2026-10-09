@@ -85,35 +85,22 @@ func studioModel(t *testing.T, width, height int) model {
 			{ID: 2, OperationID: "writing", Kind: activity.ToolStart, Tool: "workspace_put_chapter", Bytes: 2048, At: at.Add(10 * time.Second)},
 		},
 		Tasks: []activity.Task{
-			{
-				OperationID: "planning", Label: "全书规划", Kind: string(domainmodel.OperationDevelopPlan), Role: "architect", Done: true,
-				StartedAt: at.Add(-10 * time.Minute), EndedAt: at.Add(-6 * time.Minute), Turns: 4, Calls: 3,
-				Usage: activity.UsageTotals{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31},
-			},
-			{
-				OperationID: "writing", Label: "第 4 章写作", Kind: string(domainmodel.OperationWriteChapter), Role: "writer",
-				Phase: activity.Prose, StartedAt: at, Scope: activity.Scope{ChapterNumber: 4}, Turns: 3, Calls: 10, Retries: 1,
-				Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11},
-			},
+			{OperationID: "planning", Label: "全书规划", Done: true},
+			{OperationID: "writing", Label: "第 4 章写作", Scope: activity.Scope{ChapterNumber: 4}},
 		},
-		Models: []activity.ModelUsage{
-			{Model: "deepseek-v4-pro", Provider: "deepseek", Messages: 3, FirstKind: string(domainmodel.OperationDevelopPlan),
-				FirstAt: at.Add(-10 * time.Minute), LastAt: at.Add(-6 * time.Minute),
-				Usage: activity.UsageTotals{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31}},
-			{Model: "deepseek-v4-flash", Provider: "deepseek", Messages: 7, FirstKind: string(domainmodel.OperationWriteChapter),
-				FirstAt: at.Add(-5 * time.Minute), LastAt: at,
-				Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11}},
-		},
-		Roles: []activity.RoleUsage{
-			{Role: "architect", Worked: 4 * time.Minute, Usage: activity.UsageTotals{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31}},
-			{Role: "writer", Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11}},
-		},
-		ActiveModel: "deepseek-v4-flash", Worked: 4 * time.Minute,
 		Output: []activity.OutputBlock{
 			{ID: 1, Version: 1, OperationID: "writing", TaskLabel: "第 4 章写作", Kind: activity.Thinking, At: at.Add(time.Second), Scope: activity.Scope{ChapterNumber: 4}, Text: []byte(thinking)},
 			{ID: 2, Version: 1, OperationID: "writing", TaskLabel: "第 4 章写作", Kind: activity.Prose, At: at.Add(10 * time.Second), Scope: activity.Scope{ChapterNumber: 4}, Text: []byte(prose)},
 		},
-		Usage: activity.UsageTotals{Input: 233000, Output: 58000, CacheRead: 186400, Cost: 0.42},
+	}
+	m.bench.snap.Usage = workbench.TeamUsage{
+		Total: domainmodel.Usage{Input: 233000, Output: 58000, CacheRead: 186400, Cost: 0.42}, Worked: 4*time.Minute + 12*time.Second,
+		Roles: map[string]workbench.RoleUsage{
+			"architect": {Usage: domainmodel.Usage{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31}, Worked: 4 * time.Minute,
+				Model: "deepseek-v4-pro", State: domainmodel.OperationSucceeded},
+			"writer": {Usage: domainmodel.Usage{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11}, Worked: 12 * time.Second,
+				Model: "deepseek-v4-flash", State: domainmodel.OperationRunning},
+		},
 	}
 	return m
 }
@@ -162,7 +149,7 @@ func planningModel(t *testing.T, width, height int) model {
 	m.bench.snap.CurrentPhase = "正在规划故事蓝图"
 	at := time.Now().Add(-75 * time.Second)
 	m.bench.activity.OperationID = "planning"
-	m.bench.activity.Tasks = []activity.Task{{OperationID: "planning", Label: "全书规划", Kind: string(domainmodel.OperationDevelopPlan), StartedAt: at}}
+	m.bench.activity.Tasks = []activity.Task{{OperationID: "planning", Label: "全书规划"}}
 	m.bench.activity.Entries = []activity.Entry{
 		{ID: 1, OperationID: "planning", Kind: activity.ToolStart, Tool: "authority_read", Detail: "「陈渡」", Done: true, At: at.Add(20 * time.Second), DoneAt: at.Add(21 * time.Second)},
 		{ID: 2, OperationID: "planning", Kind: activity.ToolStart, Tool: "proposal_submit", Bytes: 18600, At: at.Add(30 * time.Second)},

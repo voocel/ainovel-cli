@@ -449,11 +449,8 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if !ok || feed.RunID != operation.RunID || feed.OperationID != operation.ID {
 		t.Fatalf("activity feed identity = %#v ok=%v", feed, ok)
 	}
-	if len(feed.Tasks) != 1 || !feed.Tasks[0].Done || feed.Tasks[0].Err != "" || feed.Tasks[0].OperationID != operation.ID {
+	if len(feed.Tasks) != 1 || !feed.Tasks[0].Done || feed.Tasks[0].OperationID != operation.ID {
 		t.Fatalf("successful execution did not close its task: %+v", feed.Tasks)
-	}
-	if feed.Tasks[0].Role != "editor" {
-		t.Fatalf("the task must carry the role of the worker that ran it: %q", feed.Tasks[0].Role)
 	}
 	var rejected, accepted int
 	for _, entry := range feed.Entries {
@@ -469,16 +466,18 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if rejected != 2 || accepted != 1 {
 		t.Fatalf("verdict_submit activity: rejected=%d accepted=%d entries=%#v", rejected, accepted, feed.Entries)
 	}
-	// 成功提交直接正常收尾，不再请求第五次模型回应。
-	if len(model.Requests()) != 4 || feed.Usage.Input != 40 || feed.Usage.Output != 12 || feed.Usage.Cost < 0.039 || feed.Usage.Cost > 0.041 {
-		t.Fatalf("usage totals = %#v", feed.Usage)
+	// 成功提交直接正常收尾，不再请求第五次模型回应。用量随消息落盘，创作团队按尝试汇总：
+	// 角色是执行它的 Worker，花费按绑定价目。
+	if len(model.Requests()) != 4 {
+		t.Fatalf("requests = %d", len(model.Requests()))
 	}
-	// 用量按服务端上报的模型归档（右栏按模型分列的依据）。
-	if len(feed.Models) != 1 || feed.Models[0].Model != "verdict-model" || feed.Models[0].Provider != "test" || feed.Models[0].Messages != 4 || feed.ActiveModel != "verdict-model" {
-		t.Fatalf("per-model usage = %#v active=%q", feed.Models, feed.ActiveModel)
+	attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("run attempts = %+v, %v", attempts, err)
 	}
-	if task := feed.Tasks[0]; task.Turns != 4 || task.Calls != 4 {
-		t.Fatalf("task counters = %+v", task)
+	if a := attempts[0]; a.Role != "editor" || a.Usage.Input != 40 || a.Usage.Output != 12 || a.Usage.Cost < 0.039 || a.Usage.Cost > 0.041 ||
+		a.StartedAt.IsZero() || a.LastAt.Before(a.StartedAt) || !a.Current || a.State != domainmodel.OperationRunning {
+		t.Fatalf("persisted attempt usage = %+v", a)
 	}
 }
 
@@ -698,7 +697,7 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 		t.Fatalf("report = %#v, json schema = %v", report, usedJSONSchema(model))
 	}
 	// 收尾阶段的模型判断同样进活动流：画面上是"核对语义合规"这一步与它的思考，
-	// 结构化输出只报接收进度，用量记入本轮。
+	// 结构化输出只报接收进度；用量随判断结果落盘，并入所在尝试。
 	feed, ok := hub.Snapshot(operation.Target.ID)
 	if !ok || len(feed.Entries) != 1 || feed.Entries[0].Tool != "semantic_compliance" || !feed.Entries[0].Done ||
 		feed.Entries[0].Err != "" || feed.Entries[0].Bytes != len(`{"status":"pass","findings":[]}`) {
@@ -707,8 +706,12 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if len(feed.Output) != 1 || feed.Output[0].Kind != activity.Thinking || string(feed.Output[0].Text) != "底线是不伤无辜，候选正文没有越界" {
 		t.Fatalf("compliance thinking = %#v", feed.Output)
 	}
-	if feed.Usage.Input != 10 || feed.Usage.Output != 3 || feed.Waiting || len(feed.Models) != 1 || feed.Models[0].Provider != "test" {
-		t.Fatalf("compliance usage = %#v models = %#v waiting = %v", feed.Usage, feed.Models, feed.Waiting)
+	if feed.Waiting {
+		t.Fatal("a finished judgment must not leave the feed waiting")
+	}
+	if attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID); err != nil || len(attempts) != 1 ||
+		attempts[0].Usage != (domainmodel.Usage{Input: 10, Output: 3}) || attempts[0].Attempt != operation.Attempt {
+		t.Fatalf("compliance usage must count toward its attempt: %+v, %v", attempts, err)
 	}
 	events, err := authorityStore.ListOperationEvents(ctx, operation.ID)
 	if err != nil {
@@ -717,12 +720,13 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if len(events) != 2 || events[1].Kind != "semantic.compliance_checked" {
 		t.Fatalf("events = %#v", events)
 	}
-	// usage 经 llm.Structured 回传后落审计事件，不能在收口时丢掉。
+	// 用量经 llm.Structured 回传后记在审计事件上，不能在收口时丢掉；判断不经过
+	// agent.run_started，载荷记下实际用的模型。
 	var checked struct {
-		Usage litellm.Usage `json:"usage"`
+		Model string `json:"model"`
 	}
-	if err := json.Unmarshal(events[1].Payload, &checked); err != nil || checked.Usage.InputTokens != 10 || checked.Usage.OutputTokens != 3 {
-		t.Fatalf("usage not recorded in compliance event: %s", events[1].Payload)
+	if err := json.Unmarshal(events[1].Payload, &checked); err != nil || checked.Model == "" || events[1].Usage != (domainmodel.Usage{Input: 10, Output: 3}) {
+		t.Fatalf("compliance event lacks its model or usage: %s %+v", events[1].Payload, events[1].Usage)
 	}
 }
 

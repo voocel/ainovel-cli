@@ -17,7 +17,7 @@ const (
 	benchHeaderRows   = 2   // 标题/状态 + 进度分隔线
 	benchFooterRows   = 3   // 分隔线（含反馈）+ 输入 + 提示
 	benchTabRows      = 2   // 标签 + 分隔线
-	sceneBodyRows     = 8   // 现场条正文：本轮时间线的最后几行，进行中的步骤钉在最后
+	sceneBodyRows     = 8   // 现场条正文：创作时间线的最后几行，进行中的步骤钉在最后
 	benchCardRows     = 4   // 决定卡：标题线、原因、变更摘要、操作
 	directoryNoteRows = 3   // 目录底部：空行 + 字数/要求数 + 推进方式
 	benchPad          = 2   // 主栏左右留白
@@ -230,7 +230,7 @@ func (m model) viewNote() string {
 	case b.view == viewActivity && b.activityHeld != nil:
 		return "已暂停跟随 · /follow 回到最新"
 	case b.view == viewActivity:
-		return "本轮创作过程 · 跟随最新"
+		return "创作过程 · 跟随最新"
 	case b.proseHold:
 		return "已暂停跟随 · /follow 回到最新"
 	case m.proseSource().live:
@@ -255,7 +255,7 @@ func (m model) decisionCard(width int) []string {
 	d := m.bench.decision
 	bar := benchTheme.Warning.Render("▎ ")
 	title := "◇ 等你决定"
-	summary, actions := "", "/continue 继续 · /budget 调整修订预算 · /stop 结束本轮"
+	summary, actions := "", "/continue 继续 · /budget 调整修订预算 · /stop 停止创作"
 	if d.hasProposal {
 		title = "◇ " + m.reviewTarget() + " · 等待你确认"
 		summary = m.candidateSummary()
@@ -376,13 +376,13 @@ func (m model) composerContext() string {
 	return benchTheme.Accent.Render("要求 · " + target)
 }
 
-// usageLabel 模型名与本轮累计用量；没有用量、或右栏已在分列展示时只显示模型。
+// usageLabel 模型名与全书累计用量；没有用量、或右栏已在分列展示时只显示模型。
 func (m model) usageLabel(l benchLayout) string {
 	parts := []string{m.bindingLabel()}
-	if feed, ok := m.activityFeed(); ok && feed.Usage.Input > 0 && l.railWidth == 0 {
-		parts = append(parts, tokensLine(feed.Usage))
-		if feed.Usage.Cost > 0 {
-			parts = append(parts, formatCost(feed.Usage.Cost))
+	if total := m.bench.snap.Usage.Total; total.Input > 0 && l.railWidth == 0 {
+		parts = append(parts, tokensLine(total))
+		if total.Cost > 0 {
+			parts = append(parts, formatCost(total.Cost))
 		}
 	}
 	return benchTheme.Muted.Render(truncate(strings.Join(parts, " · "), (l.width-2)/2))

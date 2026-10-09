@@ -36,8 +36,6 @@ const (
 	// TurnStart 表示一次模型调用已发出、尚无任何增量：快照据此记 Waiting，
 	// UI 显示等待时长，让漫长的首字延迟不像断线。
 	TurnStart Kind = "turn_start"
-	// Usage 是一条 assistant 消息结束时的 token 用量：只累加进快照总计，不成条目。
-	Usage Kind = "usage"
 	// Notice 是 Agent 循环之外的一件事：这一步做什么、入稿、等你确认、失败与重开……
 	// Text 是发布侧写好的一句故事语言，Tone 是它的性质。
 	Notice Kind = "notice"
@@ -55,27 +53,12 @@ const (
 	ToneInfo  Tone = "info"  // 其余说明
 )
 
-// UsageTotals 是本轮创作的 token 与费用累计（消费侧状态行展示）。
-type UsageTotals struct {
-	Input, Output, CacheRead int
-	Cost                     float64
-}
-
-func (u *UsageTotals) add(other UsageTotals) {
-	u.Input += other.Input
-	u.Output += other.Output
-	u.CacheRead += other.CacheRead
-	u.Cost += other.Cost
-}
-
 // Event 是一条带归属的活动事件；归属字段供消费侧做身份校验（交付契约 4）。
 type Event struct {
 	ProjectID   string
 	RunID       string
 	OperationID string
 	TaskLabel   string // 面向用户的任务名称，不参与执行语义。
-	TaskKind    string // 校验过的任务种类（Operation Kind）
-	Role        string // TaskStart/TaskEnd：执行任务的角色，即 Worker 的模型角色（architect / writer / editor）
 	Scope       Scope
 	Kind        Kind
 	Tool        string // ToolStart/ToolEnd/ToolDelta：规范工具名
@@ -87,19 +70,7 @@ type Event struct {
 	Text        string // Text/Prose：文字增量；Item/Notice：写好的一行
 	Tone        Tone   // Notice：这条旁白的性质
 	Bytes       int    // ToolDelta：本次增量字节数
-	Usage       UsageTotals
-	Model       string // Usage：这条消息实际使用的模型与提供方（服务端上报）
-	Provider    string
 	At          time.Time
-}
-
-// ModelUsage 是本轮某个模型的累计用量：按首次使用排序，中途换模型即多一项。
-type ModelUsage struct {
-	Model, Provider string
-	Usage           UsageTotals
-	Messages        int // 收到用量的消息数
-	FirstAt, LastAt time.Time
-	FirstKind       string // 首次使用时的任务种类
 }
 
 // Entry 是快照中的一行生命周期条目：一次工具调用（进行中或已收尾）、一次重试或一条旁白。
@@ -152,15 +123,6 @@ type Snapshot struct {
 	WaitingSince time.Time
 	// ThinkingSeen 表示本轮创作里 Provider 提供过思考文本。
 	ThinkingSeen bool
-	// Usage 是本轮（同一 RunID）累计用量；换 Run 时快照重建即清零。
-	Usage UsageTotals
-	// Models 是本轮用过的模型各自的累计用量；ActiveModel 是最近一条用量所属的模型。
-	Models      []ModelUsage
-	ActiveModel string
-	// Worked 是本轮已结束任务的执行时长之和（进行中的任务由消费侧按 StartedAt 补算）。
-	Worked time.Duration
-	// Roles 是本轮各角色名下任务的累计，按首次出场排序。
-	Roles []RoleUsage
 	// Seq 每次变更递增，消费侧可据此跳过重复渲染。
 	Seq uint64
 }
@@ -262,8 +224,6 @@ func (h *Hub) Snapshot(projectID string) (Snapshot, bool) {
 	for i := range copied.Tasks {
 		copied.Tasks[i].Scope = copied.Tasks[i].Scope.clone()
 	}
-	copied.Models = append([]ModelUsage(nil), snapshot.Models...)
-	copied.Roles = append([]RoleUsage(nil), snapshot.Roles...)
 	copied.Prose = append([]byte(nil), snapshot.Prose...)
 	copied.Output = append([]OutputBlock(nil), snapshot.Output...)
 	for i := range copied.Output {
@@ -288,10 +248,6 @@ func (s *Snapshot) fold(event Event) {
 		return
 	case TurnStart:
 		s.Waiting, s.WaitingSince = true, event.At
-		return
-	case Usage:
-		s.Usage.add(event.Usage)
-		s.foldModel(event)
 		return
 	case Retry:
 		s.append(Entry{
@@ -368,23 +324,6 @@ func (s *Snapshot) fold(event Event) {
 			s.ThinkingSeen = true
 		}
 	}
-}
-
-// foldModel 把一条消息的用量记到它所用的模型名下；模型顺序即首次使用顺序。
-func (s *Snapshot) foldModel(event Event) {
-	s.ActiveModel = event.Model
-	for i := range s.Models {
-		if m := &s.Models[i]; m.Model == event.Model && m.Provider == event.Provider {
-			m.Usage.add(event.Usage)
-			m.Messages++
-			m.LastAt = event.At
-			return
-		}
-	}
-	s.Models = append(s.Models, ModelUsage{
-		Model: event.Model, Provider: event.Provider, Usage: event.Usage, Messages: 1,
-		FirstAt: event.At, LastAt: event.At, FirstKind: event.TaskKind,
-	})
 }
 
 // openIndex 定位这次调用对应的未收尾条目：双方都有 CallID 时严格按它配对

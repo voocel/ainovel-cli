@@ -13,7 +13,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/catalog"
 )
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
@@ -32,6 +31,9 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
+	scope := taskActivityScope(task)
+	r.publishTask(operation, activity.TaskStart, nil, scope)
+	defer func() { r.publishTask(operation, activity.TaskEnd, resultErr, scope) }()
 	compiled, err := r.prompts.Load(ctx, operation.Snapshot.ConfigDigest)
 	if err != nil {
 		return model.OperationOutcome{}, err
@@ -41,10 +43,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
-	// 任务在角色确定后才开场：界面按执行的 Worker 认角色，不从任务种类另推一份。
-	scope := taskActivityScope(task)
-	r.publishTask(operation, worker.ModelRole, activity.TaskStart, nil, scope)
-	defer func() { r.publishTask(operation, worker.ModelRole, activity.TaskEnd, resultErr, scope) }()
 	binding, _ := r.bindingFor(worker.ModelRole)
 	wantsVerdict := false
 	for _, definition := range compiled.Tools {
@@ -161,7 +159,7 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 				if _, err := r.store.AppendOperationEvent(ctx, model.OperationEvent{
 					OperationID: operation.ID, StepID: "agent.message", Attempt: operation.Attempt,
 					IdempotencyKey: fmt.Sprintf("agent-message:%d:%d", operation.Attempt, messageIndex),
-					Kind:           "agent.message_committed", Payload: payload, CreatedAt: e.Message.Time,
+					Kind:           "agent.message_committed", Payload: payload, Usage: eventUsage(e.Message.Usage), CreatedAt: e.Message.Time,
 				}); err != nil {
 					return err
 				}
@@ -237,12 +235,12 @@ func (r *Runtime) activityEvent(operation model.Operation, kind activity.Kind) a
 	return event
 }
 
-func (r *Runtime) publishTask(operation model.Operation, role string, kind activity.Kind, err error, scope activity.Scope) {
+func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error, scope activity.Scope) {
 	if r.activity == nil {
 		return
 	}
 	event := r.activityEvent(operation, kind)
-	event.Attempt, event.Scope, event.TaskKind, event.Role = operation.Attempt, scope, string(operation.Kind), role
+	event.Attempt, event.Scope = operation.Attempt, scope
 	if err != nil {
 		event.Err = clipActivityText(err.Error())
 	}
@@ -271,6 +269,18 @@ func resumedProgress(messages, artifacts int) string {
 		return ""
 	}
 	return "接着上次的进度继续：已恢复 " + strings.Join(parts, "、")
+}
+
+// eventUsage 是记在事件上的模型用量；用户消息、工具结果没有用量，为零。
+func eventUsage(usage *agentcore.Usage) model.Usage {
+	if usage == nil {
+		return model.Usage{}
+	}
+	spent := model.Usage{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
+	if usage.Cost != nil {
+		spent.Cost = usage.Cost.Total
+	}
+	return spent
 }
 
 func taskActivityScope(task model.TaskInput) activity.Scope {
@@ -315,14 +325,9 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 		out.Kind = activity.TurnStart
 	case agentcore.MessageEnd:
 		// 一条消息结束（含中止）即本轮参数流终结：清空提取状态，生命周期以
-		// 消息为界，无需容量上限。消息带用量时一并发布（状态行累计）。
+		// 消息为界，无需容量上限。用量随消息落盘，创作团队的统计从落盘记录汇总。
 		stream.args.finishMessage()
-		usage := e.Message.Usage
-		if usage == nil {
-			return
-		}
-		out.Kind, out.Usage = activity.Usage, usageTotals(usage.Usage, usage.Cost)
-		out.Model, out.Provider = e.Message.Model, e.Message.Provider
+		return
 	case agentcore.ToolStart:
 		out.Kind, out.Tool, out.CallID = activity.ToolStart, e.Call.Name, e.Call.ID
 		out.Detail = toolDetail(e.Call.Name, e.Call.Args)
@@ -388,19 +393,15 @@ func (r *Runtime) publishActivity(operation model.Operation, event agentcore.Eve
 
 // judgmentFeed 把 Agent 循环之外的单次模型判断（如收尾时的语义合规）接到现场：收尾
 // 同样可能等模型十几秒，画面不能静止。它是这次执行里的一步：思考照常直播，结构化输出
-// 只报接收进度（JSON 不是给人读的），用量记入本轮。
+// 只报接收进度（JSON 不是给人读的）；用量由调用方随判断结果落盘。
 type judgmentFeed struct {
-	runtime         *Runtime
-	operation       model.Operation
-	stage           string
-	pricing         *catalog.Pricing
-	usage           litellm.Usage
-	model, provider string
+	runtime   *Runtime
+	operation model.Operation
+	stage     string
 }
 
-// judgmentFeed 的价目与 Agent 循环同源（绑定上的 Pricing），费用口径一致。
-func (r *Runtime) judgmentFeed(operation model.Operation, stage string, pricing *catalog.Pricing) *judgmentFeed {
-	feed := &judgmentFeed{runtime: r, operation: operation, stage: stage, pricing: pricing}
+func (r *Runtime) judgmentFeed(operation model.Operation, stage string) *judgmentFeed {
+	feed := &judgmentFeed{runtime: r, operation: operation, stage: stage}
 	feed.publish(feed.call(activity.ToolStart))
 	feed.publish(feed.event(activity.TurnStart))
 	return feed
@@ -416,10 +417,6 @@ func (f *judgmentFeed) observe(event litellm.Event) error {
 		progress := f.call(activity.ToolDelta)
 		progress.Bytes = len(e.Text)
 		f.publish(progress)
-	case litellm.UsageEvent:
-		f.usage = e.Usage
-	case litellm.DoneEvent:
-		f.model, f.provider = e.Model, e.Provider
 	}
 	return nil
 }
@@ -430,18 +427,6 @@ func (f *judgmentFeed) finish(err error) {
 		end.Err = clipActivityText(err.Error())
 	}
 	f.publish(end)
-	if f.usage == (litellm.Usage{}) {
-		return
-	}
-	var cost *catalog.Cost
-	if f.pricing != nil {
-		if priced, err := f.pricing.Cost(f.usage); err == nil {
-			cost = &priced
-		}
-	}
-	usage := f.event(activity.Usage)
-	usage.Usage, usage.Model, usage.Provider, usage.TaskKind = usageTotals(f.usage, cost), f.model, f.provider, string(f.operation.Kind)
-	f.publish(usage)
 }
 
 func (f *judgmentFeed) event(kind activity.Kind) activity.Event {
@@ -459,14 +444,6 @@ func (f *judgmentFeed) publish(event activity.Event) {
 	if f.runtime.activity != nil {
 		f.runtime.activity.Publish(event)
 	}
-}
-
-func usageTotals(usage litellm.Usage, cost *catalog.Cost) activity.UsageTotals {
-	totals := activity.UsageTotals{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
-	if cost != nil {
-		totals.Cost = cost.Total
-	}
-	return totals
 }
 
 func clipActivityText(text string) string { return clipRunes(text, 200) }

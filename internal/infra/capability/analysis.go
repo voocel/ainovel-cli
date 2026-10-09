@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
 	"github.com/voocel/ainovel-cli/internal/infra/llm"
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/catalog"
 )
 
 // 三个语义判断都是三分法第二类（§11 第 7 条）：边界清晰的单次 LLM 函数。
@@ -186,8 +188,8 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 		return model.SemanticComplianceReport{}, err
 	}
 	var report model.SemanticComplianceReport
-	feed := r.judgmentFeed(operation, "semantic_compliance", binding.Chat.Pricing)
-	usage, err := llm.Structured(ctx, binding, llm.Call{
+	feed := r.judgmentFeed(operation, "semantic_compliance")
+	spent, err := llm.Structured(ctx, binding, llm.Call{
 		System: "你是独立的小说事实合规检查器。只判断候选正文是否违背用户 locked/guided 约束；不得改写正文。证据不足必须返回 uncertain。pass 时 findings 必须为空。",
 		Input:  string(input),
 		Schema: llm.Schema{
@@ -222,40 +224,64 @@ func (r *Runtime) AnalyzeSemanticCompliance(
 		Observe: feed.observe,
 	}, &report)
 	feed.finish(err)
+	// 判断用的是默认绑定、不经过 agent.run_started：载荷记下实际模型，用量按同一价目记在
+	// 事件上，创作团队的统计计入所在任务。
+	by, usage := judge{Provider: binding.Provider, Model: binding.Model}, judgmentUsage(spent, binding.Chat.Pricing)
 	if err != nil {
-		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
+		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, by, usage, err)
 	}
 	if err := report.Validate(); err != nil {
-		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, err)
+		return model.SemanticComplianceReport{}, r.recordSemanticFailure(ctx, operation, by, usage, err)
 	}
 	eventPayload, err := json.Marshal(struct {
 		Report model.SemanticComplianceReport `json:"report"`
-		Usage  litellm.Usage                  `json:"usage"`
-	}{Report: report, Usage: usage})
+		judge
+	}{Report: report, judge: by})
 	if err != nil {
 		return model.SemanticComplianceReport{}, fmt.Errorf("encode semantic compliance event: %w", err)
 	}
 	if _, err := r.store.AppendOperationEvent(ctx, model.OperationEvent{
 		OperationID: operation.ID, StepID: "semantic.compliance", Attempt: operation.Attempt,
 		IdempotencyKey: fmt.Sprintf("semantic-compliance:%d", operation.Attempt),
-		Kind:           "semantic.compliance_checked", Payload: eventPayload, CreatedAt: r.now(),
+		Kind:           "semantic.compliance_checked", Payload: eventPayload, Usage: usage, CreatedAt: r.now(),
 	}); err != nil {
 		return model.SemanticComplianceReport{}, err
 	}
 	return report, nil
 }
 
-func (r *Runtime) recordSemanticFailure(ctx context.Context, operation model.Operation, cause error) error {
-	payload, err := json.Marshal(map[string]string{"error": cause.Error()})
+func (r *Runtime) recordSemanticFailure(ctx context.Context, operation model.Operation, by judge, usage model.Usage, cause error) error {
+	payload, err := json.Marshal(struct {
+		Error string `json:"error"`
+		judge
+	}{Error: cause.Error(), judge: by})
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("encode semantic compliance failure: %w", err))
 	}
 	if _, err := r.store.AppendOperationEvent(ctx, model.OperationEvent{
 		OperationID: operation.ID, StepID: "semantic.compliance", Attempt: operation.Attempt,
 		IdempotencyKey: fmt.Sprintf("semantic-compliance:%d", operation.Attempt),
-		Kind:           "semantic.compliance_failed", Payload: payload, CreatedAt: r.now(),
+		Kind:           "semantic.compliance_failed", Payload: payload, Usage: usage, CreatedAt: r.now(),
 	}); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
+}
+
+// judge 是单次判断实际用的模型，记进它的事件载荷。
+type judge struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// judgmentUsage 按绑定价目折算单次调用的用量，与 Agent 消息同一口径：价目缺失或算不出时
+// 不计花费。
+func judgmentUsage(usage litellm.Usage, pricing *catalog.Pricing) model.Usage {
+	priced := agentcore.Usage{Usage: usage}
+	if pricing != nil {
+		if cost, err := pricing.Cost(usage); err == nil {
+			priced.Cost = &cost
+		}
+	}
+	return eventUsage(&priced)
 }

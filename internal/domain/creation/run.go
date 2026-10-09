@@ -131,7 +131,7 @@ const (
 	reasonRunning   = "持续创作中"
 	reasonPausedRun = "创作已暂停，随时可以继续"
 	reasonPausedJob = "创作已暂停，恢复该任务后再继续"
-	reasonCancelled = "本轮创作已取消"
+	reasonCancelled = "创作已停止"
 	reasonCancelJob = "创作任务被取消"
 	// reasonDiagnostics 接在失败文案后面，指向事件日志里的原始诊断。
 	reasonDiagnostics = "可展开 %s 的事件记录查看原始诊断"

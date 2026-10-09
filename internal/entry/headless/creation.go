@@ -21,7 +21,7 @@ func runCreation(ctx context.Context, api *bootstrap.App, args []string, stdout,
 		flags := newFlags("creation start", stderr)
 		runID := flags.String("id", "", "Creation Run ID")
 		projectID := flags.String("project", "", "Project ID")
-		premise := flags.String("premise", "", "本轮创作目标")
+		premise := flags.String("premise", "", "创作目标")
 		chapters := flags.Int("chapters", 0, "全书章数；0 表示交给 AI")
 		repairBudget := flags.Int("repair-budget", novel.DefaultRepairBudget, "每章允许的自动修订次数")
 		if err := flags.Parse(args[1:]); err != nil {

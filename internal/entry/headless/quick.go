@@ -20,7 +20,7 @@ func runQuick(ctx context.Context, api *bootstrap.App, args []string, stdout, st
 	projectID := flags.String("project", "", "Project ID")
 	userID := flags.String("user", "", "User ID")
 	premise := flags.String("premise", "", "一句话创作要求")
-	chapters := flags.Int("chapters", novel.KeepChapters, "全书章数：正数固定，0 交给 AI；不传则沿用上一轮设定（新作品交给 AI）")
+	chapters := flags.Int("chapters", novel.KeepChapters, "全书章数：正数固定，0 交给 AI；不传则沿用上次设定（新作品交给 AI）")
 	extend := flags.Bool("extend", false, "续写：篇幅交给 AI 并撤回收官承诺，由 AI 决定再写多少；不能同时固定 --chapters")
 	approval := flags.String("approval", "", "审批预设 auto/milestone/manual；留空沿用进行中的创作")
 	workerID := flags.String("worker", "quick-worker", "Worker instance ID")

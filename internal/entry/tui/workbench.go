@@ -127,7 +127,7 @@ const (
 	situationNoRun benchSituation = iota
 	situationWriting
 	situationPausing    // 用户已暂停，当前任务还在收尾
-	situationCancelling // 本轮已取消，当前任务还在收尾
+	situationCancelling // 已停止创作，当前任务还在收尾
 	situationDecidingProposal
 	situationDeciding
 	situationCompleted
@@ -575,13 +575,13 @@ func (m model) pauseRunCmd() tea.Cmd {
 func (m model) cancelRunCmd() tea.Cmd {
 	api, ctx := m.api, m.ctx
 	gen, runID := m.bench.gen, m.bench.run().ID
-	note := "本轮创作已取消；已写内容保留，/continue 会开启新一轮继续"
+	note := "已停止创作；已写内容保留，/continue 接着写"
 	if m.bench.writing {
 		note = "取消指令已发出：当前这一步完成后停下；已写内容保留"
 	}
 	return func() tea.Msg {
 		_, err := api.Runs.CancelCreationRun(ctx, runID, time.Now().UTC())
-		return runControlMsg{gen: gen, err: err, next: "refresh", note: note, echo: "你结束了本轮创作"}
+		return runControlMsg{gen: gen, err: err, next: "refresh", note: note, echo: "你停止了创作"}
 	}
 }
 
@@ -714,7 +714,7 @@ func (m model) benchStateBadge() string {
 	case situationPausing:
 		return styleWarn.Render("Ⅱ 已暂停推进 · 当前任务收尾中")
 	case situationCancelling:
-		return styleWarn.Render("已结束本轮 · 当前任务收尾中")
+		return styleWarn.Render("已停止创作 · 当前任务收尾中")
 	case situationWriting:
 		// 取正在执行的任务：审阅、重写时不能停在最后一章。
 		label := "◉ 正在创作"

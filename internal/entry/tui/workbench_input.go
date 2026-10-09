@@ -12,7 +12,7 @@ import (
 const benchHelp = `创作控制台
 
 正文视图：阅读选中章。正在写的章逐字流出并带光标；候选稿与已入稿正文明确标注。
-活动视图：本轮创作的完整过程——每一步、思考、说明与正文预览按时间排列。
+活动视图：创作的完整过程——每一步、思考、说明与正文预览按时间排列。
 创作现场：正文下方常驻，显示上一步、当前步（或等待计时）与最新输出的尾部。
 决定卡：有稿件等你确认时出现在正文下方；输入 y 通过，或写下修改意见后回车重写。
 
@@ -30,7 +30,7 @@ const benchHelp = `创作控制台
 /accept <理由>            接受选中章第一条阻塞发现
 /export <路径>            导出已确认正文（.txt 或 .epub）
 /model [角色]             切换连接 / 模型 / 思考强度（角色：architect、writer、editor）
-/stop · /diag             结束本轮、查看诊断
+/stop · /diag             停止创作、查看诊断
 /<章号或标题> · /next     跳章或搜索、下一个匹配
 /help                     本页
 
@@ -231,7 +231,7 @@ func (m model) enterPane() (tea.Model, tea.Cmd) {
 	if b.view == viewActivity {
 		feed, ok := m.timelineFeed()
 		if !ok {
-			b.notice = "本轮还没有活动"
+			b.notice = "还没有创作活动"
 			return m, nil
 		}
 		return m.openBody(strings.Join(m.timelineLines(feed, max(1, m.width-4)), "\n")), nil
@@ -372,7 +372,7 @@ var benchCommands = []benchCommand{
 	{name: "model", usage: "[角色]", label: "切换模型与思考强度", run: func(m model, arg string) (tea.Model, tea.Cmd) {
 		return m.openModelPanel(arg)
 	}},
-	{name: "stop", label: "结束本轮", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+	{name: "stop", label: "停止创作", run: func(m model, _ string) (tea.Model, tea.Cmd) {
 		if b := &m.bench; b.hasRun() && b.run().State != domainmodel.RunCompleted &&
 			b.run().State != domainmodel.RunFailed && b.run().State != domainmodel.RunCancelled {
 			return m, m.cancelRunCmd()

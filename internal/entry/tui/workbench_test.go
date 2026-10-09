@@ -117,28 +117,33 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 		}
 		return strings.Join(cells, "\n")
 	}
-	// 上块是正在写的章的依据：规划、覆盖它的要求（没审过是一个点）；下块本轮钉在底部：
-	// 花费与用时、创作团队（每个角色的模型、用时、用量、缓存命中与花费）、合计。
+	// 上块是正在写的章的依据：规划、覆盖它的要求（没审过是一个点）；下块创作团队钉在底部：
+	// 这本书上的花费与用时、每个角色的模型、用时、用量、缓存命中与花费，最后是合计。
 	view := rail(wide)
 	requireContains(t, view,
 		"写作依据 ─", "第 4 章 · 门后的声音", "◉ 写作中", "规划", "陈渡循着回信找到老宅",
 		"要求", "3 条", "· 禁止 主角死亡", "· 用声音与一个具体动作承接悬念 · 第 4 章",
-		"本轮 ─", "$0.42 · 4m", "✓ 策划 deepseek-v4-flash", "4m00s", "↑41K ↓9.0K · 缓存 12%", "$0.31",
-		"◉ 作者 deepseek-v4-flash", "↑192K ↓49K · 缓存 95%", "$0.11", "○ 编辑 deepseek-v4-flash", "本轮还没出场",
-		"合计 ↑233K ↓58K · 缓存 80%", "连接重试 1 次",
+		"创作团队 ─", "$0.42 · 4m12s", "✓ 策划 deepseek-v4-pro", "4m00s", "↑41K ↓9.0K · 缓存 12%", "$0.31",
+		"◉ 作者 deepseek-v4-flash", "↑192K ↓49K · 缓存 95%", "$0.11", "○ 编辑 deepseek-v4-flash", "还没出场",
+		"合计 ↑233K ↓58K · 缓存 80%",
 	)
-	if cells := strings.Split(view, "\n"); !strings.Contains(cells[len(cells)-1], "连接重试") || !strings.Contains(cells[len(cells)-2], "合计") {
-		t.Fatalf("the run card must sit at the bottom of the rail:\n%s", view)
+	if cells := strings.Split(view, "\n"); !strings.Contains(cells[len(cells)-1], "合计") {
+		t.Fatalf("the crew card must sit at the bottom of the rail:\n%s", view)
 	}
-	// 每个角色的累计来自快照的角色累计，状态取它最后一项任务（失败标出来）；没有定价的
-	// 模型（中转、自部署）不显示 $0。
+	// 创作团队来自落盘的执行记录：实时活动没了（重启、换窗口）照样完整；状态取角色最近一项
+	// 任务（失败标出来），模型是它最近实际用的；没有定价的模型（中转、自部署）不显示 $0。
 	crew := wide
-	crew.bench.activity.Usage.Cost = 0
-	crew.bench.activity.Roles = []activity.RoleUsage{{Role: "editor", Worked: 3 * time.Minute, Usage: activity.UsageTotals{Input: 50000, Output: 8000, CacheRead: 25000}}}
-	crew.bench.activity.Tasks = []activity.Task{{OperationID: "r2", Label: "审阅第 4–6 章", Role: "editor", Done: true, Err: "模型连接中断"}}
-	if view := rail(crew); strings.Contains(view, "$") || !strings.Contains(view, "! 编辑 deepseek-v4-flash") || !strings.Contains(view, "3m00s") ||
-		!strings.Contains(view, "↑50K ↓8.0K · 缓存 50%") || strings.Count(view, "本轮还没出场") != 2 {
-		t.Fatalf("crew must show each role's own totals and hide unknown prices:\n%s", view)
+	crew.bench.activity = activity.Snapshot{}
+	crew.bench.snap.Usage = workbench.TeamUsage{
+		Total: domainmodel.Usage{Input: 50000, Output: 8000, CacheRead: 25000}, Worked: 3 * time.Minute,
+		Roles: map[string]workbench.RoleUsage{"editor": {
+			Usage: domainmodel.Usage{Input: 50000, Output: 8000, CacheRead: 25000}, Worked: 3 * time.Minute,
+			Model: "glm-5", State: domainmodel.OperationFailed,
+		}},
+	}
+	if view := rail(crew); strings.Contains(view, "$") || !strings.Contains(view, "! 编辑 glm-5") || !strings.Contains(view, "3m00s") ||
+		!strings.Contains(view, "↑50K ↓8.0K · 缓存 50%") || strings.Count(view, "还没出场") != 2 {
+		t.Fatalf("crew must come from the persisted run usage and hide unknown prices:\n%s", view)
 	}
 	for _, gone := range []string{"代理", "工具调用", "条消息", "本轮运行"} {
 		if strings.Contains(view, gone) {
@@ -149,11 +154,16 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 	if footer := rows[len(rows)-1]; strings.Contains(footer, "↑233K") || !strings.Contains(footer, "deepseek-v4-flash") {
 		t.Fatalf("footer must not repeat the rail's totals:\n%s", footer)
 	}
-	// 依据来自权威快照：没有实时活动时照样完整，只是不显示本轮花费。
+	// 两块都来自落盘数据：没有实时活动（重启、换窗口）时照样完整；这本书还没有执行记录时
+	// 创作团队不出现。
 	idle := wide
 	idle.bench.activity = activity.Snapshot{}
-	if view := rail(idle); !strings.Contains(view, "陈渡循着回信找到老宅") || strings.Contains(view, "本轮") {
-		t.Fatalf("idle rail must keep the brief and drop the usage:\n%s", view)
+	if view := rail(idle); !strings.Contains(view, "陈渡循着回信找到老宅") || !strings.Contains(view, "合计 ↑233K") {
+		t.Fatalf("idle rail must keep the brief and the crew card:\n%s", view)
+	}
+	idle.bench.snap.Usage = workbench.TeamUsage{}
+	if view := rail(idle); strings.Contains(view, "创作团队") {
+		t.Fatalf("a run without any attempt has no crew card:\n%s", view)
 	}
 	// 选中审过的章：要求带审阅结论，审阅意见与本章设定各成一段，计数标出要紧的。
 	reviewed := clickBench(wide, 6, l.outlineY+3)
@@ -269,7 +279,7 @@ func TestSceneTailStreamsWithoutReflowing(t *testing.T) {
 	}
 }
 
-// 现场条是本轮时间线的尾巴：从底部长起，进行中的步骤钉在最后；标题线说「此刻」——创作中
+// 现场条是创作时间线的尾巴：从底部长起，进行中的步骤钉在最后；标题线说「此刻」——创作中
 // 行首转着动画、等待计时在行尾，停下后动画消失。
 func TestSceneStripReflectsWaitingIdleAndLeavesWithActivityView(t *testing.T) {
 	m := studioModel(t, 150, 40)
@@ -324,7 +334,7 @@ func TestActivityTimelineMergesByTimeAndFreezesWhileHeld(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	m, _ = press(t, m, tea.KeyF2)
 	view := frame(m)
-	requireContains(t, view, "本轮创作过程 · 跟随最新", "本轮创作", "第 4 章写作", "✓ 查阅设定与前情", "第 4 章写作 · 思考", "第 4 章写作 · 正文预览 · 未入稿", "雨停了，屋檐却还在滴水。")
+	requireContains(t, view, "创作过程 · 跟随最新", "第 4 章写作", "✓ 查阅设定与前情", "第 4 章写作 · 思考", "第 4 章写作 · 正文预览 · 未入稿", "雨停了，屋檐却还在滴水。")
 	if strings.Index(view, "思考") > strings.Index(view, "正文预览") {
 		t.Fatal("timeline must order blocks by time")
 	}
@@ -643,7 +653,7 @@ func TestTooSmallTerminalAsksToMaximize(t *testing.T) {
 func TestFooterShowsUsageContextAndPrimaryAction(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	requireContains(t, frame(m), "deepseek-v4-flash · ↑233K ↓58K · 缓存 80% · $0.42", "/pause 暂停推进", "要求 · 第 4 章")
-	m.bench.activity.Usage = activity.UsageTotals{}
+	m.bench.snap.Usage = workbench.TeamUsage{}
 	if view := frame(m); strings.Contains(view, "↑233K") || !strings.Contains(view, "deepseek-v4-flash") {
 		t.Fatal("no usage yet must show only the model")
 	}

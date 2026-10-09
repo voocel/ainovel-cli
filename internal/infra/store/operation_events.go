@@ -32,7 +32,8 @@ func (s *Store) AppendOperationEvent(ctx context.Context, event model.OperationE
 
 func (s *Store) ListOperationEvents(ctx context.Context, operationID string) ([]model.OperationEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT sequence, step_id, attempt, idempotency_key, kind, payload, created_at_unix_ms
+		SELECT sequence, step_id, attempt, idempotency_key, kind,
+			input_tokens, output_tokens, cache_read_tokens, cost, payload, created_at_unix_ms
 		FROM operation_events WHERE operation_id = ? ORDER BY sequence`, operationID)
 	if err != nil {
 		return nil, fmt.Errorf("list operation events: %w", err)
@@ -42,7 +43,8 @@ func (s *Store) ListOperationEvents(ctx context.Context, operationID string) ([]
 	for rows.Next() {
 		var event model.OperationEvent
 		var createdAt int64
-		if err := rows.Scan(&event.Sequence, &event.StepID, &event.Attempt, &event.IdempotencyKey, &event.Kind, &event.Payload, &createdAt); err != nil {
+		if err := rows.Scan(&event.Sequence, &event.StepID, &event.Attempt, &event.IdempotencyKey, &event.Kind,
+			&event.Usage.Input, &event.Usage.Output, &event.Usage.CacheRead, &event.Usage.Cost, &event.Payload, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan operation event: %w", err)
 		}
 		event.OperationID = operationID
@@ -68,12 +70,16 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, event model.OperationEvent) 
 	var existingDigest string
 	var existingCreated int64
 	err := tx.QueryRowContext(ctx, `
-		SELECT sequence, step_id, attempt, kind, payload, payload_digest, created_at_unix_ms
+		SELECT sequence, step_id, attempt, kind, input_tokens, output_tokens, cache_read_tokens, cost,
+			payload, payload_digest, created_at_unix_ms
 		FROM operation_events WHERE operation_id = ? AND idempotency_key = ?`,
 		event.OperationID, event.IdempotencyKey).
-		Scan(&existing.Sequence, &existing.StepID, &existing.Attempt, &existing.Kind, &existingPayload, &existingDigest, &existingCreated)
+		Scan(&existing.Sequence, &existing.StepID, &existing.Attempt, &existing.Kind,
+			&existing.Usage.Input, &existing.Usage.Output, &existing.Usage.CacheRead, &existing.Usage.Cost,
+			&existingPayload, &existingDigest, &existingCreated)
 	if err == nil {
-		if existingDigest != digest || existing.StepID != event.StepID || existing.Attempt != event.Attempt || existing.Kind != event.Kind {
+		if existingDigest != digest || existing.StepID != event.StepID || existing.Attempt != event.Attempt ||
+			existing.Kind != event.Kind || existing.Usage != event.Usage {
 			return model.OperationEvent{}, fmt.Errorf("event %q: %w", event.IdempotencyKey, model.ErrIdempotencyConflict)
 		}
 		existing.OperationID = event.OperationID
@@ -91,11 +97,12 @@ func appendEventTx(ctx context.Context, tx *sql.Tx, event model.OperationEvent) 
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO operation_events (
-			operation_id, sequence, step_id, attempt, idempotency_key,
-			kind, payload, payload_digest, created_at_unix_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.OperationID, event.Sequence, event.StepID, event.Attempt, event.IdempotencyKey,
-		event.Kind, []byte(event.Payload), digest, event.CreatedAt.UnixMilli()); err != nil {
+			operation_id, sequence, step_id, attempt, idempotency_key, kind,
+			input_tokens, output_tokens, cache_read_tokens, cost, payload, payload_digest, created_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.OperationID, event.Sequence, event.StepID, event.Attempt, event.IdempotencyKey, event.Kind,
+		event.Usage.Input, event.Usage.Output, event.Usage.CacheRead, event.Usage.Cost,
+		[]byte(event.Payload), digest, event.CreatedAt.UnixMilli()); err != nil {
 		return model.OperationEvent{}, fmt.Errorf("insert operation event: %w", err)
 	}
 	return event, nil
