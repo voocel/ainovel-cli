@@ -32,9 +32,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
-	scope := taskActivityScope(task)
-	r.publishTask(operation, activity.TaskStart, nil, scope)
-	defer func() { r.publishTask(operation, activity.TaskEnd, resultErr, scope) }()
 	compiled, err := r.prompts.Load(ctx, operation.Snapshot.ConfigDigest)
 	if err != nil {
 		return model.OperationOutcome{}, err
@@ -44,6 +41,10 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	if err != nil {
 		return model.OperationOutcome{}, err
 	}
+	// 任务在角色确定后才开场：界面按执行的 Worker 认角色，不从任务种类另推一份。
+	scope := taskActivityScope(task)
+	r.publishTask(operation, worker.ModelRole, activity.TaskStart, nil, scope)
+	defer func() { r.publishTask(operation, worker.ModelRole, activity.TaskEnd, resultErr, scope) }()
 	binding, _ := r.bindingFor(worker.ModelRole)
 	wantsVerdict := false
 	for _, definition := range compiled.Tools {
@@ -236,12 +237,12 @@ func (r *Runtime) activityEvent(operation model.Operation, kind activity.Kind) a
 	return event
 }
 
-func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error, scope activity.Scope) {
+func (r *Runtime) publishTask(operation model.Operation, role string, kind activity.Kind, err error, scope activity.Scope) {
 	if r.activity == nil {
 		return
 	}
 	event := r.activityEvent(operation, kind)
-	event.Attempt, event.Scope, event.TaskKind = operation.Attempt, scope, string(operation.Kind)
+	event.Attempt, event.Scope, event.TaskKind, event.Role = operation.Attempt, scope, string(operation.Kind), role
 	if err != nil {
 		event.Err = clipActivityText(err.Error())
 	}

@@ -11,52 +11,63 @@ import (
 	"github.com/voocel/ainovel-cli/internal/infra/activity"
 )
 
-// 右栏「写作依据」（页面设计 §3）：主栏正在看的那一章（或卷、弧、全书）依据什么写——
-// 规划、覆盖它的要求与审阅结论、审阅意见、这一章记下的设定。全部来自权威快照，重启、
-// 空闲时照样完整；底部几行是本轮花费，运行明细在 /diag。
+// 右栏（页面设计 §3）上下两块，性质不同：上块「写作依据」是权威快照，跟着目录光标走——
+// 正在看的那一章（或卷、弧、全书）依据什么写：规划、覆盖它的要求与审阅结论、审阅意见、
+// 这一章记下的设定，重启、空闲时照样完整；下块「本轮」是易失的实时活动，钉在底部——创作
+// 团队里谁在干活、用哪个模型、各自用了多少与多久，最后是合计。运行明细在 /diag。
 
-const (
-	railSummaryRows = 4 // 规划摘要最多几行
-	railItemRows    = 2 // 一条要求、意见或设定最多几行
+// railLimits 是一段文字最多占几行：先按宽松的排，放不下再收紧，仍放不下才指向 /view。
+type railLimits struct{ summary, item int }
+
+var (
+	railRoomy   = railLimits{summary: 12, item: 6}
+	railCompact = railLimits{summary: 4, item: 2}
 )
 
-// railColumn 右栏：标题行、依据（放不下时末行指向 /view）、底部本轮花费。
+// railColumn 右栏：上块依据从顶部排，下块本轮钉在底部，中间留白。
 func (m model) railColumn(l benchLayout) []string {
 	width := l.railWidth - 2
-	lines := append([]string{benchTheme.Muted.Render("写作依据"), ""}, m.briefLines(width)...)
-	usage := m.usageLines(width)
-	room := l.bodyHeight - len(usage)
+	run := m.runCard(width)
+	room := l.bodyHeight - len(run)
+	lines := m.briefCard(width, railRoomy)
+	if len(lines) > room {
+		lines = m.briefCard(width, railCompact)
+	}
 	if len(lines) > room {
 		lines = append(lines[:room-1], benchTheme.Muted.Render("… /view 查看全部"))
 	}
 	for len(lines) < room {
 		lines = append(lines, "")
 	}
-	lines = append(lines, usage...)
+	lines = append(lines, run...)
 	for i := range lines {
 		lines[i] = " " + fitLine(lines[i], width)
 	}
 	return fitBlock(strings.Join(lines, "\n"), l.railWidth, l.bodyHeight)
 }
 
-// briefLines 跟着目录光标走：章行是这一章的依据，卷/弧头行是这一部分的，没有大纲时是全书的。
-func (m model) briefLines(width int) []string {
+// briefCard 写作依据：标题线下是光标所在处的依据——章行是这一章的，卷/弧头行是这一部分的，
+// 没有大纲时是全书的。
+func (m model) briefCard(width int, limits railLimits) []string {
+	r := railText{width: width, limits: limits, lines: []string{railRule("写作依据", "", width)}}
 	rows := m.outlineRows()
 	if cursor := m.bench.cursor; cursor >= 0 && cursor < len(rows) {
 		switch row := rows[cursor]; {
 		case row.isChapter():
-			return m.chapterBrief(row.chapter, width)
+			m.chapterBrief(&r, row.chapter)
+			return r.lines
 		case row.header():
-			return m.sectionBrief(row, width)
+			m.sectionBrief(&r, row)
+			return r.lines
 		}
 	}
-	return m.bookBrief(width)
+	m.bookBrief(&r)
+	return r.lines
 }
 
-func (m model) chapterBrief(number, width int) []string {
+func (m model) chapterBrief(r *railText, number int) {
 	snap := m.bench.snap
 	node, _ := m.outlineChapter(number)
-	r := railText{width: width}
 	r.head(fmt.Sprintf("第 %d 章 · %s", number, node.Node.Title), m.chapterState(node))
 	if node.Node.Summary != "" {
 		r.section("规划", "")
@@ -70,11 +81,7 @@ func (m model) chapterBrief(number, width int) []string {
 				violated++
 			}
 		}
-		note := benchTheme.Muted.Render(fmt.Sprintf("%d 条", len(brief.Requirements)))
-		if violated > 0 {
-			note = benchTheme.Error.Render(fmt.Sprintf("违反 %d", violated)) + benchTheme.Muted.Render(" · ") + note
-		}
-		r.section("要求", note)
+		r.section("要求", railCount(len(brief.Requirements), violated, benchTheme.Error, "违反"))
 		for _, requirement := range brief.Requirements {
 			r.item(checkMark(requirement.Status), requirementText(requirement), benchTheme.Text)
 		}
@@ -91,11 +98,7 @@ func (m model) chapterBrief(number, width int) []string {
 			}
 		}
 		if len(findings) > 0 {
-			note := benchTheme.Muted.Render(fmt.Sprintf("%d 条", len(findings)))
-			if blocking > 0 {
-				note = benchTheme.Warning.Render(fmt.Sprintf("阻塞 %d", blocking)) + benchTheme.Muted.Render(" · ") + note
-			}
-			r.section("审阅意见", note)
+			r.section("审阅意见", railCount(len(findings), blocking, benchTheme.Warning, "阻塞"))
 			for _, finding := range findings {
 				if finding.Severity == domainmodel.FindingBlocking {
 					r.item(benchTheme.Warning.Render("!"), finding.Note, benchTheme.Text)
@@ -112,20 +115,20 @@ func (m model) chapterBrief(number, width int) []string {
 				pending++
 			}
 		}
-		note := benchTheme.Muted.Render(fmt.Sprintf("%d 条", len(brief.Facts)))
-		if pending > 0 {
-			note = benchTheme.Warning.Render(fmt.Sprintf("待核验 %d", pending)) + benchTheme.Muted.Render(" · ") + note
-		}
-		r.section("本章设定", note)
+		r.section("本章设定", railCount(len(brief.Facts), pending, benchTheme.Warning, "待核验"))
 		for _, fact := range brief.Facts {
-			mark := benchTheme.Muted.Render("·")
-			if fact.Pending {
-				mark = benchTheme.Warning.Render("◌")
-			}
-			r.item(mark, fact.Text, benchTheme.Muted)
+			r.fact(fact)
 		}
 	}
-	return r.lines
+}
+
+// railCount 分区右侧的计数；有要紧的（违反、阻塞、待核验）时先用醒目色标出。
+func railCount(total, urgent int, style lipgloss.Style, word string) string {
+	note := benchTheme.Muted.Render(fmt.Sprintf("%d 条", total))
+	if urgent > 0 {
+		note = style.Render(fmt.Sprintf("%s %d", word, urgent)) + benchTheme.Muted.Render(" · ") + note
+	}
+	return note
 }
 
 // chapterState 与目录同一套符号：已入稿附字数。
@@ -183,9 +186,19 @@ func requirementText(requirement workbench.BriefRequirement) string {
 	return text
 }
 
+// factKinds 是设定种类的读者用语：两字等宽，作行首标签时天然对齐。
+var factKinds = map[domainmodel.CanonFactKind]string{
+	domainmodel.CanonEvent: "事件", domainmodel.CanonState: "状态", domainmodel.CanonRelationship: "关系",
+	domainmodel.CanonWorldRule: "规则", domainmodel.CanonForeshadow: "伏笔",
+}
+
+// factLine 一条设定的整行写法（/view、/review）：种类标签、主体、内容。
+func factLine(fact workbench.Fact) string {
+	return styleHint.Render(factKinds[fact.Kind]+" ") + fact.Subject + "：" + fact.Text
+}
+
 // sectionBrief 卷/弧：进度、概要，以及挂在这一部分上的要求（输入框此时的作用域就是它）。
-func (m model) sectionBrief(row outlineRow, width int) []string {
-	r := railText{width: width}
+func (m model) sectionBrief(r *railText, row outlineRow) {
 	state := benchTheme.Muted.Render(fmt.Sprintf("%d/%d 章", row.confirmed, row.chapters))
 	if row.node.Proposed {
 		state = benchTheme.Warning.Render("◇ 待确认")
@@ -203,18 +216,16 @@ func (m model) sectionBrief(row outlineRow, width int) []string {
 		}
 	}
 	if len(texts) > 0 {
-		r.section("要求", benchTheme.Muted.Render(fmt.Sprintf("%d 条", len(texts))))
+		r.section("要求", railCount(len(texts), 0, benchTheme.Muted, ""))
 		for _, text := range texts {
 			r.item(benchTheme.Muted.Render("·"), text, benchTheme.Text)
 		}
 	}
-	return r.lines
 }
 
 // bookBrief 还没有大纲时：篇幅、终局、创作意图与全部要求。
-func (m model) bookBrief(width int) []string {
+func (m model) bookBrief(r *railText) {
 	snap := m.bench.snap
-	r := railText{width: width}
 	r.head("全书", benchTheme.Muted.Render(lengthStatus(snap.Length)))
 	ending := snap.Intent.EndingDirection
 	if ending == "" && snap.Length.Compass != nil {
@@ -226,9 +237,9 @@ func (m model) bookBrief(width int) []string {
 	}
 	count := len(snap.Intent.Required) + len(snap.Intent.Forbidden) + len(snap.Directives)
 	if count == 0 {
-		return r.lines
+		return
 	}
-	r.section("要求", benchTheme.Muted.Render(fmt.Sprintf("%d 条", count)))
+	r.section("要求", railCount(count, 0, benchTheme.Muted, ""))
 	mark := benchTheme.Muted.Render("·")
 	for _, text := range snap.Intent.Required {
 		r.item(mark, text, benchTheme.Text)
@@ -243,36 +254,102 @@ func (m model) bookBrief(width int) []string {
 		}
 		r.item(mark, text, benchTheme.Text)
 	}
-	return r.lines
 }
 
-// usageLines 本轮花费：合计、用时、用量，每个用过的模型一行；没有实时用量时不占位。
-func (m model) usageLines(width int) []string {
+// runCard 本轮：标题线右端是花费（有定价时）与用时；其下是创作团队，每个角色两行；最后是
+// 合计，连接重试过时再加一行。协调器按缺口派活，策划、作者、编辑一次一个接力，所以同一
+// 时刻至多一个角色亮着。没有实时活动时整块不出现。
+func (m model) runCard(width int) []string {
 	feed, ok := m.activityFeed()
-	if !ok || len(feed.Models) == 0 {
+	if !ok {
 		return nil
 	}
-	note := fmt.Sprintf("%s · 已用 %s", formatCost(feed.Usage.Cost), formatDuration(workedTime(feed)))
-	lines := []string{"", railSection("本轮", benchTheme.Muted.Render(note), width), "  " + benchTheme.Muted.Render(tokensLine(feed.Usage))}
-	for _, entry := range feed.Models {
-		name := entry.Model
-		if name == "" {
-			name = m.api.Models.Current("").Model
-		}
-		mark := benchTheme.Muted.Render("·")
-		if entry.Model == feed.ActiveModel {
-			mark = benchTheme.Accent.Render("●")
-		}
-		lines = append(lines, alignRight(mark+" "+benchTheme.Text.Render(name), benchTheme.Muted.Render(formatCost(entry.Usage.Cost)), width))
+	note := formatDuration(workedTime(feed))
+	if feed.Usage.Cost > 0 {
+		note = formatCost(feed.Usage.Cost) + " · " + note
 	}
+	lines := []string{"", railRule("本轮", benchTheme.Muted.Render(note), width)}
+	for _, role := range m.api.Models.Roles()[1:] {
+		lines = append(lines, m.crewLines(feed, role, width)...)
+	}
+	lines = append(lines, benchTheme.Muted.Render("合计 "+tokensLine(feed.Usage)))
 	retries := 0
 	for _, task := range feed.Tasks {
 		retries += task.Retries
 	}
 	if retries > 0 {
-		lines = append(lines, "  "+benchTheme.Warning.Render(fmt.Sprintf("连接重试 %d 次", retries)))
+		lines = append(lines, benchTheme.Warning.Render(fmt.Sprintf("连接重试 %d 次", retries)))
 	}
 	return lines
+}
+
+// crewLines 一个角色两行：首行是状态、名字、它此刻绑定的模型与本轮累计用时，在干活的角色
+// 名字亮起；次行是它名下任务的用量与缓存命中，有定价时右侧是花费。累计取活动快照的角色
+// 累计（随事件累加，不受任务清单保留上限影响），状态取它最后一项任务。角色以执行任务的
+// Worker 为准（活动事件带来），不从任务种类另推。
+func (m model) crewLines(feed activity.Snapshot, role string, width int) []string {
+	var stats activity.RoleUsage
+	for _, entry := range feed.Roles {
+		if entry.Role == role {
+			stats = entry
+		}
+	}
+	var last *activity.Task
+	for i := range feed.Tasks {
+		if feed.Tasks[i].Role == role {
+			last = &feed.Tasks[i]
+		}
+	}
+	model := benchTheme.Muted.Render(m.api.Models.Current(role).Model)
+	if last == nil && stats.Worked == 0 && stats.Usage == (activity.UsageTotals{}) {
+		return []string{
+			benchTheme.Muted.Render("○ ") + benchTheme.Text.Render(roleNames[role]) + " " + model,
+			"  " + benchTheme.Muted.Render("本轮还没出场"),
+		}
+	}
+	mark, name, worked := styleNotice.Render("✓"), benchTheme.Text.Render(roleNames[role]), stats.Worked
+	if last != nil {
+		mark = m.taskMark(*last)
+		if !last.Done {
+			worked += taskDuration(*last)
+			if m.bench.writing {
+				name = styleFocus.Render(roleNames[role])
+			}
+		}
+	}
+	price := ""
+	if stats.Usage.Cost > 0 {
+		price = benchTheme.Muted.Render(formatCost(stats.Usage.Cost))
+	}
+	return []string{
+		alignRight(mark+" "+name+" "+model, benchTheme.Muted.Render(formatDuration(worked)), width),
+		alignRight("  "+benchTheme.Muted.Render(tokensLine(stats.Usage)), price, width),
+	}
+}
+
+// taskMark 任务状态：完成、失败、进行中；创作停下而没等到收尾的是空心点。
+func (m model) taskMark(task activity.Task) string {
+	switch {
+	case task.Done && task.Err != "":
+		return benchTheme.Error.Render("!")
+	case task.Done:
+		return styleNotice.Render("✓")
+	case m.bench.writing:
+		return benchTheme.Accent.Render("◉")
+	default:
+		return benchTheme.Muted.Render("◦")
+	}
+}
+
+func taskDuration(task activity.Task) time.Duration {
+	switch {
+	case task.StartedAt.IsZero():
+		return 0
+	case task.Done:
+		return task.EndedAt.Sub(task.StartedAt)
+	default:
+		return time.Since(task.StartedAt)
+	}
 }
 
 // tokensLine 「↑输入 ↓输出 · 缓存 命中率」。
@@ -295,15 +372,19 @@ func workedTime(feed activity.Snapshot) time.Duration {
 	return worked
 }
 
-// railSection 分区标题：左边标题，右边是已着色的计数。
-func railSection(title, note string, width int) string {
-	return alignRight(benchTheme.Muted.Render(title), note, width)
+// railRule 右栏两块的标题线：与「AI 创作现场」同一写法，右端可带说明。
+func railRule(title, note string, width int) string {
+	if note != "" {
+		note = " " + note
+	}
+	return sectionTitle(benchTheme.Muted.Render(title), width-lipgloss.Width(note)) + note
 }
 
-// railText 收集右栏的行：分区之间空一行，文字按宽度折行，超出行数的末行以省略号收尾。
+// railText 收集依据的行：分区名用强调色、分区之间空一行；正文用正文色，次要的淡下去。
 type railText struct {
-	width int
-	lines []string
+	width  int
+	limits railLimits
+	lines  []string
 }
 
 func (r *railText) head(title, state string) {
@@ -311,30 +392,54 @@ func (r *railText) head(title, state string) {
 }
 
 func (r *railText) section(title, note string) {
-	r.lines = append(r.lines, "", railSection(title, note, r.width))
+	r.lines = append(r.lines, "", alignRight(benchTheme.Accent.Render(title), note, r.width))
 }
 
-// paragraph 缩进两格的一段文字。
 func (r *railText) paragraph(text string) {
-	r.wrap("  ", text, benchTheme.Muted, railSummaryRows)
+	for _, line := range r.wrap(text, 0, r.limits.summary) {
+		r.lines = append(r.lines, benchTheme.Text.Render(line))
+	}
 }
 
 // item 一条带标记的条目：标记在首行行首，折行悬挂缩进两格。
 func (r *railText) item(mark, text string, style lipgloss.Style) {
-	r.wrap(mark+" ", text, style, railItemRows)
-}
-
-func (r *railText) wrap(lead, text string, style lipgloss.Style, rows int) {
-	wrapped := readingLines(oneLine(text), r.width-2)
-	if len(wrapped) > rows {
-		wrapped = wrapped[:rows]
-		last := []rune(wrapped[rows-1])
-		wrapped[rows-1] = string(last[:len(last)-1]) + "…"
-	}
-	for i, line := range wrapped {
-		if i > 0 {
-			lead = "  "
+	for i, line := range r.wrap(text, 2, r.limits.item) {
+		lead := "  "
+		if i == 0 {
+			lead = mark + " "
 		}
 		r.lines = append(r.lines, lead+style.Render(line))
 	}
+}
+
+// fact 一条设定：种类标签在行首（待核验的用警示色），主体加粗，折行与标签后的文字对齐。
+func (r *railText) fact(fact workbench.BriefFact) {
+	tag := benchTheme.Muted
+	if fact.Pending {
+		tag = benchTheme.Warning
+	}
+	label := factKinds[fact.Kind]
+	indent := lipgloss.Width(label) + 1
+	for i, line := range r.wrap(fact.Subject+"："+fact.Text, indent, r.limits.item) {
+		if i > 0 {
+			r.lines = append(r.lines, strings.Repeat(" ", indent)+benchTheme.Text.Render(line))
+			continue
+		}
+		body := benchTheme.Text.Render(line)
+		if rest, ok := strings.CutPrefix(line, fact.Subject); ok {
+			body = benchTheme.Title.Render(fact.Subject) + benchTheme.Text.Render(rest)
+		}
+		r.lines = append(r.lines, tag.Render(label)+" "+body)
+	}
+}
+
+// wrap 把 text 折成宽 width-indent 的行，超出 rows 行的末行以省略号收尾。
+func (r *railText) wrap(text string, indent, rows int) []string {
+	lines := readingLines(oneLine(text), r.width-indent)
+	if len(lines) > rows {
+		lines = lines[:rows]
+		last := []rune(lines[rows-1])
+		lines[rows-1] = string(last[:len(last)-1]) + "…"
+	}
+	return lines
 }

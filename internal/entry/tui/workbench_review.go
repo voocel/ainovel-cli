@@ -181,10 +181,16 @@ func (m model) reviewContent() (string, error) {
 			body.WriteString(styleHint.Render("· ") + line + "\n")
 		}
 	}
+	if len(view.Facts) > 0 {
+		section("设定")
+		for _, fact := range view.Facts {
+			body.WriteString(styleHint.Render("· ") + factLine(fact) + "\n")
+		}
+	}
 	for _, list := range []struct {
 		title string
 		items []string
-	}{{"设定", view.Facts}, {"删除", view.Removed}, {"其他变更", view.Other}} {
+	}{{"删除", view.Removed}, {"其他变更", view.Other}} {
 		if len(list.items) == 0 {
 			continue
 		}
@@ -337,7 +343,7 @@ func (m model) detailReport() string {
 			if fact.Pending {
 				mark = styleWarn.Render("待核验 ")
 			}
-			view.WriteString(mark + fact.Text + "\n")
+			view.WriteString(mark + factLine(fact.Fact) + "\n")
 		}
 	}
 	intent := bench.snap.Intent

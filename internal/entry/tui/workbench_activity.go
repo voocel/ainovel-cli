@@ -110,7 +110,7 @@ func (m model) stepLine(entry activity.Entry, width int, clock bool) string {
 		// 创作已停但这次调用没等到收尾（中途取消）：不能再显示为进行中。
 		body = benchTheme.Muted.Render("◦ " + label + detail + " · 未收尾")
 	default:
-		line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " " + label + detail
+		line := m.bench.pulse.spinner() + " " + label + detail
 		if entry.Bytes > 0 {
 			line += " · 已接收 " + formatDataSize(entry.Bytes)
 		}
@@ -143,12 +143,17 @@ func noticeLine(entry activity.Entry) string {
 	}
 }
 
-func (m model) waitingLine(feed activity.Snapshot) string {
-	line := spinnerFrames[m.bench.spin%len(spinnerFrames)] + " 等待模型回应"
+// waitingText 请求已发出、第一个字还没到时的等待计时。
+func waitingText(feed activity.Snapshot) string {
+	text := "等待模型回应"
 	if !feed.WaitingSince.IsZero() {
-		line += fmt.Sprintf(" · %d 秒", int(time.Since(feed.WaitingSince).Seconds()))
+		text += fmt.Sprintf(" · %d 秒", int(time.Since(feed.WaitingSince).Seconds()))
 	}
-	return styleFocus.Render(line)
+	return text
+}
+
+func (m model) waitingLine(feed activity.Snapshot) string {
+	return styleFocus.Render(m.bench.pulse.spinner() + " " + waitingText(feed))
 }
 
 // itemLines 结构化产出一条一行，折行时悬挂缩进两格，条与条一眼分得开。
@@ -165,6 +170,14 @@ func itemLines(text string, width int) []string {
 	return lines
 }
 
+// blockStyle 输出块文字的样式：思考淡下去，产出用正文色。
+func blockStyle(block activity.OutputBlock) lipgloss.Style {
+	if block.Kind == activity.Thinking {
+		return benchTheme.Thought
+	}
+	return benchTheme.Text
+}
+
 func blockText(block activity.OutputBlock, width int) []string {
 	if block.Kind == activity.Item {
 		return itemLines(string(block.Text), width)
@@ -175,12 +188,8 @@ func blockText(block activity.OutputBlock, width int) []string {
 // blockLines 一个输出块在活动视图里的排版：标题行（时钟 · 任务 · 栏目）+ 正文 + 空行。
 func (m model) blockLines(block activity.OutputBlock, width int) []string {
 	return m.bench.outputCache.lines(block, width, func() []string {
-		style := benchTheme.Text
 		kind := outputKindLabel(block)
-		switch block.Kind {
-		case activity.Thinking:
-			style = benchTheme.Muted
-		case activity.Prose:
+		if block.Kind == activity.Prose {
 			kind = "正文预览 · 未入稿"
 		}
 		task := block.TaskLabel
@@ -201,6 +210,7 @@ func (m model) blockLines(block activity.OutputBlock, width int) []string {
 		if block.Truncated {
 			lines = append(lines, benchTheme.Warning.Render("… 本段前文已截断，仅保留最近输出"))
 		}
+		style := blockStyle(block)
 		for _, line := range blockText(block, width) {
 			lines = append(lines, style.Render(line))
 		}
@@ -385,17 +395,14 @@ type sceneRow struct {
 }
 
 // sceneRows 现场条正文：本轮时间线的最后 height 行，与活动视图同源同序，排得更紧——
-// 输出块以栏目名起头、竖线引出文字，段间空行不占行；进行中的步骤、等待计时与停下后的
-// 处境钉在最后，不满时从底部长起。只排版看得见的最后几块；正文视图正在显示的那一章，正文不在这里重复。
+// 输出块以栏目名起头、文字悬挂缩进，段间空行不占行；进行中的步骤与停下后的处境钉在
+// 最后，不满时从底部长起。只排版看得见的最后几块；正文视图正在显示的那一章，正文不在这里重复。
 func (m model) sceneRows(feed activity.Snapshot, width, height int) []sceneRow {
 	m.bench.sceneCache.prune(feed.Output)
 	items, open := timeline(feed)
 	var tail []sceneRow
 	for _, entry := range open {
 		tail = append(tail, sceneRow{line: m.stepLine(entry, width, false), entry: entry, step: true})
-	}
-	if feed.Waiting {
-		tail = append(tail, sceneRow{line: m.waitingLine(feed)})
 	}
 	if !m.bench.writing && m.bench.hasRun() {
 		// 创作停下后最后一行是当下处境：这一行永远说的是"此刻"。
@@ -408,9 +415,12 @@ func (m model) sceneRows(feed activity.Snapshot, width, height int) []sceneRow {
 		if entry := items[i].entry; entry != nil {
 			chunk = []sceneRow{{line: m.stepLine(*entry, width, false), entry: *entry, step: true}}
 		} else if block := *items[i].block; !m.proseOf(block, shown) {
-			label := outputKindLabel(block)
-			head := benchTheme.Accent.Render(label) + " "
-			indent := strings.Repeat(" ", lipgloss.Width(label)+1)
+			label, labelStyle := outputKindLabel(block), benchTheme.Accent
+			if block.Kind == activity.Thinking {
+				labelStyle = benchTheme.Muted
+			}
+			head := labelStyle.Render(label) + "  "
+			indent := strings.Repeat(" ", lipgloss.Width(label)+2)
 			for j, body := range m.sceneBlock(block, width-len(indent)) {
 				row := sceneRow{line: head + body, body: body}
 				if j > 0 {
@@ -431,30 +441,40 @@ func (m model) sceneRows(feed activity.Snapshot, width, height int) []sceneRow {
 	return append(make([]sceneRow, height-len(rows)), rows...)
 }
 
-// sceneBlock 输出块在现场条里竖线之后的部分：段间空行不占行。整块从头排版（与活动视图
+// sceneBlock 输出块在现场条里栏目名之后的文字：段间空行不占行。整块从头排版（与活动视图
 // 同一锚点）：换行点不随增量漂移，新字只在末行生长，满行后整体上推一行。
 func (m model) sceneBlock(block activity.OutputBlock, width int) []string {
 	return m.bench.sceneCache.lines(block, width, func() []string {
-		style := benchTheme.Text
-		if block.Kind == activity.Thinking {
-			style = benchTheme.Muted
-		}
-		bar := benchTheme.Border.Render("▏")
+		style := blockStyle(block)
 		var lines []string
-		for _, row := range blockText(block, max(1, width-2)) {
+		for _, row := range blockText(block, max(1, width)) {
 			if strings.TrimSpace(row) != "" {
-				lines = append(lines, bar+" "+style.Render(row))
+				lines = append(lines, style.Render(row))
 			}
 		}
 		return lines
 	})
 }
 
+// sceneTitleLine 现场的标题线说的是「此刻」：创作进行中时行首呼吸着星、光沿整行流过
+// （pulse.go），停下即静止；等待模型回应的计时在行尾。都不另占一行。
+func (m model) sceneTitleLine(feed activity.Snapshot, ok bool, width int) string {
+	title, wait := m.sceneTitle(feed, ok), ""
+	if feed.Waiting {
+		wait = " " + benchTheme.Muted.Render(waitingText(feed))
+		width -= lipgloss.Width(wait)
+	}
+	if !m.bench.writing {
+		return sectionTitle(benchTheme.Muted.Render(title), width) + wait
+	}
+	return m.bench.pulse.star() + " " + m.bench.pulse.flowLine(title, width-2) + wait
+}
+
 // sceneLines 创作现场：空行隔开正文、标题线、时间线尾巴；没有实时活动时最后一行说明处境。
 func (m model) sceneLines(width int) []string {
 	feed, ok := m.activityFeed()
-	lines := []string{"", sectionTitle(benchTheme.Muted.Render(m.sceneTitle(feed, ok)), width)}
-	if !ok || len(feed.Entries) == 0 && len(feed.Output) == 0 && !feed.Waiting {
+	lines := []string{"", m.sceneTitleLine(feed, ok, width)}
+	if !ok || len(feed.Entries) == 0 && len(feed.Output) == 0 {
 		for len(lines) < benchSceneRows-1 {
 			lines = append(lines, "")
 		}

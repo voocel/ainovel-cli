@@ -17,7 +17,7 @@ const (
 	benchHeaderRows   = 2   // 标题/状态 + 进度分隔线
 	benchFooterRows   = 3   // 分隔线（含反馈）+ 输入 + 提示
 	benchTabRows      = 2   // 标签 + 分隔线
-	sceneBodyRows     = 8   // 现场条正文：本轮时间线的最后几行，进行中的步骤与等待计时钉在最后
+	sceneBodyRows     = 8   // 现场条正文：本轮时间线的最后几行，进行中的步骤钉在最后
 	benchCardRows     = 4   // 决定卡：标题线、原因、变更摘要、操作
 	directoryNoteRows = 3   // 目录底部：空行 + 字数/要求数 + 推进方式
 	benchPad          = 2   // 主栏左右留白
@@ -323,7 +323,7 @@ func (m model) benchFooter(l benchLayout) []string {
 	input.Width = max(1, inner-lipgloss.Width(context)-5)
 	input.Placeholder = m.inputPlaceholder()
 	input.TextStyle = benchTheme.Text.Background(benchColors.InputBackground)
-	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(benchColors.Placeholder).Background(benchColors.InputBackground)
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(benchColors.Faint).Background(benchColors.InputBackground)
 	input.Cursor.Style = benchTheme.Text
 	input.Cursor.TextStyle = input.TextStyle
 	if input.Value() != "" {

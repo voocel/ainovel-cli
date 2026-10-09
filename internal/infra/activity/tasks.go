@@ -18,6 +18,7 @@ func (s Scope) clone() Scope {
 type Task struct {
 	OperationID, Label string
 	Kind               string
+	Role               string // 执行这项任务的角色（Worker 的模型角色）
 	Phase              Kind
 	Tool, Err          string
 	Attempt            int
@@ -53,7 +54,7 @@ func (s *Snapshot) foldTask(e Event) {
 		}
 		t := &s.Tasks[index]
 		t.Label, t.StartedAt, t.Attempt = e.TaskLabel, e.At, e.Attempt
-		t.Kind = e.TaskKind
+		t.Kind, t.Role = e.TaskKind, e.Role
 		t.Scope = e.Scope.clone()
 		t.Done, t.Err, t.Tool, t.EndedAt = false, "", "", time.Time{}
 	}
@@ -71,9 +72,11 @@ func (s *Snapshot) foldTask(e Event) {
 		t.Done, t.EndedAt, t.Err, t.Phase = true, e.At, e.Err, TaskEnd
 		if worked := e.At.Sub(t.StartedAt); !t.StartedAt.IsZero() && worked > 0 {
 			s.Worked += worked
+			s.role(t.Role).Worked += worked
 		}
 	case Usage:
 		t.Usage.add(e.Usage)
+		s.role(t.Role).Usage.add(e.Usage)
 	}
 	switch e.Kind {
 	case TurnStart:
@@ -83,4 +86,22 @@ func (s *Snapshot) foldTask(e Event) {
 	case Retry:
 		t.Retries++
 	}
+}
+
+// RoleUsage 是本轮某个角色名下全部任务的累计：随事件累加，不受任务清单保留上限影响。
+// 用量含任务里的单次核对（语义合规），Worked 是已结束任务的执行时长之和。
+type RoleUsage struct {
+	Role   string
+	Usage  UsageTotals
+	Worked time.Duration
+}
+
+func (s *Snapshot) role(name string) *RoleUsage {
+	for i := range s.Roles {
+		if s.Roles[i].Role == name {
+			return &s.Roles[i]
+		}
+	}
+	s.Roles = append(s.Roles, RoleUsage{Role: name})
+	return &s.Roles[len(s.Roles)-1]
 }

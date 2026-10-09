@@ -11,14 +11,14 @@ import (
 )
 
 // ProposalView 是待裁决稿件里正文以外的变更，用故事语言描述（D66）：大纲按提案生效后
-// 的序号成树，人物用名称，设定写成主体+谓词+内容，不露文档 ID 与原始内容。正文候选
+// 的序号成树，人物用名称，设定写成种类+主体+内容，不露文档 ID、谓词键与原始内容。正文候选
 // 另见 Candidates，罗盘的前后对比由入口按当前罗盘呈现。
 type ProposalView struct {
 	// Summary 是规模摘要的各段，如「新增 1 卷 · 5 个故事弧 · 7 章」「设定 21 条」。
 	Summary  []string               `json:"summary,omitempty"`
 	Outline  []narrative.VolumeView `json:"outline,omitempty"`  // 新增或修订的卷弧章，祖先补齐
 	Entities []narrative.EntityView `json:"entities,omitempty"` // 新增或修订的人物、地点、物品、组织
-	Facts    []string               `json:"facts,omitempty"`    // 新增或修订的设定
+	Facts    []Fact                 `json:"facts,omitempty"`    // 新增或修订的设定
 	Compass  *model.Compass         `json:"compass,omitempty"`  // 提案后的故事罗盘，未改动为空
 	Removed  []string               `json:"removed,omitempty"`  // 删除的内容
 	Other    []string               `json:"other,omitempty"`    // 其余种类的改动
@@ -66,7 +66,7 @@ func proposalView(project projectdoc.Snapshot, proposal model.Proposal) (Proposa
 			if err := json.Unmarshal(patch.Content, &fact); err != nil {
 				return ProposalView{}, fmt.Errorf("decode proposed fact: %w", err)
 			}
-			view.Facts = append(view.Facts, next.FactSummary(fact))
+			view.Facts = append(view.Facts, factOf(next, fact))
 		case model.DocumentCompass:
 			view.Compass = new(model.Compass)
 			if err := json.Unmarshal(patch.Content, view.Compass); err != nil {

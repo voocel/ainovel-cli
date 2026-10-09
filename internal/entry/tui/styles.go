@@ -25,7 +25,7 @@ var (
 	styleSubtitle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
 )
 
-// spinnerFrames 复用 800ms 轮询节拍做创作中动画，不引入额外定时器。
+// spinnerFrames 是进行中步骤与顶栏的转圈，随创作动画的节拍换帧（pulse.go）。
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // newInput 统一文本输入样式：所有页面的输入框长一个样。

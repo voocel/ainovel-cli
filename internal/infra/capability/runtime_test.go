@@ -452,6 +452,9 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if len(feed.Tasks) != 1 || !feed.Tasks[0].Done || feed.Tasks[0].Err != "" || feed.Tasks[0].OperationID != operation.ID {
 		t.Fatalf("successful execution did not close its task: %+v", feed.Tasks)
 	}
+	if feed.Tasks[0].Role != "editor" {
+		t.Fatalf("the task must carry the role of the worker that ran it: %q", feed.Tasks[0].Role)
+	}
 	var rejected, accepted int
 	for _, entry := range feed.Entries {
 		if entry.Tool != "verdict_submit" || !entry.Done {

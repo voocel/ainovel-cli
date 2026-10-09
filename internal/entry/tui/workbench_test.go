@@ -117,13 +117,29 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 		}
 		return strings.Join(cells, "\n")
 	}
-	// 正在写的章：规划、覆盖它的要求（没审过是一个点），底部本轮花费；运行明细不常驻。
+	// 上块是正在写的章的依据：规划、覆盖它的要求（没审过是一个点）；下块本轮钉在底部：
+	// 花费与用时、创作团队（每个角色的模型、用时、用量、缓存命中与花费）、合计。
 	view := rail(wide)
 	requireContains(t, view,
-		"写作依据", "第 4 章 · 门后的声音", "◉ 写作中", "规划", "陈渡循着回信找到老宅",
+		"写作依据 ─", "第 4 章 · 门后的声音", "◉ 写作中", "规划", "陈渡循着回信找到老宅",
 		"要求", "3 条", "· 禁止 主角死亡", "· 用声音与一个具体动作承接悬念 · 第 4 章",
-		"本轮", "$0.42 · 已用 4m", "↑233K ↓58K · 缓存 80%", "● deepseek-v4-flash", "$0.11", "· deepseek-v4-pro", "$0.31", "连接重试 1 次",
+		"本轮 ─", "$0.42 · 4m", "✓ 策划 deepseek-v4-flash", "4m00s", "↑41K ↓9.0K · 缓存 12%", "$0.31",
+		"◉ 作者 deepseek-v4-flash", "↑192K ↓49K · 缓存 95%", "$0.11", "○ 编辑 deepseek-v4-flash", "本轮还没出场",
+		"合计 ↑233K ↓58K · 缓存 80%", "连接重试 1 次",
 	)
+	if cells := strings.Split(view, "\n"); !strings.Contains(cells[len(cells)-1], "连接重试") || !strings.Contains(cells[len(cells)-2], "合计") {
+		t.Fatalf("the run card must sit at the bottom of the rail:\n%s", view)
+	}
+	// 每个角色的累计来自快照的角色累计，状态取它最后一项任务（失败标出来）；没有定价的
+	// 模型（中转、自部署）不显示 $0。
+	crew := wide
+	crew.bench.activity.Usage.Cost = 0
+	crew.bench.activity.Roles = []activity.RoleUsage{{Role: "editor", Worked: 3 * time.Minute, Usage: activity.UsageTotals{Input: 50000, Output: 8000, CacheRead: 25000}}}
+	crew.bench.activity.Tasks = []activity.Task{{OperationID: "r2", Label: "审阅第 4–6 章", Role: "editor", Done: true, Err: "模型连接中断"}}
+	if view := rail(crew); strings.Contains(view, "$") || !strings.Contains(view, "! 编辑 deepseek-v4-flash") || !strings.Contains(view, "3m00s") ||
+		!strings.Contains(view, "↑50K ↓8.0K · 缓存 50%") || strings.Count(view, "本轮还没出场") != 2 {
+		t.Fatalf("crew must show each role's own totals and hide unknown prices:\n%s", view)
+	}
 	for _, gone := range []string{"代理", "工具调用", "条消息", "本轮运行"} {
 		if strings.Contains(view, gone) {
 			t.Fatalf("rail still shows run telemetry %q:\n%s", gone, view)
@@ -144,7 +160,7 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 	requireContains(t, rail(reviewed),
 		"第 3 章 · 回信", "✓ ", " 字", "违反 1 · 2 条", "✓ 禁止 主角死亡", "! 保持悬疑氛围",
 		"审阅意见", "阻塞 1 · 2 条", "! 回信背面的笔迹提前揭示了门后人的身份", "· 雨声意象连续三章出现",
-		"本章设定", "待核验 1 · 2 条", "· 「陈渡」持有：一把陌生的钥匙", "◌ 「回信」笔迹：陈渡本人",
+		"本章设定", "待核验 1 · 2 条", "事件 陈渡：在口袋里摸到一把陌生的钥匙", "伏笔 回信：背面是陈渡本人的笔迹",
 	)
 	// 卷头行：这一部分的进度（点击头行会折叠，这里直接移光标）。
 	section := wide
@@ -178,7 +194,7 @@ func TestProseViewStreamsLiveChapterAndSceneShowsThinking(t *testing.T) {
 	requireContains(t, view,
 		"◉ 正在落笔第 4 章", "已入稿 3 / 8 章",
 		"实时预览 · 最终以入稿版本为准", "◌ 生成中的草稿 · 未入稿", "门后却传来一个声音：“你今天来晚了。”▍",
-		"AI 创作现场 · 第 4 章写作", "✓ 查阅设定与前情", "落笔章节工作稿 · 已接收 2.0K", "思考 ▏ 保留上一章的雨声作为过渡",
+		"AI 创作现场 · 第 4 章写作", "✓ 查阅设定与前情", "落笔章节工作稿 · 已接收 2.0K", "思考  保留上一章的雨声作为过渡",
 		"681 字 · 2 条要求", "自动推进",
 	)
 	if strings.Count(view, "门后却传来一个声音") != 1 {
@@ -205,7 +221,7 @@ func TestProseViewStreamsLiveChapterAndSceneShowsThinking(t *testing.T) {
 	}
 	// 还没收到正文时只显示构思状态与光标，现场条看思考流。
 	m.bench.activity.Output = m.bench.activity.Output[:1]
-	requireContains(t, frame(m), "◌ 正在构思", "思考 ▏")
+	requireContains(t, frame(m), "◌ 正在构思", "思考  ")
 }
 
 // 现场条与活动视图同一排版锚点：逐字追加时前几行纹丝不动、末行只在尾部生长，满行后整体上推一行。
@@ -213,11 +229,11 @@ func TestSceneTailStreamsWithoutReflowing(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	l := m.benchLayout()
 	block := &m.bench.activity.Output[0]
-	tail := func() []string { // 思考块各行竖线之后的文字
+	tail := func() []string { // 思考块各行栏目名之后的文字
 		var lines []string
 		for _, row := range m.sceneRows(m.bench.activity, l.inner, sceneBodyRows) {
-			if _, text, ok := strings.Cut(ansi.Strip(row.line), "▏ "); ok {
-				lines = append(lines, text)
+			if row.body != "" {
+				lines = append(lines, ansi.Strip(row.body))
 			}
 		}
 		return lines
@@ -253,7 +269,8 @@ func TestSceneTailStreamsWithoutReflowing(t *testing.T) {
 	}
 }
 
-// 现场条是本轮时间线的尾巴：从底部长起，进行中的步骤与等待计时钉在最后一行。
+// 现场条是本轮时间线的尾巴：从底部长起，进行中的步骤钉在最后；标题线说「此刻」——创作中
+// 行首转着动画、等待计时在行尾，停下后动画消失。
 func TestSceneStripReflectsWaitingIdleAndLeavesWithActivityView(t *testing.T) {
 	m := studioModel(t, 150, 40)
 	m.bench.activity.Waiting, m.bench.activity.WaitingSince = true, time.Now().Add(-7*time.Second)
@@ -263,24 +280,23 @@ func TestSceneStripReflectsWaitingIdleAndLeavesWithActivityView(t *testing.T) {
 	l := m.benchLayout()
 	rows := strings.Split(frame(m), "\n")
 	scene := rows[l.sceneY : l.sceneY+benchSceneRows]
-	if cell := ansi.Cut(scene[0], l.mainX, l.railX); strings.TrimSpace(cell) != "" {
+	main := func(row string) string { return strings.TrimSpace(ansi.Cut(row, l.mainX, l.mainX+l.mainWidth)) }
+	if cell := main(scene[0]); cell != "" {
 		t.Fatalf("scene strip must start with a blank row, got %q", cell)
 	}
-	if !strings.Contains(scene[1], "AI 创作现场 · 第 4 章写作") || !strings.Contains(scene[benchSceneRows-1], "等待模型回应") ||
-		!strings.Contains(scene[benchSceneRows-2], "✓ 落笔章节工作稿") || !strings.Contains(scene[benchSceneRows-3], "✓ 查阅设定与前情") {
+	pulse := starFrames[m.bench.pulse.frame/starHold%len(starFrames)] + " AI 创作现场 · 第 4 章写作"
+	if !strings.Contains(scene[1], pulse) || !strings.HasSuffix(main(scene[1]), "等待模型回应 · 7 秒") ||
+		!strings.Contains(scene[benchSceneRows-1], "✓ 落笔章节工作稿") || !strings.Contains(scene[benchSceneRows-2], "✓ 查阅设定与前情") {
 		t.Fatalf("scene rows out of order:\n%s", strings.Join(scene, "\n"))
 	}
-	// 思考在步骤之上，栏目名只在块首；内容不满时上方留空，不画空竖线。
+	// 思考在步骤之上，栏目名只在块首；内容不满时上方留空。
 	first := -1
 	for i, row := range scene[2:] {
-		if strings.Contains(row, "思考 ▏") {
+		if strings.Contains(row, "思考  ") {
 			first = i
 		}
-		if strings.TrimSpace(ansi.Cut(row, l.mainX, l.railX)) == "▏" {
-			t.Fatalf("empty gutter row leaked into the scene:\n%s", strings.Join(scene, "\n"))
-		}
 	}
-	if first < 0 || strings.TrimSpace(ansi.Cut(scene[2], l.mainX, l.railX)) != "" {
+	if first < 0 || main(scene[2]) != "" {
 		t.Fatalf("scene must grow from the bottom with thinking above the steps:\n%s", strings.Join(scene, "\n"))
 	}
 
@@ -289,6 +305,9 @@ func TestSceneStripReflectsWaitingIdleAndLeavesWithActivityView(t *testing.T) {
 	done.bench.snap.Run.State = domainmodel.RunCompleted
 	done.bench.activity = activity.Snapshot{}
 	requireContains(t, frame(done), "✓ 已完成", "AI 创作现场 · 已完成", "全书完成 · /continue 续写", "/continue 续写（AI 决定篇幅）")
+	if title := main(strings.Split(frame(done), "\n")[l.sceneY+1]); !strings.HasPrefix(title, "AI 创作现场 · 已完成") {
+		t.Fatalf("the star must go out once creation stops: %q", title)
+	}
 
 	prose := studioModel(t, 150, 40).benchLayout()
 	activityLayout := studioModel(t, 150, 40)
@@ -365,7 +384,7 @@ func TestBlueprintProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 				Chapters: []narrative.ChapterPlanView{{Chapter: 5, Title: "旧友", Summary: "苏晚认出陈渡"}},
 			}}}},
 			Entities: []narrative.EntityView{{Name: "苏晚", Kind: domainmodel.EntityCharacter, Aliases: []string{"晚晚"}}},
-			Facts:    []string{"「苏晚」身份：陈渡的旧友"},
+			Facts:    []workbench.Fact{{Kind: domainmodel.CanonState, Subject: "苏晚", Text: "陈渡的旧友"}},
 			Compass:  &domainmodel.Compass{Ending: "真相大白"},
 		},
 	}
@@ -389,7 +408,7 @@ func TestBlueprintProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 	review = ansi.Strip(review)
 	requireContains(t, review,
 		"第 1 卷 · 第一卷 · 未寄出的信", "  第 2 个故事弧 · 门后", "    第 5 章 · 旧友", "      苏晚认出陈渡",
-		"苏晚（人物） 又名 晚晚", "「苏晚」身份：陈渡的旧友", "故事罗盘\n终局：真相大白", "重新规划（意见留作后续章节的要求）",
+		"苏晚（人物） 又名 晚晚", "· 状态 苏晚：陈渡的旧友", "故事罗盘\n终局：真相大白", "重新规划（意见留作后续章节的要求）",
 	)
 	for _, leak := range []string{"{", "plan-", "原始内容"} {
 		if strings.Contains(review, leak) {
@@ -579,11 +598,11 @@ func TestMouseHitsUseTheSharedLayout(t *testing.T) {
 	if _, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: l.sceneY + benchSceneRows - 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}); cmd == nil {
 		t.Fatal("clicking the failed step must open diagnostics")
 	}
-	// 等待计时又占一行，报错步再上移一行；点击等待行、处境行与其余行都不能越界或误命中。
+	// 等待计时在标题线上，不占正文行；点击标题线、处境行与其余行都不能越界或误命中。
 	decided.bench.activity.Waiting = true
 	for y := l.sceneY; y < l.sceneY+benchSceneRows; y++ {
 		_, cmd := decided.Update(tea.MouseMsg{X: l.mainX + 4, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-		if hit := cmd != nil; hit != (y == l.sceneY+benchSceneRows-3) {
+		if hit := cmd != nil; hit != (y == l.sceneY+benchSceneRows-2) {
 			t.Fatalf("scene row %d hit=%v while waiting", y-l.sceneY, hit)
 		}
 	}
@@ -748,10 +767,10 @@ func TestSceneStreamsStructuredItemsWithStickySection(t *testing.T) {
 	m := planningModel(t, 150, 40)
 	l := m.benchLayout()
 	scene := strings.Split(frame(m), "\n")[l.sceneY+2 : l.sceneY+benchSceneRows]
-	if !strings.Contains(scene[0], "大纲 ▏ ") {
+	if !strings.Contains(scene[0], "大纲  ") {
 		t.Fatalf("the outline block was cut at the top but lost its section:\n%s", strings.Join(scene, "\n"))
 	}
-	requireContains(t, strings.Join(scene, "\n"), "设定 ▏ 陈渡（人物） 又名 邮差", "▏ 「陈渡」state.job：镇上最后一位邮差")
+	requireContains(t, strings.Join(scene, "\n"), "设定  陈渡（人物） 又名 邮差", "      「陈渡」state.job：镇上最后一位邮差")
 	if last := scene[len(scene)-1]; !strings.Contains(last, "提交候选稿 · 已接收 18.2K") {
 		t.Fatalf("the submission in progress must stay on the last row: %q", last)
 	}

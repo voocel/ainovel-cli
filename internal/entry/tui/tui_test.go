@@ -524,7 +524,7 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 		}},
 		Briefs: map[int]workbench.ChapterBrief{1: {
 			Requirements: []workbench.BriefRequirement{{ID: "directive:d1", Text: "节奏放缓", Status: domainmodel.CheckSatisfied}},
-			Facts:        []workbench.BriefFact{{Text: "「沈舟」心境：平静"}},
+			Facts:        []workbench.BriefFact{{Fact: workbench.Fact{Kind: domainmodel.CanonState, Subject: "沈舟", Text: "平静"}}},
 		}},
 		Findings: []workbench.WorkbenchFinding{{ID: "review/0", ReviewFinding: domainmodel.ReviewFinding{ChapterID: "chapter-1", Severity: domainmodel.FindingNote, Note: "伏笔呼应完整"}}},
 		Run:      &run,
@@ -538,7 +538,7 @@ func TestWorkbenchTwoPaneOutlineDetailAndCandidateReading(t *testing.T) {
 		}
 	}
 	m, _ = submit(t, m, "/v")
-	requireContains(t, m.bench.body.View(), "要求", "✓ 节奏放缓", "（已兑现）", "审阅意见", "伏笔呼应完整", "本章设定", "「沈舟」心境：平静", "创作意图")
+	requireContains(t, m.bench.body.View(), "要求", "✓ 节奏放缓", "（已兑现）", "审阅意见", "伏笔呼应完整", "本章设定", "状态 沈舟：平静", "创作意图")
 	m, _ = press(t, m, tea.KeyEsc)
 	m.bench.pane = benchPaneOutline
 	// 选中第 2 章（待确认）回车 → 读候选稿并标注。
@@ -895,13 +895,13 @@ func TestWorkbenchActivityFeedRendersAndUnsubscribes(t *testing.T) {
 	if strings.Contains(view, "workspace_put_chapter") {
 		t.Fatalf("raw tool name leaked into view:\n%s", view)
 	}
-	// 下一轮请求已发出、尚无增量：现场显示等待中，动画帧随唤醒推进。
-	spin := m.bench.spin
+	// 下一轮请求已发出、尚无增量：现场显示等待中；唤醒记下收到活动的时刻，现场的光据此走快。
+	heard := m.bench.pulse.heard
 	publish(activity.TurnStart, nil)
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
-	if view := m.View(); !strings.Contains(view, "等待模型回应") || m.bench.spin == spin {
-		t.Fatalf("waiting indicator missing (spin %d→%d):\n%s", spin, m.bench.spin, view)
+	if view := m.View(); !strings.Contains(view, "等待模型回应") || !m.bench.pulse.heard.After(heard) {
+		t.Fatalf("waiting indicator missing or the wakeup went unheard:\n%s", view)
 	}
 
 	// 陈旧代际的唤醒不得写入当前工作台。
@@ -959,7 +959,7 @@ func TestWorkbenchRendersStreamingProsePreview(t *testing.T) {
 	updated, _ = m.Update(activityMsg{gen: m.bench.gen, open: true})
 	m = updated.(model)
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"实时预览 · 最终以入稿版本为准", "正文 ▏ 少年在山野间奔跑，晨雾未散。"} {
+	for _, want := range []string{"实时预览 · 最终以入稿版本为准", "正文  少年在山野间奔跑，晨雾未散。"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("scene missing %q:\n%s", want, view)
 		}
@@ -998,7 +998,7 @@ func TestActivityShowsThinkingExcerptAndErrorReason(t *testing.T) {
 	m = updated.(model)
 	view := ansi.Strip(m.View())
 	for _, want := range []string{
-		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "思考 ▏ 需要回到第三章补一处伏笔",
+		"给出审阅结论遇到问题", "裁定范围与任务范围不一致", "思考  需要回到第三章补一处伏笔",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)

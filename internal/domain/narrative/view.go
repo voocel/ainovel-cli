@@ -363,11 +363,22 @@ func (s *Story) planLabelByID(id string) string {
 
 // FactSummary 是事实的一句话描述：标签加内容，供要求文本这类纯文字场合使用。
 func (s *Story) FactSummary(fact model.CanonFact) string {
+	return s.factLabel(fact) + "：" + factText(fact)
+}
+
+// FactNote 是给读者看的事实：主体名与内容。谓词键（state.mood 这类）是给模型与程序的
+// 受控命名空间，不给读者看；种类由入口按 fact.Kind 写成读者用语。
+func (s *Story) FactNote(fact model.CanonFact) (subject, text string) {
+	return s.subjectName(fact.SubjectID), factText(fact)
+}
+
+// factText 事实的内容：字符串值取原文，其余照录 JSON。
+func factText(fact model.CanonFact) string {
 	var text string
 	if json.Unmarshal(fact.Value, &text) != nil {
 		text = string(fact.Value)
 	}
-	return s.factLabel(fact) + "：" + text
+	return text
 }
 
 // FactLabel 形如「主体」谓词；事件与关系按章归属，附来源章。

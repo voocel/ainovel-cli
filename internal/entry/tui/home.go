@@ -129,7 +129,7 @@ func newPremiseInput(width int) textarea.Model {
 	style := textarea.Style{
 		Base: surface, CursorLine: surface, EndOfBuffer: surface, Prompt: surface,
 		Text:        surface.Foreground(benchColors.Text),
-		Placeholder: surface.Foreground(benchColors.Placeholder),
+		Placeholder: surface.Foreground(benchColors.Faint),
 	}
 	input.FocusedStyle, input.BlurredStyle = style, style
 	input.Cursor.Style = benchTheme.Text
@@ -482,7 +482,7 @@ func (m model) createProject() (tea.Model, tea.Cmd) {
 	}
 	watch := m.openBench(projectID)
 	m.bench.writing = true
-	return m, tea.Batch(m.startQuickWriteCmd(params), pollTick(m.bench.gen), watch)
+	return m, tea.Batch(m.startQuickWriteCmd(params), pollTick(m.bench.gen), m.bench.pulse.start(m.bench.gen), watch)
 }
 
 // openProject 打开作品库中的既有作品并恢复落点。

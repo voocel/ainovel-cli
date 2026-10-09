@@ -60,7 +60,10 @@ func studioModel(t *testing.T, width, height int) model {
 				{ID: "intent:forbidden:0", Text: "主角死亡", Forbidden: true, Status: domainmodel.CheckSatisfied},
 				{ID: suspense.ID, Text: suspense.Text, Status: domainmodel.CheckViolated},
 			},
-			Facts: []workbench.BriefFact{{Text: "「陈渡」持有：一把陌生的钥匙"}, {Text: "「回信」笔迹：陈渡本人", Pending: true}},
+			Facts: []workbench.BriefFact{
+				{Fact: workbench.Fact{Kind: domainmodel.CanonEvent, Subject: "陈渡", Text: "在口袋里摸到一把陌生的钥匙，记不起它的来历"}},
+				{Fact: workbench.Fact{Kind: domainmodel.CanonForeshadow, Subject: "回信", Text: "背面是陈渡本人的笔迹"}, Pending: true},
+			},
 		},
 		4: {Requirements: []workbench.BriefRequirement{
 			{ID: "intent:forbidden:0", Text: "主角死亡", Forbidden: true}, suspense,
@@ -83,12 +86,12 @@ func studioModel(t *testing.T, width, height int) model {
 		},
 		Tasks: []activity.Task{
 			{
-				OperationID: "planning", Label: "全书规划", Kind: string(domainmodel.OperationDevelopPlan), Done: true,
+				OperationID: "planning", Label: "全书规划", Kind: string(domainmodel.OperationDevelopPlan), Role: "architect", Done: true,
 				StartedAt: at.Add(-10 * time.Minute), EndedAt: at.Add(-6 * time.Minute), Turns: 4, Calls: 3,
 				Usage: activity.UsageTotals{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31},
 			},
 			{
-				OperationID: "writing", Label: "第 4 章写作", Kind: string(domainmodel.OperationWriteChapter),
+				OperationID: "writing", Label: "第 4 章写作", Kind: string(domainmodel.OperationWriteChapter), Role: "writer",
 				Phase: activity.Prose, StartedAt: at, Scope: activity.Scope{ChapterNumber: 4}, Turns: 3, Calls: 10, Retries: 1,
 				Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11},
 			},
@@ -100,6 +103,10 @@ func studioModel(t *testing.T, width, height int) model {
 			{Model: "deepseek-v4-flash", Provider: "deepseek", Messages: 7, FirstKind: string(domainmodel.OperationWriteChapter),
 				FirstAt: at.Add(-5 * time.Minute), LastAt: at,
 				Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11}},
+		},
+		Roles: []activity.RoleUsage{
+			{Role: "architect", Worked: 4 * time.Minute, Usage: activity.UsageTotals{Input: 41000, Output: 9000, CacheRead: 4900, Cost: 0.31}},
+			{Role: "writer", Usage: activity.UsageTotals{Input: 192000, Output: 49000, CacheRead: 181500, Cost: 0.11}},
 		},
 		ActiveModel: "deepseek-v4-flash", Worked: 4 * time.Minute,
 		Output: []activity.OutputBlock{

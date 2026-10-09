@@ -6,6 +6,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/app/novel"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
+	"github.com/voocel/ainovel-cli/internal/domain/narrative"
 )
 
 // ChapterBrief 是一章的依据（页面设计 §3 右栏）：覆盖它的要求与审阅对每项的结论，以及
@@ -27,8 +28,20 @@ type BriefRequirement struct {
 
 // BriefFact 是这一章记下的一条设定；Pending 表示正文改动后待核验（D41）。
 type BriefFact struct {
-	Text    string `json:"text"` // 「主体」谓词：内容
-	Pending bool   `json:"pending,omitempty"`
+	Fact
+	Pending bool `json:"pending,omitempty"`
+}
+
+// Fact 是给读者看的一条设定：种类、主体与内容，不带谓词键（D66：故事语言）。
+type Fact struct {
+	Kind    model.CanonFactKind `json:"kind"`
+	Subject string              `json:"subject"`
+	Text    string              `json:"text"`
+}
+
+func factOf(story *narrative.Story, fact model.CanonFact) Fact {
+	subject, text := story.FactNote(fact)
+	return Fact{Kind: fact.Kind, Subject: subject, Text: text}
 }
 
 // chapterBriefs 按章号组装各已规划章节的依据：要求与审阅闸门同一份清单、同一覆盖规则，
@@ -70,7 +83,7 @@ func chapterBriefs(project projectdoc.Snapshot, final int, current map[string]*n
 			continue
 		}
 		brief := briefs[number]
-		brief.Facts = append(brief.Facts, BriefFact{Text: story.FactSummary(fact), Pending: slices.Contains(pending, fact.ID)})
+		brief.Facts = append(brief.Facts, BriefFact{Fact: factOf(story, fact), Pending: slices.Contains(pending, fact.ID)})
 		briefs[number] = brief
 	}
 	return briefs

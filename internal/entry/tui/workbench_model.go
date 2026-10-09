@@ -82,7 +82,16 @@ type modelPanel struct {
 	message      string
 }
 
-var roleLabels = map[string]string{"": "默认", "architect": "策划 architect", "writer": "作者 writer", "editor": "编辑 editor"}
+// roleNames 是模型角色的读者用语；有哪些角色、按什么顺序以 Models.Roles 为准。
+var roleNames = map[string]string{"": "默认", "architect": "策划", "writer": "作者", "editor": "编辑"}
+
+// roleLabel 面板与提示里的角色名：中文名附配置键，默认绑定只写「默认」。
+func roleLabel(role string) string {
+	if role == "" {
+		return roleNames[role]
+	}
+	return roleNames[role] + " " + role
+}
 
 func (p *modelPanel) role() string       { return p.roles[p.roleIdx] }
 func (p *modelPanel) connection() string { return pick(p.connections, p.connIdx) }
@@ -243,8 +252,8 @@ func (m model) applyModelPanel(p *modelPanel) model {
 	if current.Inherited {
 		target = "跟随默认（" + target + "）"
 	}
-	m.bench.notice = fmt.Sprintf("已切换：%s → %s · 思考 %s · %s", roleLabels[role], target, thinkingLabel(current.Thinking), when)
-	m.bench.addEcho(fmt.Sprintf("你把%s换成 %s · 思考 %s", roleLabels[role], target, thinkingLabel(current.Thinking)))
+	m.bench.notice = fmt.Sprintf("已切换：%s → %s · 思考 %s · %s", roleLabel(role), target, thinkingLabel(current.Thinking), when)
+	m.bench.addEcho(fmt.Sprintf("你把%s换成 %s · 思考 %s", roleLabel(role), target, thinkingLabel(current.Thinking)))
 	m.bench.modelPanel = nil
 	return m
 }
@@ -253,7 +262,7 @@ func (m model) applyModelPanel(p *modelPanel) model {
 func (m model) modelPanelLines(width int) []string {
 	p := m.bench.modelPanel
 	lines := []string{sectionTitle(benchTheme.Muted.Render("模型 · ←→ 切换 · Tab 换行 · Enter 应用 · Esc 取消"), width)}
-	values := [panelFieldCount]string{roleLabels[p.role()], p.connection(), p.model(), thinkingLabel(p.level())}
+	values := [panelFieldCount]string{roleLabel(p.role()), p.connection(), p.model(), thinkingLabel(p.level())}
 	if p.role() != "" && p.connection() == followDefault {
 		values[panelConnection], values[panelModel] = "跟随默认", "跟随默认"
 	}

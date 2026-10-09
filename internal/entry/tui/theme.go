@@ -7,8 +7,8 @@ import "github.com/charmbracelet/lipgloss"
 var benchColors = struct {
 	Text, Muted, Border, Accent      lipgloss.AdaptiveColor
 	SelectedText, SelectedBackground lipgloss.AdaptiveColor
-	Placeholder, InputBackground     lipgloss.AdaptiveColor
-	Warning, Error, Success          lipgloss.AdaptiveColor
+	Faint, InputBackground           lipgloss.AdaptiveColor
+	Warning, Error, Success, Glow    lipgloss.AdaptiveColor
 }{
 	Text:               lipgloss.AdaptiveColor{Light: "#252F30", Dark: "#DDE3DD"},
 	Muted:              lipgloss.AdaptiveColor{Light: "#56635D", Dark: "#A8B5AC"},
@@ -16,17 +16,18 @@ var benchColors = struct {
 	Accent:             lipgloss.AdaptiveColor{Light: "#356B58", Dark: "#A5C6AA"},
 	SelectedText:       lipgloss.AdaptiveColor{Light: "#244A39", Dark: "#DCE9DC"},
 	SelectedBackground: lipgloss.AdaptiveColor{Light: "#DDE7D9", Dark: "#2B3C30"},
-	Placeholder:        lipgloss.AdaptiveColor{Light: "#8B9294", Dark: "#8E9699"},
+	Faint:              lipgloss.AdaptiveColor{Light: "#8B9294", Dark: "#8E9699"},
 	InputBackground:    lipgloss.AdaptiveColor{Light: "#ECEEEF", Dark: "#303438"},
 	Warning:            lipgloss.AdaptiveColor{Light: "#92541B", Dark: "#F0B477"},
 	Error:              lipgloss.AdaptiveColor{Light: "#AD352F", Dark: "#FF928B"},
 	Success:            lipgloss.AdaptiveColor{Light: "#32633B", Dark: "#8BCB94"},
+	Glow:               lipgloss.AdaptiveColor{Light: "#0E6646", Dark: "#E4FBE6"}, // 创作中动画的光：比强调色更亮（深底）或更深（浅底）
 }
 
 type benchStyles struct {
 	Text, Muted, Border, Accent lipgloss.Style
 	Selected, Warning, Error    lipgloss.Style
-	Title                       lipgloss.Style
+	Title, Thought              lipgloss.Style
 }
 
 var benchTheme = newBenchStyles()
@@ -41,5 +42,7 @@ func newBenchStyles() benchStyles {
 		Warning:  lipgloss.NewStyle().Foreground(benchColors.Warning).Bold(true),
 		Error:    lipgloss.NewStyle().Foreground(benchColors.Error).Bold(true),
 		Title:    lipgloss.NewStyle().Foreground(benchColors.Text).Bold(true),
+		// 模型的思考是过程不是产出：比说明再淡一层、斜体，让大纲、设定、正文站在前面。
+		Thought: lipgloss.NewStyle().Foreground(benchColors.Faint).Italic(true),
 	}
 }

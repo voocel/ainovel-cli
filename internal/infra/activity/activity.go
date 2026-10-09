@@ -74,7 +74,8 @@ type Event struct {
 	RunID       string
 	OperationID string
 	TaskLabel   string // 面向用户的任务名称，不参与执行语义。
-	TaskKind    string // Validated operation kind, used to identify the executing role.
+	TaskKind    string // 校验过的任务种类（Operation Kind）
+	Role        string // TaskStart/TaskEnd：执行任务的角色，即 Worker 的模型角色（architect / writer / editor）
 	Scope       Scope
 	Kind        Kind
 	Tool        string // ToolStart/ToolEnd/ToolDelta：规范工具名
@@ -158,6 +159,8 @@ type Snapshot struct {
 	ActiveModel string
 	// Worked 是本轮已结束任务的执行时长之和（进行中的任务由消费侧按 StartedAt 补算）。
 	Worked time.Duration
+	// Roles 是本轮各角色名下任务的累计，按首次出场排序。
+	Roles []RoleUsage
 	// Seq 每次变更递增，消费侧可据此跳过重复渲染。
 	Seq uint64
 }
@@ -260,6 +263,7 @@ func (h *Hub) Snapshot(projectID string) (Snapshot, bool) {
 		copied.Tasks[i].Scope = copied.Tasks[i].Scope.clone()
 	}
 	copied.Models = append([]ModelUsage(nil), snapshot.Models...)
+	copied.Roles = append([]RoleUsage(nil), snapshot.Roles...)
 	copied.Prose = append([]byte(nil), snapshot.Prose...)
 	copied.Output = append([]OutputBlock(nil), snapshot.Output...)
 	for i := range copied.Output {

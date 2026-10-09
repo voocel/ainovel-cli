@@ -60,7 +60,7 @@ func TestPendingProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 		put(model.DocumentPlan, "plan-chapter-2", model.PlanNode{ID: "plan-chapter-2", Kind: model.PlanChapter, ParentID: newArc.ID, Order: 2, Title: "门后", Summary: "声音"}),
 		put(model.DocumentPlan, "plan-chapter-3", model.PlanNode{ID: "plan-chapter-3", Kind: model.PlanChapter, ParentID: newArc.ID, Order: 3, Title: "旧友", Summary: "相认"}),
 		put(model.DocumentEntity, "entity-su", model.Entity{ID: "entity-su", Kind: model.EntityCharacter, Name: "苏晚", Aliases: []string{"晚晚"}}),
-		put(model.DocumentCanon, "fact-su", model.CanonFact{ID: "fact-su", SubjectID: "entity-su", Predicate: "身份", Value: json.RawMessage(`"陈渡的旧友"`)}),
+		put(model.DocumentCanon, "fact-su", model.CanonFact{ID: "fact-su", Kind: model.CanonState, SubjectID: "entity-su", Predicate: "state.identity", Value: json.RawMessage(`"陈渡的旧友"`)}),
 		put(model.DocumentCompass, model.SingletonDocumentID, model.Compass{ScaleMax: 60, Ending: "真相大白"}),
 		put(model.DocumentOverlay, model.SingletonDocumentID, map[string]string{}),
 	}}
@@ -77,7 +77,7 @@ func TestPendingProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 		len(view.Outline[0].Arcs[1].Chapters) != 2 || view.Outline[0].Arcs[1].Chapters[1].Chapter != 3 {
 		t.Fatalf("outline tree = %+v", view.Outline)
 	}
-	if len(view.Entities) != 1 || view.Entities[0].Name != "苏晚" || view.Facts[0] != "「苏晚」身份：陈渡的旧友" ||
+	if len(view.Entities) != 1 || view.Entities[0].Name != "苏晚" || view.Facts[0] != (Fact{Kind: model.CanonState, Subject: "苏晚", Text: "陈渡的旧友"}) ||
 		view.Compass == nil || view.Compass.ScaleMax != 60 || !slices.Equal(view.Other, []string{"书级创作规则"}) {
 		t.Fatalf("view = %+v", view)
 	}
@@ -131,8 +131,8 @@ func TestChapterBriefsCarryCoveringRequirementsAndChecks(t *testing.T) {
 		},
 		Manuscript: []model.ManuscriptChapter{{ID: "c1", PlanNodeID: "p1", Number: 1}, {ID: "c2", PlanNodeID: "p2", Number: 2}},
 		Canon: []model.CanonFact{
-			{ID: "f1", SubjectID: "hero", Predicate: "职业", Value: json.RawMessage(`"邮差"`), SourceChapterID: "c1"},
-			{ID: "f2", SubjectID: "hero", Predicate: "持有", Value: json.RawMessage(`"一把陌生的钥匙"`), SourceChapterID: "c2"},
+			{ID: "f1", Kind: model.CanonState, SubjectID: "hero", Predicate: "state.job", Value: json.RawMessage(`"邮差"`), SourceChapterID: "c1"},
+			{ID: "f2", Kind: model.CanonEvent, SubjectID: "hero", Predicate: "event.find_key", Value: json.RawMessage(`"捡到一把陌生的钥匙"`), SourceChapterID: "c2"},
 		},
 		// 第 2 章正文在 f2 入账之后改过：f2 待核验。
 		Index: projectdoc.DocumentIndex{
@@ -163,7 +163,7 @@ func TestChapterBriefsCarryCoveringRequirementsAndChecks(t *testing.T) {
 	if want := []string{"保持悬疑||false|", "主角死亡||true|", "每章结尾留钩子||false|"}; !slices.Equal(third, want) {
 		t.Fatalf("an unreviewed chapter has no checks and only its covering requirements: %q", third)
 	}
-	if facts := briefs[2].Facts; len(facts) != 1 || facts[0].Text != "「陈渡」持有（第 2 章）：一把陌生的钥匙" || !facts[0].Pending ||
+	if facts := briefs[2].Facts; len(facts) != 1 || facts[0].Fact != (Fact{Kind: model.CanonEvent, Subject: "陈渡", Text: "捡到一把陌生的钥匙"}) || !facts[0].Pending ||
 		len(briefs[1].Facts) != 1 || briefs[1].Facts[0].Pending {
 		t.Fatalf("facts = %+v / %+v", briefs[1].Facts, briefs[2].Facts)
 	}

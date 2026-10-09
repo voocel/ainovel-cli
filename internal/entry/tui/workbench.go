@@ -69,7 +69,7 @@ type workbenchState struct {
 	bodyText       string
 	writing        bool
 	exporting      bool
-	spin           int // 创作中动画帧，随活动与轮询节拍推进
+	pulse          pulseState // 创作中的动画节拍
 	decision       *decisionState
 	// input 是常驻聚焦的底栏输入框：文字是要求或修改意见，`/` 是命令，`y` 回车通过。
 	input         textinput.Model
@@ -364,10 +364,19 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if bench.writing {
-			bench.spin++
 			return m, tea.Batch(m.refreshBenchCmd(), pollTick(bench.gen))
 		}
 		return m, nil
+	case pulseMsg:
+		if message.gen != bench.gen {
+			return m, nil
+		}
+		if !bench.writing {
+			bench.pulse.running = false
+			return m, nil
+		}
+		bench.pulse.advance(time.Now())
+		return m, pulseTick(bench.gen)
 	case activityMsg:
 		if message.gen != bench.gen || !message.open {
 			return m, nil
@@ -375,8 +384,7 @@ func (m model) applyWorkbench(message tea.Msg) (tea.Model, tea.Cmd) {
 		if feed, ok := m.api.Workbench.RunActivity(bench.projectID); ok {
 			bench.activity = feed
 		}
-		// 动画随活动密度转：流式时快、等待时回落到轮询节拍。
-		bench.spin++
+		bench.pulse.heard = time.Now()
 		return m, m.watchActivityCmd()
 	case benchRefreshedMsg:
 		if message.gen != bench.gen {
@@ -610,6 +618,7 @@ func (m model) continueRunWith(params quickParams) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		m.startQuickWriteCmd(params),
 		pollTick(bench.gen),
+		bench.pulse.start(bench.gen),
 	)
 }
 
@@ -712,7 +721,7 @@ func (m model) benchStateBadge() string {
 		if phase := bench.snap.CurrentPhase; phase != "" {
 			label = "◉ " + phase
 		}
-		return styleFocus.Render(label + " " + spinnerFrames[bench.spin%len(spinnerFrames)])
+		return styleFocus.Render(label + " " + bench.pulse.spinner())
 	case situationDecidingProposal, situationDeciding:
 		return styleWarn.Render("◇ 等你决定")
 	case situationCompleted:
