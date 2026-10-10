@@ -33,6 +33,7 @@ type DiagSnapshot struct {
 	ToolErrors                  []DiagToolError
 	ToolErrorsTruncated         bool
 	UnreadableMessages          int
+	Usage                       model.Usage // 所选范围全部尝试的用量，按事件用量列加总
 	RetriedOperationCount       int
 	RunEventBoundary            int64
 	LastEventAt                 *time.Time
@@ -68,6 +69,7 @@ type DiagEvent struct {
 	Attempt          int
 	Kind             string
 	CreatedAt        time.Time
+	Usage            model.Usage
 	Payload          []byte
 	PayloadTruncated bool
 }
@@ -196,6 +198,13 @@ func (s *Store) ReadDiagSnapshot(ctx context.Context, req DiagRequest) (DiagSnap
 	if err = readDiagToolErrors(ctx, tx, scope, args, &out); err != nil {
 		return out, err
 	}
+	// 用量走事件用量列的覆盖索引，不读载荷；中断、恢复的尝试各记各的，直接相加。
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(e.input_tokens),0),COALESCE(SUM(e.output_tokens),0),COALESCE(SUM(e.cache_read_tokens),0),COALESCE(SUM(e.cost),0)
+		FROM operation_events e JOIN operations o ON o.id=e.operation_id WHERE `+scope, args...).
+		Scan(&out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.Cost)
+	if err != nil {
+		return out, err
+	}
 	if lastRun.Valid && (!lastEvent.Valid || lastRun.Int64 > lastEvent.Int64) && req.OperationID == "" {
 		lastEvent = lastRun
 	}
@@ -271,7 +280,8 @@ func (s *Store) ReadDiagSnapshot(ctx context.Context, req DiagRequest) (DiagSnap
 	}
 	limit := 100
 	eventArgs := append(append([]any{}, args...), req.AfterEventSequence)
-	eventSQL := `SELECT e.operation_id,e.sequence,e.attempt,e.kind,e.created_at_unix_ms,substr(e.payload,1,65536),length(e.payload)>65536
+	eventSQL := `SELECT e.operation_id,e.sequence,e.attempt,e.kind,e.created_at_unix_ms,
+		e.input_tokens,e.output_tokens,e.cache_read_tokens,e.cost,substr(e.payload,1,65536),length(e.payload)>65536
 		FROM operation_events e JOIN operations o ON o.id=e.operation_id WHERE ` + scope + ` AND e.sequence>? ORDER BY e.sequence LIMIT ?`
 	eventArgs = append(eventArgs, limit+1)
 	rows, err = tx.QueryContext(ctx, eventSQL, eventArgs...)
@@ -280,7 +290,8 @@ func (s *Store) ReadDiagSnapshot(ctx context.Context, req DiagRequest) (DiagSnap
 	}
 	for rows.Next() {
 		var event DiagEvent
-		if err = rows.Scan(&event.OperationID, &event.Sequence, &event.Attempt, &event.Kind, &created, &event.Payload, &event.PayloadTruncated); err != nil {
+		if err = rows.Scan(&event.OperationID, &event.Sequence, &event.Attempt, &event.Kind, &created,
+			&event.Usage.Input, &event.Usage.Output, &event.Usage.CacheRead, &event.Usage.Cost, &event.Payload, &event.PayloadTruncated); err != nil {
 			rows.Close()
 			return out, err
 		}

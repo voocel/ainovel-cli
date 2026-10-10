@@ -325,6 +325,14 @@ func tokensLine(usage domainmodel.Usage) string {
 	return line
 }
 
+// spendLine 是 tokensLine 加上已知花费；没定价的模型不显示 $0。
+func spendLine(usage domainmodel.Usage) string {
+	if usage.Cost > 0 {
+		return tokensLine(usage) + " · " + formatCost(usage.Cost)
+	}
+	return tokensLine(usage)
+}
+
 // railRule 右栏两块的标题线：与「AI 创作现场」同一写法，右端可带说明。
 func railRule(title, note string, width int) string {
 	if note != "" {

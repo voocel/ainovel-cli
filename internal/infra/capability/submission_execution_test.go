@@ -77,17 +77,16 @@ func TestRuntimeRemindsToSubmitBeforeStopping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 提醒前后的两次回复都记下用量：落在各自的消息事件上，加起来是这次执行的全部。
+	var spent model.Usage
+	ended := false
 	for _, event := range events {
-		if event.Kind != "agent.run_ended" {
-			continue
-		}
-		var end struct{ Usage agentcore.Usage }
-		if err := json.Unmarshal(event.Payload, &end); err != nil || end.Usage.InputTokens != 30 || end.Usage.OutputTokens != 8 {
-			t.Fatalf("run usage = %s, %v", event.Payload, err)
-		}
-		return
+		spent.Add(event.Usage)
+		ended = ended || event.Kind == "agent.run_ended"
 	}
-	t.Fatal("missing run summary")
+	if !ended || spent != (model.Usage{Input: 30, Output: 8}) {
+		t.Fatalf("ended = %v, usage = %+v", ended, spent)
+	}
 }
 
 func runningWriterWithDraft(t *testing.T, ctx context.Context) (*store.Store, model.Operation) {

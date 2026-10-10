@@ -8,7 +8,7 @@ import (
 
 func TestTaskLifecycleRetryAndEviction(t *testing.T) {
 	h := NewHub()
-	e := Event{ProjectID: "book", RunID: "run", OperationID: "write", Kind: TaskStart, TaskLabel: "写作", At: time.Now(), Attempt: 1}
+	e := Event{ProjectID: "book", RunID: "run", OperationID: "write", Kind: TaskStart, TaskLabel: "写作", At: time.Now()}
 	h.Publish(e)
 	e.OperationID, e.TaskLabel = "review", "审阅"
 	h.Publish(e)
@@ -19,7 +19,7 @@ func TestTaskLifecycleRetryAndEviction(t *testing.T) {
 		t.Fatalf("incorrect tasks: %+v", s.Tasks)
 	}
 	s.Tasks[0].Label = "mutated"
-	e.Kind, e.Attempt = TaskStart, 2
+	e.Kind = TaskStart // 重试：同一任务再次开工
 	h.Publish(e)
 	s, _ = h.Snapshot("book")
 	if s.Tasks[0].Label != "写作" || s.Tasks[1].Done {

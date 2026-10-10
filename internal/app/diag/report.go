@@ -2,13 +2,13 @@
 package diag
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
-const FormatVersion = 1
+// FormatVersion 2：用量取事件用量列，事件与范围合计同一形状（含已定价的花费）。
+const FormatVersion = 2
 const RulesVersion = 1
 
 type Request struct {
@@ -68,6 +68,8 @@ type Metrics struct {
 	RetriedOperations int                          `json:"retried_operations"`
 	Events            int                          `json:"events"`
 	ToolErrors        int                          `json:"tool_errors"`
+	// Usage 是所选运行或任务全部尝试的模型用量，含中断与恢复的尝试。
+	Usage model.Usage `json:"usage,omitzero"`
 }
 
 type Coverage struct {
@@ -103,16 +105,8 @@ type Event struct {
 	// Text contains local details only. Never included in ShareReport.
 	Text             string `json:"text,omitempty"`
 	PayloadTruncated bool   `json:"payload_truncated,omitempty"`
-	Usage            *Usage `json:"usage,omitempty"`
-}
-
-// Usage is one persisted attempt's end summary, never a full-run estimate.
-type Usage struct {
-	Input       int64 `json:"input"`
-	Output      int64 `json:"output"`
-	CacheRead   int64 `json:"cache_read"`
-	CacheWrite  int64 `json:"cache_write"`
-	TotalTokens int64 `json:"total_tokens"`
+	// Usage 是这条事件自身的模型用量（模型消息、合规核对），其余事件为零。
+	Usage model.Usage `json:"usage,omitzero"`
 }
 
 type Report struct {
@@ -125,25 +119,4 @@ type Report struct {
 	Events            []Event     `json:"events"`
 	NextOperationID   string      `json:"next_operation_id,omitempty"`
 	NextEventSequence int64       `json:"next_event_sequence,omitempty"`
-}
-
-// decodeUsage reads the usage a run's end recorded, an agentcore.Usage, whose
-// JSON leaves zero counts out: a missing usage is not a zero one.
-func decodeUsage(payload []byte) (*Usage, error) {
-	var record struct {
-		Usage *struct {
-			Input      int64 `json:"input_tokens"`
-			Output     int64 `json:"output_tokens"`
-			CacheRead  int64 `json:"cache_read_tokens"`
-			CacheWrite int64 `json:"cache_write_tokens"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(payload, &record); err != nil {
-		return nil, err
-	}
-	u := record.Usage
-	if u == nil || u.Input < 0 || u.Output < 0 || u.CacheRead < 0 || u.CacheWrite < 0 {
-		return nil, model.ErrInvalid
-	}
-	return &Usage{u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Input + u.Output}, nil
 }

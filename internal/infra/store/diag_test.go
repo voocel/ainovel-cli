@@ -91,6 +91,52 @@ func TestDiagScopePaginationAndPayloadBudget(t *testing.T) {
 	}
 }
 
+// 用量按事件用量列全量加总：跨尝试相加（中断的尝试没有 run_ended 也算上），选定任务时只算
+// 这个任务；运行级快照的事件带各自的用量，不读载荷。
+func TestDiagSumsUsageAcrossAttempts(t *testing.T) {
+	s := openOperationStore(t)
+	seedDiagProject(t, s)
+	ctx := context.Background()
+	for _, id := range []string{"op-a", "op-b"} {
+		if _, err := s.CreateOperation(ctx, testOperation(id, 0, operationTime())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spend := func(operationID string, sequence, attempt int, kind string, usage model.Usage) {
+		t.Helper()
+		if _, err := s.db.Exec(`INSERT INTO operation_events(operation_id,sequence,step_id,attempt,idempotency_key,kind,input_tokens,output_tokens,cache_read_tokens,cost,payload,payload_digest,created_at_unix_ms)
+			VALUES (?,?,'',?,?,?,?,?,?,?,x'7b7d','digest',?)`,
+			operationID, sequence, attempt, fmt.Sprint(operationID, sequence), kind, usage.Input, usage.Output, usage.CacheRead, usage.Cost, sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spend("op-a", 1, 1, "agent.message_committed", model.Usage{Input: 100, Output: 10, CacheRead: 60, Cost: 0.1}) // 第 1 次尝试中断，没有 run_ended
+	spend("op-a", 2, 2, "agent.message_committed", model.Usage{Input: 50, Output: 5})
+	spend("op-a", 3, 2, "agent.run_ended", model.Usage{})
+	spend("op-a", 4, 2, "semantic.compliance_checked", model.Usage{Input: 7, Output: 1})
+	spend("op-b", 5, 1, "agent.message_committed", model.Usage{Input: 1000})
+
+	run, err := s.ReadDiagSnapshot(ctx, DiagRequest{ProjectID: "book-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Usage != (model.Usage{Input: 1157, Output: 16, CacheRead: 60, Cost: 0.1}) {
+		t.Fatalf("diag run usage = %+v", run.Usage)
+	}
+	for _, event := range run.Events {
+		if event.OperationID == "op-a" && event.Sequence == 4 && event.Usage != (model.Usage{Input: 7, Output: 1}) {
+			t.Fatalf("event usage = %+v", event.Usage)
+		}
+	}
+	task, err := s.ReadDiagSnapshot(ctx, DiagRequest{ProjectID: "book-1", OperationID: "op-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Usage != (model.Usage{Input: 157, Output: 16, CacheRead: 60, Cost: 0.1}) || len(task.Events) != 4 || task.Events[0].Usage.Input != 100 {
+		t.Fatalf("task usage = %+v events = %+v", task.Usage, task.Events)
+	}
+}
+
 // 工具报错必须在运行级就能统计出来：运行级不读载荷，统计只能走 SQL 谓词。
 // 回归的样子是这里归零而选中任务时才有数——那正是用户看不到错误的那个缺口。
 func TestDiagCountsToolErrorsWithoutReadingPayloads(t *testing.T) {

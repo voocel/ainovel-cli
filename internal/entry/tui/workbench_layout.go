@@ -380,10 +380,7 @@ func (m model) composerContext() string {
 func (m model) usageLabel(l benchLayout) string {
 	parts := []string{m.bindingLabel()}
 	if total := m.bench.snap.Usage.Total; total.Input > 0 && l.railWidth == 0 {
-		parts = append(parts, tokensLine(total))
-		if total.Cost > 0 {
-			parts = append(parts, formatCost(total.Cost))
-		}
+		parts = append(parts, spendLine(total))
 	}
 	return benchTheme.Muted.Render(truncate(strings.Join(parts, " · "), (l.width-2)/2))
 }

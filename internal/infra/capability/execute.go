@@ -17,7 +17,7 @@ import (
 
 // Execute 产出统一 OperationOutcome（D30）：Worker 工具集决定收尾方式——携带
 // verdict_submit 的审阅/校验类以结构化 Verdict 收尾，其余以 Proposal 收尾。
-func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outcome model.OperationOutcome, resultErr error) {
+func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (model.OperationOutcome, error) {
 	if !r.Bound() {
 		return model.OperationOutcome{}, fmt.Errorf("capability model is not bound: %w", model.ErrInvalid)
 	}
@@ -32,8 +32,8 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		return model.OperationOutcome{}, err
 	}
 	scope := taskActivityScope(task)
-	r.publishTask(operation, activity.TaskStart, nil, scope)
-	defer func() { r.publishTask(operation, activity.TaskEnd, resultErr, scope) }()
+	r.publishTask(operation, activity.TaskStart, scope)
+	defer r.publishTask(operation, activity.TaskEnd, scope)
 	compiled, err := r.prompts.Load(ctx, operation.Snapshot.ConfigDigest)
 	if err != nil {
 		return model.OperationOutcome{}, err
@@ -139,7 +139,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 	defer stopExecution(nil)
 	stream := newLiveStream(task) // 随本次执行生灭：流式工具调用的身份与参数流的提取状态
 	messageIndex := 0
-	var usage agentcore.Usage
 	var end agentcore.RunEnd
 	config := agentcore.Config{
 		Model:      binding.Routed(cacheKey, ""),
@@ -163,7 +162,6 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 				}); err != nil {
 					return err
 				}
-				usage.Add(e.Message.Usage)
 			case agentcore.RunEnd:
 				end = e
 			}
@@ -191,9 +189,8 @@ func (r *Runtime) Execute(ctx context.Context, operation model.Operation) (outco
 		Turns       int                 `json:"turns"`
 		ToolCalls   int                 `json:"tool_calls"`
 		FailedCalls int                 `json:"failed_calls"`
-		Usage       agentcore.Usage     `json:"usage"`
 		Error       string              `json:"error,omitempty"`
-	}{Reason: end.Reason, Turns: end.Turns, ToolCalls: end.ToolCalls, FailedCalls: end.FailedCalls, Usage: usage, Error: errorText})
+	}{Reason: end.Reason, Turns: end.Turns, ToolCalls: end.ToolCalls, FailedCalls: end.FailedCalls, Error: errorText})
 	if err != nil {
 		return model.OperationOutcome{}, fmt.Errorf("encode agent run summary: %w", err)
 	}
@@ -235,15 +232,12 @@ func (r *Runtime) activityEvent(operation model.Operation, kind activity.Kind) a
 	return event
 }
 
-func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, err error, scope activity.Scope) {
+func (r *Runtime) publishTask(operation model.Operation, kind activity.Kind, scope activity.Scope) {
 	if r.activity == nil {
 		return
 	}
 	event := r.activityEvent(operation, kind)
-	event.Attempt, event.Scope = operation.Attempt, scope
-	if err != nil {
-		event.Err = clipActivityText(err.Error())
-	}
+	event.Scope = scope
 	r.activity.Publish(event)
 }
 

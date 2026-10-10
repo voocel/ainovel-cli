@@ -11,7 +11,8 @@ import (
 )
 
 // 创作团队的用量按尝试加总事件自带的用量：run_ended 载荷里的合计不重复计；进程中断的尝试
-// 只到最后一条消息；崩溃后只做合规核对的尝试沿用任务的角色；别的书不混进来。
+// 只到最后一条消息；崩溃后只做合规核对的尝试沿用任务的角色；租约过期的尝试不再算正在执行；
+// 别的书不混进来。
 func TestProjectAttemptsSumPersistedUsage(t *testing.T) {
 	s := openOperationStore(t)
 	ctx := context.Background()
@@ -62,26 +63,32 @@ func TestProjectAttemptsSumPersistedUsage(t *testing.T) {
 	event("plan", 1, "semantic.compliance_failed", `{"model":"judge"}`, model.Usage{Input: 7, Output: 1}, start.Add(61*time.Second))
 	event("plan", 2, "agent.run_started", `{"role":"architect","model":"new-model"}`, none, start.Add(3*time.Minute))
 	event("plan", 2, "agent.message_committed", `{}`, model.Usage{Input: 30, Output: 5, Cost: 0.03}, start.Add(4*time.Minute))
-	event("plan", 3, "semantic.compliance_checked", `{"model":"judge"}`, model.Usage{Input: 9, Output: 2}, start.Add(7*time.Minute))
+	event("plan", 3, "semantic.compliance_checked", `{"model":"judge"}`, model.Usage{Input: 9, Output: 2}, start.Add(6*time.Minute+20*time.Second))
 	event("elsewhere", 1, "agent.run_started", `{"role":"writer","model":"other"}`, none, start)
 	event("elsewhere", 1, "agent.message_committed", `{}`, model.Usage{Input: 999}, start.Add(time.Minute))
 
-	attempts, err := s.ProjectAttempts(ctx, "book-1")
+	leased := start.Add(6*time.Minute + 30*time.Second) // 第 3 次尝试的租约到 start+7m
+	attempts, err := s.ProjectAttempts(ctx, "book-1", leased)
 	if err != nil || len(attempts) != 3 {
 		t.Fatalf("attempts = %+v, %v", attempts, err)
 	}
 	ended, crashed, judged := attempts[0], attempts[1], attempts[2]
-	if ended.Attempt != 1 || ended.Role != "architect" || ended.Model != "old-model" || ended.Current ||
+	if ended.Attempt != 1 || ended.Role != "architect" || ended.Model != "old-model" || ended.Live ||
 		ended.Usage != (model.Usage{Input: 207, Output: 21, CacheRead: 100, Cost: 0.2}) ||
 		!ended.StartedAt.Equal(start) || !ended.LastAt.Equal(start.Add(61*time.Second)) {
 		t.Fatalf("ended attempt = %+v", ended)
 	}
-	if crashed.Attempt != 2 || crashed.Model != "new-model" || crashed.Current ||
+	if crashed.Attempt != 2 || crashed.Model != "new-model" || crashed.Live ||
 		crashed.Usage != (model.Usage{Input: 30, Output: 5, Cost: 0.03}) || !crashed.LastAt.Equal(start.Add(4*time.Minute)) {
 		t.Fatalf("crashed attempt = %+v", crashed)
 	}
-	if judged.Attempt != 3 || judged.Role != "architect" || judged.Model != "" || !judged.Current ||
+	if judged.Attempt != 3 || judged.Role != "architect" || judged.Model != "" || !judged.Live ||
 		judged.State != model.OperationRunning || judged.Usage != (model.Usage{Input: 9, Output: 2}) {
 		t.Fatalf("judged attempt = %+v", judged)
+	}
+	// 进程中断：任务还标着执行中，但租约已过期，用时不能一直涨到此刻。
+	expired, err := s.ProjectAttempts(ctx, "book-1", start.Add(8*time.Minute))
+	if err != nil || expired[2].Live || expired[2].State != model.OperationRunning {
+		t.Fatalf("expired attempt = %+v, %v", expired, err)
 	}
 }

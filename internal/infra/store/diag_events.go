@@ -9,6 +9,7 @@ import (
 // readDiagTails reserves a tail window for each selected stream. Sequence is the
 // stream's durable order; timestamps do not establish cross-stream causality.
 // Both the number of streams and the total returned events are bounded by 200.
+// Tails never read payloads: usage comes from the event's usage columns.
 func readDiagTails(ctx context.Context, tx *sql.Tx, scope string, args []any, snapshot DiagSnapshot, request DiagRequest) ([]DiagEvent, error) {
 	var ids []string
 	if request.ForShare {
@@ -40,18 +41,9 @@ func readDiagTails(ctx context.Context, tx *sql.Tx, scope string, args []any, sn
 		}
 	}
 	events := make([]DiagEvent, 0, 200)
-	payload := `NULL,0`
-	if request.ForShare {
-		// Run-wide shares only decode compact end summaries. A selected task may
-		// inspect its bounded message window for tool errors; raw text never ships.
-		payload = `CASE WHEN kind='agent.run_ended' THEN substr(payload,1,65536) END,CASE WHEN kind='agent.run_ended' THEN length(payload)>65536 ELSE 0 END`
-		if request.OperationID != "" {
-			payload = `substr(payload,1,65536),length(payload)>65536`
-		}
-	}
 	for i, id := range ids {
 		quota := (200 - len(events)) / (len(ids) - i)
-		rows, err := tx.QueryContext(ctx, `SELECT operation_id,sequence,attempt,kind,created_at_unix_ms,`+payload+`
+		rows, err := tx.QueryContext(ctx, `SELECT operation_id,sequence,attempt,kind,created_at_unix_ms,input_tokens,output_tokens,cache_read_tokens,cost
 			FROM operation_events WHERE operation_id=? ORDER BY sequence DESC LIMIT ?`, id, quota)
 		if err != nil {
 			return nil, err
@@ -59,7 +51,8 @@ func readDiagTails(ctx context.Context, tx *sql.Tx, scope string, args []any, sn
 		for rows.Next() {
 			var event DiagEvent
 			var created int64
-			if err = rows.Scan(&event.OperationID, &event.Sequence, &event.Attempt, &event.Kind, &created, &event.Payload, &event.PayloadTruncated); err != nil {
+			if err = rows.Scan(&event.OperationID, &event.Sequence, &event.Attempt, &event.Kind, &created,
+				&event.Usage.Input, &event.Usage.Output, &event.Usage.CacheRead, &event.Usage.Cost); err != nil {
 				rows.Close()
 				return nil, err
 			}

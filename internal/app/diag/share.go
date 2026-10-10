@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/export"
 )
 
@@ -43,6 +44,7 @@ type ShareMetrics struct {
 	RetriedOperations int            `json:"retried_operations"`
 	Events            int            `json:"events"`
 	ToolErrors        int            `json:"tool_errors"`
+	Usage             model.Usage    `json:"usage,omitzero"`
 }
 type ShareFinding struct {
 	Code      string          `json:"code"`
@@ -76,12 +78,12 @@ type ShareOperation struct {
 	EventBoundary   int64  `json:"event_boundary"`
 }
 type ShareEvent struct {
-	Operation string `json:"operation"`
-	Sequence  int64  `json:"sequence"`
-	Attempt   int    `json:"attempt"`
-	Kind      string `json:"kind"`
-	OffsetMS  int64  `json:"offset_ms"`
-	Usage     *Usage `json:"usage,omitempty"`
+	Operation string      `json:"operation"`
+	Sequence  int64       `json:"sequence"`
+	Attempt   int         `json:"attempt"`
+	Kind      string      `json:"kind"`
+	OffsetMS  int64       `json:"offset_ms"`
+	Usage     model.Usage `json:"usage,omitzero"`
 }
 
 var buildPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$|^v1-dev$`)
@@ -115,7 +117,7 @@ func Share(report Report) ShareReport {
 		DatabaseIssue: databaseIssue(report.Header.DatabaseIssue),
 		BuildVersion:  safeBuild(report.Header.BuildVersion), Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		SchemaVersion: report.Header.SchemaVersion, Shareable: true, State: safeState(report.Summary.State),
-		Metrics:  ShareMetrics{report.Metrics.Operations, map[string]int{}, report.Metrics.Attempts, report.Metrics.RetriedOperations, report.Metrics.Events, report.Metrics.ToolErrors},
+		Metrics:  ShareMetrics{report.Metrics.Operations, map[string]int{}, report.Metrics.Attempts, report.Metrics.RetriedOperations, report.Metrics.Events, report.Metrics.ToolErrors, report.Metrics.Usage},
 		Findings: []ShareFinding{}, Coverage: []ShareCoverage{}, Operations: []ShareOperation{}, Events: []ShareEvent{}}
 	if report.Header.Scope.ProjectID != "" {
 		s.Project = "book-1"

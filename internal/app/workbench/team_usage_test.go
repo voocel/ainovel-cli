@@ -14,11 +14,11 @@ func TestTeamUsageSumsRolesAndTime(t *testing.T) {
 	start := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	now := start.Add(10 * time.Minute)
 	usage := teamUsage([]store.AttemptUsage{
-		{OperationID: "plan", Attempt: 1, Role: "architect", Model: "pro", State: model.OperationSucceeded, Current: true,
+		{OperationID: "plan", Attempt: 1, Role: "architect", Model: "pro", State: model.OperationSucceeded,
 			Usage: model.Usage{Input: 100, Output: 10, CacheRead: 40, Cost: 0.2}, StartedAt: start, LastAt: start.Add(time.Minute)},
 		{OperationID: "write", Attempt: 1, Role: "writer", Model: "flash", State: model.OperationRunning,
 			Usage: model.Usage{Input: 50, Output: 5}, StartedAt: start.Add(2 * time.Minute), LastAt: start.Add(4 * time.Minute)},
-		{OperationID: "write", Attempt: 2, Role: "writer", State: model.OperationRunning, Current: true,
+		{OperationID: "write", Attempt: 2, Role: "writer", State: model.OperationRunning, Live: true,
 			Usage: model.Usage{Input: 30, Output: 3}, StartedAt: start.Add(8 * time.Minute), LastAt: start.Add(9 * time.Minute)},
 	}, now)
 	if usage.Total != (model.Usage{Input: 180, Output: 18, CacheRead: 40, Cost: 0.2}) || usage.Worked != 5*time.Minute {

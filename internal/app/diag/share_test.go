@@ -84,22 +84,6 @@ func TestRulesDoNotInferFailureFromWaitingOrRetries(t *testing.T) {
 	}
 }
 
-func TestUsageMissingIsNotZero(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"usage":null}`, `{"usage":{"input_tokens":-1}}`, `{"usage":{"input_tokens":"1"}}`} {
-		if _, err := decodeUsage([]byte(raw)); err == nil {
-			t.Fatalf("invalid usage accepted: %s", raw)
-		}
-	}
-	u, err := decodeUsage([]byte(`{"usage":{"cost":{"total":0},"model":"private"}}`))
-	if err != nil || u == nil || u.Input != 0 {
-		t.Fatalf("recorded zero not preserved: %v %v", u, err)
-	}
-	u, err = decodeUsage([]byte(`{"usage":{"input_tokens":30,"output_tokens":5,"cache_read_tokens":20}}`))
-	if err != nil || *u != (Usage{Input: 30, Output: 5, CacheRead: 20, TotalTokens: 35}) {
-		t.Fatalf("usage = %+v, %v", u, err)
-	}
-}
-
 func TestShareReportsOmittedWindow(t *testing.T) {
 	r := Report{Metrics: Metrics{Operations: 1000, Events: 5000}, Operations: make([]Operation, 50), Events: make([]Event, 200), Findings: []Finding{{Code: "execution.failed", Count: 20, Evidence: make([]Evidence, 2)}}}
 	for i := range r.Events {

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/voocel/ainovel-cli/internal/app/diag"
+	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
 
 func diagnosticModel(t *testing.T) model {
@@ -51,10 +52,13 @@ func TestDiagnosticsBusyAndStalePage(t *testing.T) {
 
 func TestDiagnosticsPaginationDrillAndCoverage(t *testing.T) {
 	m := diagnosticModel(t)
-	report := diag.Report{Header: diag.Header{Scope: diag.Request{ProjectID: "book", RunID: "run"}}, Summary: diag.Summary{State: "waiting_user"}, Operations: []diag.Operation{{ID: "op-1", Error: "原始失败信息"}, {ID: "op-2"}}, NextOperationID: "op-2", Coverage: []diag.Coverage{{Source: "usage", Status: "missing", Detail: "用量缺失，不等于零"}}}
+	report := diag.Report{Header: diag.Header{Scope: diag.Request{ProjectID: "book", RunID: "run"}}, Summary: diag.Summary{State: "waiting_user"}, Operations: []diag.Operation{{ID: "op-1", Error: "原始失败信息"}, {ID: "op-2"}}, NextOperationID: "op-2", Coverage: []diag.Coverage{{Source: "usage", Status: "missing", Detail: "用量缺失，不等于零"}},
+		Metrics: diag.Metrics{Usage: domainmodel.Usage{Input: 120000, Output: 9000, CacheRead: 60000, Cost: 0.12}}}
 	updated, _ := m.applyDiagnostics(diagnosticsMsg{gen: 1, epoch: m.bench.diag.epoch, report: report})
 	m = updated.(model)
-	if !strings.Contains(m.bench.diag.text, "原始失败信息") || !strings.Contains(m.bench.diag.text, "不等于零") {
+	// 所选范围的用量合计常驻摘要，与右栏同一写法；未定价不显示 $0。
+	if !strings.Contains(m.bench.diag.text, "原始失败信息") || !strings.Contains(m.bench.diag.text, "不等于零") ||
+		!strings.Contains(m.bench.diag.text, "用量  ↑120K ↓9.0K · 缓存 50% · $0.12") {
 		t.Fatal(m.bench.diag.text)
 	}
 	updated, cmd := m.handleDiagnosticsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
@@ -76,12 +80,12 @@ func TestDiagnosticsPaginationDrillAndCoverage(t *testing.T) {
 		t.Fatal("task not selected")
 	}
 	report.Header.Scope.OperationID = "op-3"
-	report.Events = []diag.Event{{Sequence: 1, Text: "本地敏感事件", PayloadTruncated: true}}
+	report.Events = []diag.Event{{Sequence: 1, Text: "本地敏感事件", PayloadTruncated: true, Usage: domainmodel.Usage{Input: 3000, Output: 200}}}
 	report.NextEventSequence = 100
 	updated, _ = m.applyDiagnostics(diagnosticsMsg{gen: 1, epoch: m.bench.diag.epoch, report: report})
 	m = updated.(model)
-	if !strings.Contains(m.bench.diag.text, "已截断") {
-		t.Fatal("missing truncation coverage")
+	if !strings.Contains(m.bench.diag.text, "已截断") || !strings.Contains(m.bench.diag.text, "用量 ↑3.0K ↓200") {
+		t.Fatalf("missing truncation coverage or event usage:\n%s", m.bench.diag.text)
 	}
 	updated, cmd = m.handleDiagnosticsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	m = updated.(model)

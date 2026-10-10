@@ -37,7 +37,7 @@ func seedDiagHistory(tb testing.TB, count int) *Store {
 		tb.Fatal(err)
 	}
 	defer op.Close()
-	event, err := tx.Prepare(`INSERT INTO operation_events(operation_id,sequence,step_id,attempt,idempotency_key,kind,payload,payload_digest,created_at_unix_ms) VALUES (?,?,'',?,?,?,?,'digest',?)`)
+	event, err := tx.Prepare(`INSERT INTO operation_events(operation_id,sequence,step_id,attempt,idempotency_key,kind,input_tokens,output_tokens,payload,payload_digest,created_at_unix_ms) VALUES (?,?,'',?,?,?,?,?,?,'digest',?)`)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -50,16 +50,13 @@ func seedDiagHistory(tb testing.TB, count int) *Store {
 		}
 		for sequence := 1; sequence <= 200; sequence++ {
 			attempt := 1 + (sequence-1)/67
-			kind := "agent.message_committed"
-			payload := message
+			kind, payload, input, output := "agent.message_committed", message, 100, 10
 			if sequence == 67 || sequence == 134 || sequence == 200 {
-				kind = "agent.run_ended"
-				payload = []byte(`{"usage":{"input":100,"output":200,"cache_read":0,"cache_write":0,"total_tokens":300}}`)
+				kind, payload, input, output = "agent.run_ended", []byte(`{}`), 0, 0
 			} else if sequence == 1 || sequence == 68 || sequence == 135 {
-				kind = "operation.running"
-				payload = []byte(`{"state":"running"}`)
+				kind, payload, input, output = "operation.running", []byte(`{"state":"running"}`), 0, 0
 			}
-			if _, err = event.Exec(id, sequence, attempt, fmt.Sprint(sequence), kind, payload, sequence); err != nil {
+			if _, err = event.Exec(id, sequence, attempt, fmt.Sprint(sequence), kind, input, output, payload, sequence); err != nil {
 				tb.Fatal(err)
 			}
 		}
@@ -81,7 +78,8 @@ func BenchmarkDiagLongHistory(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if snap.OperationCount != count || snap.EventCount != count*200 || snap.AttemptCount != count*3 || len(snap.Operations) != 50 || len(snap.Events) != 200 || snap.MissingCompletionEventCount != 0 {
+				if snap.OperationCount != count || snap.EventCount != count*200 || snap.AttemptCount != count*3 || len(snap.Operations) != 50 || len(snap.Events) != 200 || snap.MissingCompletionEventCount != 0 ||
+					snap.Usage.Input != count*194*100 {
 					b.Fatalf("incorrect long-history projection: operations=%d events=%d attempts=%d task page=%d event page=%d missing=%d", snap.OperationCount, snap.EventCount, snap.AttemptCount, len(snap.Operations), len(snap.Events), snap.MissingCompletionEventCount)
 				}
 				for _, event := range snap.Events {

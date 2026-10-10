@@ -36,11 +36,16 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, event := range []struct{ kind, payload string }{
-		{"agent.message_committed", `{"role":"tool","metadata":{"is_error":true},"content":[{"type":"text","text":"PRIVATE_SENTINEL"}]}`},
-		{"agent.run_ended", `{"usage":{"input_tokens":12,"output_tokens":3},"error":"PRIVATE_SENTINEL"}`},
+	for i, event := range []struct {
+		kind, payload string
+		usage         model.Usage
+	}{
+		{"agent.message_committed", `{"role":"assistant","content":[{"type":"text","text":"PRIVATE_SENTINEL"}]}`, model.Usage{Input: 12, Output: 3}},
+		{"agent.message_committed", `{"role":"tool","metadata":{"is_error":true},"content":[{"type":"text","text":"PRIVATE_SENTINEL"}]}`, model.Usage{}},
+		{"agent.run_ended", `{"error":"PRIVATE_SENTINEL"}`, model.Usage{}},
 	} {
-		if _, err := s.AppendOperationEvent(ctx, model.OperationEvent{OperationID: op.ID, Attempt: claimed.Attempt, StepID: event.kind, IdempotencyKey: event.kind, Kind: event.kind, Payload: []byte(event.payload), CreatedAt: now.Add(time.Duration(i) * time.Millisecond)}); err != nil {
+		key := fmt.Sprint(event.kind, i)
+		if _, err := s.AppendOperationEvent(ctx, model.OperationEvent{OperationID: op.ID, Attempt: claimed.Attempt, StepID: event.kind, IdempotencyKey: key, Kind: event.kind, Payload: []byte(event.payload), Usage: event.usage, CreatedAt: now.Add(time.Duration(i) * time.Millisecond)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -52,7 +57,7 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Metrics.Operations != 1 || len(summary.Findings) != 0 {
+	if summary.Metrics.Operations != 1 || len(summary.Findings) != 0 || summary.Metrics.Usage != (model.Usage{Input: 12, Output: 3}) {
 		t.Fatalf("summary false failure: %+v", summary)
 	}
 	for _, event := range summary.Events {
@@ -70,7 +75,7 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 		foundTool = foundTool || finding.Code == "execution.tool_error"
 	}
 	for _, event := range detail.Events {
-		foundUsage = foundUsage || (event.Usage != nil && event.Usage.Input == 12)
+		foundUsage = foundUsage || event.Usage == (model.Usage{Input: 12, Output: 3})
 	}
 	if !foundTool || !foundUsage || detail.Metrics.States[model.OperationSucceeded] != 1 {
 		t.Fatalf("self-corrected details lost: %+v", detail)
@@ -91,8 +96,8 @@ func TestDiagnosticsReadOnlyLocalDetailsAndShare(t *testing.T) {
 	for _, f := range shared.Findings {
 		sharedTool = sharedTool || f.Code == "execution.tool_error"
 	}
-	if !sharedTool {
-		t.Fatal("selected-task share lost the observed tool error")
+	if !sharedTool || shared.Metrics.Usage != (model.Usage{Input: 12, Output: 3}) {
+		t.Fatalf("selected-task share lost the tool error or the usage: %+v", shared)
 	}
 	after, err := s.GetOperation(ctx, op.ID)
 	if err != nil || after.State != model.OperationSucceeded || after.Attempt != claimed.Attempt {

@@ -45,10 +45,10 @@ func teamUsage(attempts []store.AttemptUsage, now time.Time) TeamUsage {
 }
 
 // attemptTime 一次尝试的执行时长：正在执行的到此刻，其余到它最后一条执行记录（收尾、
-// 合规核对，或进程中断前的最后一条消息）。
+// 合规核对，或进程中断前的最后一条消息——中断的尝试租约一过期就不再算到此刻）。
 func attemptTime(attempt store.AttemptUsage, now time.Time) time.Duration {
 	end := attempt.LastAt
-	if attempt.Current && attempt.State == model.OperationRunning {
+	if attempt.Live {
 		end = now
 	}
 	return end.Sub(attempt.StartedAt)

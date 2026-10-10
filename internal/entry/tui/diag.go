@@ -100,6 +100,9 @@ func (m model) formatDiagnostics() {
 		fmt.Fprintf(&b, " · 工具报错 %d", r.Metrics.ToolErrors) // 常驻计数：未立发现时也要看得见
 	}
 	b.WriteString("\n")
+	if r.Metrics.Usage != (domainmodel.Usage{}) {
+		fmt.Fprintf(&b, "用量  %s\n", spendLine(r.Metrics.Usage))
+	}
 	if r.Summary.LastEventAt != nil {
 		fmt.Fprintf(&b, "最近事件  %s\n", r.Summary.LastEventAt.Format("01-02 15:04:05"))
 	}
@@ -148,8 +151,8 @@ func (m model) formatDiagnostics() {
 			if e.PayloadTruncated {
 				b.WriteString("[此事件内容已截断，完整记录保留在本地数据库]\n")
 			}
-			if e.Usage != nil {
-				fmt.Fprintf(&b, "本条结束记录用量：输入 %d · 输出 %d · 总计 %d（不跨尝试累加）\n", e.Usage.Input, e.Usage.Output, e.Usage.TotalTokens)
+			if e.Usage != (domainmodel.Usage{}) {
+				fmt.Fprintf(&b, "用量 %s\n", spendLine(e.Usage))
 			}
 		}
 		if r.NextEventSequence != 0 {

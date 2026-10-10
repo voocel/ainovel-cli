@@ -143,7 +143,7 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 	}
 	if view := rail(crew); strings.Contains(view, "$") || !strings.Contains(view, "! 编辑 glm-5") || !strings.Contains(view, "3m00s") ||
 		!strings.Contains(view, "↑50K ↓8.0K · 缓存 50%") || strings.Count(view, "还没出场") != 2 {
-		t.Fatalf("crew must come from the persisted run usage and hide unknown prices:\n%s", view)
+		t.Fatalf("crew must come from the persisted usage and hide unknown prices:\n%s", view)
 	}
 	for _, gone := range []string{"代理", "工具调用", "条消息", "本轮运行"} {
 		if strings.Contains(view, gone) {

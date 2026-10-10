@@ -471,12 +471,12 @@ func TestRuntimeReviewSubmitsVerdictWithoutProposal(t *testing.T) {
 	if len(model.Requests()) != 4 {
 		t.Fatalf("requests = %d", len(model.Requests()))
 	}
-	attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID)
+	attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID, now.Add(time.Second))
 	if err != nil || len(attempts) != 1 {
-		t.Fatalf("run attempts = %+v, %v", attempts, err)
+		t.Fatalf("project attempts = %+v, %v", attempts, err)
 	}
 	if a := attempts[0]; a.Role != "editor" || a.Usage.Input != 40 || a.Usage.Output != 12 || a.Usage.Cost < 0.039 || a.Usage.Cost > 0.041 ||
-		a.StartedAt.IsZero() || a.LastAt.Before(a.StartedAt) || !a.Current || a.State != domainmodel.OperationRunning {
+		a.StartedAt.IsZero() || a.LastAt.Before(a.StartedAt) || !a.Live || a.State != domainmodel.OperationRunning {
 		t.Fatalf("persisted attempt usage = %+v", a)
 	}
 }
@@ -709,7 +709,7 @@ func TestRuntimeSemanticComplianceUsesIndependentStructuredCall(t *testing.T) {
 	if feed.Waiting {
 		t.Fatal("a finished judgment must not leave the feed waiting")
 	}
-	if attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID); err != nil || len(attempts) != 1 ||
+	if attempts, err := authorityStore.ProjectAttempts(ctx, operation.Target.ID, now.Add(time.Second)); err != nil || len(attempts) != 1 ||
 		attempts[0].Usage != (domainmodel.Usage{Input: 10, Output: 3}) || attempts[0].Attempt != operation.Attempt {
 		t.Fatalf("compliance usage must count toward its attempt: %+v, %v", attempts, err)
 	}

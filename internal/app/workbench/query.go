@@ -90,7 +90,7 @@ type WorkbenchSnapshot struct {
 	// Run 是最近一轮创作（含终态，落点呈现）；nil 表示还没开始过。
 	Run *model.CreationRun `json:"run,omitempty"`
 	// Usage 是创作团队在这本书上的累计用量与用时（从落盘的执行记录汇总）。
-	Usage TeamUsage `json:"usage,omitzero"`
+	Usage TeamUsage `json:"usage"`
 	// CurrentPhase 是进行中的环节（创作语言），仅 Run 非终态时非空。
 	CurrentPhase string           `json:"current_phase,omitempty"`
 	Decision     *PendingDecision `json:"decision,omitempty"`
@@ -125,11 +125,12 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 	if err != nil {
 		return WorkbenchSnapshot{}, err
 	}
-	attempts, err := s.store.ProjectAttempts(ctx, projectID)
+	now := time.Now()
+	attempts, err := s.store.ProjectAttempts(ctx, projectID, now)
 	if err != nil {
 		return WorkbenchSnapshot{}, err
 	}
-	snapshot.Usage = teamUsage(attempts, time.Now())
+	snapshot.Usage = teamUsage(attempts, now)
 	writingPlanID := ""
 	if hasRun {
 		snapshot.Run = &run

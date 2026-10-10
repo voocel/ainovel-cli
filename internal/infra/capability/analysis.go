@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain/change"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 	"github.com/voocel/ainovel-cli/internal/infra/capability/prompt"
@@ -277,11 +276,11 @@ type judge struct {
 // judgmentUsage 按绑定价目折算单次调用的用量，与 Agent 消息同一口径：价目缺失或算不出时
 // 不计花费。
 func judgmentUsage(usage litellm.Usage, pricing *catalog.Pricing) model.Usage {
-	priced := agentcore.Usage{Usage: usage}
+	spent := model.Usage{Input: usage.InputTokens, Output: usage.OutputTokens, CacheRead: usage.CacheReadTokens}
 	if pricing != nil {
 		if cost, err := pricing.Cost(usage); err == nil {
-			priced.Cost = &cost
+			spent.Cost = cost.Total
 		}
 	}
-	return eventUsage(&priced)
+	return spent
 }

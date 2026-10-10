@@ -14,7 +14,7 @@ type AttemptUsage struct {
 	OperationID string
 	Attempt     int
 	State       model.OperationState // 任务此刻的状态
-	Current     bool                 // 这是任务此刻的尝试
+	Live        bool                 // 正在执行：任务此刻的尝试，租约未过期（进程中断留下的不算）
 	Role        string               // 任务的角色，取自它的 agent.run_started
 	Model       string               // 这次尝试 Agent 实际用的模型；只做合规核对的尝试为空
 	Usage       model.Usage
@@ -22,23 +22,26 @@ type AttemptUsage struct {
 	LastAt      time.Time
 }
 
-// ProjectAttempts 按开始先后列出一本书全部执行尝试的用量与起止。崩溃恢复后裁决已保存
-// 提案的尝试只有合规核对、没有 agent.run_started，角色因此按任务取。
-func (s *Store) ProjectAttempts(ctx context.Context, projectID string) ([]AttemptUsage, error) {
+// ProjectAttempts 按开始先后列出一本书全部执行尝试的用量与起止。主查询只读事件的覆盖
+// 索引；角色与模型取自 agent.run_started 的载荷，按组各查一次。崩溃恢复后裁决已保存提案
+// 的尝试只有合规核对、没有 agent.run_started，角色因此按任务取。
+func (s *Store) ProjectAttempts(ctx context.Context, projectID string, now time.Time) ([]AttemptUsage, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.operation_id, e.attempt, o.state, e.attempt = o.attempt,
+		SELECT e.operation_id, e.attempt, o.state,
+			e.attempt = o.attempt AND o.state = 'running' AND o.lease_until_unix_ms > ?,
 			COALESCE((SELECT json_extract(CAST(r.payload AS TEXT), '$.role') FROM operation_events r
-				WHERE r.operation_id = o.id AND r.kind = 'agent.run_started' LIMIT 1), ''),
-			COALESCE(MAX(CASE WHEN e.kind = 'agent.run_started' THEN json_extract(CAST(e.payload AS TEXT), '$.model') END), ''),
+				WHERE r.operation_id = e.operation_id AND r.kind = 'agent.run_started' LIMIT 1), ''),
+			COALESCE((SELECT json_extract(CAST(r.payload AS TEXT), '$.model') FROM operation_events r
+				WHERE r.operation_id = e.operation_id AND r.attempt = e.attempt AND r.kind = 'agent.run_started'), ''),
 			SUM(e.input_tokens), SUM(e.output_tokens), SUM(e.cache_read_tokens), SUM(e.cost),
 			MIN(e.created_at_unix_ms), MAX(e.created_at_unix_ms)
 		FROM operations o JOIN operation_events e ON e.operation_id = o.id
 		WHERE o.target_kind = ? AND o.target_id = ? AND e.kind IN ('agent.run_started', 'agent.message_committed', 'agent.run_ended',
 			'semantic.compliance_checked', 'semantic.compliance_failed')
 		GROUP BY e.operation_id, e.attempt
-		ORDER BY MIN(e.created_at_unix_ms), e.operation_id, e.attempt`, model.AuthorityProject, projectID)
+		ORDER BY MIN(e.created_at_unix_ms), e.operation_id, e.attempt`, now.UnixMilli(), model.AuthorityProject, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("list run usage: %w", err)
+		return nil, fmt.Errorf("list project attempts: %w", err)
 	}
 	defer rows.Close()
 	var attempts []AttemptUsage
@@ -46,16 +49,16 @@ func (s *Store) ProjectAttempts(ctx context.Context, projectID string) ([]Attemp
 		var a AttemptUsage
 		var state string
 		var started, last int64
-		if err := rows.Scan(&a.OperationID, &a.Attempt, &state, &a.Current, &a.Role, &a.Model,
+		if err := rows.Scan(&a.OperationID, &a.Attempt, &state, &a.Live, &a.Role, &a.Model,
 			&a.Usage.Input, &a.Usage.Output, &a.Usage.CacheRead, &a.Usage.Cost, &started, &last); err != nil {
-			return nil, fmt.Errorf("scan run usage: %w", err)
+			return nil, fmt.Errorf("scan project attempt: %w", err)
 		}
 		a.State = model.OperationState(state)
 		a.StartedAt, a.LastAt = time.UnixMilli(started).UTC(), time.UnixMilli(last).UTC()
 		attempts = append(attempts, a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate run usage: %w", err)
+		return nil, fmt.Errorf("iterate project attempts: %w", err)
 	}
 	return attempts, nil
 }

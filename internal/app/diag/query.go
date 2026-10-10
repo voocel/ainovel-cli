@@ -95,7 +95,7 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 		r.Summary.CreatedAt, r.Summary.UpdatedAt = &s.Run.CreatedAt, &s.Run.UpdatedAt
 	}
 	r.Summary.LastEventAt = s.LastEventAt
-	r.Metrics = Metrics{Operations: s.OperationCount, States: s.Counts, Attempts: s.AttemptCount, RetriedOperations: s.RetriedOperationCount, Events: s.EventCount, ToolErrors: s.ToolErrorCount}
+	r.Metrics = Metrics{Operations: s.OperationCount, States: s.Counts, Attempts: s.AttemptCount, RetriedOperations: s.RetriedOperationCount, Events: s.EventCount, ToolErrors: s.ToolErrorCount, Usage: s.Usage}
 	r.Findings = findings(s.Counts[model.OperationFailed], s.ExpiredLeaseCount, s.ResultUnknownCount, s.MissingCompletionEventCount)
 	r.NextOperationID, r.NextEventSequence = s.NextOperationID, s.NextEventSequence
 	for _, op := range s.Operations {
@@ -132,19 +132,12 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 		}
 	}
 	for _, event := range s.Events {
-		e := Event{OperationID: event.OperationID, Sequence: event.Sequence, Attempt: event.Attempt, Kind: event.Kind, CreatedAt: event.CreatedAt, PayloadTruncated: event.PayloadTruncated}
+		e := Event{OperationID: event.OperationID, Sequence: event.Sequence, Attempt: event.Attempt, Kind: event.Kind, CreatedAt: event.CreatedAt, PayloadTruncated: event.PayloadTruncated, Usage: event.Usage}
 		if request.OperationID != "" && !share {
 			e.Text = string(event.Payload)
 		}
-		if len(event.Payload) > 0 || event.PayloadTruncated {
-			if event.PayloadTruncated {
-				r.Coverage = append(r.Coverage, Coverage{"events", "truncated", fmt.Sprintf("事件 #%d 的本地内容超过读取预算，仅展示前缀。", event.Sequence)})
-			} else if event.Kind == "agent.run_ended" {
-				e.Usage, err = decodeUsage(event.Payload)
-				if err != nil {
-					r.Coverage = append(r.Coverage, Coverage{"usage", "partial", fmt.Sprintf("事件 #%d 的用量摘要缺失或格式不支持。", event.Sequence)})
-				}
-			}
+		if event.PayloadTruncated {
+			r.Coverage = append(r.Coverage, Coverage{"events", "truncated", fmt.Sprintf("事件 #%d 的本地内容超过读取预算，仅展示前缀。", event.Sequence)})
 		}
 		r.Events = append(r.Events, e)
 	}
@@ -194,7 +187,7 @@ func (q *Query) inspect(ctx context.Context, request Request, share bool) (Repor
 	}
 	r.Coverage = append(r.Coverage,
 		Coverage{"tool_errors", toolStatus, toolDetail},
-		Coverage{"usage", "partial", "仅展示已读取的 agent.run_ended attempt 结束增量；恢复消息不重复累计，不计算不完整历史的整轮总量。"},
+		Coverage{"usage", "complete", "用量取模型消息与语义合规核对落盘时记下的用量，覆盖所选范围的全部尝试（含中断与恢复的）；花费只计有定价的模型。"},
 		Coverage{"models", "not_collected", "未采集实际模型；配置摘要仅表明执行配置是否相同。"},
 		Coverage{"content_commits", "not_collected", "未查询内容提交时间；最近事件时间不等于最后创作进展。"})
 	return r, nil
