@@ -214,6 +214,21 @@ func List(ctx context.Context, config Config) ([]litellm.ModelInfo, error) {
 	return lister.ListModels(ctx)
 }
 
+// Try 向模型发一句极短的对话，确认模型 ID 在这组凭据下真能用。请求与创作时同形（只换消息），
+// 不另设输出上限：有的中转不认 max_tokens，试用不该因此失败。
+func Try(ctx context.Context, config Config) error {
+	chat, err := New(config)
+	if err != nil {
+		return err
+	}
+	request := chat.Request
+	request.Messages = []litellm.Message{litellm.UserText("Reply with the single word: ok")}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, err = chat.Client.Chat(ctx, request)
+	return err
+}
+
 func (config Config) Digest() (string, error) {
 	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.Model) == "" {
 		return "", fmt.Errorf("model provider and name are required: %w", model.ErrInvalid)

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -19,26 +21,35 @@ func TestConfigRoundTripAndEnvOverride(t *testing.T) {
 		t.Fatalf("save config: %v", err)
 	}
 	// 启动解析把当前连接的 type 补成显式值，其余与保存的一致。
-	resolved, err := ResolveConfig(dir)
+	resolved, err := resolve(dir)
 	pc, _ := saved.ActiveProvider()
 	if err != nil || !reflect.DeepEqual(resolved, saved.WithProvider(saved.Provider, saved.Model, pc)) {
 		t.Fatalf("resolved = %#v, %v, want stored config", resolved, err)
 	}
 
 	t.Setenv("AINOVEL_MODEL", "deepseek-reasoner")
-	resolved, err = ResolveConfig(dir)
+	resolved, err = resolve(dir)
 	if err != nil || resolved.Model != "deepseek-reasoner" || resolved.Provider != "deepseek" {
 		t.Fatalf("env override = %#v, %v", resolved, err)
 	}
 }
 
-func TestResolveConfigRejectsHalfConfigured(t *testing.T) {
+func TestWithEnvRejectsHalfConfigured(t *testing.T) {
 	dir := t.TempDir()
 	clearModelEnv(t)
 	t.Setenv("AINOVEL_PROVIDER", "openai")
-	if _, err := ResolveConfig(dir); err == nil {
+	if _, err := resolve(dir); err == nil {
 		t.Fatal("half-configured model settings were accepted")
 	}
+}
+
+// resolve 是启动时的解析：读配置文件，叠上环境变量。
+func resolve(dir string) (Config, error) {
+	saved, err := LoadConfig(dir)
+	if err != nil {
+		return Config{}, err
+	}
+	return WithEnv(saved)
 }
 
 func clearModelEnv(t *testing.T) {
@@ -59,7 +70,7 @@ func TestNamedConnectionsAndEnvironmentIsolation(t *testing.T) {
 	t.Setenv("AINOVEL_PROVIDER", "first")
 	t.Setenv("AINOVEL_MODEL", "override-model")
 	t.Setenv("AINOVEL_API_KEY", "override-secret")
-	resolved, err := ResolveConfig(dir)
+	resolved, err := resolve(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +82,7 @@ func TestNamedConnectionsAndEnvironmentIsolation(t *testing.T) {
 		t.Fatal("override modified another connection")
 	}
 	t.Setenv("AINOVEL_PROVIDER", "missing")
-	if _, err := ResolveConfig(dir); err == nil {
+	if _, err := resolve(dir); err == nil {
 		t.Fatal("unknown connection accepted")
 	}
 }
@@ -87,7 +98,7 @@ func TestEnvironmentConnectionDoesNotReuseCredentials(t *testing.T) {
 	t.Setenv("AINOVEL_PROVIDER_TYPE", "openai")
 	t.Setenv("AINOVEL_API", "chat")
 	t.Setenv("AINOVEL_MODEL", "local-model")
-	cfg, err := ResolveConfig(dir)
+	cfg, err := resolve(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +124,7 @@ func TestWithProviderPreservesConnectionsAndDoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestSaveConfigNormalizesAndRestrictsPermissions(t *testing.T) {
+func TestSaveConfigRestrictsPermissions(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(ConfigPath(dir), []byte("old"), 0644); err != nil {
 		t.Fatal(err)
@@ -167,7 +178,7 @@ func TestEnvironmentProtocolOverridesPrecedeValidation(t *testing.T) {
 	}
 	t.Setenv("AINOVEL_PROVIDER_TYPE", "openai")
 	t.Setenv("AINOVEL_API", "responses")
-	cfg, err := ResolveConfig(dir)
+	cfg, err := resolve(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +213,7 @@ func TestThinkingAndRoleOverridesRoundTrip(t *testing.T) {
 	if err := SaveConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ResolveConfig(dir)
+	resolved, err := resolve(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +225,7 @@ func TestThinkingAndRoleOverridesRoundTrip(t *testing.T) {
 		t.Fatalf("role model was not remembered on its connection: %v", got)
 	}
 	t.Setenv("AINOVEL_THINKING", "low")
-	if resolved, err = ResolveConfig(dir); err != nil || resolved.Thinking != "low" {
+	if resolved, err = resolve(dir); err != nil || resolved.Thinking != "low" {
 		t.Fatalf("env thinking override = %#v, %v", resolved, err)
 	}
 
@@ -235,5 +246,32 @@ func TestThinkingAndRoleOverridesRoundTrip(t *testing.T) {
 	}
 	if _, err := cfg.Connection("missing"); err == nil {
 		t.Fatal("unknown connection accepted")
+	}
+}
+
+// 删除连接或模型前查引用：默认绑定或角色还在用的拒绝，删除不改输入。配置文件那层可以不完整
+// （默认绑定由环境变量给出），照样能存。
+func TestRemovalChecksReferences(t *testing.T) {
+	cfg := Config{}.WithProvider("proxy", "gpt-5", ProviderConfig{Type: "openai", Models: []string{"gpt-5-mini"}})
+	cfg = cfg.WithProvider("deepseek", "deepseek-chat", ProviderConfig{}).WithRole("writer", "proxy", "gpt-5-mini", "")
+	if _, err := cfg.WithoutModel("deepseek", "deepseek-chat"); err == nil {
+		t.Fatal("the default model was removed")
+	}
+	if _, err := cfg.WithoutConnection("proxy"); err == nil || !strings.Contains(err.Error(), "writer") {
+		t.Fatalf("a connection the writer uses was removed: %v", err)
+	}
+	removed, err := cfg.WithoutModel("proxy", "gpt-5")
+	if err != nil || !slices.Equal(removed.Providers["proxy"].Models, []string{"gpt-5-mini"}) || len(cfg.Providers["proxy"].Models) != 2 {
+		t.Fatalf("WithoutModel = %+v %v (input %v)", removed.Providers["proxy"], err, cfg.Providers["proxy"].Models)
+	}
+	if removed, err = removed.WithoutRole("writer").WithoutConnection("proxy"); err != nil || len(removed.Providers) != 1 {
+		t.Fatalf("WithoutConnection = %+v %v", removed.Providers, err)
+	}
+	dir := t.TempDir()
+	if err := SaveConfig(dir, Config{Thinking: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, err := LoadConfig(dir); err != nil || loaded.Thinking != "high" || loaded.Configured() {
+		t.Fatalf("partial config = %+v %v", loaded, err)
 	}
 }

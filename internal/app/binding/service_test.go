@@ -3,10 +3,12 @@ package binding
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,7 +34,7 @@ func TestApplyBindsWithoutSavingAndKeepsIntentOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig()); err != nil {
+	if err := service.Apply(testConfig(), testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if binder.bindings == nil || binder.bindings.Default.Provider != "deepseek" || binder.bindings.Default.Model != "deepseek-chat" || binder.bindings.Default.Thinking != "high" {
@@ -43,7 +45,7 @@ func TestApplyBindsWithoutSavingAndKeepsIntentOnFailure(t *testing.T) {
 	}
 	broken := testConfig()
 	broken.Model = ""
-	if err := service.Apply(broken); err == nil || binder.calls != 1 {
+	if err := service.Apply(broken, broken); err == nil || binder.calls != 1 {
 		t.Fatalf("invalid config rebound the runtime: err=%v calls=%d", err, binder.calls)
 	}
 	if service.Config().Model != "" {
@@ -59,7 +61,7 @@ func TestUseAndSetThinkingPersistAndRebind(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig()); err != nil {
+	if err := service.Apply(testConfig(), testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Use("", "proxy", "gpt-5"); err != nil {
@@ -99,7 +101,7 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig()); err != nil {
+	if err := service.Apply(testConfig(), testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if got := service.Current("writer"); !got.Inherited || got.Model != "deepseek-chat" || got.Thinking != "high" {
@@ -143,7 +145,7 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 
 func TestUnassembledRuntimeAndConnectionLookup(t *testing.T) {
 	service := New(t.TempDir(), nil)
-	if err := service.Apply(testConfig()); err == nil || !strings.Contains(err.Error(), "not assembled") {
+	if err := service.Apply(testConfig(), testConfig()); err == nil || !strings.Contains(err.Error(), "not assembled") {
 		t.Fatalf("Apply without runtime = %v", err)
 	}
 	if _, err := modelConfigFor(testConfig(), "proxy", "gpt-5", "high"); err != nil {
@@ -166,7 +168,7 @@ func TestBindingsCarryPricesFromTheModelList(t *testing.T) {
 	binder := &fakeBinder{}
 	service := New(dir, binder)
 	config := testConfig().WithRole("writer", "proxy", "gpt-5", "")
-	if err := service.Apply(config); err != nil {
+	if err := service.Apply(config, config); err != nil {
 		t.Fatal(err)
 	}
 	if pricing := binder.bindings.Default.Chat.Pricing; pricing == nil || pricing.Input != 3e-7 || binder.bindings.Roles["writer"].Chat.Pricing != nil {
@@ -213,6 +215,106 @@ func TestListModelsRanksKnownFirstAndClassifiesRefusal(t *testing.T) {
 	}
 	relay.BaseURL = "ftp://relay.test"
 	if _, err := service.ListModels(context.Background(), "relay", relay); !errors.Is(err, appconfig.ErrBaseURL) {
+		t.Fatalf("bad address = %v", err)
+	}
+}
+
+// 环境变量带来的值只在生效配置里：界面上的修改当场生效，落盘的只有配置文件那层。文件里
+// 没有默认绑定（全由环境变量给出）时照样能存思考强度；文件里没有的连接，改它照实报错。
+func TestEditsKeepEnvironmentOverridesOutOfTheFile(t *testing.T) {
+	dir := t.TempDir()
+	binder := &fakeBinder{}
+	service := New(dir, binder)
+	saved := testConfig()
+	saved.Providers["deepseek"] = appconfig.ProviderConfig{Models: []string{"deepseek-chat"}}
+	config := testConfig().WithProvider("deepseek", "deepseek-reasoner", appconfig.ProviderConfig{Type: "deepseek", APIKey: "env-key"})
+	if err := service.Apply(saved, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetThinking("", "low"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Use("writer", "proxy", "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	file, err := appconfig.LoadConfig(dir)
+	if err != nil || file.Providers["deepseek"].APIKey != "" || file.Model != "deepseek-chat" || file.Thinking != "low" || file.Roles["writer"].Model != "gpt-5" {
+		t.Fatalf("file = %+v %v", file, err)
+	}
+	if got := service.Current(""); got.Model != "deepseek-reasoner" || got.Thinking != "low" || service.Config().Providers["deepseek"].APIKey != "env-key" {
+		t.Fatalf("effective = %+v", got)
+	}
+
+	envOnly := New(t.TempDir(), &fakeBinder{})
+	config = appconfig.Config{}.WithProvider("local", "m", appconfig.ProviderConfig{Type: "openai", BaseURL: "http://127.0.0.1:1"})
+	if err := envOnly.Apply(appconfig.Config{}, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := envOnly.SetThinking("", "high"); err != nil {
+		t.Fatalf("a file without a default binding must still save thinking: %v", err)
+	}
+	if err := envOnly.Use("", "local", "other"); err == nil || envOnly.Current("").Model != "m" {
+		t.Fatal("a connection only the environment defines cannot be saved to the file")
+	}
+}
+
+// 保存连接校验连接本身；删除连接或模型时，默认或角色还在用的拒绝，删了的不再出现在选项里。
+func TestSaveAndRemoveConnections(t *testing.T) {
+	dir := t.TempDir()
+	service := New(dir, &fakeBinder{})
+	if err := service.Apply(testConfig(), testConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SaveConnection("relay", appconfig.ProviderConfig{Type: "openai", BaseURL: "ftp://relay.test"}, ""); !errors.Is(err, appconfig.ErrBaseURL) {
+		t.Fatalf("invalid connection saved: %v", err)
+	}
+	if err := service.SaveConnection("relay", appconfig.ProviderConfig{Type: "openai", BaseURL: "https://relay.test"}, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.Current(""); got.Connection != "relay" || got.Model != "r1" {
+		t.Fatalf("saving with a model must make it the default: %+v", got)
+	}
+	if err := service.RemoveConnection("relay"); err == nil {
+		t.Fatal("the default connection was removed")
+	}
+	if err := service.RemoveModel("deepseek", "deepseek-reasoner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Use("", "deepseek", "deepseek-chat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveConnection("proxy"); err != nil {
+		t.Fatal(err)
+	}
+	file, _ := appconfig.LoadConfig(dir)
+	if _, ok := file.Providers["proxy"]; ok || slices.Contains(file.Providers["deepseek"].Models, "deepseek-reasoner") || len(service.Choices()) != 2 {
+		t.Fatalf("file = %+v choices = %+v", file.Providers, service.Choices())
+	}
+}
+
+// 试用模型：与创作同形的一次对话；模型名错时是拒绝，地址不合法不发请求。
+func TestTryModelSendsOneChatAndClassifiesRefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/chat/completions" || !strings.Contains(string(body), `"model":"good"`) {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found"}}`))
+			return
+		}
+		w.Write([]byte(`{"id":"1","object":"chat.completion","model":"good","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	service := New(t.TempDir(), &fakeBinder{})
+	relay := appconfig.ProviderConfig{Type: "openai", APIKey: "k", BaseURL: server.URL}
+	if err := service.TryModel(context.Background(), "relay", relay, "good"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TryModel(context.Background(), "relay", relay, "typo"); err == nil || !strings.Contains(err.Error(), "model not found") {
+		t.Fatalf("typo = %v", err)
+	}
+	relay.BaseURL = "ftp://relay.test"
+	if err := service.TryModel(context.Background(), "relay", relay, "good"); !errors.Is(err, appconfig.ErrBaseURL) {
 		t.Fatalf("bad address = %v", err)
 	}
 }

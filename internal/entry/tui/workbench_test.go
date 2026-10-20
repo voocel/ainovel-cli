@@ -814,7 +814,7 @@ func TestFooterShowsUsageContextAndPrimaryAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.api.Models = binding.New(m.deps.ConfigDir, &testExecutor{})
-	if err := m.api.Models.Apply(testConfig()); err != nil {
+	if err := m.api.Models.Apply(testConfig(), testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	requireContains(t, frame(m), "deepseek/deepseek-v4-flash · 思考 auto · 上下文 1M · ↑233K ↓58K")

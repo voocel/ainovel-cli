@@ -34,7 +34,7 @@ go run ./cmd/ainovel-cli --headless ...  # 无交互执行动作，供脚本与�
 go run ./cmd/ainovel-cli --version       # 程序级信息
 ```
 
-TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/v1/config.json`（v1 目录独立于 v0，格式不兼容也不迁移），之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/v1/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。环境变量 `AINOVEL_PROVIDER/AINOVEL_MODEL/AINOVEL_API_KEY/AINOVEL_BASE_URL` 可临时覆盖配置文件；只设置 provider 或 model 会直接报错，不会降级成模板结果。
+TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/v1/config.json`（v1 目录独立于 v0，格式不兼容也不迁移），之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/v1/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。环境变量 `AINOVEL_PROVIDER/AINOVEL_MODEL/AINOVEL_API_KEY/AINOVEL_BASE_URL` 可临时覆盖配置文件（只在内存里，在界面上改别的也不会把它们写进文件）；只设置 provider 或 model 会直接报错，不会降级成模板结果。
 
 连接名称可以自定义：顶层 `provider` 引用 `providers` 中的连接，连接的 `type` 指定协议（如 `openai`），`api` 选择 OpenAI 的 `chat` 或 `responses` 接口。每个连接保存自己的密钥、地址和模型列表，参见 [配置示例](config.example.jsonc)。`AINOVEL_PROVIDER_TYPE` 和 `AINOVEL_API` 可覆盖当前连接的协议和接口；选择其他连接不会沿用原连接的密钥与地址。
 

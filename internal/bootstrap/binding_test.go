@@ -51,7 +51,7 @@ func TestQueuedOperationsRunUnderTheBindingCurrentAtAttemptStart(t *testing.T) {
 	if _, err := api.Novels.QuickWrite(ctx, command); !errors.Is(err, model.ErrInvalid) {
 		t.Fatalf("unbound runtime must refuse to start: %v", err)
 	}
-	if err := api.Models.Apply(bindingConfig("model-a")); err != nil {
+	if err := api.Models.Apply(bindingConfig("model-a"), bindingConfig("model-a")); err != nil {
 		t.Fatal(err)
 	}
 	result, err := api.Novels.QuickWrite(ctx, command)
@@ -59,7 +59,7 @@ func TestQueuedOperationsRunUnderTheBindingCurrentAtAttemptStart(t *testing.T) {
 		t.Fatalf("interrupted quick write: state=%s err=%v", result.RunState, err)
 	}
 	background := context.Background()
-	if err := api.Models.Switch(bindingConfig("model-b")); err != nil {
+	if err := api.Models.Use("", "deepseek", "model-b"); err != nil {
 		t.Fatal(err)
 	}
 	command.CreatedAt = testTime().Add(time.Second)
@@ -80,6 +80,6 @@ func TestQueuedOperationsRunUnderTheBindingCurrentAtAttemptStart(t *testing.T) {
 		}
 	}
 	if saved, err := appconfig.LoadConfig(configDir); err != nil || saved.Model != "model-b" {
-		t.Fatalf("Switch must persist the new binding: %#v %v", saved, err)
+		t.Fatalf("switching must persist the new binding: %#v %v", saved, err)
 	}
 }

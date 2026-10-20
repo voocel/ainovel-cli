@@ -95,11 +95,11 @@ func assemble(tb testing.TB, executor *testExecutor, chiefModels chief.Models) (
 	}
 	api := bootstrap.New(authorityStore, options)
 	if executor != nil {
-		if err := api.Models.Apply(testConfig()); err != nil {
+		if err := api.Models.Apply(testConfig(), testConfig()); err != nil {
 			tb.Fatalf("bind test model: %v", err)
 		}
 	}
-	return Deps{API: api, ConfigDir: configDir, UserID: "tester", ListModels: listedModels("deepseek-v4-flash", "deepseek-v4")}, api
+	return Deps{API: api, ConfigDir: configDir, UserID: "tester", ListModels: listedModels("deepseek-v4-flash", "deepseek-v4"), TryModel: (&trial{}).try}, api
 }
 
 func testConfig() appconfig.Config {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/voocel/ainovel-cli/internal/app/binding"
 	appconfig "github.com/voocel/ainovel-cli/internal/infra/config"
 )
 
@@ -16,7 +17,7 @@ import (
 
 const (
 	wizardWidth = 76 // 内容栏最宽
-	wizardLabel = 10 // 表单与思考强度的标签列
+	wizardLabel = 12 // 表单、角色与思考强度的标签列
 )
 
 type wizardFrame struct {
@@ -49,8 +50,10 @@ func (m model) wizardFrame() wizardFrame {
 		section = m.providersView(&c)
 	case wizardConnection:
 		section = m.connectionView(&c)
-	default:
+	case wizardModels:
 		section = m.modelsView(&c, body-1)
+	default:
+		section = m.roleView(&c, body-1)
 	}
 	top := pageHeader + 1
 	frame := wizardFrame{capacity: section.capacity}
@@ -68,7 +71,11 @@ func (m model) wizardFrame() wizardFrame {
 	}
 	feedback := problemFeedback(m.wizard.err)
 	if feedback == "" && m.wizard.notice != "" {
-		feedback = benchTheme.Accent.Render(m.wizard.notice)
+		style := benchTheme.Accent
+		if m.wizard.confirm != (overviewItem{}) {
+			style = benchTheme.Warning
+		}
+		feedback = style.Render(m.wizard.notice)
 	}
 	lines = append(lines, m.pageBottom(feedback, section.hint+" · Ctrl+C 退出", section.aside, w)...)
 	frame.text = strings.Join(fitBlock(strings.Join(lines, "\n"), w, h), "\n")
@@ -79,45 +86,41 @@ func (m model) wizardFrame() wizardFrame {
 
 func (m model) overviewView(c *pageColumn, rows int) wizardSection {
 	w := m.wizard
-	current := m.api.Models.Current("")
-	window := ""
-	if current.ContextWindow > 0 {
-		window = "上下文 " + formatWindow(current.ContextWindow)
-	}
+	items := m.overviewItems()
 	c.add(sectionHead(benchTheme.Title.Render("当前"), "", c.width))
 	c.add("")
-	c.add(alignRight(benchTheme.Title.Render(current.Connection+" / "+current.Model), benchTheme.Muted.Render(window), c.width))
+	m.roleLine(c, 0, "")
 
-	levels, at := m.thinkingLevels()
-	line := rowLabel(w.cursor == 0, "思考强度", wizardLabel)
+	levels, at := m.thinkingLevels("")
+	line := rowLabel(w.cursor == 1, "思考强度", wizardLabel)
 	for i, level := range levels {
 		text := " " + thinkingLabel(level) + " "
 		style := benchTheme.Muted
 		if i == at {
 			style = benchTheme.Selected
 		}
-		c.hit(lipgloss.Width(line), lipgloss.Width(text), itemThinking, 0, i)
+		c.hit(lipgloss.Width(line), lipgloss.Width(text), itemThinking, 1, i)
 		line += style.Render(text) + " "
 	}
 	if at < 0 {
 		line += benchTheme.Muted.Render(" 已设 " + thinkingLabel(m.api.Models.Config().Thinking) + "，这个模型不支持，按 auto 发")
 	}
-	c.mark(w.cursor == 0, line)
-	if roles := m.overriddenRoles(); roles != "" {
-		c.add(benchTheme.Muted.Render(roles + " 单独指定了模型 · 在工作台输入 /model 调整"))
+	c.mark(w.cursor == 1, line)
+	c.add("")
+	head := slices.IndexFunc(items, func(item overviewItem) bool { return item.kind == itemConnection || item.kind == itemAddConnection })
+	for i := 2; i < head; i++ {
+		m.roleLine(c, i, items[i].role)
 	}
 	c.add("")
 	c.add("")
 	c.add(sectionHead(benchTheme.Title.Render("连接与模型"), "", c.width))
 	c.add("")
 
-	// 连接之间空一行；列表装不下时按行数开窗，空行与末尾的配置位置也占行。
-	items := m.overviewItems()
+	// 列表装不下时开窗；末尾的配置位置占两行。
 	listTop := len(c.lines)
-	capacity := max(1, rows-listTop-len(m.api.Models.Connections())-2)
-	start, end := listWindow(len(items)-1, max(0, w.cursor-1), capacity)
-	for i := start + 1; i <= end; i++ {
-		if i > start+1 && items[i].kind != itemModel && items[i].kind != itemAddModel {
+	start, end := overviewWindow(items, head, max(head, w.cursor), max(1, rows-listTop-2))
+	for i := start; i < end; i++ {
+		if i > start && groupStart(items[i]) {
 			c.add("")
 		}
 		c.item(m.overviewRow(items[i], c.width, i == w.cursor), items[i].kind, i)
@@ -125,17 +128,91 @@ func (m model) overviewView(c *pageColumn, rows int) wizardSection {
 	listLen := len(c.lines) - listTop
 	c.add("")
 	c.add(benchTheme.Muted.Render("配置保存在 " + homePath(appconfig.ConfigPath(m.deps.ConfigDir))))
-	hint := map[int]string{
-		itemThinking:      "←→ 思考强度 · ↑↓ 选择",
-		itemConnection:    "Enter 编辑密钥与地址 · ↑↓ 选择",
-		itemModel:         "Enter 换用 · ↑↓ 选择",
-		itemAddModel:      "Enter 从服务商列出模型 · ↑↓ 选择",
-		itemAddConnection: "Enter 添加连接 · ↑↓ 选择",
-	}[items[w.cursor].kind]
-	if w.fromHome {
-		hint += " · Esc 返回"
+	return wizardSection{hint: m.overviewHint(items[w.cursor]), listTop: listTop, listLen: listLen, capacity: listLen}
+}
+
+// groupStart 报告这一行是否开始新的一组（连接或「添加连接」）：组与组之间空一行。
+func groupStart(item overviewItem) bool {
+	return item.kind == itemConnection || item.kind == itemAddConnection
+}
+
+// overviewWindow 是连接列表（items[head:]）在 room 行里的可见区间：组间空行也占行（窗口
+// 首行之前的不算），从选中行向上下交替扩展，让它留在窗口中部。
+func overviewWindow(items []overviewItem, head, cursor, room int) (int, int) {
+	// height 是 items[i] 接在窗口里另一行之后占的行数：新的一组前面多一个空行。往上扩展时
+	// 原来的首行有了上一行，它前面的空行这时才出现，所以代价是 height(start)。
+	height := func(i int) int {
+		if groupStart(items[i]) {
+			return 2
+		}
+		return 1
 	}
-	return wizardSection{hint: hint, listTop: listTop, listLen: listLen, capacity: capacity}
+	start, end, used := cursor, cursor+1, 1
+	for grew := true; grew; {
+		grew = false
+		if end < len(items) && used+height(end) <= room {
+			used, end, grew = used+height(end), end+1, true
+		}
+		if start > head && used+height(start) <= room {
+			used, start, grew = used+height(start), start-1, true
+		}
+	}
+	return start, end
+}
+
+// roleLine 是「当前」里默认（role 为空）或一个角色的行：所用的模型，右侧是默认的上下文窗口
+// 或角色自己的思考强度。整行可点。
+func (m model) roleLine(c *pageColumn, index int, role string) {
+	focused := m.wizard.cursor == index
+	current := m.api.Models.Current(role)
+	value := benchTheme.Text.Render(current.Connection + " / " + current.Model)
+	right := ""
+	switch {
+	case role == "":
+		value = benchTheme.Title.Render(current.Connection + " / " + current.Model)
+		if current.ContextWindow > 0 {
+			right = "上下文 " + formatWindow(current.ContextWindow)
+		}
+	case current.Inherited:
+		value = benchTheme.Muted.Render("跟随默认")
+	default:
+		thinking := m.api.Models.Config().Roles[role].Thinking
+		if thinking == "" {
+			thinking = levelInherit
+		}
+		right = "思考 " + thinkingLabel(thinking)
+	}
+	c.hit(0, c.width, itemRole, index, -1)
+	c.mark(focused, alignRight(rowLabel(focused, roleNames[role], wizardLabel)+value, benchTheme.Muted.Render(right), c.width))
+}
+
+func (m model) overviewHint(item overviewItem) string {
+	var hint string
+	switch item.kind {
+	case itemRole:
+		hint = "Enter 换模型"
+		if _, ok := m.api.Models.Config().Roles[item.role]; ok {
+			hint += " · ←→ 思考强度"
+		}
+	case itemThinking:
+		hint = "←→ 思考强度"
+	case itemConnection:
+		hint = "Enter 编辑 · d 删除"
+	case itemModel:
+		hint = "Enter 换用 · d 删除"
+	case itemAddModel:
+		hint = "Enter 从服务商列出模型"
+	default:
+		hint = "Enter 添加连接"
+	}
+	hint += " · ↑↓ 选择"
+	switch {
+	case m.wizard.fromHome:
+		hint += " · Esc 返回"
+	case m.api.Models.Current("").Bound:
+		hint += " · Esc 去首页"
+	}
+	return hint
 }
 
 func (m model) overviewRow(item overviewItem, width int, selected bool) string {
@@ -187,23 +264,47 @@ func connectionLabel(name string, pc appconfig.ProviderConfig) string {
 	return label
 }
 
-// overriddenRoles 是单独指定了模型的角色名，按角色顺序。
-func (m model) overriddenRoles() string {
-	config := m.api.Models.Config()
-	var names []string
-	for _, role := range m.api.Models.Roles() {
-		if _, ok := config.Roles[role]; ok && role != "" {
-			names = append(names, roleNames[role])
-		}
-	}
-	return strings.Join(names, "、")
-}
-
 func homePath(path string) string {
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
 		return "~" + strings.TrimPrefix(path, home)
 	}
 	return path
+}
+
+// --- 角色 ---
+
+func (m model) roleView(c *pageColumn, rows int) wizardSection {
+	w := m.wizard
+	c.add(sectionHead(benchTheme.Title.Render("选择模型 · "+roleNames[w.role]), "", c.width))
+	c.add("")
+	choices := m.roleChoices()
+	listTop := len(c.lines)
+	capacity := max(1, rows-listTop-2)
+	start, end := listWindow(len(choices), w.cursor, capacity)
+	for i := start; i < end; i++ {
+		c.item(m.choiceLine(choices[i], c.width, i == w.cursor), 0, i)
+	}
+	c.add("")
+	c.add(benchTheme.Muted.Render("这里只有已保存的模型；要用别的，回总览给连接「+ 添加模型」"))
+	return wizardSection{hint: "↑↓ 选择 · Enter 使用 · Esc 返回", listTop: listTop, listLen: end - start, capacity: capacity}
+}
+
+// choiceLine 是换模型时的一个选项：● 是正在用的；「跟随默认」右侧写默认此刻的模型。
+func (m model) choiceLine(choice binding.Choice, width int, selected bool) string {
+	mark, tone := "○ ", benchTheme.Muted
+	if m.roleUses(m.wizard.role, choice) {
+		mark, tone = "● ", benchTheme.Accent
+	}
+	if choice.Connection == "" {
+		current := m.api.Models.Current("")
+		return listRow([]styled{{mark, tone}, {"跟随默认", benchTheme.Text}}, []styled{{current.Connection + " / " + current.Model, benchTheme.Muted}}, width, selected)
+	}
+	var right []styled
+	if window := m.api.Models.ContextWindow(choice.Connection, choice.Model); window > 0 {
+		right = []styled{{formatWindow(window), benchTheme.Muted}}
+	}
+	left := []styled{{mark, tone}, {choice.Connection + " / ", benchTheme.Muted}, {choice.Model, benchTheme.Text}}
+	return listRow(left, right, width, selected)
 }
 
 // --- 服务商 ---
@@ -355,13 +456,17 @@ func (m model) modelsView(c *pageColumn, rows int) wizardSection {
 	filter.SetCursor(filter.Position())
 	c.mark(true, filter.View())
 	c.add("")
-	if w.listing {
+	switch {
+	case w.listing:
 		c.add(benchTheme.Muted.Render("正在向服务商获取模型列表…"))
 		return wizardSection{hint: "正在获取 · Esc 取消"}
+	case w.trying != "":
+		c.add(benchTheme.Muted.Render("正在试用「" + w.trying + "」：发一句极短的对话，确认它能用…"))
+		return wizardSection{hint: "正在试用 · Esc 取消"}
 	}
 	if w.unlisted != "" {
 		c.add(benchTheme.Warning.Render("没能列出模型：") + benchTheme.Muted.Render(oneLine(w.unlisted)))
-		c.add(benchTheme.Muted.Render("直接输入模型 ID，回车使用"))
+		c.add(benchTheme.Muted.Render("直接输入模型 ID，回车先试一句，能用就用上"))
 		c.add("")
 	}
 	picks := w.pickerRows()
@@ -381,7 +486,7 @@ func (m model) modelsView(c *pageColumn, rows int) wizardSection {
 
 func (w wizardState) pickerLine(row pickerRow, width int, selected bool) string {
 	if row.option == nil {
-		return listRow([]styled{{"↵ 直接使用「" + row.id + "」", benchTheme.Accent}}, nil, width, selected)
+		return listRow([]styled{{"↵ 使用「" + row.id + "」", benchTheme.Accent}, {"  先试一句确认能用", benchTheme.Muted}}, nil, width, selected)
 	}
 	mark := "  "
 	if slices.Contains(w.models, row.id) {

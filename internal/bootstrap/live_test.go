@@ -79,7 +79,11 @@ func openLive(t *testing.T) *liveUser {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := appconfig.ResolveConfig(dir)
+	saved, err := appconfig.LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := appconfig.WithEnv(saved)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +94,7 @@ func openLive(t *testing.T) *liveUser {
 	}
 	t.Cleanup(func() { authorityStore.Close() })
 	api := bootstrap.New(authorityStore, bootstrap.Options{Version: "live", ConfigDir: t.TempDir()})
-	if err := api.Models.Apply(config); err != nil {
+	if err := api.Models.Apply(saved, config); err != nil {
 		t.Fatal(err)
 	}
 	project := os.Getenv("AINOVEL_LIVE_PROJECT") // 接着跑库里已有的书

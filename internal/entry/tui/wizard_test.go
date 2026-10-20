@@ -41,6 +41,17 @@ func (l *listing) list(_ context.Context, name string, pc appconfig.ProviderConf
 	return l.options, l.err
 }
 
+// trial 是一次试用模型的请求：记下试的模型，返回给定的结果。
+type trial struct {
+	model string
+	err   error
+}
+
+func (r *trial) try(_ context.Context, _ string, _ appconfig.ProviderConfig, model string) error {
+	r.model = model
+	return r.err
+}
+
 func paste(t *testing.T, m model, text string) model {
 	t.Helper()
 	next, _ := m.Update(tea.PasteMsg{Content: text})
@@ -111,11 +122,14 @@ func TestRefusedKeyReturnsToTheKeyWithoutSaving(t *testing.T) {
 	}
 }
 
-// 中转：名称按地址自动起、可选 Responses 接口；列不出模型时直接输入模型 ID。
+// 中转：名称按地址自动起、可选 Responses 接口；列不出模型时直接输入模型 ID，先试一句，
+// 试不通留在模型页给出原话（密钥隐去），试通了才落盘。
 func TestRelayTakesTypedModelWhenItCannotList(t *testing.T) {
 	deps, _ := newTestDeps(t, false)
 	lister := &listing{err: errors.New("404 page not found")}
 	deps.ListModels = lister.list
+	tried := &trial{err: errors.New("model my-model not found for relay-key")}
+	deps.TryModel = tried.try
 	m := newModel(context.Background(), deps)
 	m.wizard.cursor = relayPreset
 	m, _ = press(t, m, tea.KeyEnter)
@@ -139,8 +153,21 @@ func TestRelayTakesTypedModelWhenItCannotList(t *testing.T) {
 		t.Fatalf("unlisted relay must fall back to typing: step=%v unlisted=%q", m.wizard.step, m.wizard.unlisted)
 	}
 	m = typeText(t, m, "my-model")
-	requireContains(t, ansi.Strip(m.screen()), "没能列出模型", "直接使用「my-model」")
-	m, _ = press(t, m, tea.KeyEnter)
+	requireContains(t, ansi.Strip(m.screen()), "没能列出模型", "使用「my-model」")
+	m, cmd = press(t, m, tea.KeyEnter)
+	requireContains(t, ansi.Strip(m.screen()), "正在试用「my-model」")
+	next, _ := m.Update(findMsg[wizardTriedMsg](t, cmd))
+	m = next.(model)
+	if tried.model != "my-model" || m.wizard.step != wizardModels || !strings.Contains(m.wizard.err, "用不了") || strings.Contains(m.wizard.err, "relay-key") {
+		t.Fatalf("failed trial: tried=%q step=%v err=%q", tried.model, m.wizard.step, m.wizard.err)
+	}
+	if _, err := os.Stat(appconfig.ConfigPath(deps.ConfigDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a model that failed its trial was saved")
+	}
+	tried.err = nil
+	m, cmd = press(t, m, tea.KeyEnter)
+	next, _ = m.Update(findMsg[wizardTriedMsg](t, cmd))
+	m = next.(model)
 	saved := savedConfig(t, m)
 	pc := saved.Providers["wool"]
 	if m.page != pageHome || saved.Provider != "wool" || saved.Model != "my-model" || pc.Type != "openai" || pc.API != "responses" || pc.APIKey != "relay-key" {
@@ -152,8 +179,7 @@ func TestRelayTakesTypedModelWhenItCannotList(t *testing.T) {
 func TestNewConnectionNamesStayUnique(t *testing.T) {
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
-	config := m.api.Models.Config().WithConnection("wool", appconfig.ProviderConfig{Type: "openai", APIKey: "old", BaseURL: "https://api.wool.dev/v1"})
-	if err := m.api.Models.Switch(config); err != nil {
+	if err := m.api.Models.SaveConnection("wool", appconfig.ProviderConfig{Type: "openai", APIKey: "old", BaseURL: "https://api.wool.dev/v1"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	next, _ := m.activate(focusConfig)
@@ -180,8 +206,7 @@ func overviewFixture(t *testing.T) model {
 	t.Helper()
 	deps, _ := newTestDeps(t, true)
 	m := newModel(context.Background(), deps)
-	config := m.api.Models.Config().WithConnection("wool", appconfig.ProviderConfig{Type: "openai", APIKey: "wool-key", BaseURL: "https://api.wool.dev/v1", Models: []string{"grok-4.7"}})
-	if err := m.api.Models.Switch(config); err != nil {
+	if err := m.api.Models.SaveConnection("wool", appconfig.ProviderConfig{Type: "openai", APIKey: "wool-key", BaseURL: "https://api.wool.dev/v1", Models: []string{"grok-4.7"}}, ""); err != nil {
 		t.Fatal(err)
 	}
 	next, _ := m.activate(focusConfig)
@@ -205,7 +230,12 @@ func TestOverviewSwitchesAndEditsInPlace(t *testing.T) {
 	if m.wizard.step != wizardOverview {
 		t.Fatalf("configured settings must open the overview, got %v", m.wizard.step)
 	}
-	requireContains(t, ansi.Strip(m.screen()), "deepseek / deepseek-v4-flash", "OpenAI 格式 · api.wool.dev", "grok-4.7", "+ 添加连接")
+	requireContains(t, ansi.Strip(m.screen()), "deepseek / deepseek-v4-flash", "Writer", "跟随默认", "OpenAI 格式 · api.wool.dev", "grok-4.7", "+ 添加连接")
+	m, _ = press(t, m, tea.KeyRight)
+	if m.api.Models.Config().Thinking != "" {
+		t.Fatal("left/right on the default model row must not touch thinking")
+	}
+	m, _ = press(t, m, tea.KeyDown)
 	m, _ = press(t, m, tea.KeyRight)
 	if m.api.Models.Config().Thinking == "" || !strings.Contains(m.wizard.notice, "思考强度") {
 		t.Fatalf("right on thinking must change it: %q", m.api.Models.Config().Thinking)
@@ -252,6 +282,85 @@ func TestAddModelMarksSavedAndUsesThePick(t *testing.T) {
 	saved := savedConfig(t, m)
 	if m.wizard.step != wizardOverview || saved.Provider != "wool" || saved.Model != "qwen3.8-27b" || !slices.Equal(saved.Providers["wool"].Models, []string{"grok-4.7", "qwen3.8-27b"}) {
 		t.Fatalf("saved = %+v", saved)
+	}
+}
+
+// 角色：回车从已保存的模型里给它挑一个，←→ 调它自己的思考强度，选「跟随默认」即清除覆盖。
+func TestOverviewAssignsRoles(t *testing.T) {
+	m := overviewFixture(t)
+	m.wizard.cursor = slices.Index(m.overviewItems(), overviewItem{kind: itemRole, role: "writer"})
+	m, _ = press(t, m, tea.KeyRight)
+	if _, ok := m.api.Models.Config().Roles["writer"]; ok {
+		t.Fatal("an inherited role has no thinking of its own to change")
+	}
+	m, _ = press(t, m, tea.KeyEnter)
+	if m.wizard.step != wizardRole {
+		t.Fatalf("role row must open the picker, step=%v", m.wizard.step)
+	}
+	requireContains(t, ansi.Strip(m.screen()), "选择模型 · Writer", "● 跟随默认", "deepseek / deepseek-v4-flash", "wool / grok-4.7")
+	m.wizard.cursor = slices.Index(m.roleChoices(), binding.Choice{Connection: "wool", Model: "grok-4.7"})
+	m, _ = press(t, m, tea.KeyEnter)
+	if rc := m.api.Models.Config().Roles["writer"]; m.wizard.step != wizardOverview || rc.Provider != "wool" || rc.Model != "grok-4.7" || !strings.Contains(m.wizard.notice, "Writer 改用") {
+		t.Fatalf("assign: step=%v roles=%+v notice=%q", m.wizard.step, m.api.Models.Config().Roles, m.wizard.notice)
+	}
+	if item := m.overviewItems()[m.wizard.cursor]; item.role != "writer" {
+		t.Fatalf("cursor must stay on the role, got %+v", item)
+	}
+	m, _ = press(t, m, tea.KeyRight)
+	if thinking := savedConfig(t, m).Roles["writer"].Thinking; thinking == "" {
+		t.Fatal("right on an assigned role must set its own thinking")
+	}
+	requireContains(t, ansi.Strip(m.screen()), "wool / grok-4.7", "思考 ")
+	m, _ = press(t, m, tea.KeyEnter)
+	m.wizard.cursor = 0
+	m, _ = press(t, m, tea.KeyEnter)
+	if _, ok := savedConfig(t, m).Roles["writer"]; ok || !m.api.Models.Current("writer").Inherited {
+		t.Fatal("following the default must clear the override")
+	}
+}
+
+// 删除：连接与模型按两次 d 删除，中间按别的键就取消；默认或角色还在用的拒绝并说明。
+func TestOverviewDeletesWithConfirmation(t *testing.T) {
+	m := overviewFixture(t)
+	if err := m.api.Models.Use("writer", "wool", "grok-4.7"); err != nil {
+		t.Fatal(err)
+	}
+	m = cursorAt(t, m, itemConnection, "wool", "")
+	m, _ = pressRune(t, m, 'd')
+	if !strings.Contains(m.wizard.notice, "再按一次 d 删除连接「wool」和它的 1 个模型") {
+		t.Fatalf("notice = %q", m.wizard.notice)
+	}
+	m, _ = pressRune(t, m, 'd')
+	if _, ok := m.api.Models.Config().Providers["wool"]; !ok || !strings.Contains(m.wizard.err, "角色 writer 正在用") {
+		t.Fatalf("a connection a role uses was deleted: err=%q", m.wizard.err)
+	}
+	if err := m.api.Models.Use("writer", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	m = cursorAt(t, m, itemModel, "deepseek", "deepseek-v4-flash")
+	m, _ = pressRune(t, m, 'd')
+	m, _ = pressRune(t, m, 'd')
+	if !strings.Contains(m.wizard.err, "默认模型正在用") {
+		t.Fatalf("the default model was deleted: err=%q", m.wizard.err)
+	}
+	m = cursorAt(t, m, itemModel, "wool", "grok-4.7")
+	m, _ = pressRune(t, m, 'd')
+	m, _ = press(t, m, tea.KeyEsc)
+	if m.page != pageHome {
+		t.Fatal("any other key must cancel the pending delete")
+	}
+	next, _ := m.activate(focusConfig)
+	m = cursorAt(t, next.(model), itemModel, "wool", "grok-4.7")
+	m, _ = pressRune(t, m, 'd')
+	m, _ = pressRune(t, m, 'd')
+	if saved := savedConfig(t, m); len(saved.Providers["wool"].Models) != 0 || !strings.Contains(m.wizard.notice, "已删除 wool / grok-4.7") {
+		t.Fatalf("model delete: notice=%q saved=%+v", m.wizard.notice, saved.Providers["wool"])
+	}
+	m = cursorAt(t, m, itemConnection, "wool", "")
+	m, _ = pressRune(t, m, 'd')
+	m, _ = pressRune(t, m, 'd')
+	if _, ok := savedConfig(t, m).Providers["wool"]; ok || slices.ContainsFunc(m.overviewItems(), func(item overviewItem) bool { return item.connection == "wool" }) {
+		t.Fatal("connection delete did not remove it")
 	}
 }
 
@@ -353,12 +462,20 @@ func TestWizardFramesFitAndHitsStayOnScreen(t *testing.T) {
 	}
 	steps := map[string]func(m model) model{
 		"overview": func(m model) model { return m },
+		"overview-end": func(m model) model {
+			m.wizard.cursor = len(m.overviewItems()) - 1
+			return m
+		},
 		"providers": func(m model) model {
 			m.wizard.step = wizardProviders
 			return m
 		},
 		"relay": func(m model) model {
 			next, _ := m.newConnection(relayPreset)
+			return next.(model)
+		},
+		"role": func(m model) model {
+			next, _ := m.openRolePicker("writer")
 			return next.(model)
 		},
 		"models": func(m model) model {
@@ -372,7 +489,7 @@ func TestWizardFramesFitAndHitsStayOnScreen(t *testing.T) {
 	}
 	for _, isDark := range []bool{false, true} {
 		darkBackground = isDark
-		for _, size := range [][2]int{{120, 36}, {150, 40}, {240, 60}} {
+		for _, size := range [][2]int{{80, 24}, {120, 36}, {150, 40}, {240, 60}} {
 			for name, step := range steps {
 				m := overviewFixture(t)
 				m.deps.ListModels = listedModels(many...)
@@ -381,6 +498,9 @@ func TestWizardFramesFitAndHitsStayOnScreen(t *testing.T) {
 				frame := m.wizardFrame()
 				if lipgloss.Width(frame.text) > size[0] || lipgloss.Height(frame.text) != size[1] {
 					t.Fatalf("frame overflow %v %s", size, name)
+				}
+				if name == "overview-end" && !strings.Contains(ansi.Strip(frame.text), "+ 添加连接") {
+					t.Fatalf("the selected row must stay in the window %v", size)
 				}
 				for _, hit := range frame.hits {
 					if hit.y < pageHeader || hit.y >= size[1]-pageFooter || hit.x < 0 || hit.x+hit.width > size[0] {

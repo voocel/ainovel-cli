@@ -18,9 +18,9 @@ import (
 )
 
 // 模型设置（workbench §4）：未配置模型时是启动落点，配好即进首页；从首页进入时先看总览——
-// 当前模型与思考强度、各连接和它们的模型，切换、编辑、添加都在这一页。添加连接走「服务商 →
-// 连接 → 模型」三步：填好密钥回车，就向服务商列出这组凭据能用的模型（顺带验证密钥），挑一个
-// 或直接输入模型 ID。绑定成功才落盘。
+// 默认与各角色用的模型、思考强度、各连接和它们的模型，切换、分配、编辑、添加、删除都在这一页。
+// 添加连接走「服务商 → 连接 → 模型」三步：填好密钥回车，就向服务商列出这组凭据能用的模型
+// （顺带验证密钥），挑一个或直接输入模型 ID（先试一句确认能用）。绑定成功才落盘。
 
 type wizardStep int
 
@@ -29,6 +29,7 @@ const (
 	wizardProviders                    // 选择服务商
 	wizardConnection                   // 连接：密钥、地址、名称
 	wizardModels                       // 选择模型：服务商列出的模型，可筛选或直接输入
+	wizardRole                         // 给默认或某个角色换模型：从已保存的模型里选
 )
 
 type wizardMode int
@@ -61,7 +62,8 @@ const (
 
 // 总览的行。
 const (
-	itemThinking = iota
+	itemRole = iota // 默认（role 为空）或某个角色用的模型
+	itemThinking
 	itemConnection
 	itemModel
 	itemAddModel
@@ -69,8 +71,8 @@ const (
 )
 
 type overviewItem struct {
-	kind              int
-	connection, model string
+	kind                    int
+	role, connection, model string
 }
 
 type wizardState struct {
@@ -80,6 +82,8 @@ type wizardState struct {
 	cursor   int  // 总览、服务商与模型列表的选中行
 	err      string
 	notice   string
+	confirm  overviewItem // 待二次确认删除的总览行：再按 d 执行，按其他键取消
+	role     string       // 正在换模型的角色，空是默认
 
 	// 连接草稿：preset 是服务商（wizardPresets 下标），format 是中转的格式（wizardFormats
 	// 下标），original 是编辑或添加模型的已保存连接，models 是它原有的模型。
@@ -92,8 +96,9 @@ type wizardState struct {
 	row      formRow
 	named    bool // 用户改过名称：地址变化不再替它起名
 
-	// 列模型：request 标识在途请求，取消或过期的结果丢弃。
+	// 列模型与试用手动输入的模型：request 标识在途请求，取消或过期的结果丢弃。
 	listing  bool
+	trying   string // 正在试用的模型 ID
 	request  *struct{ token byte }
 	cancel   context.CancelFunc
 	options  []binding.ModelOption
@@ -105,6 +110,11 @@ type wizardState struct {
 type wizardListedMsg struct {
 	request *struct{ token byte }
 	options []binding.ModelOption
+	err     error
+}
+
+type wizardTriedMsg struct {
+	request *struct{ token byte }
 	err     error
 }
 
@@ -150,6 +160,15 @@ func newWizardState(config appconfig.Config, problem string, fromHome bool) wiza
 		w.step = wizardProviders
 	}
 	return w
+}
+
+// busy 报告是否有请求在途（列模型或试用模型）。
+func (w *wizardState) busy() bool { return w.listing || w.trying != "" }
+
+// stopRequest 取消在途请求，迟到的结果按 request 丢弃。
+func (w *wizardState) stopRequest() {
+	w.cancel()
+	w.listing, w.trying, w.request, w.cancel = false, "", nil, nil
 }
 
 func (w *wizardState) kind() string {
@@ -232,6 +251,8 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case wizardListedMsg:
 		return m.wizardListed(message)
+	case wizardTriedMsg:
+		return m.wizardTried(message)
 	case tea.MouseMsg:
 		return m.wizardMouse(message)
 	case tea.PasteMsg:
@@ -248,8 +269,10 @@ func (m model) updateWizard(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.providersKey(message)
 		case wizardConnection:
 			return m.connectionKey(message)
-		default:
+		case wizardModels:
 			return m.modelsKey(message)
+		default:
+			return m.roleKey(message)
 		}
 	}
 	return m, nil
@@ -260,7 +283,7 @@ func (m model) wizardInput(message tea.Msg) (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	var cmd tea.Cmd
 	switch {
-	case w.step == wizardModels && !w.listing:
+	case w.step == wizardModels && !w.busy():
 		before := w.filter.Value()
 		w.filter, cmd = w.filter.Update(message)
 		if w.filter.Value() != before {
@@ -305,9 +328,13 @@ func (m model) suggestName(address, kind string) string {
 
 // --- 总览 ---
 
-// overviewItems 是总览的行：思考强度；每个连接、它的模型与「添加模型」；最后是「添加连接」。
+// overviewItems 是总览的行：默认模型、思考强度与各角色的模型；每个连接、它的模型与「添加
+// 模型」；最后是「添加连接」。
 func (m model) overviewItems() []overviewItem {
-	items := []overviewItem{{kind: itemThinking}}
+	items := []overviewItem{{kind: itemRole}, {kind: itemThinking}}
+	for _, role := range m.api.Models.Roles()[1:] {
+		items = append(items, overviewItem{kind: itemRole, role: role})
+	}
 	for _, name := range m.api.Models.Connections() {
 		items = append(items, overviewItem{kind: itemConnection, connection: name})
 		for _, model := range m.api.Models.Models(name) {
@@ -321,6 +348,8 @@ func (m model) overviewItems() []overviewItem {
 func (m model) overviewKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	items := m.overviewItems()
+	item, armed := items[w.cursor], w.confirm
+	w.confirm = overviewItem{}
 	switch key.String() {
 	case "up", "shift+tab":
 		w.cursor = max(0, w.cursor-1)
@@ -331,18 +360,32 @@ func (m model) overviewKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		w.cursor = len(items) - 1
 	case "left", "right":
-		if items[w.cursor].kind == itemThinking {
-			delta := 1
-			if key.String() == "left" {
-				delta = -1
-			}
-			return m.cycleThinking(delta)
+		delta := 1
+		if key.String() == "left" {
+			delta = -1
+		}
+		switch {
+		case item.kind == itemThinking:
+			return m.cycleThinking("", delta)
+		case item.kind == itemRole && item.role != "":
+			return m.cycleThinking(item.role, delta)
 		}
 	case "enter":
-		return m.activateOverview(items[w.cursor])
+		return m.activateOverview(item)
+	case "d":
+		if item.kind != itemConnection && item.kind != itemModel {
+			return m, nil
+		}
+		if armed == item {
+			return m.removeItem(item)
+		}
+		w.confirm, w.notice = item, m.removalPrompt(item)
 	case "esc":
-		if w.fromHome {
+		switch {
+		case w.fromHome:
 			return m.leaveWizard()
+		case m.api.Models.Current("").Bound:
+			return m.enterHome()
 		}
 	}
 	return m, nil
@@ -361,6 +404,8 @@ func (m model) enterHome() (tea.Model, tea.Cmd) {
 
 func (m model) activateOverview(item overviewItem) (tea.Model, tea.Cmd) {
 	switch item.kind {
+	case itemRole:
+		return m.openRolePicker(item.role)
 	case itemModel:
 		if err := m.api.Models.Use("", item.connection, item.model); err != nil {
 			m.wizard.err = m.redact(err, item.connection)
@@ -384,25 +429,143 @@ func (m model) activateOverview(item overviewItem) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// thinkingLevels 是当前模型可选的思考强度与当前设置所在的位置（不在其中时为 -1）。
-func (m model) thinkingLevels() ([]string, int) {
-	current := m.api.Models.Current("")
+// thinkingLevels 是默认（role 为空）或角色可选的思考强度与当前设置所在的位置（不在其中时
+// 为 -1）。角色的首档是跟随默认（它与 auto 同存为空，不另列 auto）；跟随默认模型的角色没有
+// 自己的档位。
+func (m model) thinkingLevels(role string) ([]string, int) {
+	current := m.api.Models.Current(role)
 	levels := m.api.Models.Levels(current.Connection, current.Model)
-	return levels, slices.Index(levels, m.api.Models.Config().Thinking)
+	if role == "" {
+		return levels, slices.Index(levels, m.api.Models.Config().Thinking)
+	}
+	rc, ok := m.api.Models.Config().Roles[role]
+	if !ok {
+		return nil, -1
+	}
+	levels = append([]string{levelInherit}, levels[1:]...)
+	if rc.Thinking == "" {
+		return levels, 0
+	}
+	return levels, slices.Index(levels, rc.Thinking)
 }
 
-func (m model) cycleThinking(delta int) (tea.Model, tea.Cmd) {
-	levels, index := m.thinkingLevels()
-	return m.setThinking(levels[(max(0, index)+delta+len(levels))%len(levels)])
+func (m model) cycleThinking(role string, delta int) (tea.Model, tea.Cmd) {
+	levels, index := m.thinkingLevels(role)
+	if len(levels) == 0 {
+		return m, nil
+	}
+	return m.setThinking(role, levels[(max(0, index)+delta+len(levels))%len(levels)])
 }
 
-func (m model) setThinking(level string) (tea.Model, tea.Cmd) {
-	if err := m.api.Models.SetThinking("", level); err != nil {
+func (m model) setThinking(role, level string) (tea.Model, tea.Cmd) {
+	if err := m.api.Models.SetThinking(role, level); err != nil {
 		m.wizard.err = err.Error()
 		return m, nil
 	}
 	m.wizard.notice = "思考强度：" + thinkingLabel(level)
+	if role != "" {
+		m.wizard.notice = roleNames[role] + " " + m.wizard.notice
+	}
 	return m, nil
+}
+
+// removalPrompt 是删除前的确认提示。
+func (m model) removalPrompt(item overviewItem) string {
+	if item.kind == itemModel {
+		return "再按一次 d 删除「" + item.connection + " / " + item.model + "」，按其他键取消"
+	}
+	text := "再按一次 d 删除连接「" + item.connection + "」"
+	if count := len(m.api.Models.Models(item.connection)); count > 0 {
+		text += fmt.Sprintf("和它的 %d 个模型", count)
+	}
+	return text + "，按其他键取消"
+}
+
+// removeItem 删除连接或模型；默认或角色还在用的，服务拒绝并说明先换掉谁。
+func (m model) removeItem(item overviewItem) (tea.Model, tea.Cmd) {
+	var err error
+	var notice string
+	if item.kind == itemModel {
+		err, notice = m.api.Models.RemoveModel(item.connection, item.model), "已删除 "+item.connection+" / "+item.model
+	} else {
+		err, notice = m.api.Models.RemoveConnection(item.connection), "已删除连接 "+item.connection
+	}
+	if err != nil {
+		m.wizard.err = err.Error()
+		return m, nil
+	}
+	m.wizard.notice = notice
+	m.wizard.cursor = min(m.wizard.cursor, len(m.overviewItems())-1)
+	return m, nil
+}
+
+// --- 角色 ---
+
+// roleChoices 是给默认或角色换模型的选项：全部已保存的模型，角色另有首项「跟随默认」
+// （连接为空）。
+func (m model) roleChoices() []binding.Choice {
+	choices := m.api.Models.Choices()
+	if m.wizard.role != "" {
+		choices = append([]binding.Choice{{}}, choices...)
+	}
+	return choices
+}
+
+// roleUses 报告角色此刻是否用着这个选项。
+func (m model) roleUses(role string, choice binding.Choice) bool {
+	current := m.api.Models.Current(role)
+	if current.Inherited {
+		return choice.Connection == ""
+	}
+	return choice.Connection == current.Connection && choice.Model == current.Model
+}
+
+func (m model) openRolePicker(role string) (tea.Model, tea.Cmd) {
+	w := &m.wizard
+	w.step, w.role = wizardRole, role
+	w.cursor = max(0, slices.IndexFunc(m.roleChoices(), func(choice binding.Choice) bool { return m.roleUses(role, choice) }))
+	return m, nil
+}
+
+func (m model) roleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	w := &m.wizard
+	choices := m.roleChoices()
+	switch key.String() {
+	case "esc":
+		return m.showOverview("", overviewItem{kind: itemRole, role: w.role}), nil
+	case "up", "shift+tab":
+		w.cursor = max(0, w.cursor-1)
+	case "down", "tab":
+		w.cursor = min(len(choices)-1, w.cursor+1)
+	case "pgup":
+		w.cursor = max(0, w.cursor-m.wizardFrame().capacity)
+	case "pgdown":
+		w.cursor = min(len(choices)-1, w.cursor+m.wizardFrame().capacity)
+	case "enter":
+		return m.assignRole(choices[w.cursor])
+	}
+	return m, nil
+}
+
+// assignRole 让默认或角色改用所选模型；角色选「跟随默认」即清除覆盖。默认绑定修好了首次
+// 配置就进首页，其余回到总览。
+func (m model) assignRole(choice binding.Choice) (tea.Model, tea.Cmd) {
+	role := m.wizard.role
+	if err := m.api.Models.Use(role, choice.Connection, choice.Model); err != nil {
+		m.wizard.err = m.redact(err, choice.Connection)
+		return m, nil
+	}
+	if role == "" && !m.wizard.fromHome {
+		return m.enterHome()
+	}
+	notice := "已换用 " + choice.Connection + " / " + choice.Model
+	switch {
+	case role != "" && choice.Connection == "":
+		notice = roleNames[role] + " 跟随默认"
+	case role != "":
+		notice = roleNames[role] + " 改用 " + choice.Connection + " / " + choice.Model
+	}
+	return m.showOverview(notice, overviewItem{kind: itemRole, role: role}), nil
 }
 
 // --- 服务商 ---
@@ -429,7 +592,7 @@ func (m model) providersKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // 带出它的密钥与地址，继续下去就是更新它。
 func (m model) newConnection(preset int) (tea.Model, tea.Cmd) {
 	kind := wizardPresets[preset].kind
-	if _, saved := m.api.Models.Config().Providers[kind]; saved && kind != "" && !renamable(kind) {
+	if _, saved := m.api.Models.Saved().Providers[kind]; saved && kind != "" && !renamable(kind) {
 		next, cmd := m.openSaved(kind, addConnection)
 		return next, cmd
 	}
@@ -446,9 +609,15 @@ func (m model) newConnection(preset int) (tea.Model, tea.Cmd) {
 	return m, w.focusRow(w.firstInput())
 }
 
-// openSaved 打开一个已保存的连接：带出它的格式、地址、密钥与模型。
+// openSaved 打开一个已保存的连接：带出它的格式、地址、密钥与模型。编辑与重配会把表单写进
+// 配置，从文件那层带出原值，环境变量里的密钥才不随之落盘；添加模型只借生效连接的凭据列模型，
+// 不写回连接。
 func (m model) openSaved(name string, mode wizardMode) (tea.Model, tea.Cmd) {
-	pc, err := m.api.Models.Config().Connection(name)
+	config := m.api.Models.Saved()
+	if mode == addModel {
+		config = m.api.Models.Config()
+	}
+	pc, err := config.Connection(name)
 	if err != nil {
 		m.wizard.err = err.Error()
 		return m, nil
@@ -536,8 +705,7 @@ func (m *model) refreshName() {
 func (m model) backFromConnection() (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	if w.listing {
-		w.cancel()
-		w.listing, w.request, w.cancel = false, nil, nil
+		w.stopRequest()
 		return m, nil
 	}
 	if w.mode == addConnection && w.original == "" {
@@ -657,7 +825,13 @@ func (w *wizardState) pickerRows() []pickerRow {
 
 func (m model) modelsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	w := &m.wizard
-	if w.listing {
+	switch {
+	case w.trying != "":
+		if key.String() == "esc" {
+			w.stopRequest()
+		}
+		return m, nil
+	case w.listing:
 		if key.String() == "esc" {
 			return m.backFromModels()
 		}
@@ -677,7 +851,7 @@ func (m model) modelsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		w.cursor = min(max(0, len(rows)-1), w.cursor+m.wizardFrame().capacity)
 	case "enter":
 		if w.cursor < len(rows) {
-			return m.useModel(rows[w.cursor].id)
+			return m.pickModel(rows[w.cursor])
 		}
 	default:
 		return m.wizardInput(key)
@@ -688,8 +862,7 @@ func (m model) modelsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) backFromModels() (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	if w.listing {
-		w.cancel()
-		w.listing, w.request, w.cancel = false, nil, nil
+		w.stopRequest()
 	}
 	if w.mode == addModel {
 		w.step = wizardOverview
@@ -699,33 +872,76 @@ func (m model) backFromModels() (tea.Model, tea.Cmd) {
 	return m, w.focusRow(w.row)
 }
 
-// useModel 用上所选模型：连接（新建或更新）连同模型写进配置并设为默认。
+// pickModel 用上所选的模型：服务商列出的直接用；手动输入的先发一句极短的对话，确认能用再
+// 保存，ID 拼错当场报出，不用等开写。
+func (m model) pickModel(row pickerRow) (tea.Model, tea.Cmd) {
+	if row.option != nil {
+		return m.useModel(row.id)
+	}
+	w := &m.wizard
+	name, pc := w.draft()
+	ctx, cancel := context.WithCancel(m.ctx)
+	request := &struct{ token byte }{}
+	w.trying, w.request, w.cancel = row.id, request, cancel
+	try := m.deps.TryModel
+	return m, func() tea.Msg {
+		defer cancel()
+		return wizardTriedMsg{request: request, err: try(ctx, name, pc, row.id)}
+	}
+}
+
+// wizardTried 收下试用结果：能用就保存，不能用留在模型页并给出服务商的原话。
+func (m model) wizardTried(msg wizardTriedMsg) (tea.Model, tea.Cmd) {
+	w := &m.wizard
+	if w.trying == "" || msg.request != w.request {
+		return m, nil
+	}
+	id := w.trying
+	w.trying, w.request, w.cancel = "", nil, nil
+	if msg.err != nil {
+		w.err = "「" + id + "」用不了：" + m.redactDraft(msg.err)
+		return m, nil
+	}
+	return m.useModel(id)
+}
+
+// useModel 用上所选模型并设为默认：添加模型只是换用，新建或更新的连接连同模型一起写入。
 func (m model) useModel(id string) (tea.Model, tea.Cmd) {
 	name, pc := m.wizard.draft()
-	return m.applyWizard(m.api.Models.Config().WithProvider(name, id, pc), "已换用 "+name+" / "+id)
+	var err error
+	if m.wizard.mode == addModel {
+		err = m.api.Models.Use("", name, id)
+	} else {
+		err = m.api.Models.SaveConnection(name, pc, id)
+	}
+	return m.finishWizard(err, "已换用 "+name+" / "+id, overviewItem{kind: itemModel, connection: name, model: id})
 }
 
 // saveConnection 只保存连接本身，默认绑定不变。
 func (m model) saveConnection(notice string) (tea.Model, tea.Cmd) {
 	name, pc := m.wizard.draft()
-	return m.applyWizard(m.api.Models.Config().WithConnection(name, pc), notice)
+	return m.finishWizard(m.api.Models.SaveConnection(name, pc, ""), notice, overviewItem{kind: itemConnection, connection: name})
 }
 
-// applyWizard 绑定并落盘：成功后首次配置进首页，从首页来的回到总览；失败留在原页。
-func (m model) applyWizard(config appconfig.Config, notice string) (tea.Model, tea.Cmd) {
-	if err := m.api.Models.Switch(config); err != nil {
+// finishWizard 收尾一次保存：成功后首次配置进首页，从首页来的回到总览、停在 target 上；
+// 失败留在原页。
+func (m model) finishWizard(err error, notice string, target overviewItem) (tea.Model, tea.Cmd) {
+	if err != nil {
 		m.wizard.err = m.redactDraft(err)
 		return m, nil
 	}
 	if !m.wizard.fromHome {
 		return m.enterHome()
 	}
-	m.wizard = newWizardState(config, "", true)
+	return m.showOverview(notice, target), nil
+}
+
+// showOverview 换一个新的总览，停在 target 上。
+func (m model) showOverview(notice string, target overviewItem) model {
+	m.wizard = newWizardState(m.api.Models.Config(), "", m.wizard.fromHome)
 	m.wizard.notice = notice
-	m.wizard.cursor = max(0, slices.IndexFunc(m.overviewItems(), func(item overviewItem) bool {
-		return item.kind == itemModel && item.connection == config.Provider && item.model == config.Model
-	}))
-	return m, nil
+	m.wizard.cursor = max(0, slices.Index(m.overviewItems(), target))
+	return m
 }
 
 // 服务商的报错可能带回请求里的凭据，界面上一律不出现密钥。
@@ -745,7 +961,7 @@ func redactKey(text, key string) string {
 	return strings.ReplaceAll(text, key, "[已隐藏]")
 }
 
-// wizardMouse：总览的行点了即生效（换用模型、编辑连接、添加），思考强度点选；服务商点了
+// wizardMouse：总览的行点了即生效（换模型、换用、编辑连接、添加），思考强度点选；服务商点了
 // 进下一步；表单点行聚焦、点选项即选；模型单击选中、双击用上。滚轮移动列表的选中行。
 func (m model) wizardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	w := &m.wizard
@@ -761,11 +977,11 @@ func (m model) wizardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateWizard(key)
 	}
-	if !leftClick(msg) || w.listing {
+	if !leftClick(msg) || w.busy() {
 		return m, nil
 	}
 	last := w.clicked
-	w.clicked = listClick{}
+	w.clicked, w.confirm = listClick{}, overviewItem{}
 	for _, hit := range frame.hits {
 		if mouse.Y != hit.y || mouse.X < hit.x || mouse.X >= hit.x+hit.width {
 			continue
@@ -779,8 +995,8 @@ func (m model) wizardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if hit.option < 0 {
 					return m, nil
 				}
-				levels, _ := m.thinkingLevels()
-				return m.setThinking(levels[hit.option])
+				levels, _ := m.thinkingLevels("")
+				return m.setThinking("", levels[hit.option])
 			}
 			return m.activateOverview(items[hit.row])
 		case wizardProviders:
@@ -802,7 +1018,14 @@ func (m model) wizardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			w.cursor = hit.row
 			now := time.Now()
 			if last.again(hit.row, now) {
-				return m.useModel(w.pickerRows()[hit.row].id)
+				return m.pickModel(w.pickerRows()[hit.row])
+			}
+			w.clicked = listClick{row: hit.row, at: now}
+		case wizardRole:
+			w.cursor = hit.row
+			now := time.Now()
+			if last.again(hit.row, now) {
+				return m.assignRole(m.roleChoices()[hit.row])
 			}
 			w.clicked = listClick{row: hit.row, at: now}
 		}

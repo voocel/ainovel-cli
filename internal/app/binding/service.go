@@ -26,11 +26,13 @@ type Binder interface {
 }
 
 type Service struct {
-	mu     sync.Mutex
-	dir    string
-	config appconfig.Config
-	binder Binder
-	facts  *models.Facts
+	mu  sync.Mutex
+	dir string
+	// saved 是配置文件那层，config 是生效的配置：启动时由 saved 叠上环境变量得来。之后每次
+	// 修改两层一起改、只把 saved 落盘——界面上的修改当场生效，环境变量带来的值不写进文件。
+	saved, config appconfig.Config
+	binder        Binder
+	facts         *models.Facts
 	// bound 是最近一次生效的整套绑定：Runtime 之外的模型使用者（主编）按角色从这里取。
 	bound *models.Bindings
 }
@@ -62,39 +64,49 @@ type Choice struct {
 	Current    bool   `json:"current"`
 }
 
-// Config 返回当前配置（含尚未成功绑定的意图，向导预填用）。
+// Config 返回生效的配置（含尚未成功绑定的意图，向导预填用）。
 func (s *Service) Config() appconfig.Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.config
 }
 
-// Apply 记录配置并重绑 Runtime，不落盘：启动时用，环境变量覆盖的配置不该写回文件。
-// 绑定失败时保留旧绑定，只记录配置以便向导修复。
-func (s *Service) Apply(config appconfig.Config) error {
+// Saved 返回配置文件那层：编辑连接从这里带出原值，环境变量里的密钥才不会随保存写进文件。
+func (s *Service) Saved() appconfig.Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.config = config
+	return s.saved
+}
+
+// Apply 记录配置文件内容 saved 与叠上环境变量后生效的 config，按 config 重绑 Runtime，
+// 不落盘：启动时用。绑定失败时保留旧绑定，只记录配置以便向导修复。
+func (s *Service) Apply(saved, config appconfig.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saved, s.config = saved, config
 	return s.bindLocked(config)
 }
 
-// Switch 校验、绑定并落盘：任一步失败都不改变已生效的绑定与文件。
-func (s *Service) Switch(config appconfig.Config) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.switchLocked(config)
-}
-
-func (s *Service) switchLocked(config appconfig.Config) error {
+// edit 把同一处修改作用到两层，按生效配置绑定、把文件那层落盘：任一步失败都不改变已生效的
+// 绑定与文件。change 在各层自行校验引用，文件那层缺少只由环境变量给出的连接时照实报错。
+func (s *Service) edit(change func(appconfig.Config) (appconfig.Config, error)) error {
+	config, err := change(s.config)
+	if err != nil {
+		return err
+	}
+	saved, err := change(s.saved)
+	if err != nil {
+		return err
+	}
 	bindings, err := s.build(config)
 	if err != nil {
 		return err
 	}
-	if err := appconfig.SaveConfig(s.dir, config); err != nil {
+	if err := appconfig.SaveConfig(s.dir, saved); err != nil {
 		return err
 	}
 	s.binder.Bind(bindings)
-	s.config, s.bound = config, &bindings
+	s.saved, s.config, s.bound = saved, config, &bindings
 	return nil
 }
 
@@ -124,34 +136,34 @@ func (s *Service) Use(role, connection, model string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	role, connection, model = strings.TrimSpace(role), strings.TrimSpace(connection), strings.TrimSpace(model)
-	next := s.config
 	switch {
 	case role == "":
 		if connection == "" {
-			connection = next.Provider
+			connection = s.config.Provider
 		}
 		if model == "" {
 			return fmt.Errorf("模型不能为空")
 		}
-		pc, err := next.Connection(connection)
-		if err != nil {
-			return err
-		}
-		next = next.WithProvider(connection, model, pc)
+		return s.edit(func(c appconfig.Config) (appconfig.Config, error) {
+			pc, err := c.Connection(connection)
+			if err != nil {
+				return c, err
+			}
+			return c.WithProvider(connection, model, pc), nil
+		})
 	case !prompt.KnownModelRole(role):
 		return fmt.Errorf("未知角色 %q，可选：%s", role, strings.Join(prompt.ModelRoles, "、"))
 	case connection == "":
-		next = next.WithoutRole(role)
-	default:
-		if model == "" {
-			return fmt.Errorf("模型不能为空")
-		}
-		if _, err := next.Connection(connection); err != nil {
-			return err
-		}
-		next = next.WithRole(role, connection, model, next.Roles[role].Thinking)
+		return s.edit(func(c appconfig.Config) (appconfig.Config, error) { return c.WithoutRole(role), nil })
+	case model == "":
+		return fmt.Errorf("模型不能为空")
 	}
-	return s.switchLocked(next)
+	return s.edit(func(c appconfig.Config) (appconfig.Config, error) {
+		if _, err := c.Connection(connection); err != nil {
+			return c, err
+		}
+		return c.WithRole(role, connection, model, c.Roles[role].Thinking), nil
+	})
 }
 
 // SetThinking 设置角色的思考强度意图：auto 或空是自动；角色传 inherit 或空表示继承默认。
@@ -164,20 +176,50 @@ func (s *Service) SetThinking(role, level string) error {
 	if err != nil {
 		return err
 	}
-	next := s.config
-	switch {
-	case role == "":
-		next.Thinking = thinking
-	case !prompt.KnownModelRole(role):
+	if role != "" && !prompt.KnownModelRole(role) {
 		return fmt.Errorf("未知角色 %q，可选：%s", role, strings.Join(prompt.ModelRoles, "、"))
-	default:
-		rc, ok := next.Roles[role]
-		if !ok {
-			return fmt.Errorf("角色 %q 跟随默认，先为它指定模型", role)
-		}
-		next = next.WithRole(role, rc.Provider, rc.Model, thinking)
 	}
-	return s.switchLocked(next)
+	return s.edit(func(c appconfig.Config) (appconfig.Config, error) {
+		if role == "" {
+			c.Thinking = thinking
+			return c, nil
+		}
+		rc, ok := c.Roles[role]
+		if !ok {
+			return c, fmt.Errorf("角色 %q 跟随默认，先为它指定模型", role)
+		}
+		return c.WithRole(role, rc.Provider, rc.Model, thinking), nil
+	})
+}
+
+// SaveConnection 写入或更新连接；model 非空时连同模型设为默认绑定。
+func (s *Service) SaveConnection(name string, pc appconfig.ProviderConfig, model string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.edit(func(c appconfig.Config) (appconfig.Config, error) {
+		c = c.WithConnection(name, pc)
+		if _, err := c.Connection(name); err != nil {
+			return c, err
+		}
+		if model != "" {
+			c = c.WithProvider(name, model, pc)
+		}
+		return c, nil
+	})
+}
+
+// RemoveConnection 删除连接及其已保存的模型；默认绑定或角色还在用它时拒绝。
+func (s *Service) RemoveConnection(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.edit(func(c appconfig.Config) (appconfig.Config, error) { return c.WithoutConnection(name) })
+}
+
+// RemoveModel 从连接的已保存模型里删除一个；默认绑定或角色还在用它时拒绝。
+func (s *Service) RemoveModel(connection, model string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.edit(func(c appconfig.Config) (appconfig.Config, error) { return c.WithoutModel(connection, model) })
 }
 
 // Current 返回角色当前生效的绑定；role 为空是默认。
@@ -276,11 +318,11 @@ type ModelOption struct {
 // ListModels 列出连接这组凭据能用的模型，顺带验证密钥（被拒绝时是 FailureModelRefused）。
 // 模型清单认识的对话模型排前，同组内新发布的在前，其余保持厂商顺序。
 func (s *Service) ListModels(ctx context.Context, name string, pc appconfig.ProviderConfig) ([]ModelOption, error) {
-	draft := appconfig.Config{Providers: map[string]appconfig.ProviderConfig{name: pc}}
-	if _, err := draft.Connection(name); err != nil {
+	config, err := draftConfig(name, pc)
+	if err != nil {
 		return nil, err
 	}
-	listed, err := models.List(ctx, models.Config{Provider: pc.Type, API: pc.API, APIKey: pc.APIKey, BaseURL: pc.BaseURL})
+	listed, err := models.List(ctx, config)
 	if err != nil {
 		return nil, models.Classify(err)
 	}
@@ -291,8 +333,8 @@ func (s *Service) ListModels(ctx context.Context, name string, pc appconfig.Prov
 	}
 	items := make([]ranked, 0, len(listed))
 	for _, info := range listed {
-		option := ModelOption{ID: info.ID, Name: info.Name, ContextWindow: s.facts.ContextWindow(pc.Type, info.ID)}
-		pricing := s.facts.Pricing(pc.Type, info.ID)
+		option := ModelOption{ID: info.ID, Name: info.Name, ContextWindow: s.facts.ContextWindow(config.Provider, info.ID)}
+		pricing := s.facts.Pricing(config.Provider, info.ID)
 		if pricing != nil {
 			option.Input, option.Output = pricing.Input*1e6, pricing.Output*1e6
 		}
@@ -312,6 +354,26 @@ func (s *Service) ListModels(ctx context.Context, name string, pc appconfig.Prov
 		options[i] = item.option
 	}
 	return options, nil
+}
+
+// TryModel 向连接上的模型发一句极短的对话，确认手动输入的模型 ID 真能用（花很少的
+// token）：ID 拼错时当场报出，不用等开写。失败按 models.Classify 归类。
+func (s *Service) TryModel(ctx context.Context, name string, pc appconfig.ProviderConfig, model string) error {
+	config, err := draftConfig(name, pc)
+	if err != nil {
+		return err
+	}
+	config.Model = model
+	return models.Classify(models.Try(ctx, config))
+}
+
+// draftConfig 校验一个还没保存的连接，转成协议适配器配置。
+func draftConfig(name string, pc appconfig.ProviderConfig) (models.Config, error) {
+	pc, err := appconfig.Config{Providers: map[string]appconfig.ProviderConfig{name: pc}}.Connection(name)
+	if err != nil {
+		return models.Config{}, err
+	}
+	return models.Config{Provider: pc.Type, API: pc.API, APIKey: pc.APIKey, BaseURL: pc.BaseURL}, nil
 }
 
 // ContextWindow 是某连接上模型的上下文窗口（token），模型清单查不到为 0。

@@ -28,8 +28,10 @@ type Deps struct {
 	ConfigError string
 	// ListModels 向服务商列出一个连接能用的模型（顺带验证密钥），模型设置据此给出可选模型。
 	ListModels func(context.Context, string, appconfig.ProviderConfig) ([]binding.ModelOption, error)
-	Input      io.Reader
-	Output     io.Writer
+	// TryModel 向连接上的模型发一句极短的对话：手动输入的模型 ID 用上前先确认它真能用。
+	TryModel func(context.Context, string, appconfig.ProviderConfig, string) error
+	Input    io.Reader
+	Output   io.Writer
 }
 
 // quitWindow 是确认退出的时限：Ctrl+C 第一次只把底栏提示换成退出确认，时限内再按一次

@@ -87,13 +87,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	// 配置解析失败不锁死 TUI（Codex 复审 #2）：交互模式降级进向导修复，
 	// Headless 面向脚本保持硬失败。
 	var configError string
-	config, err := appconfig.ResolveConfig(configDir)
+	saved, err := appconfig.LoadConfig(configDir)
+	config := saved
+	if err == nil {
+		config, err = appconfig.WithEnv(saved)
+	}
 	if err != nil {
 		if *headlessMode {
 			return err
 		}
-		configError = err.Error()
-		config, _ = appconfig.LoadConfig(configDir)
+		configError, config = err.Error(), saved
 	}
 	dataPath := *databasePath
 	if dataPath == "" {
@@ -108,7 +111,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	api := bootstrap.New(authorityStore, bootstrap.Options{Version: version, ConfigDir: configDir, Interactive: !*headlessMode})
 	// 模型绑定失败与配置解析失败同一口径：交互模式降级进向导，Headless 硬失败。
-	if err := api.Models.Apply(config); err != nil && config.Configured() {
+	if err := api.Models.Apply(saved, config); err != nil && config.Configured() {
 		if *headlessMode {
 			authorityStore.Close()
 			return err
@@ -131,6 +134,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			UserID:      appconfig.DefaultUserID(),
 			ConfigError: configError,
 			ListModels:  api.Models.ListModels,
+			TryModel:    api.Models.TryModel,
 			Input:       os.Stdin,
 			Output:      stdout,
 		})

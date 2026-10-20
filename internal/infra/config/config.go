@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -135,6 +137,48 @@ func (c Config) WithoutRole(role string) Config {
 	return c
 }
 
+// WithoutConnection 删除一个连接；默认绑定或角色还在用它时拒绝。
+func (c Config) WithoutConnection(name string) (Config, error) {
+	if err := c.inUse(name, ""); err != nil {
+		return c, err
+	}
+	providers := c.copyProviders()
+	delete(providers, name)
+	c.Providers = providers
+	return c, nil
+}
+
+// WithoutModel 从连接的已保存模型里删除一个；默认绑定或角色还在用它时拒绝。
+func (c Config) WithoutModel(connection, model string) (Config, error) {
+	if err := c.inUse(connection, model); err != nil {
+		return c, err
+	}
+	providers := c.copyProviders()
+	if pc, ok := providers[connection]; ok {
+		pc.Models = slices.DeleteFunc(slices.Clone(pc.Models), func(item string) bool { return item == model })
+		providers[connection] = pc
+	}
+	c.Providers = providers
+	return c, nil
+}
+
+// inUse 报告连接（model 为空时是它的任一模型）是否还被默认绑定或角色引用。
+func (c Config) inUse(connection, model string) error {
+	what := "这个模型"
+	if model == "" {
+		what = "这个连接"
+	}
+	if c.Provider == connection && (model == "" || c.Model == model) {
+		return fmt.Errorf("默认模型正在用%s，先换用别的模型", what)
+	}
+	for _, role := range slices.Sorted(maps.Keys(c.Roles)) {
+		if rc := c.Roles[role]; rc.Provider == connection && (model == "" || rc.Model == model) {
+			return fmt.Errorf("角色 %s 正在用%s，先给它换个模型", role, what)
+		}
+	}
+	return nil
+}
+
 func (c Config) copyProviders() map[string]ProviderConfig {
 	providers := make(map[string]ProviderConfig, len(c.Providers)+1)
 	for key, value := range c.Providers {
@@ -211,16 +255,9 @@ func LoadConfig(dir string) (Config, error) {
 	return config, nil
 }
 
-// SaveConfig 持久化配置（0600：内含 API Key）。
+// SaveConfig 持久化配置文件那层（0600：内含 API Key）。它不必完整：默认绑定可能由环境变量
+// 给出，完整性由生效配置在绑定前把关（binding.Service）。
 func SaveConfig(dir string, config Config) error {
-	if err := config.Validate(); err != nil {
-		return err
-	}
-	pc, err := config.ActiveProvider()
-	if err != nil {
-		return err
-	}
-	config = config.WithProvider(config.Provider, config.Model, pc)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create app config dir: %w", err)
 	}
@@ -250,12 +287,10 @@ func SaveConfig(dir string, config Config) error {
 	return nil
 }
 
-// ResolveConfig 合并配置文件与环境变量（环境变量优先），供每次启动使用。
-func ResolveConfig(dir string) (Config, error) {
-	config, err := LoadConfig(dir)
-	if err != nil {
-		return Config{}, err
-	}
+// WithEnv 在配置文件内容上叠加环境变量（环境变量优先），得到这次启动生效的配置。叠加只在
+// 内存里：之后界面上的修改两层一起改、只把文件那层落盘，环境变量带来的值不写进文件。
+func WithEnv(saved Config) (Config, error) {
+	config := saved
 	envProvider := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER"))
 	apiKey := strings.TrimSpace(os.Getenv("AINOVEL_API_KEY"))
 	baseURL := strings.TrimSpace(os.Getenv("AINOVEL_BASE_URL"))
