@@ -95,7 +95,7 @@ func assemble(tb testing.TB, executor *testExecutor, chiefModels chief.Models) (
 	}
 	api := bootstrap.New(authorityStore, options)
 	if executor != nil {
-		if err := api.Models.Apply(testConfig(), testConfig()); err != nil {
+		if err := api.Models.Apply(testConfig()); err != nil {
 			tb.Fatalf("bind test model: %v", err)
 		}
 	}

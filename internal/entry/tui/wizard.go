@@ -592,7 +592,7 @@ func (m model) providersKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // 带出它的密钥与地址，继续下去就是更新它。
 func (m model) newConnection(preset int) (tea.Model, tea.Cmd) {
 	kind := wizardPresets[preset].kind
-	if _, saved := m.api.Models.Saved().Providers[kind]; saved && kind != "" && !renamable(kind) {
+	if _, saved := m.api.Models.Config().Providers[kind]; saved && kind != "" && !renamable(kind) {
 		next, cmd := m.openSaved(kind, addConnection)
 		return next, cmd
 	}
@@ -609,15 +609,9 @@ func (m model) newConnection(preset int) (tea.Model, tea.Cmd) {
 	return m, w.focusRow(w.firstInput())
 }
 
-// openSaved 打开一个已保存的连接：带出它的格式、地址、密钥与模型。编辑与重配会把表单写进
-// 配置，从文件那层带出原值，环境变量里的密钥才不随之落盘；添加模型只借生效连接的凭据列模型，
-// 不写回连接。
+// openSaved 打开一个已保存的连接：带出它的格式、地址、密钥与模型。
 func (m model) openSaved(name string, mode wizardMode) (tea.Model, tea.Cmd) {
-	config := m.api.Models.Saved()
-	if mode == addModel {
-		config = m.api.Models.Config()
-	}
-	pc, err := config.Connection(name)
+	pc, err := m.api.Models.Config().Connection(name)
 	if err != nil {
 		m.wizard.err = err.Error()
 		return m, nil

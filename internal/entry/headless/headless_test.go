@@ -192,7 +192,7 @@ func TestModelCommandsSwitchBindingsAndPersist(t *testing.T) {
 	cfg := appconfig.Config{}.WithProvider("deepseek", "deepseek-chat", appconfig.ProviderConfig{APIKey: "k"})
 	cfg = cfg.WithProvider("proxy", "gpt-5", appconfig.ProviderConfig{Type: "openai", APIKey: "p"})
 	cfg = cfg.WithProvider("deepseek", "deepseek-chat", cfg.Providers["deepseek"])
-	if err := api.Models.Apply(cfg, cfg); err != nil {
+	if err := api.Models.Apply(cfg); err != nil {
 		t.Fatal(err)
 	}
 	run := func(args ...string) string {

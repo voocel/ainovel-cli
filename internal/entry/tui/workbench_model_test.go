@@ -18,7 +18,7 @@ func twoConnectionConfig() appconfig.Config {
 func modelPanelFixture(t *testing.T) model {
 	t.Helper()
 	m := studioModel(t, 150, 40)
-	if err := m.api.Models.Apply(twoConnectionConfig(), twoConnectionConfig()); err != nil {
+	if err := m.api.Models.Apply(twoConnectionConfig()); err != nil {
 		t.Fatal(err)
 	}
 	return m
@@ -140,7 +140,7 @@ func TestModelPanelEscapeErrorsAndMouse(t *testing.T) {
 	empty := appconfig.Config{}.WithProvider("bare", "", appconfig.ProviderConfig{Type: "openai", APIKey: "test", BaseURL: "https://bare.test/v1"})
 	empty.Provider, empty.Model = "deepseek", "deepseek-v4-flash"
 	empty = empty.WithProvider("deepseek", "deepseek-v4-flash", appconfig.ProviderConfig{APIKey: "test"})
-	if err := m.api.Models.Apply(empty, empty); err != nil {
+	if err := m.api.Models.Apply(empty); err != nil {
 		t.Fatal(err)
 	}
 	m.bench.modelPanel = nil

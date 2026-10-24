@@ -33,7 +33,8 @@ import (
 //	go run ./cmd/ainovel-cli --headless --db /tmp/live.db diag --project <日志里的作品>
 //
 // AINOVEL_LIVE_PROJECT 给出库里已有的书时接着跑它（长篇超时后续跑）；AINOVEL_LIVE_CHAPTERS 换长篇的章数（默认 40，0 交给 AI）；AINOVEL_LIVE_RAW 存下工具参数坏掉的原始响应。
-// 换模型、思考强度用 AINOVEL_MODEL、AINOVEL_THINKING（见 TestLiveModelTrial）。
+// AINOVEL_LIVE_MODEL、AINOVEL_LIVE_THINKING 只在这次验收里换默认连接上的模型与思考强度，不改配置
+// 文件（见 TestLiveModelTrial）。
 const liveUserID = "live-user"
 
 // internalID 是文档编号的样子（c4、f43、e16、b1）：给用户看的文字里不该出现（D66）。
@@ -79,13 +80,15 @@ func openLive(t *testing.T) *liveUser {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := appconfig.LoadConfig(dir)
+	config, err := appconfig.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := appconfig.WithEnv(saved)
-	if err != nil {
-		t.Fatal(err)
+	if model := os.Getenv("AINOVEL_LIVE_MODEL"); model != "" {
+		config.Model = model
+	}
+	if thinking := os.Getenv("AINOVEL_LIVE_THINKING"); thinking != "" {
+		config.Thinking = thinking
 	}
 	ctx := context.Background()
 	authorityStore, err := store.Open(ctx, path)
@@ -94,7 +97,7 @@ func openLive(t *testing.T) *liveUser {
 	}
 	t.Cleanup(func() { authorityStore.Close() })
 	api := bootstrap.New(authorityStore, bootstrap.Options{Version: "live", ConfigDir: t.TempDir()})
-	if err := api.Models.Apply(saved, config); err != nil {
+	if err := api.Models.Apply(config); err != nil {
 		t.Fatal(err)
 	}
 	project := os.Getenv("AINOVEL_LIVE_PROJECT") // 接着跑库里已有的书
@@ -952,7 +955,7 @@ func TestLiveLateChange(t *testing.T) {
 }
 
 // 换模型、思考强度对照：同一设定写 6 章，篇幅用官方写作标准的默认（软要求）；模型与档位用
-// AINOVEL_MODEL、AINOVEL_THINKING 换，比每章用时、用量、字数与正文。
+// AINOVEL_LIVE_MODEL、AINOVEL_LIVE_THINKING 换，比每章用时、用量、字数与正文。
 func TestLiveModelTrial(t *testing.T) {
 	const chapters = 6
 	u := openLive(t)

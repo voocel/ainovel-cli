@@ -34,7 +34,7 @@ func TestApplyBindsWithoutSavingAndKeepsIntentOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig(), testConfig()); err != nil {
+	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if binder.bindings == nil || binder.bindings.Default.Provider != "deepseek" || binder.bindings.Default.Model != "deepseek-chat" || binder.bindings.Default.Thinking != "high" {
@@ -45,7 +45,7 @@ func TestApplyBindsWithoutSavingAndKeepsIntentOnFailure(t *testing.T) {
 	}
 	broken := testConfig()
 	broken.Model = ""
-	if err := service.Apply(broken, broken); err == nil || binder.calls != 1 {
+	if err := service.Apply(broken); err == nil || binder.calls != 1 {
 		t.Fatalf("invalid config rebound the runtime: err=%v calls=%d", err, binder.calls)
 	}
 	if service.Config().Model != "" {
@@ -61,7 +61,7 @@ func TestUseAndSetThinkingPersistAndRebind(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig(), testConfig()); err != nil {
+	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Use("", "proxy", "gpt-5"); err != nil {
@@ -101,7 +101,7 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 	dir := t.TempDir()
 	binder := &fakeBinder{}
 	service := New(dir, binder)
-	if err := service.Apply(testConfig(), testConfig()); err != nil {
+	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if got := service.Current("writer"); !got.Inherited || got.Model != "deepseek-chat" || got.Thinking != "high" {
@@ -145,7 +145,7 @@ func TestRoleOverridesFollowDefaultUntilSet(t *testing.T) {
 
 func TestUnassembledRuntimeAndConnectionLookup(t *testing.T) {
 	service := New(t.TempDir(), nil)
-	if err := service.Apply(testConfig(), testConfig()); err == nil || !strings.Contains(err.Error(), "not assembled") {
+	if err := service.Apply(testConfig()); err == nil || !strings.Contains(err.Error(), "not assembled") {
 		t.Fatalf("Apply without runtime = %v", err)
 	}
 	if _, err := modelConfigFor(testConfig(), "proxy", "gpt-5", "high"); err != nil {
@@ -168,7 +168,7 @@ func TestBindingsCarryPricesFromTheModelList(t *testing.T) {
 	binder := &fakeBinder{}
 	service := New(dir, binder)
 	config := testConfig().WithRole("writer", "proxy", "gpt-5", "")
-	if err := service.Apply(config, config); err != nil {
+	if err := service.Apply(config); err != nil {
 		t.Fatal(err)
 	}
 	if pricing := binder.bindings.Default.Chat.Pricing; pricing == nil || pricing.Input != 3e-7 || binder.bindings.Roles["writer"].Chat.Pricing != nil {
@@ -219,50 +219,11 @@ func TestListModelsRanksKnownFirstAndClassifiesRefusal(t *testing.T) {
 	}
 }
 
-// 环境变量带来的值只在生效配置里：界面上的修改当场生效，落盘的只有配置文件那层。文件里
-// 没有默认绑定（全由环境变量给出）时照样能存思考强度；文件里没有的连接，改它照实报错。
-func TestEditsKeepEnvironmentOverridesOutOfTheFile(t *testing.T) {
-	dir := t.TempDir()
-	binder := &fakeBinder{}
-	service := New(dir, binder)
-	saved := testConfig()
-	saved.Providers["deepseek"] = appconfig.ProviderConfig{Models: []string{"deepseek-chat"}}
-	config := testConfig().WithProvider("deepseek", "deepseek-reasoner", appconfig.ProviderConfig{Type: "deepseek", APIKey: "env-key"})
-	if err := service.Apply(saved, config); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.SetThinking("", "low"); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Use("writer", "proxy", "gpt-5"); err != nil {
-		t.Fatal(err)
-	}
-	file, err := appconfig.LoadConfig(dir)
-	if err != nil || file.Providers["deepseek"].APIKey != "" || file.Model != "deepseek-chat" || file.Thinking != "low" || file.Roles["writer"].Model != "gpt-5" {
-		t.Fatalf("file = %+v %v", file, err)
-	}
-	if got := service.Current(""); got.Model != "deepseek-reasoner" || got.Thinking != "low" || service.Config().Providers["deepseek"].APIKey != "env-key" {
-		t.Fatalf("effective = %+v", got)
-	}
-
-	envOnly := New(t.TempDir(), &fakeBinder{})
-	config = appconfig.Config{}.WithProvider("local", "m", appconfig.ProviderConfig{Type: "openai", BaseURL: "http://127.0.0.1:1"})
-	if err := envOnly.Apply(appconfig.Config{}, config); err != nil {
-		t.Fatal(err)
-	}
-	if err := envOnly.SetThinking("", "high"); err != nil {
-		t.Fatalf("a file without a default binding must still save thinking: %v", err)
-	}
-	if err := envOnly.Use("", "local", "other"); err == nil || envOnly.Current("").Model != "m" {
-		t.Fatal("a connection only the environment defines cannot be saved to the file")
-	}
-}
-
 // 保存连接校验连接本身；删除连接或模型时，默认或角色还在用的拒绝，删了的不再出现在选项里。
 func TestSaveAndRemoveConnections(t *testing.T) {
 	dir := t.TempDir()
 	service := New(dir, &fakeBinder{})
-	if err := service.Apply(testConfig(), testConfig()); err != nil {
+	if err := service.Apply(testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.SaveConnection("relay", appconfig.ProviderConfig{Type: "openai", BaseURL: "ftp://relay.test"}, ""); !errors.Is(err, appconfig.ErrBaseURL) {

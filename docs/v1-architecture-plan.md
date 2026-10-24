@@ -1023,7 +1023,7 @@ Runtime 直接运行单次 `agentcore.Run`：串行工具执行，每条消息�
 - Runtime 常驻、可重绑定（`Bind`）；未绑定时不领取 LLM 任务、拒绝快速创作，任务照常入队。队列中的任务在每次 attempt 开始时取当前绑定；在途 attempt 保持原绑定跑完，要立刻换：暂停再继续。
 - 每次 attempt 追加 `agent.run_started`（角色、provider、模型、生效思考强度、模型配置摘要），历史由事件解释。例外：语义合规检查由 Operation Engine 在 Execute 之后单独调用，只能用调用时刻的默认绑定，其事件载荷记 Provider 与模型、用量记在事件的用量列，可追溯。（D72 起绑定记在尝试摘要上，合规判断的模型与结论记在对话记录里，用量并入所在尝试。）
 - 思考强度是意图：存配置、切模型不抹掉；执行时按该模型能力解析生效值（不支持则自动），事件记生效值。同一模型缓存键混入绑定摘要，换绑定即换 Session。
-- 角色映射是 worker profile 的 `ModelRole`（architect / writer / editor）；未配的角色跟随默认。配置文件顶层 `provider / model / thinking` 加 `roles{role:{provider, model, thinking}}`；环境变量（含 `AINOVEL_THINKING`）在启动时仍优先于文件。
+- 角色映射是 worker profile 的 `ModelRole`（architect / writer / editor）；未配的角色跟随默认。配置文件顶层 `provider / model / thinking` 加 `roles{role:{provider, model, thinking}}`。模型配置只认这个文件，不读环境变量（2026-10-19 撤掉了 `AINOVEL_PROVIDER/MODEL/API_KEY/…` 覆盖：两层配置要防覆盖值被写回文件，复杂度不值）。
 - 切换入口：`app/binding.Service`（工作台 `/model [角色]` 面板与 headless `model` 命令共用），先保存文件再重绑，任一失败状态不变。
 - `schemaVersion` 2 → 3（`execution_profiles` 删列、旧执行器串不可领取），按 D38 不迁移。
 

@@ -255,8 +255,7 @@ func LoadConfig(dir string) (Config, error) {
 	return config, nil
 }
 
-// SaveConfig 持久化配置文件那层（0600：内含 API Key）。它不必完整：默认绑定可能由环境变量
-// 给出，完整性由生效配置在绑定前把关（binding.Service）。
+// SaveConfig 持久化配置（0600：内含 API Key）。内容由绑定服务在绑定前校验（binding.Service）。
 func SaveConfig(dir string, config Config) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create app config dir: %w", err)
@@ -285,57 +284,6 @@ func SaveConfig(dir string, config Config) error {
 		return fmt.Errorf("write app config: %w", err)
 	}
 	return nil
-}
-
-// WithEnv 在配置文件内容上叠加环境变量（环境变量优先），得到这次启动生效的配置。叠加只在
-// 内存里：之后界面上的修改两层一起改、只把文件那层落盘，环境变量带来的值不写进文件。
-func WithEnv(saved Config) (Config, error) {
-	config := saved
-	envProvider := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER"))
-	apiKey := strings.TrimSpace(os.Getenv("AINOVEL_API_KEY"))
-	baseURL := strings.TrimSpace(os.Getenv("AINOVEL_BASE_URL"))
-	providerType := strings.TrimSpace(os.Getenv("AINOVEL_PROVIDER_TYPE"))
-	api := strings.TrimSpace(os.Getenv("AINOVEL_API"))
-	if envProvider != "" {
-		config.Provider = envProvider
-	}
-	if model := strings.TrimSpace(os.Getenv("AINOVEL_MODEL")); model != "" {
-		config.Model = model
-	}
-	if thinking := strings.TrimSpace(os.Getenv("AINOVEL_THINKING")); thinking != "" {
-		config.Thinking = thinking
-	}
-	if (config.Provider == "") != (config.Model == "") {
-		return Config{}, errors.New("AINOVEL_PROVIDER 和 AINOVEL_MODEL 必须同时设置")
-	}
-	if config.Provider == "" {
-		return config, nil
-	}
-	// 环境变量指向文件里没有的连接时，连接完全由环境变量定义：不从别的连接继承密钥或地址。
-	pc, err := config.providerConfig(config.Provider)
-	if err != nil {
-		if envProvider == "" {
-			return Config{}, err
-		}
-		pc = ProviderConfig{}
-	}
-	if apiKey != "" {
-		pc.APIKey = apiKey
-	}
-	if baseURL != "" {
-		pc.BaseURL = baseURL
-	}
-	if providerType != "" {
-		pc.Type = providerType
-	}
-	if api != "" {
-		pc.API = api
-	}
-	config = config.WithProvider(config.Provider, config.Model, pc)
-	if err := config.Validate(); err != nil {
-		return Config{}, err
-	}
-	return config, nil
 }
 
 // DefaultUserID 取系统用户名作为默认创作者身份。

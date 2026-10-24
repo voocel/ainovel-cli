@@ -34,9 +34,9 @@ go run ./cmd/ainovel-cli --headless ...  # 无交互执行动作，供脚本与�
 go run ./cmd/ainovel-cli --version       # 程序级信息
 ```
 
-TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/v1/config.json`（v1 目录独立于 v0，格式不兼容也不迁移），之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/v1/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。环境变量 `AINOVEL_PROVIDER/AINOVEL_MODEL/AINOVEL_API_KEY/AINOVEL_BASE_URL` 可临时覆盖配置文件（只在内存里，在界面上改别的也不会把它们写进文件）；只设置 provider 或 model 会直接报错，不会降级成模板结果。
+TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/v1/config.json`（v1 目录独立于 v0，格式不兼容也不迁移），之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/v1/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。模型配置只认 `config.json`，不读环境变量；脚本里换模型用 `ainovel-cli --headless model use`。
 
-连接名称可以自定义：顶层 `provider` 引用 `providers` 中的连接，连接的 `type` 指定协议（如 `openai`），`api` 选择 OpenAI 的 `chat` 或 `responses` 接口。每个连接保存自己的密钥、地址和模型列表，参见 [配置示例](config.example.jsonc)。`AINOVEL_PROVIDER_TYPE` 和 `AINOVEL_API` 可覆盖当前连接的协议和接口；选择其他连接不会沿用原连接的密钥与地址。
+连接名称可以自定义：顶层 `provider` 引用 `providers` 中的连接，连接的 `type` 指定协议（如 `openai`），`api` 选择 OpenAI 的 `chat` 或 `responses` 接口。每个连接保存自己的密钥、地址和模型列表，参见 [配置示例](config.example.jsonc)。
 
 Headless 一句话写全书（篇幅由 AI 在故事罗盘里给出上限并在合适时收官；`--chapters N` 可固定全书章数，续跑不传则沿用上一轮设定；完本后加 `--extend` 续写，撤回收官承诺、由 AI 决定再写多少，TUI 完本后跟主编说“接着写”同义）：
 
@@ -91,6 +91,8 @@ profile save|show|learn|candidates|confirm
 安装 Pack 或保存 Creator Profile 后，可用 `project assets` 把确认过的版本固定到作品；之后的新 Operation 会自动装配，也可在 `operation start`、`prompt reload` 或 `quick write` 上显式覆盖。书级创作规则用 `project overlay` 维护；用户创作要求用 `project directive add|retire|list` 维护（`--scope` 定范围、`--text` 保留原话、`--target-words` 等给出可校验的字数约束），命中的要求随任务进入写作与审阅，否决理由也会自动入账为该章要求。`prompt reload` 只编译并保存新的 Execution Profile，便于先执行 `show / sources / lint / diff`；它不会修改任何已存在的 Operation。旧任务要使用新配置时执行 `operation restart --from <old> --id <new>`，旧 Workspace 会显式播种到新任务。
 
 Pack 开发目录通过 `pack install --dir` 安装；`pack export --id <id> --file style.novelpack` 生成单文件分发包，接收方可用 `pack install --file` 或 `pack install --url` 安装。Pack 内 eval 是严格 JSONC，使用 `pack eval --id <id> --output chapter.txt` 执行。
+
+URL 下载最多等待 1 分钟，大小限制为 16 MiB（按解压后的响应体计算）；本地归档不受下载限制。URL 安装可加 `--sha256 <64 位十六进制摘要>`，在解码和安装前校验下载文件的 SHA256；未提供时不校验文件摘要。该摘要可用 `shasum -a 256 style.novelpack` 获取，与安装结果中表示 Pack 内容身份的 `digest` 不同。
 
 Creator Profile 学习不是直接猜风格：先用 `profile learn --project <book> --from <revision> --to <revision>` 比较用户实际改稿，`profile candidates` 查看候选，最后 `profile confirm` 才让规则跨书生效。
 

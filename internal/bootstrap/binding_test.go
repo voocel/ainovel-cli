@@ -51,7 +51,7 @@ func TestQueuedOperationsRunUnderTheBindingCurrentAtAttemptStart(t *testing.T) {
 	if _, err := api.Novels.QuickWrite(ctx, command); !errors.Is(err, model.ErrInvalid) {
 		t.Fatalf("unbound runtime must refuse to start: %v", err)
 	}
-	if err := api.Models.Apply(bindingConfig("model-a"), bindingConfig("model-a")); err != nil {
+	if err := api.Models.Apply(bindingConfig("model-a")); err != nil {
 		t.Fatal(err)
 	}
 	result, err := api.Novels.QuickWrite(ctx, command)
