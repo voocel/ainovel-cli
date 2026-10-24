@@ -81,7 +81,7 @@ func TestLoadDirectoryResolvesJSONCManifestAndAssets(t *testing.T) {
 		_, _ = writer.Write(archivePayload)
 	}))
 	defer server.Close()
-	downloaded, err := LoadURL(context.Background(), server.URL+"/xianxia.novelpack")
+	downloaded, err := LoadURL(context.Background(), server.URL+"/xianxia.novelpack", "")
 	if err != nil || downloaded.Digest != loaded.Digest {
 		t.Fatalf("downloaded archive = %#v, %v", downloaded, err)
 	}

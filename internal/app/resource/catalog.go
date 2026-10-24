@@ -252,10 +252,10 @@ func (s *Catalog) InstallPackArchive(
 
 func (s *Catalog) InstallPackURL(
 	ctx context.Context,
-	url, changeID, userID, reason string,
+	url, expectedSHA256, changeID, userID, reason string,
 	createdAt time.Time,
 ) (InstalledPack, error) {
-	loaded, err := packloader.LoadURL(ctx, url)
+	loaded, err := packloader.LoadURL(ctx, url, expectedSHA256)
 	if err != nil {
 		return InstalledPack{}, err
 	}

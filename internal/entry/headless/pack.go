@@ -22,6 +22,7 @@ func runPack(ctx context.Context, api *bootstrap.App, args []string, stdout, std
 		directory := flags.String("dir", "", "Pack 开发目录")
 		archive := flags.String("file", "", ".novelpack 分发文件")
 		remoteURL := flags.String("url", "", ".novelpack 下载 URL")
+		checksum := flags.String("sha256", "", "下载文件的预期 SHA256（仅用于 --url）")
 		changeID := flags.String("change", "", "Change ID")
 		userID := flags.String("user", "", "User ID")
 		reason := flags.String("reason", "", "安装或更新原因")
@@ -37,6 +38,9 @@ func runPack(ctx context.Context, api *bootstrap.App, args []string, stdout, std
 		if sources != 1 || *changeID == "" || *userID == "" || *reason == "" {
 			return fmt.Errorf("pack install 需要在 --dir、--file、--url 中选择一个，并提供 --change --user --reason")
 		}
+		if *checksum != "" && *remoteURL == "" {
+			return fmt.Errorf("--sha256 只能与 --url 一起使用")
+		}
 		var installed resource.InstalledPack
 		var err error
 		switch {
@@ -45,7 +49,7 @@ func runPack(ctx context.Context, api *bootstrap.App, args []string, stdout, std
 		case *archive != "":
 			installed, err = api.Resources.InstallPackArchive(ctx, *archive, *changeID, *userID, *reason, time.Now().UTC())
 		default:
-			installed, err = api.Resources.InstallPackURL(ctx, *remoteURL, *changeID, *userID, *reason, time.Now().UTC())
+			installed, err = api.Resources.InstallPackURL(ctx, *remoteURL, *checksum, *changeID, *userID, *reason, time.Now().UTC())
 		}
 		return writeResult(stdout, installed, err)
 	case "export":
