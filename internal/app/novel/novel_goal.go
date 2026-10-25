@@ -51,18 +51,46 @@ type upcoming struct {
 
 // Next 的顺序即小说的推进规则：主编的修改等用户确认时先停下（D77）→ 蓝图超出固定篇幅
 // 先停下 → 事实缺口先核验（D41）→ 用户点名的返工（D78/D86）→ 审阅闸门（D62：写满一个窗口
-// 先审、先审后扩，阻塞发现按预算重写，到期要求必须兑现）→ 完成契约（D29/§6.4）→ 写章
-// 或扩窗（D63：全书章数未知或蓝图未到末章时扩窗）。
+// 先审、先审后扩，阻塞发现按预算重写，用尽后标记接着写、违反用户要求的等用户，到期要求
+// 必须兑现）→ 完成契约（D29/§6.4）→ 写章或扩窗（D63：全书章数未知或蓝图未到末章时扩窗）。
 func (p Policy) Next(project projectdoc.Snapshot, run model.CreationRun, evidence Evidence) (creation.Step, error) {
 	step, _, err := p.next(project, run, evidence)
 	return step, err
 }
 
-// RepairHold 是推进卡住的那一章（D63）：它有阻塞意见、本该重写，但自动修订预算已用尽，
-// 正等用户接受现状或让它再改；没卡在这里为空。与 Next 同一次推导，不另立规则。
+// RepairHold 是推进卡住的那一章（D63、D94）：它的阻塞意见违反用户的要求，自动修订预算已
+// 用尽，正等用户接受现状或跟主编说怎么改；没卡在这里为空。与 Next 同一次推导，不另立规则。
 func (p Policy) RepairHold(project projectdoc.Snapshot, run model.CreationRun, evidence Evidence) (string, error) {
 	_, held, err := p.next(project, run, evidence)
 	return held, err
+}
+
+// Mark 是标记在案的一章（D94）：Repairs 是它用掉的自动修订次数。
+type Mark struct {
+	ChapterID string `json:"chapter_id"`
+	Number    int    `json:"number"`
+	Repairs   int    `json:"repairs"`
+}
+
+// Marks 是标记在案的章（D94）：只按审阅标准判的阻塞意见还在，自动修订已用尽，推进接着往下
+// 走。与 Next 同一份裁定、预算与规则。
+func (Policy) Marks(project projectdoc.Snapshot, run model.CreationRun, evidence Evidence) ([]Mark, error) {
+	goal, err := model.DecodeNovelGoal(run.Goal)
+	if err != nil {
+		return nil, err
+	}
+	ledger := newReviewLedger(project, lengthOf(project, goal.TargetChapters).Final, evidence.Verdicts)
+	var marks []Mark
+	for _, number := range ledger.marked(repairable(run, evidence)) {
+		id := ledger.chapters[number-1].ID
+		marks = append(marks, Mark{ChapterID: id, Number: number, Repairs: evidence.Repairs[id]})
+	}
+	return marks, nil
+}
+
+// repairable 报告某章还有自动修订预算（D63）。
+func repairable(run model.CreationRun, evidence Evidence) func(chapterID string) bool {
+	return func(chapterID string) bool { return evidence.Repairs[chapterID] < run.Strategy.AutoRepairBudget }
 }
 
 func (Policy) next(project projectdoc.Snapshot, run model.CreationRun, evidence Evidence) (creation.Step, string, error) {
@@ -90,7 +118,8 @@ func (Policy) next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 		work = reworkWork(project, run, chapter, rework)
 	} else {
 		// 完成契约（§6.4）：内容齐全（没有要写或要规划的）不等于完成，全书每章都要有基线
-		// 仍成立的通过裁定、每项要求都已兑现；相干文档或要求再变化时旧证据随基线自动失效。
+		// 仍成立的裁定、阻塞意见已消除或接受或标记在案（D94）、每项要求都已兑现；相干文档
+		// 或要求再变化时旧证据随基线自动失效。
 		ledger := newReviewLedger(project, length.Final, evidence.Verdicts).withPrior(evidence.Prior)
 		through := length.Final
 		next, unwritten := nextUpcoming(project, length)
@@ -106,17 +135,21 @@ func (Policy) next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 				length.Final, directive.Text, storyOf(project).DescribeScope(directive),
 			)}, "", nil
 		}
-		canRepair := func(chapterID string) bool { return evidence.Repairs[chapterID] < run.Strategy.AutoRepairBudget }
+		canRepair := repairable(run, evidence)
 		step := ledger.gate(through, canRepair)
 		switch {
 		case step.blocked != nil:
-			chapter, findings, ok := blockedChapter(project, *step.blocked, step.chapter)
+			target := step.chapter
+			if target == "" {
+				target = repairTarget(*step.blocked, canRepair)
+			}
+			chapter, findings, ok := blockedChapter(project, *step.blocked, target)
 			if !ok {
 				return creation.Step{Fail: "审阅发现指向了不存在的章节，需要人工检查"}, "", nil
 			}
 			if !canRepair(chapter.chapterID) {
 				return creation.Step{Wait: fmt.Sprintf(
-					"第 %d 章《%s》自动修订了 %d 次仍有阻塞意见，等你决定：接受现状，或让它再改",
+					"第 %d 章《%s》自动修订了 %d 次仍没做到你的要求，等你决定：接受现状，或跟主编说怎么改",
 					chapter.number, chapter.plan.Title, evidence.Repairs[chapter.chapterID],
 				)}, chapter.chapterID, nil
 			}
@@ -126,6 +159,9 @@ func (Policy) next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 				return creation.Step{}, "", err
 			}
 		case !unwritten:
+			if marked := ledger.marked(canRepair); len(marked) > 0 {
+				return creation.Step{Done: fmt.Sprintf("全书 %d 章完成；%s自动修订后仍有审阅意见，已标记", length.Final, chapterList(marked))}, "", nil
+			}
 			return creation.Step{Done: fmt.Sprintf("全书 %d 章完成并通过审阅", length.Final)}, "", nil
 		case next.write != nil:
 			work = writeWork(project, run, *next.write)
@@ -137,6 +173,15 @@ func (Policy) next(project projectdoc.Snapshot, run model.CreationRun, evidence 
 		}
 	}
 	return creation.Step{Work: &work}, "", nil
+}
+
+// chapterList 把章号写成「第 3、7 章」。
+func chapterList(numbers []int) string {
+	parts := make([]string, len(numbers))
+	for i, number := range numbers {
+		parts[i] = strconv.Itoa(number)
+	}
+	return "第 " + strings.Join(parts, "、") + " 章"
 }
 
 // reviewedThrough 是开始下一件事前必须审过的章数（D62/D67）：写第 n 章前审完已封口的
@@ -468,7 +513,7 @@ func reviewWork(project projectdoc.Snapshot, run model.CreationRun, ledger revie
 		return !slices.ContainsFunc(requirements, func(r model.Requirement) bool { return r.ID == id })
 	})
 	goal := "审阅本窗口正文：检查与上一章的衔接、窗口内的连续性与 Intent 方向，产出结构化裁定与发现；上一章正文只用于衔接检查，不在审阅范围；" +
-		"每条 blocking 都由重写它所在的那一章来解决：写明这一章要怎么改，不要求改别的章或全书统一"
+		"每条 blocking 都由重写它所在的那一章来解决"
 	if len(step.reviewed) > 0 {
 		goal += "；reviewed 列出的章上一轮已审且正文未变，只作上下文：不再对它们记 blocking（违反 requirements 除外，但 satisfied 列出的要求上一轮已判满足，不再借它们阻塞），其中的问题记为 note；改动章与它们之间的矛盾记在改动章上"
 	}

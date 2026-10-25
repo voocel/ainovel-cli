@@ -2,6 +2,7 @@ package novel
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,8 @@ func TestNovelDeriverNextFollowsNovelRules(t *testing.T) {
 	first := []string{"chapter-i", "chapter-ii", "chapter-iii"}
 	last := []string{"chapter-iiii", "chapter-iiiii"}
 	blocking := []model.ReviewFinding{{ChapterID: "chapter-ii", Severity: model.FindingBlocking, Note: "第二章崩了"}}
+	thirdBlocking := []model.ReviewFinding{{ChapterID: "chapter-iii", Severity: model.FindingBlocking, Note: "第三章崩了"}}
+	unmet := []model.ReviewFinding{{ChapterID: "chapter-ii", Severity: model.FindingBlocking, Note: "没下雨", Requirement: "directive:d-rain"}}
 	lastBlocking := []model.ReviewFinding{{ChapterID: "chapter-iiii", Severity: model.FindingBlocking, Note: "第四章崩了"}}
 	note := []model.ReviewFinding{{ChapterID: "chapter-iii", Severity: model.FindingNote, Note: "动机要更明确"}}
 	firstPass := storedTestVerdict("review-a", 1, first, nil)
@@ -181,9 +184,18 @@ func TestNovelDeriverNextFollowsNovelRules(t *testing.T) {
 		{name: "blocked window rewrites within budget", plans: 3, written: 3,
 			evidence: Evidence{Verdicts: []StoredVerdict{storedTestVerdict("review-a", 1, first, blocking)}},
 			wantKind: model.OperationRewriteChapter, wantID: "run:book:1:rewrite:chapter-ii:r2"},
-		{name: "exhausted budget waits", plans: 3, written: 3,
+		// 按审阅标准判的阻塞，预算用尽后标记在章上接着写（D94）。
+		{name: "exhausted budget marks and moves on", plans: 3, written: 3,
 			evidence: Evidence{Verdicts: []StoredVerdict{storedTestVerdict("review-a", 1, first, blocking)}, Repairs: map[string]int{"chapter-ii": 1}},
-			wantWait: "第 2 章《第一一章》自动修订了 1 次仍有阻塞意见"},
+			wantKind: model.OperationRevisePlan, wantID: "run:book:1:plan:extend:3:f5:s0:e0"},
+		// 违反用户要求的阻塞，预算用尽后等用户。
+		{name: "exhausted budget on a requirement waits", plans: 3, written: 3,
+			evidence: Evidence{Verdicts: []StoredVerdict{storedTestVerdict("review-a", 1, first, unmet)}, Repairs: map[string]int{"chapter-ii": 1}},
+			wantWait: "第 2 章《第一一章》自动修订了 1 次仍没做到你的要求"},
+		// 同一裁定里用尽的章不挡还有预算的章：先重写后者。
+		{name: "exhausted chapter yields to a repairable one", plans: 3, written: 3,
+			evidence: Evidence{Verdicts: []StoredVerdict{storedTestVerdict("review-a", 1, first, append(slices.Clone(blocking), thirdBlocking...))}, Repairs: map[string]int{"chapter-ii": 1}},
+			wantKind: model.OperationRewriteChapter, wantID: "run:book:1:rewrite:chapter-iii:r2"},
 		// 预算按章计（D63）：别的章用过的重写次数不挤占本章。
 		{name: "budget is per chapter", plans: 5, written: 5,
 			evidence: Evidence{Verdicts: []StoredVerdict{firstPass, storedTestVerdict("review-b", 2, last, lastBlocking)}, Repairs: map[string]int{"chapter-ii": 1}},
@@ -200,6 +212,9 @@ func TestNovelDeriverNextFollowsNovelRules(t *testing.T) {
 		{name: "every chapter covered completes", plans: 5, written: 5,
 			evidence: Evidence{Verdicts: []StoredVerdict{firstPass, storedTestVerdict("review-b", 2, last, nil)}},
 			wantDone: "全书 5 章完成并通过审阅"},
+		{name: "marked chapters are named on completion", plans: 5, written: 5,
+			evidence: Evidence{Verdicts: []StoredVerdict{firstPass, storedTestVerdict("review-b", 2, last, lastBlocking)}, Repairs: map[string]int{"chapter-iiii": 1}},
+			wantDone: "全书 5 章完成；第 4 章自动修订后仍有审阅意见，已标记"},
 		{name: "later blocked window rewrites its chapter", plans: 5, written: 5,
 			evidence: Evidence{Verdicts: []StoredVerdict{firstPass, storedTestVerdict("review-b", 2, last, lastBlocking)}},
 			wantKind: model.OperationRewriteChapter, wantID: "run:book:1:rewrite:chapter-iiii:r2"},
@@ -305,7 +320,7 @@ func rewritten(project *projectdoc.Snapshot, chapterID string, revision model.Re
 }
 
 // 返工要求（D78）：作用域内、正文写在要求入账之前的章按章号逐一重写，先于审阅；重写过的
-// 不再返工；返工不计入自动修订预算。
+// 不再返工。
 func TestReworkRewritesChaptersWrittenBeforeTheRequirement(t *testing.T) {
 	run := testRun(5, 1)
 	project := novelFixture(t, 3, 3)
@@ -327,13 +342,34 @@ func TestReworkRewritesChaptersWrittenBeforeTheRequirement(t *testing.T) {
 		if err := input.Validate(); err != nil || len(input.Directives) != 2 || !strings.Contains(next.Work.Reasons.Start, "「太拖了，紧凑点重写」") {
 			t.Fatalf("rework input = %#v, %v", input, err)
 		}
-		if repairs := model.RepairChapters(&input); len(repairs) != 0 {
-			t.Fatalf("rework counted as a repair: %v", repairs)
-		}
 		rewritten(&project, want, 4)
 	}
 	next, err := Policy{}.Next(project, run, Evidence{})
 	if err != nil || next.Work == nil || next.Work.Kind != model.OperationReviewRange {
 		t.Fatalf("after rework = %#v, %v", next, err)
+	}
+}
+
+// 标记在案的章（D94）：只按审阅标准判的阻塞意见还在、自动修订已用尽；违反要求的是等用户，
+// 还有预算的是待重写，用户接受过的不算。
+func TestMarksAreExhaustedReviewStandardFindings(t *testing.T) {
+	run := testRun(5, 1)
+	project := novelFixture(t, 5, 5)
+	first := []string{"chapter-i", "chapter-ii", "chapter-iii"}
+	last := []string{"chapter-iiii", "chapter-iiiii"}
+	verdicts := []StoredVerdict{
+		storedTestVerdict("review-a", 1, first, []model.ReviewFinding{
+			{ChapterID: "chapter-i", Severity: model.FindingBlocking, Note: "人物前后矛盾"},
+			{ChapterID: "chapter-ii", Severity: model.FindingBlocking, Note: "没下雨", Requirement: "directive:d-rain"},
+			{ChapterID: "chapter-iii", Severity: model.FindingBlocking, Note: "左右手写反"},
+		}),
+		acceptedVerdict(storedTestVerdict("review-b", 2, last, []model.ReviewFinding{
+			{ChapterID: "chapter-iiii", Severity: model.FindingBlocking, Note: "时间线冲突"},
+		}), "review-b/0"),
+	}
+	repairs := map[string]int{"chapter-i": 1, "chapter-ii": 1, "chapter-iiii": 1}
+	marks, err := Policy{}.Marks(project, run, Evidence{Verdicts: verdicts, Repairs: repairs})
+	if want := []Mark{{ChapterID: "chapter-i", Number: 1, Repairs: 1}}; err != nil || !slices.Equal(marks, want) {
+		t.Fatalf("marks = %#v, %v", marks, err)
 	}
 }

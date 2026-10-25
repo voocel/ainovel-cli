@@ -111,7 +111,7 @@ func (m model) chapterBrief(r *railText, number int) {
 			}
 		}
 		if len(findings) > 0 {
-			r.section("审阅意见", railCount(len(findings), blocking, benchTheme.Warning, "阻塞"))
+			r.section("审阅意见", railCount(len(findings), blocking, benchTheme.Warning, "未解决"))
 			for _, finding := range findings {
 				if finding.Severity == domainmodel.FindingBlocking {
 					r.item(benchTheme.Warning.Render("!"), finding.Note, benchTheme.Text)
@@ -144,9 +144,12 @@ func railCount(total, urgent int, style lipgloss.Style, word string) string {
 	return note
 }
 
-// chapterState 与目录同一套符号：已入稿附字数。
+// chapterState 与目录同一套符号：已入稿附字数，带未解决意见的附条数（D94）。
 func (m model) chapterState(node workbench.OutlineNode) string {
+	unresolved := len(m.unresolvedFindings(node.Number))
 	switch {
+	case node.State == workbench.ChapterConfirmed && unresolved > 0:
+		return benchTheme.Warning.Render(fmt.Sprintf("! 未解决 %d 条", unresolved))
 	case node.State == workbench.ChapterConfirmed:
 		chapter, _ := chapterByNumber(m.bench.snap.Manuscript, node.Number)
 		return benchTheme.Success.Render(fmt.Sprintf("✓ %s 字", groupDigits(chapter.Runes())))

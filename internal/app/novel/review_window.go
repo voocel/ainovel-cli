@@ -269,8 +269,8 @@ type gateStep struct {
 }
 
 // gate 推导第 1..through 章的审阅闸门：按章节顺序，未覆盖的章节起一块（见 chunk、
-// recheck），当前裁定 blocked 则返回它待重写；全部通过后，作用域已在其中收尾却未兑现
-// 的要求，交给覆盖其末章的窗口再审一次（此时必须给出结论，窗口正文都已审过）。
+// recheck），当前裁定还挡着推进（见 holds）则返回它待处理；全部通过后，作用域已在其中
+// 收尾却未兑现的要求，交给覆盖其末章的窗口再审一次（此时必须给出结论，窗口正文都已审过）。
 // canRepair 表示某章还有自动修订预算。
 func (l reviewLedger) gate(through int, canRepair func(chapterID string) bool) gateStep {
 	chapters := l.chapters[:min(through, len(l.chapters))]
@@ -280,7 +280,7 @@ func (l reviewLedger) gate(through int, canRepair func(chapterID string) bool) g
 			ids, _ := l.chunk(i, len(chapters))
 			return l.recheck(i, ids, canRepair)
 		}
-		if verdict := l.effective[stored.Key]; verdict.Blocking() > 0 {
+		if verdict := l.effective[stored.Key]; holds(verdict, canRepair) {
 			return gateStep{blocked: &verdict}
 		}
 	}
@@ -302,7 +302,7 @@ func (l reviewLedger) recheck(start int, ids []string, canRepair func(chapterID 
 	for j, id := range ids {
 		if blocking := l.priorBlocking(id); len(blocking) > 0 && l.unchanged(start+j) {
 			if !canRepair(id) {
-				break // 预算已尽：留在焦点复审，由新的有效裁定走等待用户
+				break // 预算已尽：留在焦点复审，新的有效裁定再决定标记还是等用户
 			}
 			verdict := l.priorEffective[l.prior[id].Key]
 			verdict.Findings = blocking
@@ -327,6 +327,54 @@ func (l reviewLedger) recheck(start int, ids []string, canRepair func(chapterID 
 		step.satisfied = slices.DeleteFunc(step.satisfied, func(r string) bool { return !slices.Contains(satisfied, r) })
 	}
 	return step
+}
+
+// holds 报告裁定是否还挡着推进（D94）：阻塞意见所在的章还有修订预算，或意见违反用户的
+// 要求。预算用尽、只按审阅标准判的阻塞意见留在章上作标记，接着写。
+func holds(verdict model.ReviewVerdict, canRepair func(chapterID string) bool) bool {
+	return slices.ContainsFunc(verdict.Findings, func(finding model.ReviewFinding) bool {
+		return finding.Severity == model.FindingBlocking && (finding.Requirement != "" || canRepair(finding.ChapterID))
+	})
+}
+
+// repairTarget 是挡着推进的裁定先处理的那一章：还有预算的先重写；都用尽时是违反用户
+// 要求的那一章，等用户。
+func repairTarget(verdict model.ReviewVerdict, canRepair func(chapterID string) bool) string {
+	held := ""
+	for _, finding := range verdict.Findings {
+		if finding.Severity != model.FindingBlocking {
+			continue
+		}
+		if canRepair(finding.ChapterID) {
+			return finding.ChapterID
+		}
+		if held == "" && finding.Requirement != "" {
+			held = finding.ChapterID
+		}
+	}
+	return held
+}
+
+// marked 是标记在案的章号（D94）：当前裁定里仍有阻塞意见，都只按审阅标准判，自动修订
+// 已用尽，推进不再为它们停留。
+func (l reviewLedger) marked(canRepair func(chapterID string) bool) []int {
+	var numbers []int
+	for i, chapter := range l.chapters {
+		stored := l.current[chapter.ID]
+		if stored == nil || canRepair(chapter.ID) {
+			continue
+		}
+		blocking, linked := false, false
+		for _, finding := range l.effective[stored.Key].Findings {
+			if finding.ChapterID == chapter.ID && finding.Severity == model.FindingBlocking {
+				blocking, linked = true, linked || finding.Requirement != ""
+			}
+		}
+		if blocking && !linked {
+			numbers = append(numbers, i+1)
+		}
+	}
+	return numbers
 }
 
 func satisfiedChecks(verdict model.ReviewVerdict) []string {

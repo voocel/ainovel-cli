@@ -373,15 +373,6 @@ func taskDirectives(input TaskInput) []Directive {
 	}
 }
 
-// RepairChapters 返回自动修订任务针对的章节，修订预算按章计（D63）。
-// 用户点名的返工不是自动修订，不计入（D78）。
-func RepairChapters(input TaskInput) []string {
-	if value, ok := input.(*RewriteChapterInput); ok {
-		return []string{value.ChapterID}
-	}
-	return nil
-}
-
 // taskBasis 返回任务输入携带的证据基线（D48/D51）：不带基线的种类返回零值，
 // 零值基线在任何 Revision 上都成立。
 func taskBasis(input TaskInput) EvidenceBasis {

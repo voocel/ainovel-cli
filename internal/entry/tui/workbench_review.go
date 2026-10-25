@@ -366,15 +366,24 @@ func castLine(member workbench.CastMember) string {
 	return line + benchTheme.Muted.Render(fmt.Sprintf(" · %d 章 · 最近第 %d 章", member.Chapters, member.Latest))
 }
 
-// heldFindings 是卡住那一章尚未被接受的阻塞意见。
-func (m model) heldFindings() []workbench.WorkbenchFinding {
-	var held []workbench.WorkbenchFinding
+// unresolvedFindings 是第 number 章尚未被接受的阻塞意见（D94）。
+func (m model) unresolvedFindings(number int) []workbench.WorkbenchFinding {
+	chapter, ok := chapterByNumber(m.bench.snap.Manuscript, number)
+	if !ok {
+		return nil
+	}
+	var findings []workbench.WorkbenchFinding
 	for _, finding := range m.bench.snap.Findings {
-		if finding.ChapterID == m.bench.decision.held && finding.Severity == domainmodel.FindingBlocking {
-			held = append(held, finding)
+		if finding.ChapterID == chapter.ID && finding.Severity == domainmodel.FindingBlocking {
+			findings = append(findings, finding)
 		}
 	}
-	return held
+	return findings
+}
+
+// heldFindings 是卡住那一章尚未被接受的阻塞意见。
+func (m model) heldFindings() []workbench.WorkbenchFinding {
+	return m.unresolvedFindings(m.heldNumber())
 }
 
 // heldNumber 是卡住那一章的章号，没有卡住为 0。
@@ -395,7 +404,7 @@ func (m model) heldSummary() string {
 	if len(findings) == 0 {
 		return ""
 	}
-	summary := "阻塞意见：" + oneLine(findings[0].Note)
+	summary := "未解决：" + oneLine(findings[0].Note)
 	if len(findings) > 1 {
 		summary += fmt.Sprintf("（另有 %d 条）", len(findings)-1)
 	}

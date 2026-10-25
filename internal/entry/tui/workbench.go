@@ -191,12 +191,14 @@ func (b *workbenchState) situation() benchSituation {
 	return situationRunning
 }
 
-// resumable 报告创作停着、可以接着写：回车就继续。正在写、有稿件等你裁决、完本（续写要
-// 跟主编说篇幅）都不算。
+// resumable 报告创作停着、可以接着写：回车就继续。正在写、有稿件等你裁决、某章没做到你的
+// 要求（照原样续跑还会停在那里）、完本（续写要跟主编说篇幅）都不算。
 func (b *workbenchState) resumable() bool {
 	switch b.situation() {
-	case situationNoRun, situationPaused, situationFailed, situationCancelled, situationDeciding, situationRunning:
+	case situationNoRun, situationPaused, situationFailed, situationCancelled, situationRunning:
 		return true
+	case situationDeciding:
+		return b.decision.held == ""
 	}
 	return false
 }
@@ -204,7 +206,7 @@ func (b *workbenchState) resumable() bool {
 // decisionState 是决定卡：等待原因 + 可选的待裁决稿件及其故事语言描述。
 // continueAfter 标记裁决后是否自动续跑（创作任务的稿件续跑，用户自己的草案不续）；
 // stale 表示稿件基线已过期（直接通过会撞版本冲突），只留重写路径；held 是自动修订
-// 预算用尽、等你接受现状或让它再改的那一章（章节 ID）。
+// 用尽仍没做到你的要求、等你接受现状或跟主编说怎么改的那一章（章节 ID）。
 type decisionState struct {
 	reason        string
 	proposal      domainmodel.Proposal
@@ -538,20 +540,23 @@ func (m model) handleDriveEnd(message chief.DriveEnd) (tea.Model, tea.Cmd) {
 	return m, m.refreshBenchCmd()
 }
 
-// acceptHeld 接受卡住那一章的现状：它的阻塞意见一次入账为用户裁决（D43），之后不再为
-// 它们重写（这一章再变化时裁决自动失效），接着写。
+// acceptHeld 接受卡住那一章的现状，接着写。
 func (m model) acceptHeld() (tea.Model, tea.Cmd) {
-	bench := &m.bench
-	findings := m.heldFindings()
-	number := m.heldNumber()
+	findings, number := m.heldFindings(), m.heldNumber()
+	m.bench.presentDecision(nil)
+	return m, m.acceptCmd(findings, number, true)
+}
+
+// acceptCmd 接受一章的现状：它尚未被接受的阻塞意见一次入账为用户裁决（D43），之后不再为
+// 它们重写，标记随之消失（这一章再变化时裁决自动失效）。continueAfter 表示之后接着写。
+func (m model) acceptCmd(findings []workbench.WorkbenchFinding, number int, continueAfter bool) tea.Cmd {
 	api, ctx, user := m.api, m.ctx, m.deps.UserID
-	gen, projectID := bench.gen, bench.projectID
-	bench.presentDecision(nil)
+	gen, projectID := m.bench.gen, m.bench.projectID
 	ids := make([]string, len(findings))
 	for i, finding := range findings {
 		ids[i] = finding.ID
 	}
-	return m, func() tea.Msg {
+	return func() tea.Msg {
 		now := time.Now().UTC()
 		if _, err := api.Reviews.AddAdjudication(ctx, novel.AddAdjudicationCommand{
 			ProjectID: projectID, ChangeID: projectdoc.NewID("adjudication", now), UserID: user,
@@ -559,7 +564,7 @@ func (m model) acceptHeld() (tea.Model, tea.Cmd) {
 		}); err != nil {
 			return decisionDoneMsg{gen: gen, err: err}
 		}
-		return decisionDoneMsg{gen: gen, continueAfter: true, echo: fmt.Sprintf("你接受了第 %d 章的现状", number)}
+		return decisionDoneMsg{gen: gen, continueAfter: continueAfter, echo: fmt.Sprintf("你接受了第 %d 章的现状", number)}
 	}
 }
 
@@ -588,11 +593,9 @@ func (m model) pauseRunCmd() tea.Cmd {
 	}
 }
 
-// continueRun 是统一续跑入口：同一推进从落点继续，篇幅沿用上一轮设定。卡在某章的修订预算
-// 上时，继续就是让它再改：预算重新起算（D63）。
+// continueRun 是统一续跑入口：同一推进从落点继续，篇幅沿用上一轮设定。
 func (m model) continueRun() (tea.Model, tea.Cmd) {
-	held := m.bench.decision != nil && m.bench.decision.held != ""
-	return m.continueRunWith(chief.WriteParams{Chapters: novel.KeepChapters, Renew: held})
+	return m.continueRunWith(chief.WriteParams{Chapters: novel.KeepChapters})
 }
 
 // continueRunWith 按篇幅设定续跑：Chapters 正数固定章数，0 交给 AI，novel.KeepChapters 沿用。

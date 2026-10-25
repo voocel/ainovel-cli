@@ -210,7 +210,7 @@ func findingLine(v struct {
 	}
 	severity := "参考"
 	if v.Severity == model.FindingBlocking {
-		severity = "阻塞"
+		severity = "必改"
 	}
 	return fmt.Sprintf("第 %d 章 · %s —— %s", v.Chapter, severity, note)
 }
@@ -294,7 +294,7 @@ func toolDetail(tool string, args json.RawMessage) string {
 			}
 		}
 		if blocking > 0 {
-			return fmt.Sprintf("%d 条意见（阻塞 %d）", len(input.Findings), blocking)
+			return fmt.Sprintf("%d 条意见（必改 %d）", len(input.Findings), blocking)
 		}
 		return fmt.Sprintf("%d 条意见", len(input.Findings))
 	case prompt.ToolProposalSubmit:

@@ -123,7 +123,11 @@ func (m model) benchHeader(l benchLayout) []string {
 		title = m.bench.projectID
 	}
 	done, length := len(m.bench.snap.Manuscript), m.bench.snap.Length
-	right := m.benchStateBadge() + benchTheme.Muted.Render("  ·  "+progressLabel(done, chapterCount(m.bench.snap), length)) + " "
+	right := m.benchStateBadge() + benchTheme.Muted.Render("  ·  "+progressLabel(done, chapterCount(m.bench.snap), length))
+	if unresolved := len(unresolvedChapters(m.bench.snap)); unresolved > 0 {
+		right += benchTheme.Muted.Render("  ·  ") + benchTheme.Warning.Render(fmt.Sprintf("! %d 章未解决", unresolved))
+	}
+	right += " "
 	brand := " " + benchTheme.Accent.Bold(true).Render("AINOVEL") + benchTheme.Muted.Render("  /  ")
 	left := brand + benchTheme.Title.Render(truncate(title, max(4, l.width-lipgloss.Width(right)-lipgloss.Width(brand)-2)))
 	return []string{alignRight(left, right, l.width), progressRule(done, length.Final, l.width)}
@@ -269,7 +273,7 @@ func (m model) decisionCard(width int) []string {
 	summary, actions := "", "回车继续"
 	if d.held != "" {
 		summary = m.heldSummary()
-		actions = "y 接受现状 · 回车让它再改 · 或跟主编说怎么改"
+		actions = "y 接受现状 · 回车阅读这一章 · 或跟主编说怎么改"
 	}
 	if d.hasProposal {
 		title = "◇ " + m.reviewTarget() + " · 等待你确认"
@@ -358,10 +362,14 @@ func (m model) inputPlaceholder() string {
 	switch {
 	case m.bench.thread.Busy:
 		return "接着说，主编会在这一轮里读到"
+	case m.bench.decision != nil && m.bench.decision.held != "":
+		return "y 接受现状，或跟主编说这一章怎么改"
 	case m.bench.resumable():
 		return "回车继续创作，或跟主编说说想法"
 	case m.reviewing():
 		return "y 通过，或跟主编说哪里不满意"
+	case len(m.unresolvedFindings(m.selectedChapterNumber())) > 0:
+		return "y 接受这一章的现状，或跟主编说这一章怎么改"
 	default:
 		return "跟主编说：提要求、问进度、讨论情节…（/ 命令）"
 	}
@@ -401,14 +409,13 @@ func (m model) primaryAction() benchAction {
 	case situationCompleted:
 		return benchAction{key: "Enter", label: "阅读选中章", do: model.enterPane}
 	}
-	label := "继续创作"
 	switch {
 	case !m.bench.hasRun():
-		label = "开始创作"
+		return benchAction{key: "Enter", label: "开始创作", do: model.continueRun}
 	case m.bench.decision != nil && m.bench.decision.held != "":
-		label = "让它再改"
+		return benchAction{key: "Enter", label: "阅读这一章", do: model.enterPane}
 	}
-	return benchAction{key: "Enter", label: label, do: model.continueRun}
+	return benchAction{key: "Enter", label: "继续创作", do: model.continueRun}
 }
 
 func (m model) actionHints() string {

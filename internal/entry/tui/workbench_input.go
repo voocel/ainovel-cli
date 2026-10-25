@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/voocel/ainovel-cli/internal/app/workbench"
 )
 
 const benchHelp = `创作控制台
@@ -18,7 +19,8 @@ const benchHelp = `创作控制台
 活动视图：创作的完整过程——每一步、思考、说明与正文预览按时间排列。
 创作现场：正文下方常驻，显示上一步、当前步（或等待计时）与最新输出的尾部。
 决定卡：等你决定时出现在正文下方。有稿件时回车看全部内容，y 通过，不满意就跟主编说理由；
-某章自动修订多次仍有阻塞意见时，y 接受现状，回车让它再改。
+某章自动修订多次仍没做到你的要求时，y 接受现状，或跟主编说怎么改。只按审阅标准没改好的章
+不停下，目录上标“!”、顶栏计数，接着写；选中它按 y 接受现状，或跟主编说怎么改。
 确认卡：主编提出的修改要你确认时出现在同一位置，创作随之停下。回车看全部改动，y 确认，不要了
 跟主编说；修改与已写章节有出入时，输入序号选怎么处理（重写受影响的章、只改设定后文按新的写、
 不改了）。改错了跟主编说，它会查修改记录并撤销。
@@ -278,7 +280,7 @@ func (m model) approve() (tea.Model, tea.Cmd) {
 	case bench.decision != nil && bench.decision.held != "":
 		return m.acceptHeld()
 	case bench.decision == nil || !bench.decision.hasProposal:
-		bench.notice = "现在没有等你决定的稿件"
+		return m.acceptSelected()
 	case bench.writing:
 		bench.notice = "创作进行中，稿件写完后再裁决"
 	case bench.decision.stale:
@@ -286,6 +288,23 @@ func (m model) approve() (tea.Model, tea.Cmd) {
 		bench.notice = "这份稿件完成后书又有了新变化，不能直接通过；回车按现在的内容重写"
 	default:
 		return m.approveCmd()
+	}
+	return m, nil
+}
+
+// acceptSelected 接受选中那一章的现状（D94）：标记在案的章随时可以接受；没有未解决意见时
+// 没有可决定的事，正在按意见重写的等它写完。
+func (m model) acceptSelected() (tea.Model, tea.Cmd) {
+	number := m.selectedChapterNumber()
+	findings := m.unresolvedFindings(number)
+	node, _ := m.outlineChapter(number)
+	switch {
+	case len(findings) == 0:
+		m.bench.notice = "现在没有等你决定的稿件"
+	case node.State == workbench.ChapterInProgress:
+		m.bench.notice = "这一章正在按意见重写，写完再说"
+	default:
+		return m, m.acceptCmd(findings, number, false)
 	}
 	return m, nil
 }

@@ -27,6 +27,7 @@ type outlineRow struct {
 	chapters    int  // 子树章节数
 	pending     int  // 子树待确认章数
 	confirmed   int
+	unresolved  int // 子树带未解决意见的章数（D94）
 }
 
 // bookRowID 是全书行的界面身份：刷新后按它找回光标，不是作品计划里的节点。
@@ -53,9 +54,9 @@ func outlineDepth(kind domainmodel.PlanNodeKind) (int, bool) {
 	}
 }
 
-type outlineNodeStats struct{ children, chapters, pending, confirmed int }
+type outlineNodeStats struct{ children, chapters, pending, confirmed, unresolved int }
 
-func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
+func outlineStats(outline []workbench.OutlineNode, unresolved map[int]bool) map[string]outlineNodeStats {
 	stats := make(map[string]outlineNodeStats)
 	var ancestors []string
 	for _, entry := range outline {
@@ -77,6 +78,9 @@ func outlineStats(outline []workbench.OutlineNode) map[string]outlineNodeStats {
 				}
 				if entry.State == workbench.ChapterPending || entry.Proposed {
 					s.pending++
+				}
+				if unresolved[entry.Number] {
+					s.unresolved++
 				}
 				stats[id] = s
 			}
@@ -135,7 +139,7 @@ func (m model) directoryEntries() []workbench.OutlineNode {
 func (m model) buildOutlineRows() []outlineRow {
 	bench := m.bench
 	entries := m.directoryEntries()
-	stats := outlineStats(entries)
+	stats := outlineStats(entries, unresolvedChapters(bench.snap))
 	var rows []outlineRow
 	skipDepth := -1
 	ancestors := make(map[int]string)
@@ -168,7 +172,7 @@ func (m model) buildOutlineRows() []outlineRow {
 		if depth < 2 {
 			ancestors[depth] = entry.Node.Title
 			s := stats[entry.Node.ID]
-			row.chapters, row.pending, row.confirmed, row.empty = s.chapters, s.pending, s.confirmed, s.children == 0
+			row.chapters, row.pending, row.confirmed, row.unresolved, row.empty = s.chapters, s.pending, s.confirmed, s.unresolved, s.children == 0
 		}
 		if entry.Node.Kind != domainmodel.PlanChapter && bench.collapsed[entry.Node.ID] {
 			row.collapsed = true
@@ -612,7 +616,7 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 	if row.node.Node.Kind == domainmodel.PlanArc {
 		style = benchTheme.Accent
 	}
-	label, pending, progress := "", "", ""
+	label, pending, marked, progress := "", "", "", ""
 	switch {
 	case row.empty:
 		fold, label = "  ", " · 待展开"
@@ -625,20 +629,43 @@ func (m model) outlineRowLine(row outlineRow, selected bool, width int) string {
 	if row.node.Proposed || row.collapsed && row.pending > 0 {
 		pending = " ◇"
 	}
-	room := width - 2 - lipgloss.Width(indent+fold+label+pending)
+	// 折叠起来的部分里带未解决意见的章，章行看不到，在头行上点出数量（D94）。
+	if row.collapsed && row.unresolved > 0 {
+		marked = fmt.Sprintf(" !%d", row.unresolved)
+	}
+	room := width - 2 - lipgloss.Width(indent+fold+label+pending+marked)
 	if progress != "" {
 		room -= lipgloss.Width(progress) + 1
 	}
 	text := indent + fold + truncate(title, max(1, room))
 	if selected {
-		return benchTheme.Selected.Render(alignRight("▎"+text+label+pending, progress, width))
+		return benchTheme.Selected.Render(alignRight("▎"+text+label+pending+marked, progress, width))
 	}
-	return alignRight(" "+style.Render(text)+benchTheme.Muted.Render(label)+benchTheme.Warning.Render(pending), benchTheme.Muted.Render(progress), width)
+	return alignRight(" "+style.Render(text)+benchTheme.Muted.Render(label)+benchTheme.Warning.Render(pending+marked), benchTheme.Muted.Render(progress), width)
+}
+
+// unresolvedChapters 是带着尚未被接受的阻塞意见的章号（D94）：正在按意见重写，或自动修订
+// 用尽后标记在案。目录、顶栏与右栏都按它标“!”。
+func unresolvedChapters(snap workbench.WorkbenchSnapshot) map[int]bool {
+	numbers := make(map[string]int, len(snap.Manuscript))
+	for _, chapter := range snap.Manuscript {
+		numbers[chapter.ID] = chapter.Number
+	}
+	unresolved := make(map[int]bool)
+	for _, finding := range snap.Findings {
+		if number, ok := numbers[finding.ChapterID]; ok && finding.Severity == domainmodel.FindingBlocking {
+			unresolved[number] = true
+		}
+	}
+	return unresolved
 }
 
 func (m model) outlineChapterLine(entry workbench.OutlineNode, indent string, selected bool, width int) string {
 	symbol, style, titleStyle := "○", benchTheme.Muted, benchTheme.Muted
 	switch {
+	case entry.State == workbench.ChapterConfirmed && len(m.unresolvedFindings(entry.Number)) > 0:
+		// 带着阻塞意见的章（D94）：正在按意见重写，或自动修订用尽后标记在这里接着写。
+		symbol, style, titleStyle = "!", benchTheme.Warning, benchTheme.Text
 	case entry.State == workbench.ChapterConfirmed:
 		symbol, style, titleStyle = "✓", benchTheme.Success, benchTheme.Text
 	case entry.State == workbench.ChapterPending || entry.Proposed:

@@ -3,9 +3,11 @@ package chief
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/app/novel"
 	"github.com/voocel/ainovel-cli/internal/app/workbench"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
@@ -44,6 +46,9 @@ func (s *Session) brief(ctx context.Context, view View) (string, error) {
 	}
 	if decision := pendingDecision(snap); decision != "" {
 		lines = append(lines, "待用户决定："+decision)
+	}
+	if marked := markedChapters(snap.Marks); marked != "" {
+		lines = append(lines, "标记在案："+marked)
 	}
 	looking := "全书"
 	if view.Chapter > 0 {
@@ -125,6 +130,24 @@ func pendingChange(snap workbench.WorkbenchSnapshot) string {
 	return text + "。用户按 y 确认；不要了就 revert_change 撤回"
 }
 
+// markedChapters 是标记在案的章与用户能怎么做（D94）；没有为空。
+func markedChapters(marks []novel.Mark) string {
+	const limit = 12
+	if len(marks) == 0 {
+		return ""
+	}
+	numbers := make([]string, 0, min(len(marks), limit))
+	for _, mark := range marks[:min(len(marks), limit)] {
+		numbers = append(numbers, strconv.Itoa(mark.Number))
+	}
+	text := "第 " + strings.Join(numbers, "、") + " 章"
+	if len(marks) > limit {
+		text += fmt.Sprintf("等 %d 章", len(marks))
+	}
+	return text + "自动修订用尽仍有审阅意见，创作没停（意见用 book_reviews 看）。用户说就这样，请他选中那一章按 y 接受；" +
+		"要改就问清楚怎么改，用 note_requirement 记下并设 rework"
+}
+
 // pendingDecision 是等用户决定的事与用户能怎么做；没有为空。
 func pendingDecision(snap workbench.WorkbenchSnapshot) string {
 	decision := snap.Decision
@@ -132,7 +155,7 @@ func pendingDecision(snap workbench.WorkbenchSnapshot) string {
 	case decision == nil:
 		return ""
 	case decision.Held != "":
-		return oneLine(decision.Reason, 120) + "。用户按 y 接受现状，或让它再改一次（resume_creation）"
+		return oneLine(decision.Reason, 120) + "。用户按 y 接受现状；要改就问清楚怎么改，用 note_requirement 记下并设 rework，再 resume_creation"
 	case decision.HasProposal:
 		return oneLine(decision.Reason, 120) + "。稿件用 book_draft 看；用户按 y 通过，不满意就说理由，用 reject_draft 退回"
 	default:

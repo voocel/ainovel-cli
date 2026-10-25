@@ -549,7 +549,7 @@ func TestQuickWriteBlockedReviewTriggersRewriteAndReReview(t *testing.T) {
 	if len(milestones) != 6 {
 		t.Fatalf("milestones = %q", milestones)
 	}
-	for _, want := range []string{"第 1 章《", "第 2 章《", "》改写入稿", "审阅第 1–2 章：未通过 · 阻塞 1 处", "审阅第 1–2 章：通过", "全书 2 章完成"} {
+	for _, want := range []string{"第 1 章《", "第 2 章《", "》改写入稿", "审阅第 1–2 章：未通过 · 1 处未解决", "审阅第 1–2 章：通过", "全书 2 章完成"} {
 		if !slices.ContainsFunc(milestones, func(text string) bool { return strings.Contains(text, want) }) {
 			t.Fatalf("milestones missing %q: %q", want, milestones)
 		}
@@ -719,9 +719,9 @@ func TestQuickWriteWindowReviewBlockedTriggersRewriteBeforeExtending(t *testing.
 	}
 }
 
-func TestQuickWriteExhaustedRepairBudgetWaitsAndRenewedBudgetResumes(t *testing.T) {
-	// 自动修订预算是显式 RunStrategy（§6.3）：预算用尽落 waiting_user 而不是
-	// 静默降低审阅标准；照常续跑仍卡在那一章，用户确认继续后预算重新起算，从落点写到完成。
+func TestQuickWriteExhaustedRepairBudgetMarksAndMovesOn(t *testing.T) {
+	// 按审阅标准判的阻塞，自动修订用尽后标记在章上接着写（D94）：不停下等用户；预算按章
+	// 的连续自动修订计，新开一轮也不让标记过的章重来。
 	ctx := context.Background()
 	executor := &scriptedQuickExecutor{
 		now: testTime(), blockChapter: "chapter-chapter-plan-2", blockRemaining: 3,
@@ -735,9 +735,68 @@ func TestQuickWriteExhaustedRepairBudgetWaitsAndRenewedBudgetResumes(t *testing.
 	if err != nil {
 		t.Fatalf("quick write until budget exhausted: %v", err)
 	}
-	// 规划 1 + 两章 2 + 审阅/重写交替（阻塞 3 次、重写 2 次消耗预算 2）= 8 次。
-	if result.RunState != model.RunWaitingUser || executor.calls != 8 ||
-		!strings.Contains(result.RunReason, "自动修订了 2 次仍有阻塞意见") {
+	// 规划 1 + 两章 2 + 审阅/重写交替（阻塞 3 次、重写 2 次用尽预算）= 8 次，之后标记完成。
+	if result.RunState != model.RunCompleted || executor.calls != 8 ||
+		result.RunReason != "全书 2 章完成；第 2 章自动修订后仍有审阅意见，已标记" {
+		t.Fatalf("result = %#v, executor calls = %d", result, executor.calls)
+	}
+	snapshot, err := api.Workbench.WorkbenchSnapshot(ctx, command.ProjectID)
+	if err != nil || len(snapshot.Findings) != 1 || snapshot.Findings[0].ChapterID != "chapter-chapter-plan-2" ||
+		snapshot.Findings[0].Severity != model.FindingBlocking {
+		t.Fatalf("marked findings = %#v, %v", snapshot.Findings, err)
+	}
+	// 标记与推导同一份规则；时间线在放下它的那次审阅处交代“已标记，接着写”。
+	if want := []novelapp.Mark{{ChapterID: "chapter-chapter-plan-2", Number: 2, Repairs: 2}}; !slices.Equal(snapshot.Marks, want) {
+		t.Fatalf("marks = %#v", snapshot.Marks)
+	}
+	var timeline []string
+	for _, milestone := range snapshot.Milestones {
+		timeline = append(timeline, milestone.Text)
+	}
+	marked := slices.Index(timeline, "第 2 章《第2章》修订 2 次仍未改好，已标记，接着写")
+	if marked < 1 || timeline[marked-1] != "审阅第 1–2 章：未通过 · 1 处未解决" {
+		t.Fatalf("timeline = %q", timeline)
+	}
+	resume := command
+	resume.CreatedAt = testTime().Add(time.Minute)
+	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunCompleted ||
+		result.RunID != "run:budget-book:2" || executor.calls != 8 {
+		t.Fatalf("a new run must not rewrite the marked chapter again: %#v calls=%d err=%v", result, executor.calls, err)
+	}
+}
+
+func TestQuickWriteUnmetRequirementWaitsAndReworkResumes(t *testing.T) {
+	// 违反用户要求的阻塞，自动修订用尽后仍等用户（D94）：照常续跑停在原处；用户说清怎么改
+	// 返工这一章，预算重新起算，从落点写到完成。
+	ctx := context.Background()
+	executor := &scriptedQuickExecutor{
+		now: testTime(), blockChapter: "chapter-chapter-plan-2", unmetDirective: "hook", unmetRemaining: 3,
+	}
+	api := newQuickTestApp(t, executor)
+	command := novelapp.QuickWriteCommand{
+		ProjectID: "unmet-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
+		Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: testTime(),
+	}
+	executor.onExecute = func(operation model.Operation) {
+		if operation.ID != runQuickID("run:unmet-book:1", "chapter", "chapter-plan-1") {
+			return
+		}
+		executor.onExecute = nil
+		if _, err := api.Projects.AddDirective(ctx, projectdoc.AddDirectiveCommand{
+			ProjectID: "unmet-book", ChangeID: "hook", UserID: "user-1", DirectiveID: "hook",
+			Scope: "from_chapter:1", Text: "每章结尾留钩子", Reason: "写作中途提出要求",
+			CreatedAt: command.CreatedAt.Add(30 * time.Minute),
+		}); err != nil {
+			t.Fatalf("mid-run directive: %v", err)
+		}
+	}
+	result, err := api.Novels.QuickWrite(ctx, command)
+	if err != nil {
+		t.Fatalf("quick write until budget exhausted: %v", err)
+	}
+	// 规划 1 + 第 1 章（失效）1 + 后继 1 + 第 2 章 1 + 审阅/重写交替（未满足 3 次、重写 2 次）5 = 9 次。
+	if result.RunState != model.RunWaitingUser || executor.calls != 9 ||
+		!strings.Contains(result.RunReason, "第 2 章《第2章》自动修订了 2 次仍没做到你的要求") {
 		t.Fatalf("result = %#v, executor calls = %d", result, executor.calls)
 	}
 	// 预算用尽的等待不携带稿件；卡住的那一章由推导器报给工作台。
@@ -748,7 +807,7 @@ func TestQuickWriteExhaustedRepairBudgetWaitsAndRenewedBudgetResumes(t *testing.
 	if err != nil {
 		t.Fatalf("read waiting run: %v", err)
 	}
-	project, err := api.Projects.Project(ctx, "budget-book", 0)
+	project, err := api.Projects.Project(ctx, "unmet-book", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,18 +815,22 @@ func TestQuickWriteExhaustedRepairBudgetWaitsAndRenewedBudgetResumes(t *testing.
 		t.Fatalf("repair hold = %q, %v", held, err)
 	}
 	resume := command
-	resume.CreatedAt = testTime().Add(time.Minute)
-	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunWaitingUser || executor.calls != 8 {
+	resume.CreatedAt = testTime().Add(time.Hour)
+	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunWaitingUser || executor.calls != 9 {
 		t.Fatalf("plain resume must stay on the exhausted chapter: %#v calls=%d err=%v", result, executor.calls, err)
 	}
-	resume.CreatedAt, resume.RenewRepairBudget = testTime().Add(2*time.Minute), true
-	result, err = api.Novels.QuickWrite(ctx, resume)
-	if err != nil {
-		t.Fatalf("resume after renewing budget: %v", err)
+	if _, err := api.Projects.AddDirective(ctx, projectdoc.AddDirectiveCommand{
+		ProjectID: "unmet-book", ChangeID: "rework", UserID: "user-1", DirectiveID: "rework",
+		Scope: model.DirectiveScopeChapters(2, 2), Text: "结尾停在信封上那行没写完的地址", Rework: true,
+		Reason: "说清怎么改", CreatedAt: testTime().Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("rework directive: %v", err)
 	}
-	// 续跑：第三次重写 1 + 末窗审阅通过 1 = 10 次。
-	if result.RunState != model.RunCompleted || executor.calls != 10 {
-		t.Fatalf("resumed result = %#v, executor calls = %d", result, executor.calls)
+	resume.CreatedAt = testTime().Add(3 * time.Hour)
+	result, err = api.Novels.QuickWrite(ctx, resume)
+	// 续跑：返工 1 + 末窗审阅通过 1 = 11 次。
+	if err != nil || result.RunState != model.RunCompleted || executor.calls != 11 {
+		t.Fatalf("resumed result = %#v, executor calls = %d, %v", result, executor.calls, err)
 	}
 }
 
@@ -1221,9 +1284,10 @@ func TestQuickWriteUnrelatedDirectiveKeepsWindowVerdictValid(t *testing.T) {
 	}
 }
 
-// TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock 是 D43 的闭环：预算用尽
-// 等待用户 → 用户接受阻塞发现 → 续跑不重写即完成；撤回后阻塞恢复，新一轮按意见重写。
-func TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock(t *testing.T) {
+// TestQuickWriteAcceptedFindingClearsMarkAndWithdrawRestoresIt 是 D43 在标记上的闭环（D94）：
+// 预算用尽标记完成 → 用户接受阻塞发现，标记消失、全书算通过；撤回后标记恢复，新一轮
+// 不因此再重写。
+func TestQuickWriteAcceptedFindingClearsMarkAndWithdrawRestoresIt(t *testing.T) {
 	ctx := context.Background()
 	executor := &scriptedQuickExecutor{
 		now: testTime(), blockChapter: "chapter-chapter-plan-2", blockRemaining: 3,
@@ -1234,7 +1298,7 @@ func TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock(t *testing.T)
 		Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: testTime(),
 	}
 	result, err := api.Novels.QuickWrite(ctx, command)
-	if err != nil || result.RunState != model.RunWaitingUser || executor.calls != 8 {
+	if err != nil || result.RunState != model.RunCompleted || executor.calls != 8 || !strings.Contains(result.RunReason, "已标记") {
 		t.Fatalf("result = %#v, calls = %d, err = %v", result, executor.calls, err)
 	}
 	snapshot, err := api.Workbench.WorkbenchSnapshot(ctx, command.ProjectID)
@@ -1260,7 +1324,8 @@ func TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock(t *testing.T)
 	}
 	resume := command
 	resume.CreatedAt = testTime().Add(3 * time.Minute)
-	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunCompleted || executor.calls != 8 {
+	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunCompleted ||
+		result.RunReason != "全书 2 章完成并通过审阅" || executor.calls != 8 {
 		t.Fatalf("resume after adjudication = %#v, calls = %d, err = %v", result, executor.calls, err)
 	}
 	if _, err := api.Reviews.WithdrawAdjudication(ctx, novelapp.WithdrawAdjudicationCommand{
@@ -1279,10 +1344,10 @@ func TestQuickWriteAcceptedFindingUnblocksAndWithdrawRestoresBlock(t *testing.T)
 		len(snapshot.Findings) != 1 || len(snapshot.Adjudications) != 0 {
 		t.Fatalf("snapshot after withdrawal = findings %#v, adjudications %#v, %v", snapshot.Findings, snapshot.Adjudications, err)
 	}
-	// 新一轮续写：阻塞恢复，按意见重写 1 + 末窗审阅通过 1。
+	// 新一轮：标记恢复，这一章的自动修订早已用尽，不再重写。
 	resume.CreatedAt = testTime().Add(6 * time.Minute)
 	if result, err = api.Novels.QuickWrite(ctx, resume); err != nil || result.RunState != model.RunCompleted ||
-		result.RunID != "run:accept-book:2" || executor.calls != 10 {
+		result.RunID != "run:accept-book:3" || !strings.Contains(result.RunReason, "已标记") || executor.calls != 8 {
 		t.Fatalf("rerun after withdrawal = %#v, calls = %d, err = %v", result, executor.calls, err)
 	}
 }
@@ -1299,7 +1364,7 @@ func TestAdjudicationExpiresWhenChapterChanges(t *testing.T) {
 		ProjectID: "expire-book", UserID: "user-1", Premise: "一个失忆的邮差替亡者送完最后一封信",
 		Chapters: 2, WorkerID: "quick-worker", LeaseDuration: time.Minute, CreatedAt: testTime(),
 	}
-	if result, err := api.Novels.QuickWrite(ctx, command); err != nil || result.RunState != model.RunWaitingUser {
+	if result, err := api.Novels.QuickWrite(ctx, command); err != nil || result.RunState != model.RunCompleted {
 		t.Fatalf("result = %#v, err = %v", result, err)
 	}
 	snapshot, err := api.Workbench.WorkbenchSnapshot(ctx, command.ProjectID)
@@ -1697,7 +1762,7 @@ func testFixingLengthSupersedesWaitingRaise(t *testing.T, paused bool) {
 	ctx := context.Background()
 	executor := &scriptedQuickExecutor{
 		now: testTime(), scaleMax: 4, raiseTo: model.CompassAutonomyCeiling + 1,
-		blockChapter: "chapter-chapter-plan-4", blockRemaining: 10,
+		blockChapter: "chapter-chapter-plan-4", unmetDirective: "hook", unmetRemaining: 10,
 	}
 	api := newQuickTestApp(t, executor)
 	command := novelapp.QuickWriteCommand{
@@ -1716,12 +1781,18 @@ func testFixingLengthSupersedesWaitingRaise(t *testing.T, paused bool) {
 		}
 	}
 
+	if _, err := api.Projects.AddDirective(ctx, projectdoc.AddDirectiveCommand{
+		ProjectID: "fix-book", ChangeID: "hook", UserID: "user-1", DirectiveID: "hook",
+		Scope: "from_chapter:4", Text: "每章结尾留钩子", Reason: "等待时提出要求", CreatedAt: command.CreatedAt.Add(30 * time.Minute),
+	}); err != nil {
+		t.Fatalf("directive: %v", err)
+	}
 	command.Chapters, command.CreatedAt = 5, command.CreatedAt.Add(time.Hour)
 	if result, err = api.Novels.QuickWrite(ctx, command); err != nil {
 		t.Fatalf("fix length: %v", err)
 	}
-	// 第 4 章审阅一直阻塞：每章 2 次自动重写用尽后等待，这次等待不带稿件。
-	if result.RunState != model.RunWaitingUser || !strings.Contains(result.RunReason, "自动修订了 2 次仍有阻塞意见") {
+	// 第 4 章一直没做到要求：2 次自动重写用尽后等用户（D94），这次等待不带稿件。
+	if result.RunState != model.RunWaitingUser || !strings.Contains(result.RunReason, "自动修订了 2 次仍没做到你的要求") {
 		t.Fatalf("budget wait = %#v", result)
 	}
 	// 被取代的上调转为 stale（D64）：不再作为等待稿件呈现，旧稿也不能再被批准入账。

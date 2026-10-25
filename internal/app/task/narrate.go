@@ -66,7 +66,7 @@ func outcomeDetail(result operationengine.RunResult) string {
 			return ""
 		}
 		if blocking := verdict.Blocking(); blocking > 0 {
-			return fmt.Sprintf("：未通过 · 阻塞 %d 处", blocking)
+			return fmt.Sprintf("：未通过 · %d 处未解决", blocking)
 		}
 		return "：通过"
 	}

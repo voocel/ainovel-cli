@@ -208,25 +208,43 @@ func (s *Store) GetOperation(ctx context.Context, id string) (model.Operation, e
 
 // AwaitingRunOperations 列出运行里等待审批的任务：驱动据此作废被新推导取代的旧稿（D64）。
 func (s *Store) AwaitingRunOperations(ctx context.Context, runID string) ([]model.Operation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+operationColumns+` FROM operations
+	return s.listOperations(ctx, "awaiting", `SELECT `+operationColumns+` FROM operations
 		WHERE run_id = ? AND state = ? ORDER BY id`, runID, model.OperationAwaitingApproval)
+}
+
+// ProjectOperations 列出作品上指定种类的任务，跨全部运行，按创建先后。
+func (s *Store) ProjectOperations(ctx context.Context, projectID string, kinds ...model.OperationKind) ([]model.Operation, error) {
+	if strings.TrimSpace(projectID) == "" || len(kinds) == 0 {
+		return nil, fmt.Errorf("project operations require a project and kinds: %w", model.ErrInvalid)
+	}
+	args := []any{model.AuthorityProject, projectID}
+	for _, kind := range kinds {
+		args = append(args, kind)
+	}
+	return s.listOperations(ctx, "project", `SELECT `+operationColumns+` FROM operations
+		WHERE target_kind = ? AND target_id = ? AND kind IN (?`+strings.Repeat(", ?", len(kinds)-1)+`)
+		ORDER BY created_at_unix_ms, id`, args...)
+}
+
+func (s *Store) listOperations(ctx context.Context, what, query string, args ...any) ([]model.Operation, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list awaiting operations: %w", err)
+		return nil, fmt.Errorf("list %s operations: %w", what, err)
 	}
 	var operations []model.Operation
 	for rows.Next() {
 		operation, err := scanOperation(rows)
 		if err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("read awaiting operation: %w", err)
+			return nil, fmt.Errorf("read %s operation: %w", what, err)
 		}
 		operations = append(operations, operation)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close awaiting operations: %w", err)
+		return nil, fmt.Errorf("close %s operations: %w", what, err)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate awaiting operations: %w", err)
+		return nil, fmt.Errorf("iterate %s operations: %w", what, err)
 	}
 	for i := range operations {
 		if operations[i].DependsOn, err = loadOperationDependencies(ctx, s.db, operations[i].ID); err != nil {

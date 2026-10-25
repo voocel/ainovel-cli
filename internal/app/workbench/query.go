@@ -76,7 +76,7 @@ type PendingDecision struct {
 	Stale       bool           `json:"stale,omitempty"`
 	// View 是稿件里正文以外变更的故事语言描述，有稿件时才有。
 	View ProposalView `json:"view,omitzero"`
-	// Held 是推进卡住的那一章（章节 ID）：它的自动修订预算已用尽，等用户接受现状或让它再改。
+	// Held 是推进卡住的那一章（章节 ID）：自动修订用尽仍没做到用户的要求，等用户接受现状或跟主编说怎么改（D94）。
 	Held string `json:"held,omitempty"`
 }
 
@@ -121,7 +121,9 @@ type WorkbenchSnapshot struct {
 	Milestones []Milestone `json:"milestones,omitempty"`
 	// Findings 是基线仍成立的最新审阅发现（D48）中尚未被用户接受的部分；
 	// Adjudications 是仍然有效的接受记录（D43）。
-	Findings      []WorkbenchFinding   `json:"findings,omitempty"`
+	Findings []WorkbenchFinding `json:"findings,omitempty"`
+	// Marks 是标记在案的章（D94）：自动修订用尽仍有只按审阅标准判的阻塞意见，创作接着往下走。
+	Marks         []novel.Mark         `json:"marks,omitempty"`
 	Adjudications []model.Adjudication `json:"adjudications,omitempty"`
 	// Briefs 是各已规划章节的依据（键为章号）：覆盖它的要求与结论、它记下的设定。
 	Briefs map[int]ChapterBrief `json:"briefs,omitempty"`
@@ -194,15 +196,20 @@ func (s *Query) snapshotFromProject(ctx context.Context, project projectdoc.Snap
 	if snapshot.Change, err = s.pendingChange(ctx, project); err != nil {
 		return WorkbenchSnapshot{}, err
 	}
-	if snapshot.Milestones, err = s.milestones(ctx, project, snapshot.Run); err != nil {
-		return WorkbenchSnapshot{}, err
-	}
 	verdicts, err := s.reviews.ListVerdicts(ctx, project)
 	if err != nil {
 		return WorkbenchSnapshot{}, err
 	}
 	current := novel.CurrentVerdicts(verdicts)
 	if snapshot.Findings, snapshot.Adjudications, err = s.validFindings(ctx, project, current); err != nil {
+		return WorkbenchSnapshot{}, err
+	}
+	if hasRun {
+		if snapshot.Marks, err = s.reviews.Marks(ctx, project, run); err != nil {
+			return WorkbenchSnapshot{}, err
+		}
+	}
+	if snapshot.Milestones, err = s.milestones(ctx, project, snapshot.Run, marksAt(snapshot.Marks, current)); err != nil {
 		return WorkbenchSnapshot{}, err
 	}
 	var pending []model.Proposal

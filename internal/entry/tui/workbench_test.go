@@ -199,11 +199,12 @@ func TestRailShowsTheBriefOfWhatTheMainViewShows(t *testing.T) {
 	if view := rail(idle); strings.Contains(view, "创作团队") {
 		t.Fatalf("a run without any attempt has no crew card:\n%s", view)
 	}
-	// 选中审过的章：要求带审阅结论，审阅意见与本章设定各成一段，计数标出要紧的。
+	// 选中审过的章：要求带审阅结论，审阅意见与本章设定各成一段，计数标出要紧的；带未解决
+	// 意见的章，标题旁与目录同样标“!”（D94）。
 	reviewed := clickBench(wide, 6, l.outlineY+4)
 	requireContains(t, rail(reviewed),
-		"第 3 章 · 回信", "✓ ", " 字", "违反 1 · 2 条", "✓ 禁止 主角死亡", "! 保持悬疑氛围",
-		"审阅意见", "阻塞 1 · 2 条", "! 回信背面的笔迹提前揭示了门后人的身份", "· 雨声意象连续三章出现",
+		"第 3 章 · 回信", "! 未解决 1 条", "违反 1 · 2 条", "✓ 禁止 主角死亡", "! 保持悬疑氛围",
+		"审阅意见", "未解决 1 · 2 条", "! 回信背面的笔迹提前揭示了门后人的身份", "· 雨声意象连续三章出现",
 		"本章设定", "待核验 1 · 2 条", "│ 事件 陈渡：在口袋里摸到一把陌生的钥", "│ 伏笔 回信：背面是陈渡本人的笔迹",
 	)
 	// 返工要求（D78）：这一章写在要求之前，标出要按它重写。
@@ -555,7 +556,7 @@ func TestTalkInterleavesMilestonesByTime(t *testing.T) {
 	}}
 	m.bench.snap.Milestones = []workbench.Milestone{
 		{At: base.Add(10 * time.Minute), Tone: workbench.MilestoneDone, Text: "第 2 章《回信》入稿"},
-		{At: base.Add(20 * time.Minute), Tone: workbench.MilestoneWait, Text: "审阅第 1–2 章：未通过 · 阻塞 1 处"},
+		{At: base.Add(20 * time.Minute), Tone: workbench.MilestoneWait, Text: "审阅第 1–2 章：未通过 · 1 处未解决"},
 		{At: base.Add(2 * time.Hour), Tone: workbench.MilestoneDone, Text: "第 3 章《门后》入稿"},
 	}
 	m.switchView(viewTalk)
@@ -564,7 +565,7 @@ func TestTalkInterleavesMilestonesByTime(t *testing.T) {
 	for _, line := range lines {
 		said = append(said, strings.TrimSpace(ansi.Strip(line)))
 	}
-	want := []string{"› 第二章多点雨声", "记下了。", "", "◆ 第 2 章《回信》入稿", "◆ 审阅第 1–2 章：未通过 · 阻塞 1 处", "", "› 写得怎么样了", "", "◆ 第 3 章《门后》入稿"}
+	want := []string{"› 第二章多点雨声", "记下了。", "", "◆ 第 2 章《回信》入稿", "◆ 审阅第 1–2 章：未通过 · 1 处未解决", "", "› 写得怎么样了", "", "◆ 第 3 章《门后》入稿"}
 	if strings.Join(said, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("talk = %q, want %q", said, want)
 	}
@@ -676,29 +677,61 @@ func TestStoppedCreationResumesOnEnterAndOnOpen(t *testing.T) {
 	}
 }
 
-// 某章自动修订多次仍有阻塞意见：决定卡点名那一章与它的阻塞意见并选中它；回车让它再改，
-// y 接受现状后接着写。
-func TestHeldChapterDecisionAcceptsOrRetries(t *testing.T) {
+// 某章自动修订多次仍没做到用户的要求（D94）：决定卡点名那一章与它的阻塞意见并选中它；
+// 回车阅读这一章（照原样续跑还会停在这里），y 接受现状后接着写。
+func TestHeldChapterDecisionAcceptsOrReads(t *testing.T) {
 	held := func() model {
 		m := studioModel(t, 150, 40)
 		m.bench.writing = false
 		m.bench.snap.Run.State = domainmodel.RunWaitingUser
-		m.bench.snap.Decision = &workbench.PendingDecision{Reason: "第 3 章《回信》自动修订了 2 次仍有阻塞意见，等你决定：接受现状，或让它再改", Held: "ch-3"}
+		m.bench.snap.Decision = &workbench.PendingDecision{Reason: "第 3 章《回信》自动修订了 2 次仍没做到你的要求，等你决定：接受现状，或跟主编说怎么改", Held: "ch-3"}
 		updated, _ := m.Update(benchRefreshedMsg{gen: m.bench.gen, snap: m.bench.snap})
 		return updated.(model)
 	}
 	m := held()
 	view := frame(m)
-	requireContains(t, view, "第 3 章《回信》自动修订了 2 次", "阻塞意见：回信背面的笔迹提前揭示了门后人的身份",
-		"y 接受现状 · 回车让它再改 · 或跟主编说怎么改", "Enter 让它再改")
+	requireContains(t, view, "第 3 章《回信》自动修订了 2 次", "未解决：回信背面的笔迹提前揭示了门后人的身份",
+		"y 接受现状 · 回车阅读这一章 · 或跟主编说怎么改", "Enter 阅读这一章")
 	if m.selectedChapterNumber() != 3 || strings.Contains(view, "（另有") {
 		t.Fatalf("the held chapter must be selected and only its blocking findings summarized: %d", m.selectedChapterNumber())
 	}
-	if retried, cmd := press(t, m, tea.KeyEnter); cmd == nil || !retried.bench.writing {
-		t.Fatal("Enter must let the held chapter be rewritten again")
+	if read, _ := press(t, m, tea.KeyEnter); read.bench.writing || !read.bench.reading || !strings.Contains(read.bench.bodyText, "第 3 章") {
+		t.Fatal("Enter must open the held chapter instead of resuming into the same stop")
 	}
 	if accepted, cmd := submit(t, held(), "y"); cmd == nil || accepted.bench.decision != nil || accepted.bench.err != "" {
 		t.Fatalf("y must accept the held chapter as it is: err=%q", accepted.bench.err)
+	}
+}
+
+// 带着未解决意见的章（D94）：目录标“!”，顶栏计数，卷折叠后在头行点出数量；选中按 y 接受
+// 现状，标记随之消失，正在按意见重写的章等它写完。
+func TestUnresolvedChaptersAreMarkedAndAcceptable(t *testing.T) {
+	m := studioModel(t, 150, 40)
+	requireContains(t, frame(m), "✓ 02  雨夜来客", "! 03  回信", "! 1 章未解决")
+	m.bench.collapsed["v1"] = true
+	requireContains(t, frame(m), "▸ 第一卷", "!1  3/4")
+	delete(m.bench.collapsed, "v1")
+
+	m.bench.cursor = 4 // 第 3 章
+	if m.selectedChapterNumber() != 3 || !strings.Contains(frame(m), "y 接受这一章的现状") {
+		t.Fatalf("selecting a marked chapter must offer to accept it:\n%s", frame(m))
+	}
+	if accepted, cmd := submit(t, m, "y"); cmd == nil || accepted.bench.notice != "" {
+		t.Fatalf("y must accept the selected marked chapter: notice=%q", accepted.bench.notice)
+	}
+	rewriting := m
+	rewriting.bench.snap.Outline = slices.Clone(m.bench.snap.Outline)
+	for i := range rewriting.bench.snap.Outline {
+		if rewriting.bench.snap.Outline[i].Number == 3 {
+			rewriting.bench.snap.Outline[i].State = workbench.ChapterInProgress
+		}
+	}
+	if waited, cmd := submit(t, rewriting, "y"); cmd != nil || waited.bench.notice != "这一章正在按意见重写，写完再说" {
+		t.Fatalf("a chapter being rewritten is not accepted mid-way: notice=%q", waited.bench.notice)
+	}
+	m.bench.cursor = 3 // 第 2 章没有未解决意见
+	if none, cmd := submit(t, m, "y"); cmd != nil || none.bench.notice != "现在没有等你决定的稿件" {
+		t.Fatalf("y on a settled chapter decides nothing: notice=%q", none.bench.notice)
 	}
 }
 

@@ -371,7 +371,7 @@ func TestReviewStreamsFindingsAndVerdict(t *testing.T) {
 	_, verdict, _ := tracker.feed(prompt.ToolVerdictSubmit, "call-v",
 		`{"review_key":"review","checks":[{"id":"d-1","status":"violated","note":"第 3 章"},{"id":"d-9","status":"pending"}]}`)
 	want := []liveLine{
-		{sectionReview, "第 3 章 · 阻塞 —— 门后人的身份 已被暗示"},
+		{sectionReview, "第 3 章 · 必改 —— 门后人的身份 已被暗示"},
 		{sectionReview, "第 4 章 · 参考 —— 雨声意象重复"},
 		{sectionVerdict, "被违反 · 保持悬疑氛围，不要过早揭示门后人的身份 —— 第 3 章"},
 		{sectionVerdict, "待定 · d-9"},
@@ -389,7 +389,7 @@ func TestToolDetailNamesTheTarget(t *testing.T) {
 		{prompt.ToolWorkspacePutCandidate, `{"key":"draft","content":{}}`, "draft"},
 		{prompt.ToolWorkspacePutChapter, `{"chapter":{"blocks":[{"id":"b1","text":"雨停了。"},{"id":"b2","text":"他没有敲门。"}]}}`, "10 字"},
 		{prompt.ToolWorkspaceReplaceBlock, `{"block_id":"b2","text":"他敲了门。"}`, "段落 b2 · 5 字"},
-		{prompt.ToolWorkspacePutReview, `{"key":"r","findings":[{"severity":"blocking"},{"severity":"note"}]}`, "2 条意见（阻塞 1）"},
+		{prompt.ToolWorkspacePutReview, `{"key":"r","findings":[{"severity":"blocking"},{"severity":"note"}]}`, "2 条意见（必改 1）"},
 		{prompt.ToolWorkspacePutReview, `{"key":"r","findings":[]}`, "0 条意见"},
 		{prompt.ToolProposalSubmit, `{"reason":"完成第四章\n初稿"}`, "完成第四章 初稿"},
 		{prompt.ToolWorkspaceRead, `{}`, ""},

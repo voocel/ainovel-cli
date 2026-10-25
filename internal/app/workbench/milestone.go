@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/app/novel"
 	projectdoc "github.com/voocel/ainovel-cli/internal/app/project"
 	"github.com/voocel/ainovel-cli/internal/domain/model"
 )
@@ -30,7 +31,18 @@ const (
 	MilestoneFail MilestoneTone = "fail"
 )
 
-func (s *Query) milestones(ctx context.Context, project projectdoc.Snapshot, run *model.CreationRun) ([]Milestone, error) {
+// marksAt 按产出它的裁定归拢标记在案的章（D94）：那份裁定落定时，推进放下这些章接着写。
+func marksAt(marks []novel.Mark, current map[string]*novel.StoredVerdict) map[string][]novel.Mark {
+	byVerdict := make(map[string][]novel.Mark, len(marks))
+	for _, mark := range marks {
+		if stored := current[mark.ChapterID]; stored != nil {
+			byVerdict[stored.Key] = append(byVerdict[stored.Key], mark)
+		}
+	}
+	return byVerdict
+}
+
+func (s *Query) milestones(ctx context.Context, project projectdoc.Snapshot, run *model.CreationRun, marks map[string][]novel.Mark) ([]Milestone, error) {
 	chapters := make(map[string]model.ManuscriptChapter, len(project.Manuscript))
 	for _, chapter := range project.Manuscript {
 		chapters[chapter.ID] = chapter
@@ -77,9 +89,13 @@ func (s *Query) milestones(ctx context.Context, project projectdoc.Snapshot, run
 		}
 		milestone := Milestone{At: document.CreatedAt, Tone: MilestoneDone, Text: "审阅" + chapterSpan(numbers) + "：通过"}
 		if blocking := verdict.Blocking(); blocking > 0 {
-			milestone.Tone, milestone.Text = MilestoneWait, fmt.Sprintf("审阅%s：未通过 · 阻塞 %d 处", chapterSpan(numbers), blocking)
+			milestone.Tone, milestone.Text = MilestoneWait, fmt.Sprintf("审阅%s：未通过 · %d 处未解决", chapterSpan(numbers), blocking)
 		}
 		milestones = append(milestones, milestone)
+		for _, mark := range marks[document.Key] {
+			milestones = append(milestones, Milestone{At: document.CreatedAt, Tone: MilestoneWait, Text: fmt.Sprintf(
+				"%s修订 %d 次仍未改好，已标记，接着写", label(chapters[mark.ChapterID]), mark.Repairs)})
+		}
 	}
 	if run != nil {
 		switch run.State {

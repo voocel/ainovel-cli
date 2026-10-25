@@ -102,7 +102,7 @@ func (s *Session) tools() []tool {
 			"type":"object","properties":{"chapters":{"type":"integer","minimum":0}},
 			"required":["chapters"],"additionalProperties":false}`, s.length),
 		define(toolPause, "暂停创作（用户要停下时）", empty, s.pauseTool),
-		define(toolResume, "继续创作；卡在某章修订次数上时，就是让它再改一次", empty, s.resume),
+		define(toolResume, "继续创作", empty, s.resume),
 		define(toolChange, "按用户的意思改这本书：大纲（卷、故事弧、章的标题与梗概）、人物地点、设定、作品方向、锁定与审批方式。"+
 			"已有的按序号、名称、主体+谓词定位，给出的字段改成新的，没给的不变。能否直接生效由审批决定；"+
 			"改设定、人物地点时，还没写成正文的规划里点到它的——没写的章纲与卷、故事弧梗概，规划时定下的设定（不带章号的事实），作品前提——在同一次修改里一并改成新的样子，对不上会被退回；已写章的章题、章纲与事实随正文走，不在这里改。"+
@@ -471,14 +471,13 @@ func (s *Session) resume(ctx context.Context, _ none) (string, error) {
 		return "", errors.New("有稿件等用户决定，先让用户通过或退回")
 	case snap.Run != nil && snap.Run.State == model.RunCompleted:
 		return "", errors.New("全书已经完成；要续写就调整篇幅")
+	case snap.Decision != nil && snap.Decision.Held != "":
+		// 照原样续跑还会停在这一章：要改得先有新的说法，返工后才接着写。
+		return "", errors.New("卡住的那一章修订已用尽仍没做到用户的要求：让用户按 y 接受现状；要改就问清楚怎么改，用 note_requirement 记下并设 rework，再继续创作")
 	}
-	held := snap.Decision != nil && snap.Decision.Held != ""
 	// 已经在写就是用户要的状态：照实回执，不算失败。
-	if !s.Write(WriteParams{Chapters: novel.KeepChapters, Renew: held}) {
+	if !s.Write(WriteParams{Chapters: novel.KeepChapters}) {
 		return "已经在写了", nil
-	}
-	if held {
-		return "让卡住的那一章再改一次 · 继续创作", nil
 	}
 	return "继续创作", nil
 }

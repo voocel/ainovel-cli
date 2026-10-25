@@ -11,12 +11,11 @@ import (
 )
 
 // WriteParams 是一次推进的篇幅设定：Chapters 正数固定章数，0 交给 AI，novel.KeepChapters
-// 沿用；Extend 是完本后续写；Renew 是修订预算用尽的那一章再改一次（D63）。Intent 非空时
-// 先以它建书（向导完善设定），Premise 与 Approval 随建书给出。
+// 沿用；Extend 是完本后续写。Intent 非空时先以它建书（向导完善设定），Premise 与 Approval
+// 随建书给出。
 type WriteParams struct {
 	Chapters int
 	Extend   bool
-	Renew    bool
 	Premise  string
 	Approval model.ApprovalPolicy
 	Intent   *model.Intent
@@ -149,7 +148,7 @@ func (s *Service) command(ctx context.Context, projectID, userID string, params 
 	}
 	return novel.QuickWriteCommand{
 		ProjectID: projectID, UserID: userID, Premise: premise,
-		Chapters: params.Chapters, Extend: params.Extend, RenewRepairBudget: params.Renew, Approval: params.Approval,
+		Chapters: params.Chapters, Extend: params.Extend, Approval: params.Approval,
 		WorkerID: "desk-" + userID, CreatedAt: time.Now().UTC(),
 	}, nil
 }
