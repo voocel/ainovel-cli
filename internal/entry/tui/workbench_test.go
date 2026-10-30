@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -573,8 +574,20 @@ func TestTalkInterleavesMilestonesByTime(t *testing.T) {
 
 func TestCommandPaletteFiltersJumpsAndRejectsUnknown(t *testing.T) {
 	m := studioModel(t, 150, 40)
+	closed := m.benchLayout()
 	m = typeText(t, m, "/")
 	requireContains(t, frame(m), "命令 · 回车执行，支持唯一前缀", "/export <路径>", "/model [角色]", "/help")
+	// 面板是浮在底栏分隔线正上方的方框：内容对齐输入的文字，其他区域几何不变。
+	l := m.benchLayout()
+	rows := strings.Split(frame(m), "\n")
+	if !strings.HasPrefix(rows[l.panel.Min.Y], " ╭─") || !strings.HasPrefix(rows[l.panel.Min.Y+1], " │ 命令 · ") ||
+		!strings.HasPrefix(rows[l.footerY-2], " │ /help") || !strings.HasPrefix(rows[l.footerY-1], " ╰─") || !strings.HasPrefix(rows[l.footerY+1], " › /") {
+		t.Fatalf("palette must float right above the input:\n%s", strings.Join(rows[l.panel.Min.Y:], "\n"))
+	}
+	closed.panel = l.panel
+	if l != closed {
+		t.Fatalf("the palette must not move other regions: closed=%+v open=%+v", closed, l)
+	}
 	m = typeText(t, m, "m")
 	view := frame(m)
 	requireContains(t, view, "/model")
@@ -1046,5 +1059,51 @@ func BenchmarkLongTalk(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.screen()
+	}
+}
+
+// 真实光标跟着插入点：输入法把拼写中的文字画在终端光标处，光标留在右下角会把整屏顶上去。
+func TestRealCursorFollowsInputCaret(t *testing.T) {
+	m := studioModel(t, 150, 40)
+	m = typeText(t, m, "雨夜来信")
+	m, _ = press(t, m, tea.KeyLeft)
+	view, l := m.View(), m.benchLayout()
+	if view.Cursor == nil || view.Cursor.Y != l.footerY+1 || view.Cursor.X != 1+lipgloss.Width("› 雨夜来") {
+		t.Fatalf("cursor = %+v, want right after 雨夜来 on input row %d", view.Cursor, l.footerY+1)
+	}
+	if strings.Contains(view.Content, caretMark) {
+		t.Fatal("the caret mark must not reach the terminal")
+	}
+	m = typeText(t, m, "/")
+	if view := m.View(); view.Cursor == nil || view.Cursor.Y != l.footerY+1 {
+		t.Fatalf("the floating palette must keep the cursor on the input: %+v", view.Cursor)
+	}
+	m.bench.reading = true
+	if m.View().Cursor != nil {
+		t.Fatal("without a focused input the cursor stays hidden")
+	}
+}
+
+// 单行输入按显示宽度横向滚动：插入点之前放不下时向左滚，插入点始终落在宽度之内。
+func TestInputViewScrollsByDisplayWidth(t *testing.T) {
+	input := newInput("")
+	input.Focus()
+	input.SetValue(strings.Repeat("长", 30))
+	line, cursor := placeCaret(inputView(input, 21))
+	if lipgloss.Width(line) > 21 || cursor.X != 20 {
+		t.Fatalf("end of a long line: width=%d cursor=%d %q", lipgloss.Width(line), cursor.X, ansi.Strip(line))
+	}
+	input.SetCursor(5)
+	line, cursor = placeCaret(inputView(input, 21))
+	if lipgloss.Width(line) > 21 || cursor.X != 2+10 || !strings.HasSuffix(ansi.Strip(line), "…") {
+		t.Fatalf("caret in the middle: width=%d cursor=%d %q", lipgloss.Width(line), cursor.X, ansi.Strip(line))
+	}
+	input.EchoMode, input.EchoCharacter = textinput.EchoPassword, '•'
+	if line, _ := placeCaret(inputView(input, 80)); strings.Contains(line, "长") {
+		t.Fatalf("password input must stay masked: %q", ansi.Strip(line))
+	}
+	input.Blur()
+	if _, cursor := placeCaret(inputView(input, 80)); cursor != nil {
+		t.Fatal("a blurred input places no caret")
 	}
 }

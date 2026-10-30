@@ -230,7 +230,9 @@ func (m model) keyHint(hint string) string {
 // 鼠标热区（M3，用户拍板滚轮+点击）的代价是终端原生划选复制需按住 Shift；键盘始终覆盖
 // 全部操作。
 func (m model) View() tea.View {
-	view := tea.NewView(m.screen())
+	screen, cursor := placeCaret(m.screen())
+	view := tea.NewView(screen)
+	view.Cursor = cursor
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	return view

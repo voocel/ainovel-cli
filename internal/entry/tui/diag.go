@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/voocel/ainovel-cli/internal/app/diag"
 	domainmodel "github.com/voocel/ainovel-cli/internal/domain/model"
 )
@@ -223,10 +224,9 @@ func (m model) handleDiagnosticsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadDiagnosticsCmd()
 	case "e":
 		input := newInput("./diagnostics.json")
-		input.SetWidth(max(1, m.width-8))
 		input.Focus()
 		d.input = &input
-		return m, textinput.Blink
+		return m, nil
 	case "n":
 		if d.request.OperationID != "" {
 			if d.report.NextTranscriptSequence == 0 {
@@ -321,7 +321,7 @@ func (m model) viewDiagnostics() string {
 		status = benchTheme.Error.Render(d.err)
 	}
 	if d.input != nil {
-		status = "保存到 " + d.input.View()
+		status = "保存到 " + inputView(*d.input, m.width-lipgloss.Width("保存到 "))
 	}
 	lines = append(lines, fitLine(status, m.width))
 	help := "↑/↓ 滚动 · j/k 选任务 · Enter 查看 · n 下一页 · g 首页 · r 刷新 · e 分享 · Esc 返回"

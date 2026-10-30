@@ -205,7 +205,7 @@ func premiseView(input textarea.Model, surface lipgloss.Style) []string {
 		placeholder = readingLines(premisePlaceholder, input.Width())
 		input.Placeholder = placeholder[0]
 	}
-	rows := strings.Split(strings.TrimSuffix(input.View(), "\n"), "\n")
+	rows := areaView(input)
 	if placeholder != nil {
 		faint := surface.Foreground(benchColors.Faint)
 		for i := 1; i < len(rows); i++ {
@@ -246,10 +246,8 @@ func (m model) librarySection(c *pageColumn, rows int) (int, int) {
 	}
 	if home.searching {
 		field := home.search
-		field.SetWidth(min(28, c.width/2))
 		field.Prompt = "/ "
-		field.SetCursor(field.Position())
-		c.add(sectionHead(title, field.View(), c.width))
+		c.add(sectionHead(title, inputView(field, min(28, c.width/2)+2), c.width))
 	} else {
 		search := "/ 搜索"
 		if query := home.search.Value(); query != "" {

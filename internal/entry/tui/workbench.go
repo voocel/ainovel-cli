@@ -261,12 +261,12 @@ func newWorkbenchState(projectID string, gen int, session *chief.Session) workbe
 	}
 }
 
-// newBenchInput 是常驻输入框：静态光标不挂闪烁定时器，焦点永不离开；灰底只跟着文字走。
+// newBenchInput 是常驻输入框：焦点永不离开；灰底只跟着文字走。
 func newBenchInput() textinput.Model {
 	input := newInput("")
 	input.Prompt = "› "
 	input.SetStyles(inputStyles(benchTheme.Text.Background(benchColors.InputBackground),
-		lipgloss.NewStyle().Foreground(benchColors.Faint).Background(benchColors.InputBackground), false))
+		lipgloss.NewStyle().Foreground(benchColors.Faint).Background(benchColors.InputBackground)))
 	input.Focus()
 	return input
 }

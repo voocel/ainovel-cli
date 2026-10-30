@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image"
 	"strconv"
 	"strings"
 
@@ -318,28 +319,33 @@ type benchCommand struct {
 	run                func(m model, arg string) (tea.Model, tea.Cmd)
 }
 
-var benchCommands = []benchCommand{
-	{name: "export", usage: "<路径>", label: "导出", run: func(m model, arg string) (tea.Model, tea.Cmd) {
-		return m.submitExport(arg)
-	}},
-	{name: "view", label: "完整详情", run: func(m model, _ string) (tea.Model, tea.Cmd) {
-		return m.openBody(m.detailReport()), nil
-	}},
-	{name: "model", usage: "[角色]", label: "切换模型与思考强度", run: func(m model, arg string) (tea.Model, tea.Cmd) {
-		return m.openModelPanel(arg)
-	}},
-	{name: "diag", label: "诊断", run: func(m model, _ string) (tea.Model, tea.Cmd) {
-		return m.openDiagnostics()
-	}},
-	{name: "next", label: "下一个匹配", quiet: true, run: func(m model, _ string) (tea.Model, tea.Cmd) {
-		if m.bench.search == "" || !m.findChapter(m.bench.search, true) {
-			m.bench.notice = "先用 /章号 或 /标题 搜索"
-		}
-		return m, nil
-	}},
-	{name: "help", label: "帮助", run: func(m model, _ string) (tea.Model, tea.Cmd) {
-		return m.openBody(benchHelp), nil
-	}},
+var benchCommands []benchCommand
+
+// 命令表在 init 里赋值：命令执行会经布局读到命令面板，面板又读这张表，包级初始化不能成环。
+func init() {
+	benchCommands = []benchCommand{
+		{name: "export", usage: "<路径>", label: "导出", run: func(m model, arg string) (tea.Model, tea.Cmd) {
+			return m.submitExport(arg)
+		}},
+		{name: "view", label: "完整详情", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+			return m.openBody(m.detailReport()), nil
+		}},
+		{name: "model", usage: "[角色]", label: "切换模型与思考强度", run: func(m model, arg string) (tea.Model, tea.Cmd) {
+			return m.openModelPanel(arg)
+		}},
+		{name: "diag", label: "诊断", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+			return m.openDiagnostics()
+		}},
+		{name: "next", label: "下一个匹配", quiet: true, run: func(m model, _ string) (tea.Model, tea.Cmd) {
+			if m.bench.search == "" || !m.findChapter(m.bench.search, true) {
+				m.bench.notice = "先用 /章号 或 /标题 搜索"
+			}
+			return m, nil
+		}},
+		{name: "help", label: "帮助", run: func(m model, _ string) (tea.Model, tea.Cmd) {
+			return m.openBody(benchHelp), nil
+		}},
+	}
 }
 
 // matchCommand 按完整名称、别名或唯一前缀取命令；有歧义时需继续输入。
@@ -406,6 +412,13 @@ func (m model) handleBenchMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	mouse := msg.Mouse()
 	l := m.benchLayout()
+	if image.Pt(mouse.X, mouse.Y).In(l.panel) {
+		// 方框盖住的区域只归方框：点模型面板的字段行聚焦，其余不穿透到下面的内容。
+		if field, ok := m.modelPanelFieldAt(l, mouse.Y); ok && leftClick(msg) {
+			bench.modelPanel.focus = field
+		}
+		return m, nil
+	}
 	if l.inRail(mouse.X) {
 		return m, nil // 右栏只读，不滚不点
 	}
@@ -423,10 +436,6 @@ func (m model) handleBenchMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.scrollPane(benchPaneMain, delta), nil
 	case !leftClick(msg):
-		return m, nil
-	}
-	if field, ok := m.modelPanelFieldAt(l, mouse.X, mouse.Y); ok {
-		bench.modelPanel.focus = field
 		return m, nil
 	}
 	if index, ok := m.outlineRowAt(l, mouse.X, mouse.Y); ok {

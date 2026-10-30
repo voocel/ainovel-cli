@@ -376,9 +376,7 @@ func (m model) connectionView(c *pageColumn) wizardSection {
 			}
 		default:
 			input := w.inputs[map[formRow]int{rowAddress: inputAddress, rowKey: inputKey, rowName: inputName}[row]]
-			input.SetWidth(max(1, c.width-wizardLabel-1))
-			input.SetCursor(input.Position())
-			line += input.View()
+			line += inputView(input, c.width-lipgloss.Width(line))
 		}
 		c.hit(0, c.width, int(row), -1, -1)
 		c.mark(focused, line)
@@ -451,10 +449,7 @@ func (m model) modelsView(c *pageColumn, rows int) wizardSection {
 	}
 	c.add(sectionHead(benchTheme.Title.Render("选择模型 · "+name), count, c.width))
 	c.add("")
-	filter := w.filter
-	filter.SetWidth(max(1, c.width-4))
-	filter.SetCursor(filter.Position())
-	c.mark(true, filter.View())
+	c.mark(true, inputView(w.filter, c.width-2))
 	c.add("")
 	switch {
 	case w.listing:

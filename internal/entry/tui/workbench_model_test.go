@@ -124,8 +124,7 @@ func TestModelPanelEscapeErrorsAndMouse(t *testing.T) {
 	}
 	m, _ = submit(t, m, "/model")
 	l := m.benchLayout()
-	start := max(l.bodyY+benchTabRows, l.bodyY+benchTabRows+l.contentRows-modelPanelRows)
-	updated, _ := m.Update(tea.MouseClickMsg{X: l.mainX + 2, Y: start + 1 + int(panelThinking), Button: tea.MouseLeft})
+	updated, _ := m.Update(tea.MouseClickMsg{X: 5, Y: l.panel.Min.Y + 2 + int(panelThinking), Button: tea.MouseLeft})
 	m = updated.(model)
 	if m.bench.modelPanel == nil || m.bench.modelPanel.focus != panelThinking {
 		t.Fatalf("clicking a panel row must focus it: %+v", m.bench.modelPanel)

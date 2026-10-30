@@ -144,7 +144,8 @@ func newPremiseInput(width int) textarea.Model {
 		Text:        surface.Foreground(benchColors.Text),
 		Placeholder: surface.Foreground(benchColors.Faint),
 	}
-	input.SetStyles(textarea.Styles{Focused: style, Blurred: style, Cursor: textarea.CursorStyle{Color: benchColors.Text, Blink: true}})
+	input.SetStyles(textarea.Styles{Focused: style, Blurred: style})
+	input.SetVirtualCursor(false)
 	input.Focus()
 	return input
 }
@@ -530,9 +531,7 @@ func (m model) viewHomeSettings() string {
 	for i, field := range settingFields {
 		input := m.home.settings[i]
 		if i == m.home.settingStep {
-			input.SetWidth(max(1, width-4))
-			input.SetCursor(input.Position())
-			lines = append(lines, benchTheme.Accent.Bold(true).Render("▎ "+field.label), "  "+input.View(), "")
+			lines = append(lines, benchTheme.Accent.Bold(true).Render("▎ "+field.label), "  "+inputView(input, width-2), "")
 			continue
 		}
 		value := strings.TrimSpace(input.Value())
@@ -546,10 +545,7 @@ func (m model) viewHomeSettings() string {
 }
 
 func (m model) viewHomeImport() string {
-	input := m.home.importIn
-	input.SetWidth(max(1, m.entryWidth()-4))
-	input.SetCursor(input.Position())
-	lines := []string{benchTheme.Muted.Render("从导出的作品文件继续创作。"), "", input.View(), ""}
+	lines := []string{benchTheme.Muted.Render("从导出的作品文件继续创作。"), "", inputView(m.home.importIn, m.entryWidth()), ""}
 	if m.home.importing {
 		lines = append(lines, benchTheme.Accent.Render("正在导入…"))
 	}

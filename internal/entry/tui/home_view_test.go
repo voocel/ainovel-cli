@@ -303,3 +303,18 @@ func TestHomeLongStoryInputKeepsCursorEndVisible(t *testing.T) {
 		t.Fatal("input did not scroll to the cursor")
 	}
 }
+
+// 首页故事输入是多行输入框：真实光标落在已输入文字之后（中文按两列算）。
+func TestHomePremiseCursorFollowsCaret(t *testing.T) {
+	m := homeFixture(t, 150, 40, 0)
+	m = typeText(t, m, "雨夜来信")
+	view := m.View()
+	if view.Cursor == nil {
+		t.Fatal("the story input must place the terminal cursor")
+	}
+	row := strings.Split(ansi.Strip(view.Content), "\n")[view.Cursor.Y]
+	prefix, _, ok := strings.Cut(row, "雨夜来信")
+	if !ok || view.Cursor.X != lipgloss.Width(prefix+"雨夜来信") {
+		t.Fatalf("cursor %+v must sit right after the typed text on %q", view.Cursor, row)
+	}
+}

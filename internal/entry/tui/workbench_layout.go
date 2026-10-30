@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"strconv"
 	"strings"
 
@@ -12,7 +13,8 @@ import (
 )
 
 // 双栏创作台：左栏目录，右栏「正文 / 活动」视图 + 常驻创作现场 + 决定卡；底栏输入。
-// 几何只由终端尺寸、当前视图与是否有决定卡决定；渲染与鼠标命中共用同一份。
+// 命令面板与模型面板是浮在输入行上方的方框，不改变其他区域。几何只由终端尺寸、当前视图、
+// 是否有决定卡与输入面板决定；渲染与鼠标命中共用同一份。
 const (
 	benchHeaderRows   = 2   // 标题/状态 + 进度分隔线
 	benchFooterRows   = 3   // 分隔线（含反馈）+ 输入 + 提示
@@ -38,6 +40,8 @@ type benchLayout struct {
 	outlineY, outlineRows              int // 目录可见行起点与行数（标题行与截断指示行之外）
 	tabsY, contentY, contentRows       int
 	sceneY, cardY                      int // -1 表示该区本帧不存在
+
+	panel image.Rectangle // 输入面板方框（空表示本帧没有）
 }
 
 func (m model) benchLayout() benchLayout {
@@ -57,6 +61,11 @@ func (m model) benchLayout() benchLayout {
 	l.bodyY = benchHeaderRows
 	l.bodyHeight = l.height - benchHeaderRows - benchFooterRows
 	l.footerY = l.bodyY + l.bodyHeight
+	if box := m.inputPanel(l.width); box != "" {
+		// 方框左缘对齐输入提示符，内容对齐输入的文字，底边压在底栏分隔线上方。
+		w, h := lipgloss.Size(box)
+		l.panel = image.Rect(1, l.footerY-h, 1+w, l.footerY)
+	}
 	l.outlineY = l.bodyY + 2
 	l.outlineRows = l.bodyHeight - 3 - directoryNoteRows
 	l.tabsY = l.bodyY
@@ -113,7 +122,15 @@ func (m model) viewBench() string {
 		lines = append(lines, line)
 	}
 	lines = append(lines, m.benchFooter(l)...)
-	return strings.Join(fitBlock(strings.Join(lines, "\n"), l.width, l.height), "\n")
+	rows := fitBlock(strings.Join(lines, "\n"), l.width, l.height)
+	if !l.panel.Empty() {
+		// 只把方框盖住的几行交给合成器按单元格叠放（宽字符跨方框边缘时由它处理）；合成会
+		// 重新编码整段并裁掉行尾空格，所以不经过底栏（插入点标记在那里），合成后再补满宽度。
+		covered := lipgloss.NewLayer(strings.Join(rows[l.panel.Min.Y:l.panel.Max.Y], "\n"))
+		box := lipgloss.NewLayer(m.inputPanel(l.width)).X(l.panel.Min.X).Z(1)
+		copy(rows[l.panel.Min.Y:], fitBlock(lipgloss.NewCompositor(covered, box).Render(), l.width, l.panel.Dy()))
+	}
+	return strings.Join(rows, "\n")
 }
 
 // benchHeader：品牌 / 作品名 …… 运行状态 · 入稿进度；第二行分隔线兼进度条。
@@ -171,7 +188,7 @@ func padMain(lines []string, l benchLayout, height int) []string {
 	return fitBlock(strings.Join(lines, "\n"), l.mainWidth, height)
 }
 
-// mainColumn 自上而下：标签、内容、创作现场、决定卡；命令浮层或模型面板覆盖内容区底部。
+// mainColumn 自上而下：标签、内容、创作现场、决定卡。
 func (m model) mainColumn(l benchLayout) []string {
 	lines := m.tabRows(l)
 	lines = append(lines, m.contentLines(l)...)
@@ -184,15 +201,6 @@ func (m model) mainColumn(l benchLayout) []string {
 			card = m.changeCard
 		}
 		lines = append(lines, padMain(card(l.inner), l, benchCardRows)...)
-	}
-	overlay := m.commandOverlay(l.inner)
-	if m.bench.modelPanel != nil {
-		overlay = m.modelPanelLines(l.inner)
-	}
-	if len(overlay) > 0 {
-		end := benchTabRows + l.contentRows
-		start := max(benchTabRows, end-len(overlay))
-		copy(lines[start:end], padMain(overlay[len(overlay)-(end-start):], l, end-start))
 	}
 	return fitBlock(strings.Join(lines, "\n"), l.mainWidth, l.bodyHeight)
 }
@@ -292,14 +300,35 @@ func (m model) decisionCard(width int) []string {
 	}
 }
 
-// commandOverlay 输入以 / 开头时的命令面板：按前缀过滤；无匹配时说明回车会按章号或标题跳转。
-func (m model) commandOverlay(width int) []string {
+// inputPanel 浮在输入行上方的方框：/model 面板打开时是它，否则输入以 / 开头时是命令面板；
+// 都没有时为空。首行是标题，宽度随内容，不超过整屏。
+func (m model) inputPanel(width int) string {
+	title, rows := m.commandPalette()
+	if m.bench.modelPanel != nil {
+		title, rows = m.modelPanelRows()
+	}
+	if title == "" {
+		return ""
+	}
+	room := width - 6 // 方框左缘起点、两侧边框与留白
+	lines := []string{benchTheme.Muted.Render(fitLine(title, room))}
+	for _, row := range rows {
+		lines = append(lines, fitLine(row, room))
+	}
+	return panelBox.Render(strings.Join(lines, "\n"))
+}
+
+var panelBox = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(benchColors.Border).Padding(0, 1).MarginRight(1)
+
+// commandPalette 输入以 / 开头时的命令面板：按前缀过滤；无匹配时说明回车会按章号或标题跳转。
+func (m model) commandPalette() (string, []string) {
 	text := m.bench.input.Value()
 	if !strings.HasPrefix(text, "/") {
-		return nil
+		return "", nil
 	}
 	name, _, _ := strings.Cut(text[1:], " ")
-	lines := []string{sectionTitle(benchTheme.Muted.Render("命令 · 回车执行，支持唯一前缀"), width)}
+	const title = "命令 · 回车执行，支持唯一前缀"
+	var lines []string
 	var matches []benchCommand
 	for _, command := range benchCommands {
 		if command.quiet && name == "" {
@@ -311,9 +340,9 @@ func (m model) commandOverlay(width int) []string {
 	}
 	if len(matches) == 0 {
 		if _, err := strconv.Atoi(name); err == nil {
-			return append(lines, "回车跳到第 "+name+" 章")
+			return title, []string{"回车跳到第 " + name + " 章"}
 		}
-		return append(lines, "回车搜索标题「"+name+"」")
+		return title, []string{"回车搜索标题「" + name + "」"}
 	}
 	const shown = 7
 	for i, command := range matches {
@@ -328,7 +357,7 @@ func (m model) commandOverlay(width int) []string {
 		pad := strings.Repeat(" ", max(1, 20-lipgloss.Width(usage)))
 		lines = append(lines, usage+pad+command.label)
 	}
-	return lines
+	return title, lines
 }
 
 // benchFooter：分隔线（反馈嵌在线里）、输入框、主要操作与提示 + 模型用量。
@@ -336,13 +365,7 @@ func (m model) benchFooter(l benchLayout) []string {
 	b := m.bench
 	inner := l.width - 2
 	input := b.input
-	input.SetWidth(max(1, inner-5))
 	input.Placeholder = m.inputPlaceholder()
-	if input.Value() != "" {
-		// textinput 用正文样式涂满整个宽度；灰底只跟着文字走。
-		input.SetWidth(min(input.Width(), max(1, lipgloss.Width(input.Value()))))
-		input.SetCursor(input.Position())
-	}
 	feedback := ""
 	switch {
 	case b.err != "":
@@ -353,7 +376,7 @@ func (m model) benchFooter(l benchLayout) []string {
 	hints := m.keyHint(m.actionHints())
 	return []string{
 		feedbackRule(feedback, l.width),
-		" " + input.View(),
+		" " + inputView(input, inner-2),
 		" " + alignRight(hints, m.usageLabel(l, inner-lipgloss.Width(hints)-2), inner),
 	}
 }

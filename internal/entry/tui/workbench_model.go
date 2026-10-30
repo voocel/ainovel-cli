@@ -35,9 +35,8 @@ func (m model) bindingLabel() string {
 }
 
 // 模型面板（老版本 /model 的形态）：角色 / 连接 / 模型 / 思考强度四行，←→ 切选项、
-// Tab/↑↓ 换行、Enter 应用、Esc 取消。覆盖在内容区底部，与命令浮层同一位置。
+// Tab/↑↓ 换行、Enter 应用、Esc 取消。浮在输入行上方，与命令面板同一个方框。
 const (
-	modelPanelRows = 6 // 标题线、四个字段、提示或错误
 	// levelInherit 是角色专用的档位：不设自己的强度，跟随默认绑定。
 	levelInherit = "inherit"
 	// followDefault 是角色专用的连接选项：清除覆盖，跟随默认绑定。
@@ -238,10 +237,10 @@ func (m model) applyModelPanel(p *modelPanel) model {
 	return m
 }
 
-// modelPanelLines 渲染面板：标题线、四个字段（聚焦行用 ‹ › 标出）、提示或错误。
-func (m model) modelPanelLines(width int) []string {
+// modelPanelRows 面板的标题与各行：四个字段（聚焦行用 ‹ › 标出）、提示或错误。
+func (m model) modelPanelRows() (string, []string) {
 	p := m.bench.modelPanel
-	lines := []string{sectionTitle(benchTheme.Muted.Render("模型 · ←→ 切换 · Tab 换行 · Enter 应用 · Esc 取消"), width)}
+	var lines []string
 	values := [panelFieldCount]string{roleNames[p.role()], p.connection(), p.model(), thinkingLabel(p.level())}
 	if p.role() != "" && p.connection() == followDefault {
 		values[panelConnection], values[panelModel] = "跟随默认", "跟随默认"
@@ -257,23 +256,21 @@ func (m model) modelPanelLines(width int) []string {
 			name = benchTheme.Accent.Render(label)
 			value = benchTheme.Selected.Render("‹ " + values[field] + " ›")
 		}
-		lines = append(lines, fitLine(name+value, width))
+		lines = append(lines, name+value)
 	}
-	hint := benchTheme.Muted.Render(fitLine("切换只影响之后开始的任务；正在写的这一步用原来的模型", width))
+	hint := benchTheme.Muted.Render("切换只影响之后开始的任务；正在写的这一步用原来的模型")
 	if p.message != "" {
-		hint = benchTheme.Error.Render(fitLine("! "+p.message, width))
+		hint = benchTheme.Error.Render("! " + p.message)
 	}
-	return append(lines, hint)
+	return "模型 · ←→ 切换 · Tab 换行 · Enter 应用 · Esc 取消", append(lines, hint)
 }
 
-// modelPanelFieldAt 把整屏坐标映射到面板字段行（鼠标点行聚焦）。
-func (m model) modelPanelFieldAt(l benchLayout, x, y int) (modelPanelField, bool) {
-	if m.bench.modelPanel == nil || x < l.mainX || l.inRail(x) {
+// modelPanelFieldAt 把方框内的行映射到面板字段（鼠标点行聚焦）；上边框之下首行是标题。
+func (m model) modelPanelFieldAt(l benchLayout, y int) (modelPanelField, bool) {
+	if m.bench.modelPanel == nil {
 		return 0, false
 	}
-	end := l.bodyY + benchTabRows + l.contentRows
-	start := max(l.bodyY+benchTabRows, end-modelPanelRows)
-	field := y - start - 1
+	field := y - l.panel.Min.Y - 2
 	if field < 0 || field >= int(panelFieldCount) {
 		return 0, false
 	}
