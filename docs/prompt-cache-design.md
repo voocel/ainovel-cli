@@ -404,13 +404,22 @@ broke := prevPrefix > 0 && prefix >= prevPrefix &&
    "system 提示词 token 数按 128 向下取整"，说明只有 system 段命中、消息段全 miss。
 4. **收益核算**：读价 0.1x、写价 1.25x，意味着一条缓存只要被读 1 次就回本。
    多轮 agent 会话里断点几乎总是正收益，所以 `CacheLastMessage` 不设开关、默认开。
+   **例外（Responses 端点）**：litellm v1.8.11 的 Responses 适配器只允许断点落在
+   `input_text` 上；agentcore 的滚动尖端会贴到最后一条非 system 消息，工具循环里
+   就是 tool_result（`function_call_output`），本地校验直接拒绝、请求发不出去
+   （`cache breakpoints are not supported on tool result blocks`）。因此
+   `internal/agents/build.go` 的 `explicitCacheControl` 对 `api: "responses"` 的
+   provider 关闭 `CacheLastMessage`，只保留 `prompt_cache_key` 路由亲和；Anthropic
+   与 chat 端点不受影响。
 
 ---
 
 ## 11. 接入指南速查
 
 **ainovel-cli**（已内置）：每个 agent 配 `CacheLastMessage: "ephemeral"` +
-`PromptCacheKey: promptCacheBase(bookDir) + "-<role>"`，其余全自动。
+`PromptCacheKey: promptCacheBase(bookDir) + "-<role>"`，其余全自动。provider 声明
+`api: "responses"` 时断点自动关闭（litellm v1.8.11 的 Responses 适配器不接受
+tool_result 上的断点，见 §10.4），`prompt_cache_key` 照旧。
 
 **codebot**（已内置）：key = SessionID；`Reset`/`SwitchSession` 时
 `agent.SetPromptCacheKey(newSessionID)`；teammate 用 `sessionID + "-" + name`。
