@@ -731,7 +731,7 @@ output/{novel_name}/
 
 ## 技术栈
 
-- **Go 1.25** — 主语言
+- **Go 1.26** — 主语言（依赖 agentcore v1.8.8 / litellm v1.9.6 要求）
 - **[agentcore](https://github.com/voocel/agentcore)** — 极简 Agent 内核（tool-calling + streaming）
 - **[litellm](https://github.com/voocel/litellm)** — 统一 LLM 接口适配
 - **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** — 终端 TUI 框架
