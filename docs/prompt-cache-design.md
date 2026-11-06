@@ -372,6 +372,44 @@ opt-in：
 > 为什么按端点而不是按模型判定？同一个 provider 键下多个模型共享一个 client，
 > 可信度是端点属性；运行时 `/model` 切换可能换端点，判定必须跟着端点走。
 
+### 7.3 厂商能力差异：断点只在有落点的适配器上出门
+
+§6 的断点编排是**请求侧意图**；断点能否真的写进请求体，取决于适配器有没有对应的
+协议落点。litellm v1.9.6 里有落点的只有这几类：
+
+| 适配器 | 断点落点（请求体字段） |
+|---|---|
+| `openai`（`api: "chat"` 与 `api: "responses"` 两侧都有） | 内容块上的 `prompt_cache_breakpoint: {"mode":"explicit"}` |
+| `anthropic` | 内容块上的 `cache_control` |
+| `bedrock` | 内容块上的 `cachePoint` |
+| `openrouter` | 内容块上的 `cache_control: {"type":"ephemeral"}` |
+
+其余内置兼容适配器（`deepseek` / `qwen` / `glm` / `mimo` / `minimax` / `compat` /
+`grok` / `ollama`）都走 `openaicompat`，而它们的 `Spec.Cache` 是 `nil`：
+
+```go
+// litellm v1.9.6 provider/internal/openaicompat/request.go
+func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) map[string]any {
+	if cache != nil {
+		maps.Copy(part, p.spec.Cache) // Spec.Cache 为 nil → 空操作
+	}
+	return part
+}
+```
+
+于是 `workerCache()`、system 地板断点、agentcore 的滚动尖端与回看断点在这些端点上
+**全部被静默丢弃**：不报错、不打 warning、也不降级提示。实测（2026-11，本地 stub
+端点逐厂商断言请求体）：`openai` 收到 `prompt_cache_breakpoint`、`openrouter` 收到
+`cache_control`，而上述八个兼容厂商的请求体里既没有 `prompt_cache_breakpoint` 也没有
+`cache_control`。两个直接推论：
+
+- **别用"没报错"判断断点生效**。这些端点上缓存能否命中，只取决于厂商自己的服务端
+  隐式前缀缓存；客户端唯一还能做的是 §4 的前缀字节稳定。路由键也基本帮不上——
+  `prompt_cache_key` 的发送按 §7.2 只对 `type: "openai"` 端点开放。
+- **换适配器 = 换缓存语义**。把 `type` 从 `openai` 换成 `deepseek` 后，`Cache` 配置
+  看起来没变，实际缓存收益可能归零；成本评估必须按适配器分别量，口径仍是 §8 的
+  逐请求 usage 序列。
+
 ---
 
 ## 8. 观测：缓存链断裂检测

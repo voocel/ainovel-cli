@@ -285,14 +285,14 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 
 ### 6.5 输出上限与推理预算
 
-**这是依赖版本契约，不是应用配置**：`go.mod` 要求 `agentcore v1.8.8` + `litellm v1.9.6` 起，客户端**一律不发送输出 token 上限**——`litellm.Request.MaxTokens` 保持 nil，生成长度与思考长度都交给 provider / 模型侧决定。
+**这是依赖版本契约，不是应用配置**：`go.mod` 要求 `agentcore v1.8.8` + `litellm v1.9.6` 起，客户端**不发送请求级输出 token 上限**——请求模板 `MaxTokens` 恒为 nil（`agentcore/llm` 的 `MaxTokens int` 与 `llmcontract` 的 output cap 选项都已移除），生成长度与思考长度交给 provider / 模型侧决定。
 
-- 旧链路把 `max_tokens` 当成必填的应用参数（`agentcore/llm` 的 `MaxTokens int`，`>0` 即写进请求），推理与正文共享同一预算时正文会被截断；该参数与 `llmcontract` 的 output cap 选项已一并移除。
-- **唯一例外是协议必填**：只有 litellm 能力声明 `MaxTokensRequired` 的适配器（Claude 协议：Anthropic，Bedrock 同族）需要 `max_tokens`，此时填模型注册表登记的物理上限；注册表未登记该模型时直接报错，绝不猜一个未经验证的值（`bootstrap.endpoint.protocolRequiredMaxTokens`）。
-- **推理预算只走 `litellm.Thinking`**（`effort` / `budget_tokens` / `disabled`），端点不支持则静默丢弃（`endpoint.shape`）；它与输出上限是两件事，不用调小输出上限来"省思考"。
+- **策略在装配层强制，不在调用点自律**：请求发出前 `bootstrap.endpoint.shape` 会**无条件覆盖** `req.MaxTokens`（`req.MaxTokens = maxTokens`，`maxTokens` 由端点计算）。因此调用方即便自己设了 `MaxTokens` 也会被抹掉——"不设上限"是 shape 的结果，不是"只要没人设就没人设"。
+- **唯一非 nil 的例外是协议必填**：只有 litellm 能力声明 `MaxTokensRequired` 的适配器需要 `max_tokens`（当前仅 `anthropic`）。取值顺序：`providers.<key>.models[].max_output_tokens` 显式声明 → 模型注册表登记的物理上限（先按原样模型名查，再去掉 `-YYYYMMDD` / `-YYYY-MM-DD` 发布日后缀重查）。注册表未命中且无显式声明时**直接报错（fail closed）**并提示可用该字段兜底，绝不猜一个未经验证的值（`bootstrap.endpoint.protocolRequiredMaxTokens`）。注意判据是 litellm 的 `Capabilities().MaxTokensRequired`：v1.9.6 里只有 `anthropic` 声明为 true，`bedrock` 的 `inferenceConfig.maxTokens` 是可选项、未声明该能力，因此本项目在 Bedrock 上不发上限，该字段在 Bedrock 上也不生效。其余协议（openai / 兼容厂商 / gemini 等）拿到 nil，即不发送。
+- **推理预算只走 `litellm.Thinking`**（`effort` / `budget_tokens` / `disabled`），`endpoint.shape` 再按端点能力裁剪：`Disabled` 不被接受时清空整个 `Thinking`；`Effort` 不被接受时同样把**整个 `Thinking` 置空**（静默丢弃，无 warning）。已知受害者是 `qwen` / `mimo`：其适配器拒绝 `Effort`，所以这两个厂商上 `reasoning_effort` 配了也可能不生效——请求体里 `reasoning_effort`、`enable_thinking`、`thinking` 一个都不会出现（连"显式开启思考"的字段也一起丢，只剩 provider 默认行为）。它与输出上限是两件事，不用调小输出上限来"省思考"。
 - `AnalyzeBudget.MaxOutputTokens` 之类只是导入管线的分批估算，不进请求。
 
-要限制输出，改 provider 或模型侧配置；应用层加 cap 属于偏离。
+要限制输出，改 provider 或模型侧配置；应用层加 cap 属于偏离。已知注册表未收录的 Claude 模型，用 `providers.<key>.models[].max_output_tokens` 显式声明物理上限（只对该协议生效，其余协议忽略该字段）。
 
 ### 6.6 提示词缓存
 
@@ -304,13 +304,19 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 2. **历史 append-only** — 消息只追加不改写；上下文压缩是"付一次全 miss 换窗口"的显式交易，压缩结果由框架一次性替换 history 后继续追加
 3. **动态内容进尾部** — 信封/指令全部尾部追加，永不回写早期消息
 
-**断点三来源**（显式缓存协议下不再按 provider 分叉）：
+**断点三来源**（请求侧不再按 provider 分叉；协议落点仍由适配器决定）：
 
 1. **system 首块地板** — `workerSystem` 给 system 块带 `litellm.CacheControl`，钉住 tools+system 这段最大静态前缀；
 2. **滚动尖端** — `Config.Cache` 让框架把断点打在最后一条消息上，本轮写入、下轮读取；
 3. **回看断点** — 框架同时在上一次请求写过的位置（最新 assistant 响应之前那条消息）再放一个断点，避免并行工具调用一次新增过多块时超出 provider 的回看窗口。
 
-身份仍是「一书一基、一角色一名」：OpenAI 系 `prompt_cache_key = nvl-<书哈希>-<角色>` 做路由亲和（只对确认透传的端点发送——官方 `api.openai.com` 或 `prompt_cache_params` 显式开启的中转）；每个 Worker 一条跨 run 累积的 history，因此一个角色在本进程内始终是同一条缓存血统。litellm ≥ v1.9.2 的 Responses 适配器已支持在 tool result 块上落断点，v1.9.6 起本项目对 Responses 端点的 gate 已删除，`Config.Cache` 对所有 provider 统一生效（历史原因见 `docs/prompt-cache-design.md` §10.4）。**闩锁红线**：一切进缓存键的量会话内首算即冻结，宁陈旧不破缓存。断裂检测（`host/usage.go noteCacheBreak`）纯观测不修复，计数进 `usage.json cache_breaks` 与 TUI 缓存面板。
+断点是否真的出门取决于适配器的协议落点：`openai` 写 `prompt_cache_breakpoint`，
+`anthropic`/`bedrock` 写 `cache_control`/`cachePoint`，`openrouter` 写 `cache_control`；
+而 `deepseek`/`qwen`/`glm`/`mimo`/`minimax`/`compat`/`grok`/`ollama` 在 litellm v1.9.6
+里 `Spec.Cache` 为 nil，断点被**静默丢弃**（无报错、无 warning）。厂商能力差异见
+`docs/prompt-cache-design.md` §7.3。
+
+身份仍是「一书一基、一角色一名」：OpenAI 系 `prompt_cache_key = nvl-<书哈希>-<角色>` 做路由亲和（只对确认透传的端点发送——官方 `api.openai.com` 或 `prompt_cache_params` 显式开启的中转）；每个 Worker 一条跨 run 累积的 history，因此一个角色在本进程内始终是同一条缓存血统。litellm ≥ v1.9.2 的 Responses 适配器已支持在 tool result 块上落断点，v1.9.6 起本项目对 Responses 端点的 gate 已删除，`Config.Cache` 对所有 provider 统一配置（能否真发出见上）；历史原因见 `docs/prompt-cache-design.md` §10.4。**闩锁红线**：一切进缓存键的量会话内首算即冻结，宁陈旧不破缓存。断裂检测（`host/usage.go noteCacheBreak`）纯观测不修复，计数进 `usage.json cache_breaks` 与 TUI 缓存面板。
 
 ---
 

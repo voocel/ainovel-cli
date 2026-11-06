@@ -323,7 +323,7 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 
 > ⚠️ `provider`（以及 `roles.*.provider`）的值是 `providers` 里的 **key 名**——一根指针，不是协议名。项目级若把 `provider` 切到一个全局 `providers` 里不存在的账号，必须在项目级同时补上该账号的凭证（`api_key` / `base_url`），否则启动会报“未配置凭证”。
 
-`providers.<name>.models` 为可选模型对象列表：`name` 是传给 Provider 的模型名，`context_window` 是模型专属的上下文压缩窗口，`json_schema` 是原生结构化输出的三态覆盖（`true` 确认支持、`false` 确认不支持、省略则采用适配器能力）。自定义中转或能力取决于具体模型时建议明确填写。旧版字符串数组仍可读取，下一次通过 `/config` 保存时会规范化为对象列表。如果未配置，系统会回退为配置中已经出现过的同 Provider 模型。
+`providers.<name>.models` 为可选模型对象列表：`name` 是传给 Provider 的模型名，`context_window` 是模型专属的上下文压缩窗口，`json_schema` 是原生结构化输出的三态覆盖（`true` 确认支持、`false` 确认不支持、省略则采用适配器能力），`max_output_tokens` 是该模型的物理输出上限（单次请求的 `max_tokens`），只在 provider 协议**强制要求**输出上限时生效（当前即 `anthropic`，其余协议如 `openai` / `compat` / 兼容厂商忽略该字段、不会发送 `max_tokens`）：显式值优先于模型注册表，未配置时回退注册表（先按原样模型名查，再去掉 `-YYYYMMDD` / `-YYYY-MM-DD` 发布日后缀重查），仍然查不到会直接报错并提示用这个字段兜底。自定义中转或能力取决于具体模型时建议明确填写。旧版字符串数组仍可读取，下一次通过 `/config` 保存时会规范化为对象列表。如果未配置，系统会回退为配置中已经出现过的同 Provider 模型。
 
 上下文窗口按“模型专属值 → 旧顶层 `context_window` → 模型注册表 → 200K 兜底”的顺序解析。它只影响本地上下文压缩时机，不改变远端 API 的真实请求限制。
 
@@ -331,7 +331,7 @@ docker compose run --rm ainovel --headless --prompt "写一本悬疑短篇"
 
 Provider 详情中的 API Key 与 Base URL 支持原位编辑，已有 Key 只显示首尾脱敏提示；“测试连接”会使用当前草稿和所选模型发送一个最小真实请求，可能产生少量 API 用量，但测试结果不会阻止保存或触发自动降级。任意 `extra`、`extra_body`、`stream_idle_timeout` 等高级配置仍在界面显示的实际配置文件中维护。
 
-`reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。推理强度按“意图 × 能力”生效：配置里存的是你选定的**原始意图**，实际下发时再按该角色**当前模型的能力**钳制——换到能力较低的模型只是当次生效值被钳低，存储的意图不变，切回强模型即自动恢复。TUI `/model` 面板切换 provider、model 或推理强度后，会写回当前生效的那份配置（与 `/config` 一致：项目级存在则写项目，否则写全局）。
+`reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。推理强度按“意图 × 能力”生效：配置里存的是你选定的**原始意图**，实际下发时再按该角色**当前模型的能力**钳制——换到能力较低的模型只是当次生效值被钳低，存储的意图不变，切回强模型即自动恢复。**但适配器完全不接受 `effort` 时是例外**：litellm v1.9.6 的 `qwen` / `mimo` 适配器拒绝该字段，端点裁剪会把整个思考参数清空——请求体里 `reasoning_effort`、`enable_thinking`、`thinking` 一个都不会出现，即“配置了也可能不生效”，而且不报错、不告警（本项目也不打印能力日志）。判断依据只能是适配器声明的能力（litellm `Capabilities().ThinkingEffort`，按 provider 静态给出）与实际请求体，不能靠“没报错”。TUI `/model` 面板切换 provider、model 或推理强度后，会写回当前生效的那份配置（与 `/config` 一致：项目级存在则写项目，否则写全局）。
 
 `providers.<name>.api` 仅对 `type: "openai"` 或内置 `openai` 生效，用于选择 OpenAI 协议 endpoint：`chat`（默认，`base_url + /chat/completions`）或 `responses`（`base_url + /responses`）。`base_url` 若已包含路径（如火山方舟的 `/api/v3`），该路径会原样保留；只填写域名时默认使用 OpenAI 的 `/v1`。Codex 类代理通常需要配置为 `responses`。
 
