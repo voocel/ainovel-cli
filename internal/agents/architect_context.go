@@ -1,7 +1,7 @@
 package agents
 
 import (
-	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 )
 
 const architectSummarySystemPrompt = `你是小说规划上下文摘要助手。请把 Architect 与协调器的旧对话压缩为可继续工作的规划检查点。
@@ -48,12 +48,10 @@ const architectTurnPrefixPrompt = `这是一个过长规划轮次的前半部分
 只摘要理解后半部分必需的信息：本轮任务、硬性约束、已确认事实、前半段规划决策、工具执行结果和未解决问题。明确区分已保存结果与未保存提议。`
 
 var architectContextProfile = roleContextProfile{
-	Agent:           "architect",
-	KeepRecentReads: 3,
-	Summary: corecontext.FullSummaryConfig{
-		SystemPrompt:        architectSummarySystemPrompt,
-		SummaryPrompt:       architectSummaryPrompt,
-		UpdateSummaryPrompt: architectUpdateSummaryPrompt,
-		TurnPrefixPrompt:    architectTurnPrefixPrompt,
+	Prompts: ctxpack.SummaryPrompts{
+		System:     architectSummarySystemPrompt,
+		Summary:    architectSummaryPrompt,
+		Update:     architectUpdateSummaryPrompt,
+		TurnPrefix: architectTurnPrefixPrompt,
 	},
 }

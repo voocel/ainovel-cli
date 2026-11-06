@@ -11,19 +11,22 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
 )
 
 // sessionRecord 是 meta/sessions/*.jsonl 单条记录的轻量解析形态——只取
 // 累计 usage 需要的字段。Content 等大字段跳过解析，节省启动期 IO。
 //
 // 模型归属三级降级：
-//  1. Usage.Provider/Model — agentcore/litellm 透传的真实响应模型（首选）
+//  1. Provider/Model       — agentcore.Message 上透传的真实响应模型（首选）
 //  2. Meta(_meta)          — 上游未透传时，写入侧由 ModelLookup 补的"当时生效"模型
 //  3. 都没有                — replay 退回 effectiveModel 用当前 ModelSet 反推（精度受损）
 type sessionRecord struct {
-	Role  agentcore.Role     `json:"role"`
-	Usage *agentcore.Usage   `json:"usage,omitempty"`
-	Meta  *sessionRecordMeta `json:"_meta,omitempty"`
+	Role     litellm.Role       `json:"role"`
+	Provider string             `json:"provider,omitempty"`
+	Model    string             `json:"model,omitempty"`
+	Usage    *agentcore.Usage   `json:"usage,omitempty"`
+	Meta     *sessionRecordMeta `json:"_meta,omitempty"`
 }
 
 type sessionRecordMeta struct {
@@ -115,10 +118,10 @@ func (t *UsageTracker) replayFile(path, agentName string) (int, error) {
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
-		if rec.Role != agentcore.RoleAssistant || rec.Usage == nil {
+		if rec.Role != litellm.RoleAssistant || rec.Usage == nil {
 			continue
 		}
-		provider, modelName := usageActualModel(rec.Usage)
+		provider, modelName := strings.TrimSpace(rec.Provider), strings.TrimSpace(rec.Model)
 		if rec.Meta != nil {
 			if provider == "" {
 				provider = rec.Meta.Provider

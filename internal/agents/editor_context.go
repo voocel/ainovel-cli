@@ -1,7 +1,7 @@
 package agents
 
 import (
-	corecontext "github.com/voocel/agentcore/context"
+	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 )
 
 const editorSummarySystemPrompt = `你是小说审阅上下文摘要助手。请把 Editor 与协调器的旧对话压缩为可继续审阅的检查点。
@@ -48,12 +48,10 @@ const editorTurnPrefixPrompt = `这是一个过长审阅轮次的前半部分，
 只摘要理解后半部分必需的信息：本轮任务与授权范围、已读章节及关键证据、当前发现、工具执行结果和待验证问题。不得把未读内容写成证据。`
 
 var editorContextProfile = roleContextProfile{
-	Agent:           "editor",
-	KeepRecentReads: 2,
-	Summary: corecontext.FullSummaryConfig{
-		SystemPrompt:        editorSummarySystemPrompt,
-		SummaryPrompt:       editorSummaryPrompt,
-		UpdateSummaryPrompt: editorUpdateSummaryPrompt,
-		TurnPrefixPrompt:    editorTurnPrefixPrompt,
+	Prompts: ctxpack.SummaryPrompts{
+		System:     editorSummarySystemPrompt,
+		Summary:    editorSummaryPrompt,
+		Update:     editorUpdateSummaryPrompt,
+		TurnPrefix: editorTurnPrefixPrompt,
 	},
 }

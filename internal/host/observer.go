@@ -1,6 +1,7 @@
 package host
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,9 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/progress"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // errorKind classifies a runtime error into a stable, short label for log
@@ -21,24 +24,58 @@ import (
 // the rendered string fallback used when the chain has been flattened
 // (e.g. inside sub-agent JSON results).
 func errorKind(err error, msg string) string {
-	if kind := agentcore.ErrorKind(err); kind != "" && kind != "unknown" {
+	if kind := chainErrorKind(err); kind != "" {
 		return kind
 	}
 	if msg == "" {
 		return ""
 	}
-	if kind := agentcore.ErrorKind(errors.New(msg)); kind != "unknown" {
-		return kind
+	if err != nil {
+		// 链上已经给不出类型，文本兜底时排除自身（避免重复分类同一串文本）。
+		if msg == err.Error() {
+			return ""
+		}
 	}
+	return textErrorKind(msg)
+}
+
+// chainErrorKind 从活的错误链上取类型：agentcore 的终止哨兵优先，其次交给
+// litellm 的 provider 错误类型。
+func chainErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, agentcore.ErrMaxTurns):
+		return "max_turns"
+	}
+	if typ := litellm.ErrorTypeOf(err); typ != "" {
+		return string(typ)
+	}
+	return textErrorKind(err.Error())
+}
+
+// textErrorKind 只在错误链被压平成字符串（子代理 JSON 结果）时才有信息可用。
+func textErrorKind(msg string) string {
 	lower := strings.ToLower(msg)
 	switch {
 	case strings.Contains(lower, "tool argument validation failed"):
 		return "tool_validation"
 	case strings.Contains(lower, "too many concurrent requests"):
 		return "overloaded"
+	case strings.Contains(lower, "stream idle timeout"):
+		return "stream_idle"
 	// providerError 会把 litellm 的结构化类型附在文本末尾。
 	// HTTP/2 INTERNAL_ERROR 本身没有可分类关键词，保留这个显式 network 标记即可。
 	case strings.Contains(lower, "[network,"):
+		return "network"
+	// 供应商把网络错误扁平化成纯文本时（v1.8.3 由 ClassifyProvider 兜底），
+	// 这些词仍应按 network 处理，否则瞬态故障会被当成语义失败计入僵局。
+	case strings.Contains(lower, "eof"),
+		strings.Contains(lower, "connection reset"),
+		strings.Contains(lower, "broken pipe"):
 		return "network"
 	}
 	return ""
@@ -76,6 +113,7 @@ type observer struct {
 	modelStarts         map[string]*activeCall     // agent → 进行中的模型响应
 	toolStarts          map[string]*activeCall     // agent → 进行中的 TOOL 调用
 	streamExtractors    map[string]*agentExtractor // agent → 当前工具调用 JSON 参数的内容抽取器
+	streamTools         map[string]map[int]string  // agent → 流式块 index → 工具名（ToolUseDelta 只带 index）
 	retryEvents         map[string]string          // retry scope → event ID，用同一行原地更新 (2/7)
 	streamHasContent    bool                       // 当前 streamRound 是否已输出过内容（判断是否需要段落分隔）
 	streamLastByte      byte                       // 最近一次流式输出的末字节（用于精确补齐换行）
@@ -111,17 +149,19 @@ func newObserver(s *storepkg.Store, emitEv func(Event), emitD func(string), emit
 		modelStarts:         make(map[string]*activeCall),
 		toolStarts:          make(map[string]*activeCall),
 		streamExtractors:    make(map[string]*agentExtractor),
+		streamTools:         make(map[string]map[int]string),
 		retryEvents:         make(map[string]string),
 	}
 }
 
 // ── Engine 直驱入口 ──
 //
-// Engine 直接运行 Worker，事件来源分为两条:
+// Engine 直接运行 Worker，事件来源分为三条:
 //  1. dispatchStart/dispatchFinish —— Engine 在派发边界直接调用(DISPATCH 行)
-//  2. workerProgress —— Worker 的进度中继(ctx ToolProgress)，
-//     由 handleToolUpdate 统一处理 TOOL/流式正文/thinking/retry/context
-//     (TOOL 行/流式正文/thinking/retry/context)。
+//  2. handleWorkerEvent —— Worker 运行事件的真实边界(模型响应/工具调用/重试)，
+//     由 AgentLoop 的 Emit 转发，负责 MODEL 行与流式正文/thinking/工具参数
+//  3. workerProgress —— 工具自己上报的进度(progress.Report)，由 handleToolUpdate
+//     统一处理 TOOL/流式正文/thinking/retry/context 行
 
 // dispatchStart 记录一次 Worker 派发开始并发 DISPATCH 行。
 func (o *observer) dispatchStart(agent, task, reason string) {
@@ -152,6 +192,7 @@ func (o *observer) dispatchFinish(agent string, runErr error) {
 		a.tool = ""
 	})
 	delete(o.lastThinkingByAgent, agent)
+	o.clearStreamTool(agent)
 	if call, ok := o.modelStarts[agent]; ok {
 		delete(o.modelStarts, agent)
 		o.emitCallFinish(call, "MODEL", agent, runErr)
@@ -168,10 +209,9 @@ func (o *observer) dispatchFinish(agent string, runErr error) {
 	o.streamClear()
 }
 
-// workerProgress 把 Worker 进度中继适配为既有的 ToolExecUpdate 处理。
-func (o *observer) workerProgress(p agentcore.ProgressPayload) {
-	payload := p
-	o.handleToolUpdate(agentcore.Event{Type: agentcore.EventToolExecUpdate, Progress: &payload})
+// workerProgress 把 Worker 的进度中继投影到 TOOL/流式正文/thinking/retry 行。
+func (o *observer) workerProgress(p progress.Event) {
+	o.handleToolUpdate(p)
 }
 
 func (o *observer) finalize() {

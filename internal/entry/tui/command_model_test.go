@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
@@ -13,7 +13,7 @@ type fakeModelRuntime struct {
 	curProvider string
 	curModel    string
 	thinking    map[string]string // role -> 存储的原始意图
-	available   []agentcore.ThinkingLevel
+	available   []bootstrap.ThinkingLevel
 	setCalls    []struct{ role, level string }
 	switchCalls int
 }
@@ -25,7 +25,7 @@ func (f *fakeModelRuntime) ConfiguredModelOptions(provider string) []host.Config
 func (f *fakeModelRuntime) CurrentModelSelection(role string) (string, string, bool) {
 	return f.curProvider, f.curModel, true
 }
-func (f *fakeModelRuntime) AvailableThinking(role string) []agentcore.ThinkingLevel {
+func (f *fakeModelRuntime) AvailableThinking(role string) []bootstrap.ThinkingLevel {
 	return f.available
 }
 func (f *fakeModelRuntime) CurrentThinking(role string) string { return f.thinking[role] }
@@ -75,7 +75,7 @@ func TestModelSwitchAppliesExplicitThinkingChange(t *testing.T) {
 		models:      map[string][]host.ConfiguredModel{"proxy": {{Name: "m"}}},
 		curProvider: "proxy", curModel: "m",
 		thinking:  map[string]string{"writer": ""},
-		available: []agentcore.ThinkingLevel{"low", "high"},
+		available: []bootstrap.ThinkingLevel{bootstrap.ThinkingLow, bootstrap.ThinkingHigh},
 	}
 	st := newModelSwitchState(rt, "writer")
 	st.focus = modelFocusThinking

@@ -2,13 +2,13 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
-	"encoding/json"
-	"github.com/voocel/agentcore"
-	"log/slog"
+	"github.com/voocel/ainovel-cli/internal/progress"
 )
 
 func retryPrefix(attempt, maxRetries int, delay time.Duration) string {
@@ -38,9 +38,9 @@ func formatRetryDelay(delay time.Duration) string {
 	return (time.Duration(seconds) * time.Second).String()
 }
 
-func (o *observer) handleThinkingProgress(ev agentcore.Event) {
-	agent := ev.Progress.Agent
-	thinking := ev.Progress.Thinking
+func (o *observer) handleThinkingProgress(ev progress.Event) {
+	agent := ev.Agent
+	thinking := ev.Thinking
 	if agent == "" || thinking == "" {
 		return
 	}
@@ -58,8 +58,8 @@ func (o *observer) handleThinkingProgress(ev agentcore.Event) {
 	o.emitStreamDelta(delta, true)
 }
 
-func (o *observer) handleContextProgress(ev agentcore.Event) {
-	if ev.Progress == nil || len(ev.Progress.Meta) == 0 {
+func (o *observer) handleContextProgress(ev progress.Event) {
+	if len(ev.Meta) == 0 {
 		return
 	}
 	var payload struct {
@@ -69,11 +69,11 @@ func (o *observer) handleContextProgress(ev agentcore.Event) {
 		Scope         string  `json:"scope"`
 		Strategy      string  `json:"strategy"`
 	}
-	if json.Unmarshal(ev.Progress.Meta, &payload) != nil {
+	if json.Unmarshal(ev.Meta, &payload) != nil {
 		return
 	}
 
-	agent := ev.Progress.Agent
+	agent := ev.Agent
 	if agent == "" {
 		return
 	}

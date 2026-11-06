@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
@@ -245,7 +244,7 @@ func validateDispatchAgainst(dispatch *DispatchOp, phase string) error {
 
 // DecideIntervention 干预分诊。失败语义:返回 error → 调用方显式回显
 // 真实失败原因,且不产生任何写入(宁可不动,不可误动)。
-func DecideIntervention(ctx context.Context, model agentcore.ChatModel, systemPrompt string, facts InterventionFacts, text string) (InterventionDecision, error) {
+func DecideIntervention(ctx context.Context, model llmcontract.Model, systemPrompt string, facts InterventionFacts, text string) (InterventionDecision, error) {
 	payload, err := marshalPayload(struct {
 		Intervention string            `json:"intervention"`
 		Facts        InterventionFacts `json:"facts"`

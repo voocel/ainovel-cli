@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/subagent"
+	"github.com/voocel/litellm"
+
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
@@ -25,9 +26,11 @@ import (
 	"github.com/voocel/ainovel-cli/internal/host/exp"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
 	"github.com/voocel/ainovel-cli/internal/host/sim"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	runtimelog "github.com/voocel/ainovel-cli/internal/logger"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
 	"github.com/voocel/ainovel-cli/internal/notify"
+	"github.com/voocel/ainovel-cli/internal/progress"
 	"github.com/voocel/ainovel-cli/internal/revision"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
@@ -205,7 +208,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 		models:          models,
 		thinkingApplier: applyThinking,
 		writerRestore:   restore,
-		userRules:       userrules.NewService(store, models.Default, rules.DefaultOptions()),
+		userRules:       userrules.NewService(store, models.ForRole("default"), rules.DefaultOptions()),
 		usage:           usage,
 		usageCancel:     usageCancel,
 		configPath:      bootstrap.EffectiveConfigPath(),
@@ -218,11 +221,15 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 	}
 	h.runCtx, h.runCancel = context.WithCancel(context.Background())
 	h.observer = newObserver(store, h.emitEvent, h.emitDelta, h.emitClear)
-	workers.SetEventObserver(func(meta subagent.RunMeta, ev agentcore.Event) {
-		h.observer.handleWorkerEvent(meta.Agent, ev)
+	workers.SetEventObserver(func(agent string, ev agentcore.Event) {
+		h.observer.handleWorkerEvent(agent, ev)
 	})
-	// 宿主侧 Arbiter 与 Worker 共用同一条 ToolProgress → observer → 工作台链路。
-	h.runCtx = agentcore.WithToolProgress(h.runCtx, h.observer.workerProgress)
+	// 宿主侧 Arbiter 与 Worker 共用同一条 WithProgress → observer → 工作台链路。
+	h.runCtx = agentcore.WithProgress(h.runCtx, func(p any) {
+		if ev, ok := p.(progress.Event); ok {
+			h.observer.workerProgress(ev)
+		}
+	})
 	if cfg.Notify.IsEnabled() {
 		h.notifier = notify.New(cfg.Notify.Command, cfg.Notify.Events)
 	}
@@ -277,7 +284,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 	h.engine = &engine{
 		store:           store,
 		workers:         workers,
-		arbiterModel:    newUsageTrackedModel(models.Default, "arbiter", usage.Record),
+		arbiterModel:    bootstrap.TrackUsage(models.ForRole("default"), h.usageRecorder("arbiter", "")),
 		failurePrompt:   bundle.Prompts.ArbiterFailure,
 		planStartPrompt: bundle.Prompts.ArbiterPlanStart,
 		style:           cfg.Style,
@@ -318,7 +325,7 @@ func (h *Host) PrepareUserRules(rawPrompt string) error {
 	// 超时落到既有 degraded 路径：宁可降级为 raw preferences 也不阻塞开书。
 	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
 	defer cancel()
-	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
+	svc := userrules.NewService(h.store, h.models.ForRole("default"), rules.DefaultOptions())
 	snap, err := runObservedStep(h.observer, "SYSTEM", "rules", "规则归一化",
 		func() (*rules.Snapshot, error) { return svc.Build(ctx, rawPrompt) })
 	if err != nil {
@@ -342,7 +349,7 @@ func (h *Host) ensureUserRules() {
 	// 同样必须可取消 + 有超时,否则恢复路径复现 issue #125 的静默卡死。
 	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
 	defer cancel()
-	svc := userrules.NewService(h.store, h.models.Default, rules.DefaultOptions())
+	svc := userrules.NewService(h.store, h.models.ForRole("default"), rules.DefaultOptions())
 	snap, err := svc.GetOrBuild(ctx)
 	if err != nil {
 		slog.Warn("用户规则快照读取/生成失败，运行时将退到内置默认", "module", "rules", "err", err)
@@ -768,8 +775,36 @@ func newInterventionFailureEvent(err error) Event {
 }
 
 // arbiterModel 返回带用量追踪的裁定模型(token/成本进预算与 usage 系统)。
-func (h *Host) arbiterModel() agentcore.ChatModel {
-	return newUsageTrackedModel(h.models.Default, "arbiter", h.usage.Record)
+func (h *Host) arbiterModel() llmcontract.Model {
+	return bootstrap.TrackUsage(h.models.ForRole("default"), h.usageRecorder("arbiter", ""))
+}
+
+// usageRecorder 把一次非流式调用的响应折算成 usage 台账的入参:
+// token/成本必须进预算与 usage 系统,否则预算上限对开销失明、UI 用量不准。
+// agentName 决定归属角色(UsageTracker 对未知角色按 Default 价目计费)。
+func (h *Host) usageRecorder(agentName, task string) func(*litellm.Response) {
+	return func(resp *litellm.Response) {
+		if resp == nil {
+			return
+		}
+		h.usage.Record(agentName, task, recordedMessage(resp))
+	}
+}
+
+// recordedMessage 把一次响应还原成 agent 消息形态,供 usage 台账读取用量与
+// provider/model 归属。上游不报 usage 时保留 nil:台账据此计"计费盲区",
+// 不能拿零值冒充真实的 0 token。
+func recordedMessage(resp *litellm.Response) agentcore.Message {
+	msg := agentcore.Message{
+		Role:     litellm.RoleAssistant,
+		Blocks:   resp.Blocks,
+		Provider: resp.Provider,
+		Model:    resp.Model,
+	}
+	if resp.Usage != (litellm.Usage{}) {
+		msg.Usage = &agentcore.Usage{Usage: resp.Usage}
+	}
+	return msg
 }
 
 // Continue 停机后用户在输入框输入时调用:干预裁定 + 确保引擎重新运行。
@@ -1459,7 +1494,7 @@ func (h *Host) CurrentThinking(role string) string {
 	return h.cfg.ResolveReasoningEffort(strings.ToLower(strings.TrimSpace(role)))
 }
 
-func (h *Host) AvailableThinking(role string) []agentcore.ThinkingLevel {
+func (h *Host) AvailableThinking(role string) []bootstrap.ThinkingLevel {
 	h.mu.Lock()
 	model := h.models.ForRole(strings.ToLower(strings.TrimSpace(role)))
 	h.mu.Unlock()
@@ -1469,7 +1504,7 @@ func (h *Host) AvailableThinking(role string) []agentcore.ThinkingLevel {
 // resolveThinkingForRoleLocked 计算某角色实际生效的推理强度：取其原始意图
 // （ResolveReasoningEffort：角色级 → 顶层默认），再按该角色当前模型的能力钳制。
 // 钳制只发生在这条“生效路径”上，不回写配置——存储始终保留用户的原始意图。
-func (h *Host) resolveThinkingForRoleLocked(role string) agentcore.ThinkingLevel {
+func (h *Host) resolveThinkingForRoleLocked(role string) bootstrap.ThinkingLevel {
 	parsed, _ := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(role))
 	resolved, _ := agents.ResolveThinkingForModel(h.models.ForRole(role), parsed)
 	return resolved
@@ -1689,7 +1724,7 @@ func (h *Host) SyncChapterRevisions(ctx context.Context) (*revision.Result, erro
 			"reason", ev.Reason, "from", fmt.Sprintf("%s/%s", ev.FromProvider, ev.FromModel),
 			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel), "err", ev.Err)
 	})
-	model = newUsageTrackedModel(model, "editor", h.usage.Record)
+	model = bootstrap.TrackUsage(model, h.usageRecorder("editor", ""))
 	service := revision.NewService(h.store, model, h.bundle.Prompts.RevisionAnalyze, h.styleStats)
 	return service.Sync(ctx)
 }
@@ -1766,26 +1801,28 @@ func (h *Host) importCaller(fn string) imp.Caller {
 			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel),
 			"err", ev.Err)
 	})
-	model = newUsageTrackedModel(model, role, h.usage.Record)
+	model = bootstrap.TrackUsage(model, h.usageRecorder(role, ""))
 	return imp.Caller{Model: model, Runtime: h.importModelRuntime(role, model)}
 }
 
 // importModelRuntime 探测所选档位角色模型的调用能力，供 imp 双预算 / thinking 自适应使用（RFC §13/§21）。
 // 探测失败的字段留零值，imp 侧回退保守默认，保证无能力信息也能正确运行。
 // 结构化输出由 imp 的 llmcontract 在每次请求前现读模型事实，不在 Runtime 重复缓存。
-func (h *Host) importModelRuntime(role string, model agentcore.ChatModel) imp.ModelRuntime {
+func (h *Host) importModelRuntime(role string, model llmcontract.Model) imp.ModelRuntime {
 	var rt imp.ModelRuntime
 	provider, name, _ := h.models.CurrentSelection(role)
 	if name == "" {
-		name = bootstrap.ModelName(model)
-		provider = bootstrap.ModelProvider(model)
+		name = model.ModelName
+		provider = model.Provider
 	}
 	// context 上限：被包装模型的 Info() 不含窗口，按配置与 registry 解析。
 	rt.ContextTokens, _ = h.cfg.ResolveContextWindow(provider, name)
 	// thinking：按角色 reasoning effort 与模型能力 resolve；不支持则不发（与 arbiter 同策略）。
+	// 强度档位在两个包各有自己的字符串类型（agents/bootstrap 一侧与 llmcontract 一侧），
+	// 在这一处边界显式换型，避免两个包互相依赖。
 	if level, err := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort(role)); err == nil {
 		if resolved, ok := agents.ResolveThinkingForModel(model, level); ok {
-			rt.Thinking = resolved
+			rt.Thinking = llmcontract.ThinkingLevel(resolved)
 		}
 	}
 	return rt

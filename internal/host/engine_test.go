@@ -10,6 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,17 +24,166 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/subagent"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
+
+	"github.com/voocel/ainovel-cli/internal/agents"
+	"github.com/voocel/ainovel-cli/internal/agents/guard"
 	"github.com/voocel/ainovel-cli/internal/arbiter"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/flow"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
-// scriptedChatModel 按回调产出响应的最小 ChatModel。
-type scriptedChatModel struct {
-	fn func(msgs []agentcore.Message) agentcore.Message
+// scriptedProvider 是按请求内容产出应答的假 provider：回调看得到本次请求的
+// 全部消息，因此可以按"对话里已经回填了几个工具结果"编排脚本，复刻真实工具回路。
+type scriptedProvider struct {
+	mu    sync.Mutex
+	calls int
+	reply func(call int, req *litellm.Request) litellmtest.Reply
+}
+
+func newScriptedProvider(reply func(call int, req *litellm.Request) litellmtest.Reply) *scriptedProvider {
+	return &scriptedProvider{reply: reply}
+}
+
+func (p *scriptedProvider) Name() string { return "test" }
+
+func (p *scriptedProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	return litellmtest.New(p.next(req)).Chat(ctx, req)
+}
+
+func (p *scriptedProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
+	return litellmtest.New(p.next(req)).Stream(ctx, req)
+}
+
+func (p *scriptedProvider) next(req *litellm.Request) litellmtest.Reply {
+	p.mu.Lock()
+	p.calls++
+	n := p.calls
+	p.mu.Unlock()
+	return p.reply(n, req)
+}
+
+// testModel 把假 provider 包成 agentcore 模型句柄（无网络、无重试）。
+func testModel(t *testing.T, p litellm.Provider) agentcore.Model {
+	t.Helper()
+	client, err := litellm.New(p)
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return agentcore.Model{Client: client, Request: litellm.Request{Model: "test-model"}}
+}
+
+// testArbiterModel 在模型句柄外补上裁定模型需要的 provider/model 标识。
+func testArbiterModel(t *testing.T, p litellm.Provider) llmcontract.Model {
+	t.Helper()
+	return llmcontract.Model{
+		Core:      testModel(t, p),
+		Provider:  "test",
+		ModelName: "test-model",
+	}
+}
+
+// textReply 是"只回文本"的脚本应答。
+func textReply(text string) litellmtest.Reply { return litellmtest.Text(text) }
+
+// toolReply 是"调用一次工具"的脚本应答。
+func toolReply(name string, args any) litellmtest.Reply {
+	data, _ := json.Marshal(args)
+	return litellmtest.Respond(litellm.ToolUseBlock{ID: "tc-" + name, Name: name, Arguments: string(data)})
+}
+
+// toolResultCount 统计"本次 run"里已回填的工具结果数。
+// Worker 的 history 跨 Run 累积，因此只数最后一条 user 消息之后的结果：
+// 每个任务都是一次新的 plan → draft → check → commit 序列。
+func toolResultCount(req *litellm.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		if m.Role == litellm.RoleUser {
+			n = 0
+			continue
+		}
+		for _, block := range m.Blocks {
+			if _, ok := block.(litellm.ToolResultBlock); ok {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// lastMessageIsToolResult 报告请求末尾是否是工具结果（即同一次 run 的工具刚刚回填）。
+func lastMessageIsToolResult(req *litellm.Request) bool {
+	if len(req.Messages) == 0 {
+		return false
+	}
+	return req.Messages[len(req.Messages)-1].Role == litellm.RoleTool
+}
+
+// newTestWorker 组装一个测试 Worker：脚本化模型 + 真实工具 + 轮数上限。
+// stopAfter 命中的工具调用以 Result.Terminate 收尾（v1.8.8 用它表达旧的
+// subagent.StopAfterTools），run 因此在该轮结束而不必再问模型。
+func newTestWorker(t *testing.T, p litellm.Provider, ts []agentcore.Tool, maxTurns int, stopAfter ...string) agentcore.Config {
+	t.Helper()
+	if len(stopAfter) > 0 {
+		ts = terminateAfter(ts, stopAfter...)
+	}
+	return agentcore.Config{
+		Model:    testModel(t, p),
+		System:   []litellm.Block{litellm.Text("test")},
+		Tools:    ts,
+		MaxTurns: maxTurns,
+	}
+}
+
+// terminateAfter 复刻 agents.build.go 的 terminateOn：命中这些工具后 run 走 OnStop 收尾。
+func terminateAfter(ts []agentcore.Tool, names ...string) []agentcore.Tool {
+	stop := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		stop[n] = struct{}{}
+	}
+	out := make([]agentcore.Tool, len(ts))
+	for i, t := range ts {
+		inner := t
+		run := t.Run
+		name := t.Name
+		if run != nil {
+			inner.Run = func(ctx context.Context, args json.RawMessage) (agentcore.Result, error) {
+				res, err := run(ctx, args)
+				if err == nil {
+					if _, ok := stop[name]; ok {
+						res.Terminate = true
+					}
+				}
+				return res, err
+			}
+		}
+		out[i] = inner
+	}
+	return out
+}
+
+// newTestWorkers 用命名配置组装 WorkerSet（顺序按名字排序，保证确定性）。
+func newTestWorkers(t *testing.T, cfgs map[string]agentcore.Config) *agents.WorkerSet {
+	t.Helper()
+	return agents.NewWorkerSet(cfgs, slices.Sorted(maps.Keys(cfgs)))
+}
+
+// writerTools 是"写一章"所需的真实工具组合（经适配器转成框架工具）。
+func writerTools(st *storepkg.Store) []agentcore.Tool {
+	return tools.ToAgentcoreAll([]tools.Tool{
+		tools.NewPlanChapterTool(st), tools.NewDraftChapterTool(st),
+		tools.NewCheckConsistencyTool(st), tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
+	})
+}
+
+// newTestWriter 是走完整 plan → draft → check → commit 的测试 Writer。
+func newTestWriter(t *testing.T, st *storepkg.Store) agentcore.Config {
+	t.Helper()
+	return newTestWorker(t, scriptedWriterProvider(), writerTools(st), 10, "commit_chapter")
 }
 
 func TestFailureFactsKeepPartialStateAndWarnings(t *testing.T) {
@@ -66,22 +217,22 @@ func TestIsNonSemanticWorkerFailure(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
-		{name: "context overflow", err: agentcore.ErrContextOverflow, want: true},
-		{name: "partial stream", err: agentcore.ErrStreamPartial, want: true},
-		{name: "stream idle", err: agentcore.ErrProviderStreamIdle, want: true},
-		{name: "quota", err: agentcore.ErrProviderQuota, want: true},
-		{name: "rate limit", err: agentcore.ErrProviderRateLimit, want: true},
-		{name: "timeout", err: agentcore.ErrProviderTimeout, want: true},
-		{name: "auth", err: agentcore.ErrProviderAuth, want: true},
-		{name: "network wrapped", err: fmt.Errorf("provider: %w", agentcore.ErrProviderNetwork), want: true},
-		{name: "raw EOF", err: fmt.Errorf("upstream closed: EOF"), want: true},
-		{name: "overloaded", err: agentcore.ErrProviderOverloaded, want: true},
+		{name: "context overflow", err: providerErr(litellm.ErrorTypeContextOverflow, "context length exceeded"), want: true},
+		{name: "partial stream", err: providerErrCause(litellm.ErrorTypeNetwork, "stream ended before done", io.ErrUnexpectedEOF), want: true},
+		{name: "stream idle", err: providerErr(litellm.ErrorTypeNetwork, "stream idle timeout"), want: true},
+		{name: "quota", err: providerErr(litellm.ErrorTypeQuota, "quota exceeded"), want: true},
+		{name: "rate limit", err: providerErr(litellm.ErrorTypeRateLimit, "rate limited"), want: true},
+		{name: "timeout", err: providerErr(litellm.ErrorTypeTimeout, "request timeout"), want: true},
+		{name: "auth", err: providerErr(litellm.ErrorTypeAuth, "invalid api key"), want: true},
+		{name: "network wrapped", err: fmt.Errorf("provider: %w", providerErr(litellm.ErrorTypeNetwork, "connection reset")), want: true},
+		{name: "provider EOF", err: networkErr(), want: true},
+		{name: "overloaded", err: providerErr(litellm.ErrorTypeOverloaded, "service overloaded"), want: true},
 		{name: "flattened overloaded", err: fmt.Errorf("bad_response_status_code: Too many concurrent requests [provider, HTTP 500, openai]"), want: true},
-		{name: "content filter", err: agentcore.ErrProviderContentFilter, want: false},
+		{name: "content filter", err: providerErr(litellm.ErrorTypeContentFilter, "content filtered"), want: false},
 		{name: "max turns", err: agentcore.ErrMaxTurns, want: false},
-		{name: "stop guard", err: agentcore.ErrStopGuard, want: false},
+		{name: "stop guard", err: guard.ErrStopGuardEscalated, want: false},
 		{name: "canceled", err: context.Canceled, want: false},
-		{name: "tool validation", err: agentcore.ErrToolValidation, want: false},
+		{name: "tool validation", err: fmt.Errorf("tool argument validation failed: chapter"), want: false},
 		{name: "unknown", err: fmt.Errorf("unknown failure"), want: false},
 	}
 	for _, tt := range tests {
@@ -109,121 +260,123 @@ func TestInterventionDispatchTaskPreservesOriginalAuthority(t *testing.T) {
 	}
 }
 
-func (m *scriptedChatModel) Generate(_ context.Context, msgs []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	return &agentcore.LLMResponse{Message: m.fn(msgs)}, nil
-}
-
-func (m *scriptedChatModel) GenerateStream(ctx context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	resp, _ := m.Generate(ctx, msgs, tools, opts...)
-	ch := make(chan agentcore.StreamEvent, 1)
-	ch <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: resp.Message, StopReason: resp.Message.StopReason}
-	close(ch)
-	return ch, nil
-}
-
-func (m *scriptedChatModel) SupportsTools() bool { return true }
-
-// editThenCancelModel 复现 #84：每次 Worker 都成功产生一个内容不同的
+// editThenCancelProvider 复现 #84：每次 Worker 都成功产生一个内容不同的
 // edit checkpoint，随后在同一 run 内返回 context canceled，始终没有 commit。
-type editThenCancelModel struct {
+type editThenCancelProvider struct {
 	edits atomic.Int32
 }
 
-func (m *editThenCancelModel) Generate(_ context.Context, msgs []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	if len(msgs) > 0 && msgs[len(msgs)-1].Role == agentcore.RoleTool {
-		return nil, context.Canceled
+func newEditThenCancelProvider() *editThenCancelProvider {
+	return &editThenCancelProvider{}
+}
+
+func (p *editThenCancelProvider) Name() string { return "test" }
+
+func (p *editThenCancelProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	return litellmtest.New(p.reply(req)).Chat(ctx, req)
+}
+
+func (p *editThenCancelProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
+	return litellmtest.New(p.reply(req)).Stream(ctx, req)
+}
+
+func (p *editThenCancelProvider) reply(req *litellm.Request) litellmtest.Reply {
+	if lastMessageIsToolResult(req) {
+		return litellmtest.Fail(context.Canceled)
 	}
-	n := int(m.edits.Add(1))
-	return &agentcore.LLMResponse{Message: testToolCallMsg("edit_chapter", map[string]any{
+	n := int(p.edits.Add(1))
+	return toolReply("edit_chapter", map[string]any{
 		"chapter":    1,
 		"old_string": fmt.Sprintf("版本%d", n-1),
 		"new_string": fmt.Sprintf("版本%d", n),
-	})}, nil
+	})
 }
 
-func (m *editThenCancelModel) GenerateStream(ctx context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	resp, err := m.Generate(ctx, msgs, tools, opts...)
-	if err != nil {
-		return nil, err
-	}
-	ch := make(chan agentcore.StreamEvent, 1)
-	ch <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: resp.Message, StopReason: resp.Message.StopReason}
-	close(ch)
-	return ch, nil
+// networkProvider 模拟 Worker 在任何模型输出前即遭遇瞬态网络故障：
+// 每次调用都以同一个网络错误失败（litellmtest.Provider 的脚本只有一条回复，
+// 用它会从第二次调用起变成 internal 错误，把失败错误地升级为语义失败）。
+// agentcore.Config.Retry 为零值时每次 Run 恰好对应一次调用，便于验证 Engine 重试计数。
+type networkProvider struct {
+	mu    sync.Mutex
+	calls int
 }
 
-func (m *editThenCancelModel) SupportsTools() bool { return true }
+func newNetworkProvider() *networkProvider { return &networkProvider{} }
 
-// providerNetworkModel 模拟 Worker 在任何模型输出前即遭遇瞬态网络故障。
-// MaxRetries=0 时每次 subagent.Run 对应一次调用，便于验证 Engine 重试计数。
-type providerNetworkModel struct {
-	calls atomic.Int32
+func (p *networkProvider) Name() string { return "test" }
+
+func (p *networkProvider) Chat(context.Context, *litellm.Request) (*litellm.Response, error) {
+	p.count()
+	return nil, networkErr()
 }
 
-func (m *providerNetworkModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.calls.Add(1)
-	return nil, fmt.Errorf("test provider EOF: %w", agentcore.ErrProviderNetwork)
+func (p *networkProvider) Stream(context.Context, *litellm.Request) (litellm.Stream, error) {
+	p.count()
+	return nil, networkErr()
 }
 
-func (m *providerNetworkModel) GenerateStream(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	m.calls.Add(1)
-	return nil, fmt.Errorf("test provider EOF: %w", agentcore.ErrProviderNetwork)
+// Calls 返回已发生的失败调用数。
+func (p *networkProvider) Calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
-func (m *providerNetworkModel) SupportsTools() bool { return true }
-
-func testToolCallMsg(name string, args any) agentcore.Message {
-	data, _ := json.Marshal(args)
-	return agentcore.Message{
-		Role: agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.ToolCallBlock(agentcore.ToolCall{
-			ID: "tc-" + name, Name: name, Args: data,
-		})},
-		StopReason: agentcore.StopReasonToolUse,
-	}
+func (p *networkProvider) count() {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
 }
 
-func testTextMsg(text string) agentcore.Message {
-	return agentcore.Message{
-		Role:       agentcore.RoleAssistant,
-		Content:    []agentcore.ContentBlock{agentcore.TextBlock(text)},
-		StopReason: agentcore.StopReasonStop,
-	}
+// networkErr 是 provider 声明的网络失败（可被 ErrorTypeOf 分类）。
+func networkErr() error {
+	return litellm.NewError("test", litellm.ErrorTypeNetwork, "test provider EOF", nil)
+}
+
+// providerErr 构造带 litellm 结构化类型的 provider 错误。
+func providerErr(typ litellm.ErrorType, msg string) error {
+	return litellm.NewError("test", typ, msg, nil)
+}
+
+// providerErrCause 构造带底层原因（如 io.ErrUnexpectedEOF）的 provider 错误。
+func providerErrCause(typ litellm.ErrorType, msg string, cause error) error {
+	return litellm.NewError("test", typ, msg, cause)
 }
 
 var chapterRe = regexp.MustCompile(`写第 (\d+) 章`)
 
-// scriptedWriterModel 按对话内已有的 tool 结果数决定下一步,
+// scriptedWriterProvider 按对话内已有的工具结果数决定下一步,
 // 走完整 plan → draft → check → commit 序列(真实工具,真实落盘)。
-func scriptedWriterModel() *scriptedChatModel {
-	return &scriptedChatModel{fn: func(msgs []agentcore.Message) agentcore.Message {
+func scriptedWriterProvider() litellm.Provider {
+	return newScriptedProvider(func(_ int, req *litellm.Request) litellmtest.Reply {
 		chapter := 0
-		toolResults := 0
-		for _, m := range msgs {
-			if m.Role == agentcore.RoleUser {
-				if match := chapterRe.FindStringSubmatch(m.TextContent()); match != nil {
-					chapter, _ = strconv.Atoi(match[1])
+		for _, m := range req.Messages {
+			if m.Role != litellm.RoleUser {
+				continue
+			}
+			for _, block := range m.Blocks {
+				if text, ok := block.(litellm.TextBlock); ok {
+					if match := chapterRe.FindStringSubmatch(text.Text); match != nil {
+						chapter, _ = strconv.Atoi(match[1])
+					}
 				}
 			}
-			if m.Role == agentcore.RoleTool {
-				toolResults++
-			}
 		}
-		switch toolResults {
+		switch toolResultCount(req) {
 		case 0:
-			return testToolCallMsg("plan_chapter", map[string]any{
+			return toolReply("plan_chapter", map[string]any{
 				"chapter": chapter, "title": fmt.Sprintf("第%d章", chapter),
 				"goal": "推进主线", "conflict": "主角遇阻", "hook": "悬念收尾",
 			})
 		case 1:
-			return testToolCallMsg("draft_chapter", map[string]any{
+			return toolReply("draft_chapter", map[string]any{
 				"chapter": chapter, "mode": "write",
 				"content": strings.Repeat(fmt.Sprintf("第%d章的正文段落，主角在黑暗中摸索前行。", chapter), 20),
 			})
 		case 2:
-			return testToolCallMsg("check_consistency", map[string]any{"chapter": chapter})
+			return toolReply("check_consistency", map[string]any{"chapter": chapter})
 		default:
-			return testToolCallMsg("commit_chapter", map[string]any{
+			return toolReply("commit_chapter", map[string]any{
 				"chapter": chapter, "title": fmt.Sprintf("第%d章", chapter), "summary": fmt.Sprintf("第%d章摘要", chapter),
 				"characters": []string{"主角"}, "key_events": []string{"推进"},
 				"timeline_events": []any{}, "foreshadow_updates": []any{},
@@ -231,11 +384,11 @@ func scriptedWriterModel() *scriptedChatModel {
 				"hook_type": "crisis", "dominant_strand": "quest", "feedback": nil,
 			})
 		}
-	}}
+	})
 }
 
 // newTestEngine 组装带真实 store/observer 的引擎;返回引擎、事件采集与完成信号。
-func newTestEngine(t *testing.T, st *storepkg.Store, workers *subagent.Runner, arbiterModel agentcore.ChatModel) (*engine, *[]Event, chan struct{}) {
+func newTestEngine(t *testing.T, st *storepkg.Store, workers *agents.WorkerSet, arbiterModel llmcontract.Model) (*engine, *[]Event, chan struct{}) {
 	t.Helper()
 	if err := st.RunMeta.Init("default", "test", "test"); err != nil {
 		t.Fatalf("init run meta: %v", err)
@@ -248,6 +401,10 @@ func newTestEngine(t *testing.T, st *storepkg.Store, workers *subagent.Runner, a
 		*events = append(*events, ev)
 		mu.Unlock()
 	}, func(string) {}, func() {})
+	// 与 Host 一致：Worker 原始事件进 observer，MODEL/TOOL 行才有人投影。
+	workers.SetEventObserver(func(agent string, ev agentcore.Event) {
+		obs.handleWorkerEvent(agent, ev)
+	})
 	e := &engine{
 		store:           st,
 		workers:         workers,
@@ -310,15 +467,8 @@ func TestEngine_ReviewPermitWritesExactlyOneNewChapter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	writer := subagent.Config{
-		Name: "writer", Description: "test writer", Model: scriptedWriterModel(), SystemPrompt: "test",
-		Tools: []agentcore.Tool{
-			tools.NewPlanChapterTool(st), tools.NewDraftChapterTool(st),
-			tools.NewCheckConsistencyTool(st), tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
-		},
-		MaxTurns: 10, StopAfterTools: []string{"commit_chapter"},
-	}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), nil)
+	writer := newTestWriter(t, st)
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), llmcontract.Model{})
 	if err := st.RunMeta.SetAdvanceMode(domain.ChapterAdvanceReview); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +504,7 @@ func TestEngine_StalePairedDispatchDoesNotBypassHold(t *testing.T) {
 	if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
 		t.Fatal(err)
 	}
-	e, _, _ := newTestEngine(t, st, subagent.NewRunner(), nil)
+	e, _, _ := newTestEngine(t, st, newTestWorkers(t, nil), llmcontract.Model{})
 	e.pending = []controlOp{{
 		hold:     &arbiter.AdvanceHoldOp{After: domain.AdvanceHoldAtBoundary, Reason: "先停下"},
 		dispatch: &arbiter.DispatchOp{Agent: "editor", Task: "过期任务"},
@@ -395,20 +545,8 @@ func TestEngine_WritesBookToCompletion(t *testing.T) {
 		t.Fatalf("outline: %v", err)
 	}
 
-	writer := subagent.Config{
-		Name: "writer", Description: "test writer",
-		Model:        scriptedWriterModel(),
-		SystemPrompt: "test",
-		Tools: []agentcore.Tool{
-			tools.NewPlanChapterTool(st),
-			tools.NewDraftChapterTool(st),
-			tools.NewCheckConsistencyTool(st),
-			tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
-		},
-		MaxTurns:       10,
-		StopAfterTools: []string{"commit_chapter"},
-	}
-	e, events, done := newTestEngine(t, st, subagent.NewRunner(writer), nil)
+	writer := newTestWriter(t, st)
+	e, events, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), llmcontract.Model{})
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -461,23 +599,20 @@ func TestEngine_WorkerFailureConsultsArbiterAndAborts(t *testing.T) {
 	}
 
 	var runs atomic.Int32
-	// writer 每轮只回文字不落盘 → guard.NewWriterStopGuard 连续拦截后升级 → Execute 报错
-	idle := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg("我写完了(其实什么都没做)")
-	}}
-	writer := subagent.Config{
-		Name: "writer", Description: "idle writer",
-		Model: idle, SystemPrompt: "test", MaxTurns: 20,
-		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-			runs.Add(1)
-			return failNTimesGuard()
-		},
+	// writer 每轮只回文字不落盘 → StopGuard 连续拦截后升级 → run 报错
+	idle := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply("我写完了(其实什么都没做)")
+	})
+	writer := newTestWorker(t, idle, nil, 20)
+	writer.OnStop = func(context.Context, agentcore.StopInfo) ([]agentcore.Message, error) {
+		runs.Add(1)
+		return nil, fmt.Errorf("%w: writer 反复空转", guard.ErrStopGuardEscalated)
 	}
 	// Arbiter 裁定 abort
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"writer 反复空转,建议人工检查模型配置"}`)
-	}}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), arb)
+	arb := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply(`{"action":"abort","dispatch":null,"reason":"writer 反复空转,建议人工检查模型配置"}`)
+	})
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -534,7 +669,7 @@ func seedStuckRewrite(t *testing.T, st *storepkg.Store) {
 func TestEngine_DeadlockAbortDropsStuckRewrite(t *testing.T) {
 	st := storepkg.NewStore(t.TempDir())
 	seedStuckRewrite(t, st)
-	e, events, _ := newTestEngine(t, st, subagent.NewRunner(), nil)
+	e, events, _ := newTestEngine(t, st, newTestWorkers(t, nil), llmcontract.Model{})
 
 	inst := &flow.Instruction{Agent: "writer", Task: "重写第 2 章", Chapter: 2}
 	e.lastKey, e.repeats = instructionKey(inst), deadlockAbortAt-1
@@ -579,7 +714,7 @@ func TestEngine_DropStuckRewriteOnlyTouchesQueuedChapter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := storepkg.NewStore(t.TempDir())
 			seedStuckRewrite(t, st)
-			e, _, _ := newTestEngine(t, st, subagent.NewRunner(), nil)
+			e, _, _ := newTestEngine(t, st, newTestWorkers(t, nil), llmcontract.Model{})
 			if e.dropStuckRewrite(tc.inst) {
 				t.Fatal("不该出队")
 			}
@@ -612,26 +747,23 @@ func TestEngine_TransientProviderFailuresDoNotBecomeDeadlock(t *testing.T) {
 		t.Fatalf("outline: %v", err)
 	}
 
-	network := &providerNetworkModel{}
-	writer := subagent.Config{
-		Name: "writer", Description: "network failing writer",
-		Model: network, SystemPrompt: "test", MaxTurns: 5, MaxRetries: 0,
-	}
+	network := newNetworkProvider()
+	writer := newTestWorker(t, network, nil, 5)
 	var arbiterCalls atomic.Int32
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
+	arb := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
 		if arbiterCalls.Add(1) == 1 {
-			return testTextMsg(`{"action":"retry","dispatch":null,"reason":"瞬态网络故障，重试原任务"}`)
+			return textReply(`{"action":"retry","dispatch":null,"reason":"瞬态网络故障，重试原任务"}`)
 		}
-		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"网络持续不可用，暂停等待恢复"}`)
-	}}
-	e, events, done := newTestEngine(t, st, subagent.NewRunner(writer), arb)
+		return textReply(`{"action":"abort","dispatch":null,"reason":"网络持续不可用，暂停等待恢复"}`)
+	})
+	e, events, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
 	}
 	waitEngineDone(t, done)
 
-	if got := network.calls.Load(); got != 4 {
+	if got := network.Calls(); got != 4 {
 		t.Fatalf("两轮 Engine 失败周期各执行 2 次 Worker，got %d", got)
 	}
 	recs, err := st.Decisions.Recent(10)
@@ -664,13 +796,6 @@ func TestEngine_TransientProviderFailuresDoNotBecomeDeadlock(t *testing.T) {
 	}
 }
 
-// failNTimesGuard 立即升级的 StopGuard(模拟空转熔断)。
-func failNTimesGuard() agentcore.StopGuard {
-	return func(context.Context, agentcore.StopInfo) agentcore.StopDecision {
-		return agentcore.StopDecision{Allow: false, Escalate: true}
-	}
-}
-
 // TestEngine_RetriesUnfinishedPlanStart 启动裁定失败后的自愈路径:StartPrompt 已落盘、
 // PlanStart 缺位(启动时模型故障)→ 引擎起动时现场补裁 → 固化 PlanStartRecord → 派发规划师。
 // 规划师不落盘 → 走既有僵局路径停机,证明补裁后引擎回到正常轨道。
@@ -688,22 +813,18 @@ func TestEngine_RetriesUnfinishedPlanStart(t *testing.T) {
 	}
 
 	// Arbiter:首次调用是补裁(plan_start),之后是僵局咨询(abort 收尾)。
-	var arbCalls atomic.Int32
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		if arbCalls.Add(1) == 1 {
-			return testTextMsg(`{"planner":"architect_long","task":"围绕凡人修仙规划三卷框架","reason":"长篇修仙题材"}`)
+	arb := newScriptedProvider(func(call int, _ *litellm.Request) litellmtest.Reply {
+		if call == 1 {
+			return textReply(`{"planner":"architect_long","task":"围绕凡人修仙规划三卷框架","reason":"长篇修仙题材"}`)
 		}
-		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"规划师空转,停机"}`)
-	}}
+		return textReply(`{"action":"abort","dispatch":null,"reason":"规划师空转,停机"}`)
+	})
 	// 规划师成功返回但不落任何盘 → Route 始终返回同一补齐指令 → 僵局。
-	architect := subagent.Config{
-		Name: "architect_long", Description: "idle planner",
-		Model: &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-			return testTextMsg("已规划(其实没有落盘)")
-		}},
-		SystemPrompt: "test", MaxTurns: 3,
-	}
-	e, events, done := newTestEngine(t, st, subagent.NewRunner(architect), arb)
+	lazy := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply("已规划(其实没有落盘)")
+	})
+	architect := newTestWorker(t, lazy, nil, 3)
+	e, events, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"architect_long": architect}), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -759,11 +880,11 @@ func TestEngine_PlanStartRetryFailurePauses(t *testing.T) {
 	}
 
 	var e *engine
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
+	arb := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
 		e.abort() // 模拟宿主取消持续失败的调用，失败路径由 context 明确结束。
-		return testTextMsg("这不是 JSON")
-	}}
-	e, events, done := newTestEngine(t, st, subagent.NewRunner(), arb)
+		return textReply("这不是 JSON")
+	})
+	e, events, done := newTestEngine(t, st, newTestWorkers(t, nil), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -815,17 +936,14 @@ func TestEngine_DeadlockConsultsArbiter(t *testing.T) {
 	}
 
 	// architect 无守卫、成功返回但不落任何盘 → Route 指令恒定
-	lazy := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg("知道了(什么也不做)")
-	}}
-	architect := subagent.Config{
-		Name: "architect_long", Description: "lazy architect",
-		Model: lazy, SystemPrompt: "test", MaxTurns: 5,
-	}
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"abort","dispatch":null,"reason":"规划师反复无产出"}`)
-	}}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(architect), arb)
+	lazy := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply("知道了(什么也不做)")
+	})
+	architect := newTestWorker(t, lazy, nil, 5)
+	arb := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply(`{"action":"abort","dispatch":null,"reason":"规划师反复无产出"}`)
+	})
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"architect_long": architect}), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -877,19 +995,14 @@ func TestEngine_IntermediateCheckpointsDoNotMaskDeadlock(t *testing.T) {
 		t.Fatalf("flow: %v", err)
 	}
 
-	writerModel := &editThenCancelModel{}
-	writer := subagent.Config{
-		Name: "writer", Description: "edit then cancel writer",
-		Model: writerModel, SystemPrompt: "test",
-		Tools:    []agentcore.Tool{tools.NewEditChapterTool(st)},
-		MaxTurns: 5,
-	}
+	writerModel := newEditThenCancelProvider()
+	writer := newTestWorker(t, writerModel, tools.ToAgentcoreAll([]tools.Tool{tools.NewEditChapterTool(st)}), 5)
 	// 即使 Arbiter 对 worker_failure / deadlock 一直要求 retry，现有第 5 次
 	// 硬熔断也必须在派发前截停，不得被 edit checkpoint 重置。
-	arb := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
-		return testTextMsg(`{"action":"retry","dispatch":null,"reason":"继续重试"}`)
-	}}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), arb)
+	arb := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
+		return textReply(`{"action":"retry","dispatch":null,"reason":"继续重试"}`)
+	})
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), testArbiterModel(t, arb))
 
 	if !e.start(nil) {
 		t.Fatal("engine start")
@@ -962,15 +1075,9 @@ func TestEngine_PauseWithEditorDispatchWaitsForRewriteQueue(t *testing.T) {
 	}
 
 	// editor:一次 save_review(verdict=rewrite, affected=[1]) 把第 1 章入队。
-	editorModel := &scriptedChatModel{fn: func(msgs []agentcore.Message) agentcore.Message {
-		toolResults := 0
-		for _, m := range msgs {
-			if m.Role == agentcore.RoleTool {
-				toolResults++
-			}
-		}
-		if toolResults == 0 {
-			return testToolCallMsg("save_review", map[string]any{
+	editorModel := newScriptedProvider(func(_ int, req *litellm.Request) litellmtest.Reply {
+		if toolResultCount(req) == 0 {
+			return toolReply("save_review", map[string]any{
 				"chapter": 1, "scope": "chapter",
 				"dimensions": []map[string]any{
 					{"dimension": "consistency", "score": 85, "comment": "达标(引用:原文)"},
@@ -989,27 +1096,12 @@ func TestEngine_PauseWithEditorDispatchWaitsForRewriteQueue(t *testing.T) {
 				"verdict": "rewrite", "summary": "第1章语气需重写",
 			})
 		}
-		return testTextMsg("done")
-	}}
-	editor := subagent.Config{
-		Name: "editor", Description: "test editor", Model: editorModel,
-		SystemPrompt: "test", MaxTurns: 6,
-		Tools:          []agentcore.Tool{tools.NewSaveReviewTool(st)},
-		StopAfterTools: []string{"save_review"},
-	}
-	writer := subagent.Config{
-		Name: "writer", Description: "test writer", Model: scriptedWriterModel(),
-		SystemPrompt: "test",
-		Tools: []agentcore.Tool{
-			tools.NewPlanChapterTool(st),
-			tools.NewDraftChapterTool(st),
-			tools.NewCheckConsistencyTool(st),
-			tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
-		},
-		MaxTurns: 10, StopAfterTools: []string{"commit_chapter"},
-	}
+		return textReply("done")
+	})
+	editor := newTestWorker(t, editorModel, tools.ToAgentcoreAll([]tools.Tool{tools.NewSaveReviewTool(st)}), 6, "save_review")
+	writer := newTestWriter(t, st)
 
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(editor, writer), nil)
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"editor": editor, "writer": writer}), llmcontract.Model{})
 	// 模拟 Arbiter 返工裁定:hold + dispatch editor(引擎未运行 → 立即应用)。
 	e.applyControlOp(context.Background(), controlOp{
 		hold:     &arbiter.AdvanceHoldOp{After: domain.AdvanceHoldAfterRewritesDrained, Reason: "重写第1章语气,改完暂停验收"},
@@ -1065,18 +1157,8 @@ func TestEngine_BoundaryHoldDoesNotDispatchAnotherWorker(t *testing.T) {
 		t.Fatalf("outline: %v", err)
 	}
 
-	writer := subagent.Config{
-		Name: "writer", Description: "test writer", Model: scriptedWriterModel(),
-		SystemPrompt: "test",
-		Tools: []agentcore.Tool{
-			tools.NewPlanChapterTool(st),
-			tools.NewDraftChapterTool(st),
-			tools.NewCheckConsistencyTool(st),
-			tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
-		},
-		MaxTurns: 10, StopAfterTools: []string{"commit_chapter"},
-	}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), nil)
+	writer := newTestWriter(t, st)
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), llmcontract.Model{})
 	if !e.start(nil) {
 		t.Fatal("engine start")
 	}
@@ -1120,15 +1202,8 @@ func TestEngine_TargetChapterHoldStopsAtRequestedChapter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writer := subagent.Config{
-		Name: "writer", Description: "test writer", Model: scriptedWriterModel(), SystemPrompt: "test",
-		Tools: []agentcore.Tool{
-			tools.NewPlanChapterTool(st), tools.NewDraftChapterTool(st),
-			tools.NewCheckConsistencyTool(st), tools.NewCommitChapterTool(st, tools.NewStyleStatsIndex(st)),
-		},
-		MaxTurns: 10, StopAfterTools: []string{"commit_chapter"},
-	}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), nil)
+	writer := newTestWriter(t, st)
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), llmcontract.Model{})
 	if err := st.RunMeta.SetAdvanceHold(domain.AdvanceHold{
 		After: domain.AdvanceHoldAtChapter, TargetChapter: 2, Reason: "写到第2章",
 	}); err != nil {
@@ -1168,16 +1243,16 @@ func TestEngine_ExitRaceRestoresPendingDispatch(t *testing.T) {
 	}
 
 	// worker 挂起直到 ctx 取消:制造"入队后引擎被 abort"的窗口。
-	blocked := &scriptedChatModel{fn: func([]agentcore.Message) agentcore.Message {
+	blocked := newScriptedProvider(func(int, *litellm.Request) litellmtest.Reply {
 		time.Sleep(50 * time.Millisecond)
-		return testTextMsg("...")
-	}}
-	writer := subagent.Config{Name: "writer", Description: "slow", Model: blocked, SystemPrompt: "t", MaxTurns: 100}
+		return textReply("...")
+	})
+	writer := newTestWorker(t, blocked, nil, 100)
 	// 需要 outline 让 Route 派 writer
 	if err := st.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "一", CoreEvent: "a"}, {Chapter: 2, Title: "二", CoreEvent: "b"}}); err != nil {
 		t.Fatalf("outline: %v", err)
 	}
-	e, _, done := newTestEngine(t, st, subagent.NewRunner(writer), nil)
+	e, _, done := newTestEngine(t, st, newTestWorkers(t, map[string]agentcore.Config{"writer": writer}), llmcontract.Model{})
 
 	if !e.start(nil) {
 		t.Fatal("engine start")

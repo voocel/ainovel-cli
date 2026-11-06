@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // analysisSchemaVersion 是逐章事实 schema 版本，纳入 InputDigest。
@@ -64,10 +65,11 @@ type ChapterAnalysisPayload struct {
 }
 
 // AnalyzeBudget 是逐章分析的输入/输出双预算（RFC §9.2）。
-// 输入以字节近似 context window；输出以每章保守事实预留近似 completion 上限。
+// 输入以字节近似 context window；输出以每章保守事实预留近似 completion 规模。
+// 两个窗口只用于估算分批：请求本身不带输出上限，生成预算由 provider/model 决定。
 type AnalyzeBudget struct {
 	ContextBytes     int // 输入预算（正文 + ledger + overhead）
-	MaxOutputTokens  int // 可见输出预算（completion 上限）
+	MaxOutputTokens  int // 可见输出预算估算（只用于分批，不进入请求）
 	PerChapterOutput int // 每章保守输出预留
 	PromptOverhead   int // system/ledger 固定输入开销（字节）
 }
@@ -279,7 +281,7 @@ func validateBatch(r *AnalysisBatchResult, seg *Segmentation, start, end int) er
 
 // AnalyzeNext 从第一份缺失分析起组一个批次并原子落盘，返回本次提交的章节数。
 // 截断即「失败 + 缩小重组批」（默认，§9.5）；批次已缩到单章仍截断则显式报告容量不足。
-func AnalyzeNext(ctx context.Context, m callModel, systemPrompt string, w *Workspace, normalized []byte, seg *Segmentation, segIdentity, promptVersion string, budget AnalyzeBudget, prof callProfile) (int, error) {
+func AnalyzeNext(ctx context.Context, m llmcontract.Model, systemPrompt string, w *Workspace, normalized []byte, seg *Segmentation, segIdentity, promptVersion string, budget AnalyzeBudget, prof callProfile) (int, error) {
 	total := len(seg.Chapters)
 	start := analyzedChapters(w, seg, normalized, segIdentity, promptVersion)
 	if start >= total {
@@ -290,7 +292,7 @@ func AnalyzeNext(ctx context.Context, m callModel, systemPrompt string, w *Works
 
 	for {
 		payload := buildAnalyzePayload(normalized, seg, ledger, start, end)
-		res, err := callStructured[AnalysisBatchResult](ctx, m, analysisContract, systemPrompt, payload, budget.MaxOutputTokens, prof, func(r *AnalysisBatchResult) error {
+		res, err := callStructured[AnalysisBatchResult](ctx, m, analysisContract, systemPrompt, payload, prof, func(r *AnalysisBatchResult) error {
 			return validateBatch(r, seg, start, end)
 		})
 		if err != nil {

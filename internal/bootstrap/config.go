@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/errs"
 	"github.com/voocel/ainovel-cli/internal/models"
 	"github.com/voocel/ainovel-cli/internal/notify"
 	"github.com/voocel/ainovel-cli/internal/utils"
+	litellmprovider "github.com/voocel/litellm/provider"
 )
 
 // DefaultContextWindow 模型未在 registry 登记时的兜底窗口大小。
@@ -35,7 +36,7 @@ const MinCompactReserve = 8000
 //	threshold = window - reserve = window * CompactRatio
 //	reserve   = max(MinCompactReserve, window * (1 - CompactRatio))
 //
-// 给 agentcore.context.Engine 的 EngineConfig.ReserveTokens 用。
+// 给上下文压缩的 ReserveTokens 预算用。
 func CompactReserveTokens(window int) int {
 	if window <= 0 {
 		return 0
@@ -49,7 +50,7 @@ func CompactReserveTokens(window int) int {
 
 // ProviderConfig 定义单个 LLM 提供商的凭证。
 type ProviderConfig struct {
-	Type    string        `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini），自定义代理时指定
+	Type    string        `json:"type,omitempty"`     // API 协议类型（openai/anthropic/gemini/deepseek/...；自定义 OpenAI 兼容端点填 compat），自定义代理时指定
 	API     string        `json:"api,omitempty"`      // OpenAI 协议 endpoint：chat（默认）/ responses
 	APIKey  string        `json:"api_key,omitempty"`  // API Key
 	BaseURL string        `json:"base_url,omitempty"` // API Base URL
@@ -58,8 +59,11 @@ type ProviderConfig struct {
 	// presence_penalty，或厂商特有键如 nvidia 开 think 的 chat_template_kwargs）。
 	// OpenAI 兼容端逐字并入请求体（即 extra_body 约定）；值由用户自负其责。
 	ExtraBody map[string]any `json:"extra_body,omitempty"`
-	// Extra 透传给 provider 级配置（litellm.ProviderConfig.Extra），用于 HTTP
-	// headers、user_agent、anthropic_beta 等客户端/传输层选项。
+	// Extra 透传给 provider 级配置（不是请求体），用于传输层与端点选项：
+	// headers、user_agent、anthropic_beta（映射为 anthropic-beta 头）、
+	// api/api_mode（OpenAI 协议端点，等价于 api 字段）、prompt_cache_params
+	// （确认代理原样透传 prompt_cache_key）、bedrock 的 access_key_id /
+	// secret_access_key / session_token / region。
 	Extra map[string]any `json:"extra,omitempty"`
 	// StreamIdleTimeout 流式空闲看门狗：超过该时长收不到任何 chunk 即断流
 	// （Go duration 字符串，如 "900s" / "15m"）。留空默认 5m——云端服务的合理上界；
@@ -161,10 +165,21 @@ func (pc ProviderConfig) ProviderType(name string) (string, error) {
 	if pc.Type != "" {
 		return pc.Type, nil
 	}
-	if llm.IsProviderRegistered(name) {
-		return name, nil
+	if IsProviderRegistered(name) {
+		return strings.ToLower(strings.TrimSpace(name)), nil
 	}
 	return "", fmt.Errorf("provider %q 缺少 type，且不在 litellm 已知 provider 列表中: %w", name, errs.ErrConfig)
+}
+
+// IsProviderRegistered 报告该名字是否是 litellm 的内置 provider（可省略 type）。
+// compat / gateway 是自建端点用的适配器，不是厂商名，因此不参与推断。
+func IsProviderRegistered(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "", "compat", "gateway":
+		return false
+	}
+	return slices.Contains(litellmprovider.Names(), name)
 }
 
 // ModelRef 表示一个 provider/model 组合。

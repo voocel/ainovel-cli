@@ -1,12 +1,10 @@
 package ctxpack
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
 	"github.com/voocel/agentcore"
-	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -107,12 +105,11 @@ const restoreBudgetTokens = 6000
 
 // WriterRestorePack holds pre-assembled context that the Writer needs after
 // compression. It is refreshed by the orchestrator at key lifecycle points
-// (chapter start, commit, recovery) and consumed by the PostSummaryHook as a
-// pure in-memory injection — no I/O in the hook path.
+// (chapter start, commit, recovery) and read by the WriterCompactor as a pure
+// in-memory injection — no I/O on the compaction path.
 type WriterRestorePack struct {
-	mu      sync.RWMutex
-	text    string
-	chapter int
+	mu   sync.RWMutex
+	text string
 }
 
 // Refresh loads the current chapter's context from store and caches it.
@@ -152,14 +149,12 @@ func (p *WriterRestorePack) Refresh(s *store.Store) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.chapter = ch
 	p.text = text
 }
 
 func (p *WriterRestorePack) setWarning(scope string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.chapter = 0
 	p.text = fmt.Sprintf("<post-compact-context>\n## 数据告警\n%s：%v\n</post-compact-context>", scope, err)
 }
 
@@ -168,25 +163,11 @@ func (p *WriterRestorePack) Clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.text = ""
-	p.chapter = 0
 }
 
-// Hook returns a PostSummaryHook that injects the cached restore pack.
-// The hook performs no I/O — it only reads the in-memory pack under a read lock.
-func (p *WriterRestorePack) Hook() corecontext.PostSummaryHook {
-	return func(_ context.Context, _ corecontext.SummaryInfo, _ []agentcore.AgentMessage, room int) ([]agentcore.AgentMessage, error) {
-		msg, ok, err := p.buildMessage(min(restoreBudgetTokens, room))
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, nil
-		}
-		return []agentcore.AgentMessage{msg}, nil
-	}
-}
-
-// buildMessage returns the cached restore message when it fits.
+// buildMessage returns the cached restore message when it fits the budget.
+// The compactor reads the pack through it under a read lock, so refreshing the
+// pack never races with a compaction.
 func (p *WriterRestorePack) buildMessage(budgetTokens int) (agentcore.Message, bool, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -194,8 +175,8 @@ func (p *WriterRestorePack) buildMessage(budgetTokens int) (agentcore.Message, b
 	if p.text == "" {
 		return agentcore.Message{}, false, nil
 	}
-	msg := agentcore.UserMsg(p.text)
-	required := corecontext.EstimateTokens(msg)
+	msg := agentcore.UserText(p.text)
+	required := agentcore.EstimateMessage(msg)
 	if required > budgetTokens {
 		return agentcore.Message{}, false, fmt.Errorf("writer restore pack requires %d tokens, only %d available", required, budgetTokens)
 	}

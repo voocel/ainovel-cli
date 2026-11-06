@@ -8,6 +8,8 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/models"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/catalog"
 )
 
 func TestUsageTrackerReplaySessionsReadsWorkerLogs(t *testing.T) {
@@ -17,9 +19,9 @@ func TestUsageTrackerReplaySessionsReadsWorkerLogs(t *testing.T) {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
 	rec := sessionRecord{
-		Role: agentcore.RoleAssistant,
+		Role: litellm.RoleAssistant,
 		Usage: &agentcore.Usage{
-			Input: 1200, Output: 300, CacheRead: 800,
+			Usage: litellm.Usage{InputTokens: 1200, OutputTokens: 300, CacheReadTokens: 800},
 		},
 		Meta: &sessionRecordMeta{Provider: "openrouter", Model: "test-model"},
 	}
@@ -49,12 +51,10 @@ func TestUsageTrackerReplaySessionsReadsWorkerLogs(t *testing.T) {
 // makeUsageMsg 构造一条 OnMessage 回调能接受的消息（带 Usage）。
 // Role 必须显式置成 assistant：UsageTracker.Record 现在按角色筛，
 // 只有 assistant 消息才会被累计（其它角色天然不带 usage）。
-func makeUsageMsg(input, cacheRead, cacheWrite, output int) agentcore.AgentMessage {
+func makeUsageMsg(input, cacheRead, cacheWrite, output int) agentcore.Message {
 	return agentcore.Message{
-		Role: agentcore.RoleAssistant,
-		Usage: &agentcore.Usage{
-			Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite,
-		},
+		Role:  litellm.RoleAssistant,
+		Usage: &agentcore.Usage{Usage: litellm.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite}},
 	}
 }
 
@@ -139,9 +139,9 @@ func Test_UsageTracker_ArchitectAliasNormalized(t *testing.T) {
 
 func Test_UsageTracker_PerModelAccumulates(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
-	tk.accumulate("writer", "openrouter", "model-a", agentcore.Usage{Input: 1000, Output: 200, CacheRead: 700})
-	tk.accumulate("editor", "openrouter", "model-b", agentcore.Usage{Input: 500, Output: 100})
-	tk.accumulate("writer", "openrouter", "model-a", agentcore.Usage{Input: 300, Output: 80, CacheRead: 200})
+	tk.accumulate("writer", "openrouter", "model-a", agentcore.Usage{Usage: litellm.Usage{InputTokens: 1000, OutputTokens: 200, CacheReadTokens: 700}})
+	tk.accumulate("editor", "openrouter", "model-b", agentcore.Usage{Usage: litellm.Usage{InputTokens: 500, OutputTokens: 100}})
+	tk.accumulate("writer", "openrouter", "model-a", agentcore.Usage{Usage: litellm.Usage{InputTokens: 300, OutputTokens: 80, CacheReadTokens: 200}})
 
 	perModel := tk.PerModel()
 	if len(perModel) != 2 {
@@ -169,12 +169,11 @@ func Test_UsageTracker_PerModelAccumulates(t *testing.T) {
 func Test_UsageTracker_RecordUsesActualUsageModel(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 	tk.Record("writer", "", agentcore.Message{
-		Role: agentcore.RoleAssistant,
+		Role:     litellm.RoleAssistant,
+		Provider: "openrouter",
+		Model:    "google/gemini-2.5-pro",
 		Usage: &agentcore.Usage{
-			Provider: "openrouter",
-			Model:    "google/gemini-2.5-pro",
-			Input:    1000,
-			Output:   200,
+			Usage: litellm.Usage{InputTokens: 1000, OutputTokens: 200},
 		},
 	})
 
@@ -193,11 +192,10 @@ func Test_UsageTracker_RecordUsesActualUsageModel(t *testing.T) {
 func Test_UsageTracker_ProviderOnlyDoesNotInventModelKey(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 	tk.Record("writer", "", agentcore.Message{
-		Role: agentcore.RoleAssistant,
+		Role:     litellm.RoleAssistant,
+		Provider: "openrouter",
 		Usage: &agentcore.Usage{
-			Provider: "openrouter",
-			Input:    1000,
-			Output:   200,
+			Usage: litellm.Usage{InputTokens: 1000, OutputTokens: 200},
 		},
 	})
 
@@ -258,25 +256,25 @@ func Test_computeSaved(t *testing.T) {
 	}{
 		{
 			name:  "anthropic 5m 命中节省 90%",
-			usage: agentcore.Usage{Input: 100_000, CacheRead: 80_000},
+			usage: agentcore.Usage{Usage: litellm.Usage{InputTokens: 100_000, CacheReadTokens: 80_000}},
 			entry: models.ModelEntry{InputCostPer1M: 3.0, CacheReadCostPer1M: 0.3},
 			want:  80_000 * (3.0 - 0.3) / 1_000_000, // 0.216
 		},
 		{
 			name:  "无命中 saved=0",
-			usage: agentcore.Usage{Input: 100_000, CacheRead: 0},
+			usage: agentcore.Usage{Usage: litellm.Usage{InputTokens: 100_000, CacheReadTokens: 0}},
 			entry: models.ModelEntry{InputCostPer1M: 3.0, CacheReadCostPer1M: 0.3},
 			want:  0,
 		},
 		{
 			name:  "模型未标价 saved=0",
-			usage: agentcore.Usage{Input: 100_000, CacheRead: 50_000},
+			usage: agentcore.Usage{Usage: litellm.Usage{InputTokens: 100_000, CacheReadTokens: 50_000}},
 			entry: models.ModelEntry{InputCostPer1M: 0, CacheReadCostPer1M: 0},
 			want:  0,
 		},
 		{
 			name:  "异常价差 saved=0",
-			usage: agentcore.Usage{Input: 100_000, CacheRead: 50_000},
+			usage: agentcore.Usage{Usage: litellm.Usage{InputTokens: 100_000, CacheReadTokens: 50_000}},
 			entry: models.ModelEntry{InputCostPer1M: 1.0, CacheReadCostPer1M: 2.0}, // 缓存反而更贵
 			want:  0,
 		},
@@ -343,8 +341,8 @@ func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 
 	withContent := func(text string) agentcore.Message {
 		return agentcore.Message{
-			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.TextBlock(text)},
+			Role:   litellm.RoleAssistant,
+			Blocks: []litellm.Block{litellm.Text(text)},
 		}
 	}
 
@@ -352,10 +350,10 @@ func Test_UsageTracker_MissingAssistantUsageCounted(t *testing.T) {
 	tk.Record("writer", "", withContent("hi"))
 	tk.Record("writer", "", withContent("again"))
 	// assistant 但 Content 为空 → 异常恢复路径或占位消息，不算 missing
-	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleAssistant})
+	tk.Record("writer", "", agentcore.Message{Role: litellm.RoleAssistant})
 	// user/tool 消息天然不携带 usage，无论 Content 是否为空都不算 missing
-	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleUser, Content: []agentcore.ContentBlock{agentcore.TextBlock("u")}})
-	tk.Record("writer", "", agentcore.Message{Role: agentcore.RoleTool, Content: []agentcore.ContentBlock{agentcore.TextBlock("t")}})
+	tk.Record("writer", "", agentcore.Message{Role: litellm.RoleUser, Blocks: []litellm.Block{litellm.Text("u")}})
+	tk.Record("writer", "", agentcore.Message{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.Text("t")}})
 	// 正常带 usage → 走累加路径，不计入诊断
 	tk.Record("writer", "", makeUsageMsg(100, 50, 0, 20))
 
@@ -403,8 +401,8 @@ func Test_UsageTracker_AccumulatesAnyRoleWithUsage(t *testing.T) {
 	tk := NewUsageTracker(nil, nil)
 	// 构造一条理论上不太常见的、带 Usage 的非 assistant 消息
 	hypothetical := agentcore.Message{
-		Role:  agentcore.RoleSystem,
-		Usage: &agentcore.Usage{Input: 200, Output: 50, CacheRead: 100},
+		Role:  litellm.RoleSystem,
+		Usage: &agentcore.Usage{Usage: litellm.Usage{InputTokens: 200, OutputTokens: 50, CacheReadTokens: 100}},
 	}
 	tk.Record("writer", "", hypothetical)
 
@@ -424,10 +422,13 @@ func Test_UsageTracker_OnCostCallback(t *testing.T) {
 	var got []float64
 	tk.SetOnCost(func(total float64) { got = append(got, total) })
 
-	msg := func(cost float64) agentcore.AgentMessage {
+	msg := func(cost float64) agentcore.Message {
 		return agentcore.Message{
-			Role:  agentcore.RoleAssistant,
-			Usage: &agentcore.Usage{Input: 100, Output: 10, Cost: &agentcore.Cost{Total: cost}},
+			Role: litellm.RoleAssistant,
+			Usage: &agentcore.Usage{
+				Usage: litellm.Usage{InputTokens: 100, OutputTokens: 10},
+				Cost:  &catalog.Cost{Total: cost},
+			},
 		}
 	}
 	tk.Record("writer", "", msg(0.5))
@@ -444,7 +445,7 @@ func Test_UsageTracker_OnMissingUsageOnce(t *testing.T) {
 	fired := 0
 	tk.SetOnMissingUsage(func() { fired++ })
 
-	noUsage := agentcore.Message{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("正文")}}
+	noUsage := agentcore.Message{Role: litellm.RoleAssistant, Blocks: []litellm.Block{litellm.Text("正文")}}
 	tk.Record("writer", "", noUsage)
 	tk.Record("writer", "", noUsage)
 	tk.Record("editor", "", noUsage)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
 )
 
 // TestDiscardAnalysesAfter 守护 #4a：清理越过新鲜前缀的旧分析工件，
@@ -124,12 +124,12 @@ func TestAnalyzeNextPersistsWithRebatchOnTruncation(t *testing.T) {
 	ws := &Workspace{dir: book}
 	// 首批 2 章截断：第 1 章完整、第 2 章半截 → 打捞第 1 章连续前缀（§9.5）。
 	truncated := `{"chapters":[` + factsJSON(1, seg.Chapters[0].Title) + `,{"chapter":2,"summary":"截断`
-	m := &mockModel{
+	m := &mockProvider{
 		responses: []string{truncated},
-		stops:     []agentcore.StopReason{agentcore.StopReasonLength},
+		stops:     []litellm.FinishReason{litellm.FinishReasonLength},
 	}
 	budget := AnalyzeBudget{ContextBytes: 1 << 20, MaxOutputTokens: 1000, PerChapterOutput: 10, PromptOverhead: 0}
-	done, err := AnalyzeNext(context.Background(), m, "sys", ws, norm, seg, "segid", "v1", budget, callProfile{})
+	done, err := AnalyzeNext(context.Background(), scriptModel(t, m), "sys", ws, norm, seg, "segid", "v1", budget, callProfile{})
 	if err != nil {
 		t.Fatalf("AnalyzeNext: %v", err)
 	}
@@ -179,11 +179,11 @@ func TestSalvagePrefixStopsAtGap(t *testing.T) {
 func TestAnalyzedChaptersInvalidatesOnUpstreamChange(t *testing.T) {
 	norm, seg := analyzeFixture(t, 2)
 	ws := &Workspace{dir: t.TempDir()}
-	m := &mockModel{responses: []string{
+	m := &mockProvider{responses: []string{
 		`{"chapters":[` + factsJSON(1, seg.Chapters[0].Title) + `,` + factsJSON(2, seg.Chapters[1].Title) + `]}`,
 	}}
 	budget := AnalyzeBudget{ContextBytes: 1 << 20, MaxOutputTokens: 1 << 20, PerChapterOutput: 10, PromptOverhead: 0}
-	if _, err := AnalyzeNext(context.Background(), m, "sys", ws, norm, seg, "segid-A", "v1", budget, callProfile{}); err != nil {
+	if _, err := AnalyzeNext(context.Background(), scriptModel(t, m), "sys", ws, norm, seg, "segid-A", "v1", budget, callProfile{}); err != nil {
 		t.Fatalf("AnalyzeNext: %v", err)
 	}
 	if got := analyzedChapters(ws, seg, norm, "segid-A", "v1"); got != 2 {

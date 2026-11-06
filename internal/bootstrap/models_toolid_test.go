@@ -11,17 +11,18 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
 )
 
-// rawToolUseID 取自真实故障日志：tool_use id 中带 '#'，而请求校验只接受 [A-Za-z0-9_-]。
+// rawToolUseID 取自真实故障日志：tool_use id 中带 '#'，而 Claude 等协议的
+// tool_use / tool_result 只接受 [A-Za-z0-9_-]。
 const rawToolUseID = "call_3543acedc27c4404bfe7317c#235532d85de245bda8ff64f6a683623a"
 
 var validToolUseIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // TestCreateModelNormalizesInvalidToolUseIDs 锁定模型工厂的行为：含非法字符的 tool_use id
 // 必须在发出前归一化为合法形态，且 tool_use / tool_result 两侧成对改写，否则整轮会话会在
-// 本地校验阶段反复失败（messages[i]: tool use id "..." is invalid）。
+// 厂商校验阶段反复失败。
 func TestCreateModelNormalizesInvalidToolUseIDs(t *testing.T) {
 	var (
 		mu   sync.Mutex
@@ -38,32 +39,30 @@ func TestCreateModelNormalizesInvalidToolUseIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	model, err := createModelFromConfig("stub", "stub-model", ProviderConfig{
-		Type:    "openai",
-		APIKey:  "stub-key",
-		BaseURL: srv.URL,
-	}, map[string]agentcore.ChatModel{})
+	cfg := Config{
+		Provider: "stub", ModelName: "stub-model",
+		Providers: map[string]ProviderConfig{"stub": {
+			Type:    "openai",
+			APIKey:  "stub-key",
+			BaseURL: srv.URL,
+		}},
+	}
+	models, err := NewModelSet(cfg)
 	if err != nil {
-		t.Fatalf("createModelFromConfig: %v", err)
+		t.Fatalf("NewModelSet: %v", err)
 	}
+	model := models.ForRole("default")
 
-	messages := []agentcore.Message{
-		agentcore.UserMsg("hi"),
-		{
-			Role: agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{
-				agentcore.ToolCallBlock(agentcore.ToolCall{
-					ID:   rawToolUseID,
-					Name: "novel_context",
-					Args: json.RawMessage(`{}`),
-				}),
-			},
+	request := litellm.Request{
+		Model: model.ModelName,
+		Messages: []litellm.Message{
+			litellm.UserText("hi"),
+			litellm.Assistant(litellm.ToolUseBlock{ID: rawToolUseID, Name: "novel_context", Arguments: "{}"}),
+			litellm.ToolResultText(rawToolUseID, "ok"),
 		},
-		agentcore.ToolResultMsg(rawToolUseID, json.RawMessage(`"ok"`), false),
 	}
-
-	if _, err := model.Generate(context.Background(), messages, nil); err != nil {
-		t.Fatalf("请求未发出（若为 tool use id ... is invalid 则说明归一化未生效）: %v", err)
+	if _, err := model.Core.Client.Chat(context.Background(), request); err != nil {
+		t.Fatalf("请求未发出（若为 tool use id 校验错误则说明归一化未生效）: %v", err)
 	}
 
 	mu.Lock()

@@ -7,113 +7,42 @@ import (
 	"testing"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/agentcore/schema"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
-type baseModel struct{}
-
-func (baseModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	return nil, nil
-}
-
-func (baseModel) GenerateStream(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	return nil, nil
-}
-
-func (baseModel) SupportsTools() bool { return true }
-
-type capsModel struct {
-	baseModel
-	caps llm.Capabilities
-}
-
-func (m capsModel) Capabilities() llm.Capabilities { return m.caps }
-
-type overrideModel struct {
-	capsModel
-	override *bool
-}
-
-func (m overrideModel) JSONSchemaOverride() *bool { return m.override }
-
-type infoModel struct {
-	baseModel
-	info llm.ModelInfo
-}
-
-func (m infoModel) Info() llm.ModelInfo { return m.info }
-
-type factsModel struct {
-	baseModel
-	facts ModelFacts
-}
-
-func (m factsModel) StructuredOutputFacts() ModelFacts { return m.facts }
-
-func structured(jsonSchema, strict llm.Support) llm.Capabilities {
-	return llm.Capabilities{
-		Provider:   "prov",
-		Model:      "mod",
-		Structured: llm.StructuredCapabilities{JSONSchema: jsonSchema, Strict: strict},
+// testModel 构造一次结构化调用的模型句柄：test client + 请求模板。
+func testModel(t *testing.T, provider litellm.Provider, override *bool) Model {
+	t.Helper()
+	client, err := litellm.New(provider)
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return Model{
+		Core:               agentcore.Model{Client: client, Request: litellm.Request{Model: "test-model"}},
+		Provider:           provider.Name(),
+		ModelName:          "test-model",
+		JSONSchemaOverride: override,
 	}
 }
 
-func boolPtr(v bool) *bool { return &v }
-
-// TestResolveMatrix 覆盖 config 三态 × adapter 能力的全部组合。
-func TestResolveMatrix(t *testing.T) {
-	cases := []struct {
-		name       string
-		model      agentcore.ChatModel
-		wantMode   Mode
-		wantSource Source
-		wantStrict bool
-	}{
-		{"无任何能力接口", baseModel{}, ModePromptContract, SourceUnknown, false},
-		{"adapter yes + strict yes", capsModel{caps: structured(llm.SupportYes, llm.SupportYes)}, ModeNativeJSONSchema, SourceAdapter, true},
-		{"adapter yes + strict no（Gemini 形态）", capsModel{caps: structured(llm.SupportYes, llm.SupportNo)}, ModeNativeJSONSchema, SourceAdapter, false},
-		{"adapter yes + strict unknown", capsModel{caps: structured(llm.SupportYes, llm.SupportUnknown)}, ModeNativeJSONSchema, SourceAdapter, false},
-		{"adapter no", capsModel{caps: structured(llm.SupportNo, llm.SupportNo)}, ModePromptContract, SourceAdapter, false},
-		{"adapter unknown", capsModel{caps: structured(llm.SupportUnknown, llm.SupportUnknown)}, ModePromptContract, SourceUnknown, false},
-		{"config true 无能力信息默认 strict", overrideModel{override: boolPtr(true)}, ModeNativeJSONSchema, SourceConfig, true},
-		{"config true + adapter strict no 关 strict", overrideModel{capsModel{caps: structured(llm.SupportUnknown, llm.SupportNo)}, boolPtr(true)}, ModeNativeJSONSchema, SourceConfig, false},
-		{"config false 覆盖 adapter yes", overrideModel{capsModel{caps: structured(llm.SupportYes, llm.SupportYes)}, boolPtr(false)}, ModePromptContract, SourceConfig, false},
-		{"config 未配置回落 adapter", overrideModel{capsModel{caps: structured(llm.SupportYes, llm.SupportYes)}, nil}, ModeNativeJSONSchema, SourceAdapter, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := Resolve(tc.model)
-			if res.Mode != tc.wantMode || res.Source != tc.wantSource || res.Strict != tc.wantStrict {
-				t.Fatalf("Resolve = %+v, want mode=%s source=%s strict=%v", res, tc.wantMode, tc.wantSource, tc.wantStrict)
-			}
-		})
-	}
+// fallbackProvider 模拟把 schema 挪进提示词的 adapter：响应带 schema_prompt_fallback。
+type fallbackProvider struct {
+	*litellmtest.Provider
 }
 
-func TestResolveIdentity(t *testing.T) {
-	res := Resolve(capsModel{caps: structured(llm.SupportYes, llm.SupportYes)})
-	if res.Provider != "prov" || res.Model != "mod" {
-		t.Fatalf("caps 身份未取到: %+v", res)
+func (p fallbackProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	resp, err := p.Provider.Chat(ctx, req)
+	if err != nil {
+		return nil, err
 	}
-	res = Resolve(infoModel{info: llm.ModelInfo{Provider: "p2", Name: "m2"}})
-	if res.Provider != "p2" || res.Model != "m2" {
-		t.Fatalf("Info 兜底身份未取到: %+v", res)
-	}
-}
-
-func TestResolveUsesAtomicFactsSnapshot(t *testing.T) {
-	res := Resolve(factsModel{facts: ModelFacts{
-		Capabilities:       structured(llm.SupportYes, llm.SupportYes),
-		Info:               llm.ModelInfo{Provider: "snapshot-provider", Name: "snapshot-model"},
-		JSONSchemaOverride: boolPtr(false),
-	}})
-	if res.Mode != ModePromptContract || res.Source != SourceConfig {
-		t.Fatalf("config false 快照应关闭原生 schema: %+v", res)
-	}
-	if res.Provider != "prov" || res.Model != "mod" {
-		t.Fatalf("能力身份应来自同一快照: %+v", res)
-	}
+	resp.Warnings = append(resp.Warnings, litellm.Warning{
+		Code:     warningSchemaPromptFallback,
+		Provider: p.Name(),
+		Message:  "JSON Schema uses prompt; schema adherence is not enforced",
+	})
+	return resp, nil
 }
 
 func testContract() Contract {
@@ -127,25 +56,85 @@ func testContract() Contract {
 	}
 }
 
-func TestPlanNativeOptions(t *testing.T) {
-	opts, res := Plan(capsModel{caps: structured(llm.SupportYes, llm.SupportYes)}, testContract())
-	if res.Mode != ModeNativeJSONSchema || len(opts) == 0 {
-		t.Fatalf("native 模式应产出 opts: res=%+v opts=%d", res, len(opts))
+// TestResolveMatrix 覆盖 config 三态 × schema strict 可满足性的组合。
+func TestResolveMatrix(t *testing.T) {
+	provider := litellmtest.New()
+	loose := testContract()
+	loose.Schema = map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"action": map[string]any{"type": "string"}},
 	}
-	cfg := agentcore.ResolveCallConfig(opts)
-	rf := cfg.ResponseFormat
-	if rf == nil || rf.Type != agentcore.ResponseFormatJSONSchema || rf.JSONSchema == nil {
-		t.Fatalf("ResponseFormat = %+v", rf)
+
+	cases := []struct {
+		name       string
+		contract   Contract
+		override   *bool
+		wantMode   Mode
+		wantSource Source
+		wantStrict bool
+	}{
+		{"未声明覆盖走 adapter 映射", testContract(), nil, ModeNativeJSONSchema, SourceAdapter, true},
+		{"未声明覆盖但 schema 非 strict 就绪不声明 strict", loose, nil, ModeNativeJSONSchema, SourceAdapter, false},
+		{"config true 强制原生 schema", testContract(), new(true), ModeNativeJSONSchema, SourceConfig, true},
+		{"config true + schema 非 strict 就绪", loose, new(true), ModeNativeJSONSchema, SourceConfig, false},
+		{"config false 关闭原生 schema", testContract(), new(false), ModePromptContract, SourceConfig, false},
 	}
-	if rf.JSONSchema.Name != "test_decision" || rf.JSONSchema.Strict == nil || !*rf.JSONSchema.Strict {
-		t.Fatalf("JSONSchema = %+v", rf.JSONSchema)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Resolve(testModel(t, provider, tc.override), tc.contract)
+			if res.Mode != tc.wantMode || res.Source != tc.wantSource || res.Strict != tc.wantStrict {
+				t.Fatalf("Resolve = %+v, want mode=%s source=%s strict=%v", res, tc.wantMode, tc.wantSource, tc.wantStrict)
+			}
+		})
+	}
+
+	res := Resolve(Model{}, testContract())
+	if res.Source != SourceUnknown {
+		t.Fatalf("无 client 时应标记 unknown: %+v", res)
 	}
 }
 
-func TestPlanPromptContractNoOptions(t *testing.T) {
-	opts, res := Plan(baseModel{}, testContract())
-	if res.Mode != ModePromptContract || opts != nil {
-		t.Fatalf("prompt 模式不应产出 opts: res=%+v opts=%v", res, opts)
+func TestResolveIdentity(t *testing.T) {
+	res := Resolve(testModel(t, litellmtest.New(), nil), testContract())
+	if res.Provider != "test" || res.Model != "test-model" {
+		t.Fatalf("身份未取到: %+v", res)
+	}
+	res = Resolve(Model{Core: agentcore.Model{Request: litellm.Request{Model: "template-model"}}}, testContract())
+	if res.Provider != "" || res.Model != "template-model" {
+		t.Fatalf("请求模板兜底身份未取到: %+v", res)
+	}
+}
+
+func TestPlanNativeFormat(t *testing.T) {
+	format, res, err := Plan(testModel(t, litellmtest.New(), new(true)), testContract())
+	if err != nil || res.Mode != ModeNativeJSONSchema {
+		t.Fatalf("Plan = %+v %v", res, err)
+	}
+	if format == nil || format.Type != litellm.ResponseFormatJSONSchema || format.JSONSchema == nil {
+		t.Fatalf("ResponseFormat = %+v", format)
+	}
+	if format.JSONSchema.Name != "test_decision" || format.JSONSchema.Description != "测试契约" {
+		t.Fatalf("JSONSchema = %+v", format.JSONSchema)
+	}
+	if format.JSONSchema.Strict == nil || !*format.JSONSchema.Strict {
+		t.Fatalf("strict 应声明为 true: %+v", format.JSONSchema)
+	}
+}
+
+func TestPlanPromptContractUsesJSONMode(t *testing.T) {
+	format, res, err := Plan(testModel(t, litellmtest.New(), new(false)), testContract())
+	if err != nil || res.Mode != ModePromptContract {
+		t.Fatalf("Plan = %+v %v", res, err)
+	}
+	if format == nil || format.Type != litellm.ResponseFormatJSONObject || format.JSONSchema != nil {
+		t.Fatalf("prompt 模式应只开 JSON 模式: %+v", format)
+	}
+}
+
+func TestPlanRejectsUnmarshalableSchema(t *testing.T) {
+	bad := Contract{Name: "bad", Schema: map[string]any{"bad": make(chan int)}}
+	if _, _, err := Plan(testModel(t, litellmtest.New(), nil), bad); err == nil || !strings.Contains(err.Error(), "response_format") {
+		t.Fatalf("应暴露 schema 序列化错误, got %v", err)
 	}
 }
 
@@ -258,86 +247,197 @@ func TestExtractJSONObjectBalanced(t *testing.T) {
 	}
 }
 
-type executionModel struct {
-	responses []string
-	stops     []agentcore.StopReason
-	calls     int
-	messages  []agentcore.Message
-	config    agentcore.CallConfig
-}
-
-func (m *executionModel) Generate(_ context.Context, messages []agentcore.Message, _ []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.messages = messages
-	m.config = agentcore.ResolveCallConfig(opts)
-	response := m.responses[m.calls]
-	var stop agentcore.StopReason
-	if m.calls < len(m.stops) {
-		stop = m.stops[m.calls]
-	}
-	m.calls++
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role:       agentcore.RoleAssistant,
-		Content:    []agentcore.ContentBlock{agentcore.TextBlock(response)},
-		StopReason: stop,
-	}}, nil
-}
-
-type nativeExecutionModel struct{ *executionModel }
-
-func (m *nativeExecutionModel) Capabilities() llm.Capabilities {
-	return structured(llm.SupportYes, llm.SupportYes)
+type decision struct {
+	Action string `json:"action"`
+	Reason string `json:"reason"`
 }
 
 func TestExecutePromptModeSelfHealsSchemaViolation(t *testing.T) {
-	model := &executionModel{responses: []string{
-		`{}`,
-		`{"action":"a","reason":"fixed"}`,
-	}}
-	type output struct {
-		Action string `json:"action"`
-		Reason string `json:"reason"`
-	}
-	out, err := Execute(t.Context(), model, Request[output]{
+	provider := litellmtest.New(
+		litellmtest.Reply{Blocks: []litellm.Block{litellm.Text(`{}`)}},
+		litellmtest.Reply{Blocks: []litellm.Block{litellm.Text(`{"action":"a","reason":"fixed"}`)}},
+	)
+	out, err := Execute(t.Context(), testModel(t, provider, new(false)), Request[decision]{
 		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入", Agent: "test",
 	})
 	if err != nil || out.Reason != "fixed" {
 		t.Fatalf("自愈失败: %+v %v", out, err)
 	}
-	if model.calls != 2 {
-		t.Fatalf("应在第二次成功，calls=%d", model.calls)
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("应在第二次成功，calls=%d", len(requests))
 	}
-	if len(model.messages) != 4 || !strings.Contains(model.messages[3].TextContent(), "$.action") {
-		t.Fatalf("重问未携带精确 Schema 错误: %+v", model.messages)
+	if requests[0].ResponseFormat == nil || requests[0].ResponseFormat.Type != litellm.ResponseFormatJSONObject {
+		t.Fatalf("prompt 模式应只开 JSON 模式: %+v", requests[0].ResponseFormat)
+	}
+	if got := requests[0].Messages[0].Blocks[0].(litellm.TextBlock).Text; !strings.Contains(got, "<output-json-schema>") {
+		t.Fatalf("prompt 模式应把契约写进系统提示词:\n%s", got)
+	}
+	second := requests[1].Messages
+	if len(second) != 4 || !strings.Contains(second[3].Blocks[0].(litellm.TextBlock).Text, "$.action") {
+		t.Fatalf("重问未携带精确 Schema 错误: %+v", second)
 	}
 }
 
 func TestExecuteNativeSchemaViolationFailsImmediately(t *testing.T) {
-	model := &nativeExecutionModel{executionModel: &executionModel{responses: []string{`{}`}}}
-	_, err := Execute(t.Context(), model, Request[map[string]any]{
+	provider := litellmtest.New(litellmtest.Reply{Blocks: []litellm.Block{litellm.Text(`{}`)}})
+	_, err := Execute(t.Context(), testModel(t, provider, new(true)), Request[map[string]any]{
 		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
 	})
 	var failure *Failure
 	if !errors.As(err, &failure) || failure.Kind != FailureContract {
 		t.Fatalf("应返回原生契约错误，得 %T %v", err, err)
 	}
-	if model.calls != 1 {
-		t.Fatalf("原生契约违约不应重问，calls=%d", model.calls)
+	if len(provider.Requests()) != 1 {
+		t.Fatalf("原生契约违约不应重问，calls=%d", len(provider.Requests()))
+	}
+}
+
+// 端点把 schema 挪进提示词时不具备强制力：结构违约应反馈重问，而不是当作代码缺陷。
+func TestExecuteSchemaPromptFallbackSelfHeals(t *testing.T) {
+	provider := fallbackProvider{Provider: litellmtest.New(
+		litellmtest.Reply{Blocks: []litellm.Block{litellm.Text(`{}`)}},
+		litellmtest.Reply{Blocks: []litellm.Block{litellm.Text(`{"action":"b","reason":"ok"}`)}},
+	)}
+	var modes []Mode
+	out, err := Execute(t.Context(), testModel(t, provider, nil), Request[decision]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+		Hooks: Hooks{Correction: func(ev Correction) { modes = append(modes, ev.Mode) }},
+	})
+	if err != nil || out.Action != "b" {
+		t.Fatalf("回退后应自愈: %+v %v", out, err)
+	}
+	if len(modes) != 1 || modes[0] != ModePromptContract {
+		t.Fatalf("修正记录应报告 prompt contract: %+v", modes)
+	}
+	if len(provider.Requests()) != 2 {
+		t.Fatalf("回退后应重问一次, calls=%d", len(provider.Requests()))
 	}
 }
 
 func TestExecuteExposesModelErrorStopReason(t *testing.T) {
-	model := &executionModel{
-		responses: []string{`{"action":"a","reason":"unused"}`},
-		stops:     []agentcore.StopReason{agentcore.StopReasonError},
-	}
-	_, err := Execute(t.Context(), model, Request[map[string]any]{
+	provider := litellmtest.New(litellmtest.Reply{
+		Blocks:       []litellm.Block{litellm.Text(`{"action":"a","reason":"unused"}`)},
+		FinishReason: litellm.FinishReasonError,
+	})
+	_, err := Execute(t.Context(), testModel(t, provider, new(true)), Request[map[string]any]{
 		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
 	})
 	var failure *Failure
 	if !errors.As(err, &failure) || failure.Kind != FailureProtocol || !strings.Contains(err.Error(), "stop_reason=error") {
 		t.Fatalf("应暴露模型错误终止原因，得 %T %v", err, err)
 	}
-	if model.calls != 1 {
-		t.Fatalf("错误终止不应作为 JSON 错误重问，calls=%d", model.calls)
+	if len(provider.Requests()) != 1 {
+		t.Fatalf("错误终止不应作为 JSON 错误重问，calls=%d", len(provider.Requests()))
+	}
+}
+
+func TestExecuteRejectsEmptyNativeOutput(t *testing.T) {
+	provider := litellmtest.New(litellmtest.Reply{})
+	_, err := Execute(t.Context(), testModel(t, provider, new(true)), Request[map[string]any]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+	})
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Kind != FailureContract || !strings.Contains(err.Error(), "原生 schema 返回空内容") {
+		t.Fatalf("空原生输出应报契约错误，得 %T %v", err, err)
+	}
+}
+
+func TestExecuteRejectsUnmarshalableContractBeforeRequest(t *testing.T) {
+	bad := Contract{Name: "bad", Schema: map[string]any{"bad": make(chan int)}}
+	provider := litellmtest.New()
+	_, err := Execute(t.Context(), testModel(t, provider, nil), Request[map[string]any]{
+		Contract: bad, SystemPrompt: "判断。", Payload: "输入",
+	})
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Kind != FailureContract {
+		t.Fatalf("不可序列化契约应由本地拦下，得 %T %v", err, err)
+	}
+	if len(provider.Requests()) != 0 {
+		t.Fatalf("契约不可序列化时不应发请求, calls=%d", len(provider.Requests()))
+	}
+}
+
+// 端点校验失败属于请求构造缺陷，不是可重试的请求失败。
+func TestExecuteClassifiesValidationErrorAsProtocol(t *testing.T) {
+	provider := litellmtest.New(litellmtest.Fail(
+		litellm.NewError("test", litellm.ErrorTypeValidation, "response_format json_object has no equivalent", nil),
+	))
+	_, err := Execute(t.Context(), testModel(t, provider, new(false)), Request[map[string]any]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+	})
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Kind != FailureProtocol {
+		t.Fatalf("校验错误应归为协议失败，得 %T %v", err, err)
+	}
+	if litellm.ErrorTypeOf(failure.Err) != litellm.ErrorTypeValidation {
+		t.Fatalf("应保留 litellm 错误类型: %v", failure.Err)
+	}
+	if len(provider.Requests()) != 1 {
+		t.Fatalf("校验错误不应重试, calls=%d", len(provider.Requests()))
+	}
+}
+
+// Options 是请求模板之上的覆盖：思考等级必须落到真正发出的请求里。
+func TestExecuteAppliesOptionsToRequest(t *testing.T) {
+	provider := litellmtest.New(litellmtest.Text(`{"action":"a","reason":"ok"}`))
+	_, err := Execute(t.Context(), testModel(t, provider, nil), Request[decision]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+		Options: []Option{WithThinking(ThinkingHigh)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.Requests()[0]
+	if sent.Thinking == nil || sent.Thinking.Effort != "high" {
+		t.Fatalf("thinking 未落到请求: %+v", sent.Thinking)
+	}
+	if sent.MaxTokens != nil {
+		t.Fatalf("结构化调用不应设置输出上限: %d", *sent.MaxTokens)
+	}
+}
+
+func TestWithThinkingMapsLevels(t *testing.T) {
+	base := litellm.Request{Model: "m"}
+	cases := []struct {
+		level  ThinkingLevel
+		want   *litellm.Thinking
+		absent bool
+	}{
+		{ThinkingAuto, nil, true},
+		{ThinkingOff, &litellm.Thinking{Disabled: true}, false},
+		{ThinkingHigh, &litellm.Thinking{Effort: "high"}, false},
+	}
+	for _, tc := range cases {
+		req := base
+		WithThinking(tc.level)(&req)
+		if tc.absent {
+			if req.Thinking != nil {
+				t.Fatalf("%s 不应设置 thinking: %+v", tc.level, req.Thinking)
+			}
+			continue
+		}
+		if req.Thinking == nil || *req.Thinking != *tc.want {
+			t.Fatalf("%s → %+v, want %+v", tc.level, req.Thinking, tc.want)
+		}
+	}
+}
+
+func TestWithProviderOptionsMerges(t *testing.T) {
+	base, err := litellm.NewProviderOptions(map[string]any{"a": 1, "b": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, err := litellm.NewProviderOptions(map[string]any{"b": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := litellm.Request{Model: "m", ProviderOptions: base}
+	WithProviderOptions(extra)(&req)
+	if string(req.ProviderOptions["a"]) != "1" || string(req.ProviderOptions["b"]) != "3" {
+		t.Fatalf("合并结果不符: %s", req.ProviderOptions)
+	}
+	if string(base["b"]) != "2" {
+		t.Fatalf("不应修改传入的模板选项: %s", base)
 	}
 }

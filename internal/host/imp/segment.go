@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // BoundaryDecision 是模型对单个 owned range 的边界判断（RFC §8.2）。
@@ -315,11 +317,11 @@ func segmentChunkDigest(identity, loID, hiID string) string {
 }
 
 // Segment 对整份归一化文本做语义切分：逐 owned 区间调用模型识别边界，再全文覆盖校验。
-// contextMargin 上下文单元数，chunkBytes owned 区间字节预算，maxTokens 单次输出预算。
+// contextMargin 上下文单元数，chunkBytes owned 区间字节预算。
 // w 非空时逐块落盘边界缓存（identity = segmentInputDigest）：单块可达数分钟，任何一块失败
 // 不应重付已完成块的调用——与 analyze 逐章、synthesize 逐区间同一哲学，此前切分是
 // 唯一没有阶段内持久化的昂贵阶段，一处失败即全部重来。
-func Segment(ctx context.Context, m callModel, systemPrompt string, normalized []byte, units []SourceUnit, guidance string, chunkBytes, contextMargin, maxTokens int, prof callProfile, w *Workspace, identity string) (*Segmentation, error) {
+func Segment(ctx context.Context, m llmcontract.Model, systemPrompt string, normalized []byte, units []SourceUnit, guidance string, chunkBytes, contextMargin int, prof callProfile, w *Workspace, identity string) (*Segmentation, error) {
 	chunks := planChunks(units, planningBudget(chunkBytes, systemPrompt, guidance))
 	unitByID := make(map[string]SourceUnit, len(units))
 	for _, u := range units {
@@ -350,7 +352,7 @@ func Segment(ctx context.Context, m callModel, systemPrompt string, normalized [
 		}
 		v := chunkValidator{projIDs: projIDs, ownedIDs: ownedIDs, unitByID: unitByID,
 			normalized: normalized, coverStart: owned[0] == 0}
-		batch, err := callStructured[boundaryBatch](ctx, m, segmentContract, systemPrompt, payload, maxTokens, prof, func(b *boundaryBatch) error {
+		batch, err := callStructured[boundaryBatch](ctx, m, segmentContract, systemPrompt, payload, prof, func(b *boundaryBatch) error {
 			return v.validate(b.Boundaries)
 		})
 		if err != nil {

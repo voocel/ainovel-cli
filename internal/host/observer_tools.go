@@ -6,54 +6,51 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/progress"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
-// handleToolUpdate 处理 Worker 的进度中继(ProgressPayload):TOOL 行、流式正文、
+// handleToolUpdate 处理 Worker 的进度中继(progress.Event):TOOL 行、流式正文、
 // thinking、retry、context。Engine 经 observer.workerProgress 喂入。
-func (o *observer) handleToolUpdate(ev agentcore.Event) {
-	if ev.Progress == nil {
-		return
-	}
-	switch ev.Progress.Kind {
-	case agentcore.ProgressToolDelta:
-		if ev.Progress.Delta != "" {
-			o.handleSubagentDelta(ev.Progress)
+func (o *observer) handleToolUpdate(ev progress.Event) {
+	switch ev.Kind {
+	case progress.KindToolDelta:
+		if ev.Delta != "" {
+			o.handleSubagentDelta(&ev)
 		}
-	case agentcore.ProgressToolStart:
+	case progress.KindToolStart:
 		// Worker 内部的工具调用（如 writer → draft_chapter）。
-		if ev.Progress.Agent == "" || ev.Progress.Tool == "" {
+		if ev.Agent == "" || ev.Tool == "" {
 			break
 		}
-		toolName := displayToolName(ev.Progress.Tool, ev.Progress.Args)
+		toolName := displayToolName(ev.Tool, ev.Args)
 		id := nextEventID()
-		o.toolStarts[ev.Progress.Agent] = &activeCall{id: id, start: time.Now(), summary: toolName, depth: 1}
+		o.toolStarts[ev.Agent] = &activeCall{id: id, start: time.Now(), summary: toolName, depth: 1}
 		o.emitAndLog(Event{
 			ID:       id,
 			Time:     time.Now(),
 			Category: "TOOL",
-			Agent:    ev.Progress.Agent,
+			Agent:    ev.Agent,
 			Summary:  toolName,
 			Level:    "info",
 			Depth:    1,
 		})
-		o.updateAgent(ev.Progress.Agent, func(a *agentState) {
+		o.updateAgent(ev.Agent, func(a *agentState) {
 			a.state = "working"
-			a.tool = ev.Progress.Tool
-			a.summary = fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName)
+			a.tool = ev.Tool
+			a.summary = fmt.Sprintf("%s → %s", ev.Agent, toolName)
 		})
-		o.emitFallbackStreamHeader(ev.Progress.Tool)
-	case agentcore.ProgressToolEnd:
-		delete(o.streamExtractors, ev.Progress.Agent)
-		if ev.Progress.Agent == "" {
+		o.emitFallbackStreamHeader(ev.Tool)
+	case progress.KindToolEnd:
+		delete(o.streamExtractors, ev.Agent)
+		if ev.Agent == "" {
 			return
 		}
-		call, ok := o.toolStarts[ev.Progress.Agent]
+		call, ok := o.toolStarts[ev.Agent]
 		if !ok {
 			return
 		}
-		delete(o.toolStarts, ev.Progress.Agent)
+		delete(o.toolStarts, ev.Agent)
 		// 同 ID 更新事件：TUI 按 ID 定位原 TOOL 行，回填 FinishedAt / Duration。
 		// Summary / Depth 也带上，保证 runtime queue replay 时能还原完整行。
 		finishEv := Event{
@@ -61,7 +58,7 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 			Time:       call.start,
 			FinishedAt: time.Now(),
 			Category:   "TOOL",
-			Agent:      ev.Progress.Agent,
+			Agent:      ev.Agent,
 			Summary:    call.summary,
 			Level:      "info",
 			Depth:      call.depth,
@@ -69,47 +66,31 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		}
 		o.emitEv(finishEv)
 		o.persistEvent(finishEv)
-	case agentcore.ProgressThinking:
+	case progress.KindThinking:
 		o.handleThinkingProgress(ev)
-	case agentcore.ProgressRetry:
+	case progress.KindRetry:
 		// 只展示上游明确报告的实际等待时间，避免本地估算与真实退避节奏不一致。
 		// Summary 不嵌静态延时——UI 依 RetryAt 逐秒倒计时；Detail/日志保留发出时的延时快照。
-		delay := retryProgressDelay(ev.Progress)
-		retryEv := Event{
-			ID:       o.retryEventID(ev.Progress.Agent, ev.Progress.Attempt),
-			Time:     time.Now(),
-			Category: "SYSTEM",
-			Agent:    ev.Progress.Agent,
-			Summary:  retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, 0) + utils.TruncateRunes(ev.Progress.Message, 80),
-			Detail:   retryPrefix(ev.Progress.Attempt, ev.Progress.MaxRetries, delay) + ev.Progress.Message,
-			Kind:     errorKind(nil, ev.Progress.Message),
-			Level:    "warn",
-			Depth:    1,
-		}
-		if delay > 0 {
-			retryEv.RetryAt = retryEv.Time.Add(delay)
-		}
-		o.emitEv(retryEv)
-		o.persistEvent(retryEv)
-	case agentcore.ProgressToolError:
-		delete(o.streamExtractors, ev.Progress.Agent)
-		msg := ev.Progress.Message
+		o.emitRetryRow(ev.Agent, ev.Attempt, ev.MaxRetries, retryProgressDelay(&ev), ev.Message)
+	case progress.KindToolError:
+		delete(o.streamExtractors, ev.Agent)
+		msg := ev.Message
 		if msg == "" {
 			msg = "unknown error"
 		}
 		// 如果有进行中的 TOOL 行，原地标记为失败并把完整错误放进 Detail。
 		// 同一次失败只生成一个 ERROR 级事件，避免 TOOL 失败态与附加 ERROR
 		// 详情在 tui.log 中被误读成两次独立故障。
-		if call, ok := o.toolStarts[ev.Progress.Agent]; ok {
-			delete(o.toolStarts, ev.Progress.Agent)
-			detail := fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, msg)
+		if call, ok := o.toolStarts[ev.Agent]; ok {
+			delete(o.toolStarts, ev.Agent)
+			detail := fmt.Sprintf("%s 错误: %s", ev.Tool, msg)
 			finishEv := Event{
 				ID:         call.id,
 				Time:       call.start,
 				FinishedAt: time.Now(),
 				Failed:     true,
 				Category:   "TOOL",
-				Agent:      ev.Progress.Agent,
+				Agent:      ev.Agent,
 				Summary:    fmt.Sprintf("%s 错误: %s", call.summary, utils.TruncateRunes(msg, 100)),
 				Detail:     detail,
 				Kind:       errorKind(nil, msg),
@@ -125,21 +106,41 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		errEv := Event{
 			Time:     time.Now(),
 			Category: "ERROR",
-			Agent:    ev.Progress.Agent,
-			Summary:  fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, utils.TruncateRunes(msg, 100)),
-			Detail:   fmt.Sprintf("%s 错误: %s", ev.Progress.Tool, msg),
+			Agent:    ev.Agent,
+			Summary:  fmt.Sprintf("%s 错误: %s", ev.Tool, utils.TruncateRunes(msg, 100)),
+			Detail:   fmt.Sprintf("%s 错误: %s", ev.Tool, msg),
 			Kind:     errorKind(nil, msg),
 			Level:    "error",
 			Depth:    1,
 		}
 		o.emitEv(errEv)
 		o.persistEvent(errEv)
-	case agentcore.ProgressContext:
+	case progress.KindContext:
 		o.handleContextProgress(ev)
 	}
 }
 
-func retryProgressDelay(p *agentcore.ProgressPayload) time.Duration {
+// emitRetryRow 发一行重试提示：同一 scope 的连续尝试原地更新同一行 (2/7)。
+func (o *observer) emitRetryRow(agent string, attempt, maxRetries int, delay time.Duration, msg string) {
+	retryEv := Event{
+		ID:       o.retryEventID(agent, attempt),
+		Time:     time.Now(),
+		Category: "SYSTEM",
+		Agent:    agent,
+		Summary:  retryPrefix(attempt, maxRetries, 0) + utils.TruncateRunes(msg, 80),
+		Detail:   retryPrefix(attempt, maxRetries, delay) + msg,
+		Kind:     errorKind(nil, msg),
+		Level:    "warn",
+		Depth:    1,
+	}
+	if delay > 0 {
+		retryEv.RetryAt = retryEv.Time.Add(delay)
+	}
+	o.emitEv(retryEv)
+	o.persistEvent(retryEv)
+}
+
+func retryProgressDelay(p *progress.Event) time.Duration {
 	if p == nil {
 		return 0
 	}

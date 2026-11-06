@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/logger"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -34,14 +34,13 @@ type Prompts struct {
 
 // RunBudgets 是各语义函数的输入/输出预算。第一版用保守常量；
 // 未来应由当前 architect 模型的 context window / completion 上限推导，使批次随能力自然放大（RFC §9.2/§21）。
+// 输出预算只用于估算分批与区间划分，不进入请求：生成预算由 provider/model 决定。
 type RunBudgets struct {
 	MaxUnitBytes         int
 	SegmentChunkBytes    int
 	SegmentContextMargin int
-	SegmentMaxTokens     int
 	Analyze              AnalyzeBudget
 	SynthesizeRangeBytes int
-	SynthesizeMaxTokens  int
 }
 
 // DefaultRunBudgets 返回保守默认预算，用于模型能力未知（探测失败）时兜底。
@@ -50,10 +49,8 @@ func DefaultRunBudgets() RunBudgets {
 		MaxUnitBytes:         8000,
 		SegmentChunkBytes:    24000,
 		SegmentContextMargin: 20,
-		SegmentMaxTokens:     8192,
 		Analyze:              AnalyzeBudget{ContextBytes: 24000, MaxOutputTokens: 8000, PerChapterOutput: 900, PromptOverhead: 2000},
 		SynthesizeRangeBytes: 16000,
-		SynthesizeMaxTokens:  8192,
 	}
 }
 
@@ -61,8 +58,8 @@ func DefaultRunBudgets() RunBudgets {
 // 让预算随 context 自然放大、thinking 随能力发送；全零值时回退保守默认，
 // 行为与接入能力前一致。结构化输出不按 provider 能力发 response_format（见 callProfile 注释）。
 type ModelRuntime struct {
-	ContextTokens int                     // 输入上下文上限（token）
-	Thinking      agentcore.ThinkingLevel // 已按能力 resolve；ThinkingAuto("") 表示不显式发送
+	ContextTokens int                       // 输入上下文上限（token）
+	Thinking      llmcontract.ThinkingLevel // 已按能力 resolve；ThinkingAuto("") 表示不显式发送
 }
 
 // profile 派生本运行时的调用能力选项（thinking）。
@@ -74,13 +71,14 @@ func (rt ModelRuntime) profile() callProfile {
 // segment/analyze/synthesize 各自持有档位，预算与调用选项都按各自档位派生，
 // 廉价档位的小窗口只约束它自己的函数，不拖累其它阶段。
 type Caller struct {
-	Model   callModel
+	Model   llmcontract.Model
 	Runtime ModelRuntime
 }
 
-// maxOutputTokens 是导入单次调用的输出上限，与写作 agent 的默认输出上限（agentcore 65536）
-// 一致：厂商接受写作请求就接受导入请求。不取模型目录的 completion 上限——那是聚合网关
-// 报的值，不是厂商接口的限制（如 GLM 目录值远超智谱接口的 131072，会被直接 400）。
+// maxOutputTokens 是预算推导时假定的可见输出规模，只用于估算分批与区间划分，不作为
+// 任何请求的输出上限发出。取值与写作 agent 的默认输出上限一致：厂商接受写作请求，导入
+// 请求自然也在其生成能力内。不取模型目录的 completion 上限——那是聚合网关报的值，
+// 不是厂商接口的限制（如 GLM 目录值远超智谱接口的 131072）。
 const maxOutputTokens = 65536
 
 // budgetsFromRuntime 从模型真实 context 上限派生各语义函数预算（RFC §9.2/§21）。
@@ -103,7 +101,6 @@ func budgetsFromRuntime(rt ModelRuntime) RunBudgets {
 		MaxUnitBytes:         min(inBytes/2, 32000),
 		SegmentChunkBytes:    inBytes,
 		SegmentContextMargin: 20,
-		SegmentMaxTokens:     out,
 		Analyze: AnalyzeBudget{
 			ContextBytes:     inBytes,
 			MaxOutputTokens:  out,
@@ -111,7 +108,6 @@ func budgetsFromRuntime(rt ModelRuntime) RunBudgets {
 			PromptOverhead:   2000,
 		},
 		SynthesizeRangeBytes: inBytes,
-		SynthesizeMaxTokens:  out,
 	}
 }
 
@@ -147,10 +143,8 @@ func budgetsFromDeps(d Deps) RunBudgets {
 		MaxUnitBytes:         seg.MaxUnitBytes,
 		SegmentChunkBytes:    seg.SegmentChunkBytes,
 		SegmentContextMargin: seg.SegmentContextMargin,
-		SegmentMaxTokens:     seg.SegmentMaxTokens,
 		Analyze:              ana.Analyze,
 		SynthesizeRangeBytes: syn.SynthesizeRangeBytes,
-		SynthesizeMaxTokens:  syn.SynthesizeMaxTokens,
 	}
 }
 
@@ -158,7 +152,7 @@ func budgetsFromDeps(d Deps) RunBudgets {
 // 在自己的 goroutine 中跑；返回的事件通道由本函数关闭。
 func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 	if deps.Store == nil || deps.CommitChapter == nil ||
-		deps.Segment.Model == nil || deps.Analyze.Model == nil || deps.Synthesize.Model == nil {
+		deps.Segment.Model.Core.Client == nil || deps.Analyze.Model.Core.Client == nil || deps.Synthesize.Model.Core.Client == nil {
 		return nil, fmt.Errorf("deps 不完整")
 	}
 	if deps.Budgets == (RunBudgets{}) {
@@ -172,7 +166,7 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 		"segment_ctx", deps.Segment.Runtime.ContextTokens,
 		"analyze_ctx", deps.Analyze.Runtime.ContextTokens,
 		"synthesize_ctx", deps.Synthesize.Runtime.ContextTokens,
-		"analyze_max_output", deps.Budgets.Analyze.MaxOutputTokens,
+		"analyze_output_estimate", deps.Budgets.Analyze.MaxOutputTokens,
 		"analyze_context_bytes", deps.Budgets.Analyze.ContextBytes)
 	events := make(chan Event, 32)
 	go func() {
@@ -433,7 +427,7 @@ func (r *runner) segment(ctx context.Context) error {
 	// 范围已变，仅凭端点 ID 匹配会复用错位的旧边界（anchor 失配确定性失败或静默错切）。
 	chunkIdentity := fmt.Sprintf("%s\x00units:%d", digest, r.deps.Budgets.MaxUnitBytes)
 	seg, err := Segment(ctx, r.deps.Segment.Model, r.deps.Prompts.Segment, src, units, guidance,
-		r.deps.Budgets.SegmentChunkBytes, r.deps.Budgets.SegmentContextMargin, r.deps.Budgets.SegmentMaxTokens,
+		r.deps.Budgets.SegmentChunkBytes, r.deps.Budgets.SegmentContextMargin,
 		r.profileFor(r.deps.Segment, StageSegmenting), r.ws, chunkIdentity)
 	if err != nil {
 		return err
@@ -581,7 +575,7 @@ func (r *runner) synthesize(ctx context.Context) error {
 	}
 	r.emit(StageSynthesizing, 0, total, "分层归纳全书语义...", nil)
 	syn, err := Synthesize(ctx, r.deps.Synthesize.Model, r.deps.Prompts.Synthesize, r.deps.Prompts.Range, r.ws, facts,
-		r.deps.Budgets.SynthesizeRangeBytes, r.deps.Budgets.SynthesizeMaxTokens, r.profileFor(r.deps.Synthesize, StageSynthesizing))
+		r.deps.Budgets.SynthesizeRangeBytes, r.profileFor(r.deps.Synthesize, StageSynthesizing))
 	if err != nil {
 		return err
 	}

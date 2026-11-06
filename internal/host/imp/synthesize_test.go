@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
@@ -165,11 +164,11 @@ func TestReduceToFitMergesUntilBudget(t *testing.T) {
 	}
 	budget := len(mustJSON(t, ds[0]))*2 + 10
 	// 每组归并出一个小摘要：第 1-10 章、第 11-20 章。
-	m := &mockModel{responses: []string{
+	m := &mockProvider{responses: []string{
 		rangeDigestJSON(1, 10, "合并一"),
 		rangeDigestJSON(11, 20, "合并二"),
 	}}
-	out, err := reduceToFit(context.Background(), m, "range", ds, budget, 4096, callProfile{})
+	out, err := reduceToFit(context.Background(), scriptModel(t, m), "range", ds, budget, callProfile{})
 	if err != nil {
 		t.Fatalf("reduceToFit: %v", err)
 	}
@@ -190,8 +189,8 @@ func mustJSON(t *testing.T, v any) []byte {
 func TestSynthesizeDirectWithMock(t *testing.T) {
 	facts := factsN(3)
 	resp := synthesisFixtureJSON(3, storyOpen)
-	m := &mockModel{responses: []string{resp}}
-	s, err := Synthesize(context.Background(), m, "sys", "range-sys", &Workspace{dir: t.TempDir()}, facts, 0, 4096, callProfile{})
+	m := &mockProvider{responses: []string{resp}}
+	s, err := Synthesize(context.Background(), scriptModel(t, m), "sys", "range-sys", &Workspace{dir: t.TempDir()}, facts, 0, callProfile{})
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
@@ -201,5 +200,4 @@ func TestSynthesizeDirectWithMock(t *testing.T) {
 	if _, err := AssembleFoundation(s, facts, false, "b.txt"); err != nil {
 		t.Fatalf("组装应成功：%v", err)
 	}
-	_ = agentcore.StopReasonStop
 }

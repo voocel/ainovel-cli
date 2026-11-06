@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,60 +21,49 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
+// normalStop 是一次"模型自己说要结束"的停机信息。
+func normalStop() agentcore.StopInfo {
+	return agentcore.StopInfo{Turns: 1, Message: agentcore.Message{Stop: agentcore.StopEnd}}
+}
+
 // TestSubAgentGuard_HardStopReasonEscalatesImmediately 验证：模型返回
-// safety / content_filter 这类不可恢复的 provider 端拒答时，子代理 StopGuard
-// 必须立即 Escalate 而不是注入催促消息。
+// safety 这类不可恢复的 provider 端拒答时，子代理 StopGuard 必须立即升级终止
+// 而不是注入催促消息。
 //
 // 历史背景：实测 hy3-preview:free 写第 2 章时连续 8 次 stop_reason='safety'
 // 拒答；旧逻辑反复注入"必须 commit"，模型继续 safety，攒到 3 次 block 才 escalate，
-// 之后 Engine 又重跑 writer 总共 3 次。每次都是新的 SubAgent → 缓存
-// 前缀全部冷启动。修复后第一次 safety 立即 escalate，Engine 可直接按不可恢复错误暂停。
+// 之后 Engine 又重跑 writer 总共 3 次。修复后第一次 safety 立即升级，
+// Engine 可直接按不可恢复错误暂停。
 //
-// 注意只测 safety / content_filter：StopReasonError / StopReasonAborted 走
-// agentcore loop.go 直接终止 run 的分支，根本不会调用 StopGuard，列进来反而
-// 引入死代码。
+// 注意只测 safety：StopError / StopAborted 走 agentcore 的"直接结束 run"分支
+// （loop.go 的 respond 把 vendor error 作为 run 错误返回），根本不会咨询 OnStop，
+// 列进来反而引入死代码。
 func TestSubAgentGuard_HardStopReasonEscalatesImmediately(t *testing.T) {
-	cases := []agentcore.StopReason{
-		agentcore.StopReason("safety"),
-		agentcore.StopReason("content_filter"),
+	s := newTestStore(t)
+	guard := NewWriterStopGuard(s, nil)
+	info := agentcore.StopInfo{Turns: 1, Message: agentcore.Message{Stop: agentcore.StopSafety}}
+
+	msgs, err := guard(context.Background(), info)
+	if !errors.Is(err, ErrStopGuardEscalated) {
+		t.Fatalf("safety 停机必须立即升级，got err=%v msgs=%v", err, msgs)
 	}
-	for _, sr := range cases {
-		t.Run(string(sr), func(t *testing.T) {
-			s := newTestStore(t)
-			guard := NewWriterStopGuard(s, nil)
-			info := agentcore.StopInfo{
-				TurnIndex: 1,
-				Message:   agentcore.Message{StopReason: sr},
-			}
-			d := guard(context.Background(), info)
-			if !d.Escalate {
-				t.Fatalf("stop_reason=%q must escalate immediately, got %#v", sr, d)
-			}
-			if d.InjectMessage != "" {
-				t.Fatalf("stop_reason=%q must not inject any message, got %q", sr, d.InjectMessage)
-			}
-		})
+	if len(msgs) != 0 {
+		t.Fatalf("safety 停机不得注入任何催促消息，got %v", msgs)
 	}
 }
 
-// TestSubAgentGuard_NormalStopStillBlocks 确保对正常 stop_reason 的拦截行为
+// TestSubAgentGuard_NormalStopStillBlocks 确保对正常停机的拦截行为
 // 不受硬错误旁路的影响——LLM 自停且没 commit 时仍然要催。
 func TestSubAgentGuard_NormalStopStillBlocks(t *testing.T) {
 	s := newTestStore(t)
 	guard := NewWriterStopGuard(s, nil)
-	info := agentcore.StopInfo{
-		TurnIndex: 1,
-		Message:   agentcore.Message{StopReason: agentcore.StopReasonStop},
+
+	msgs, err := guard(context.Background(), normalStop())
+	if err != nil {
+		t.Fatalf("首次拦截不应升级，got %v", err)
 	}
-	d := guard(context.Background(), info)
-	if d.Escalate {
-		t.Fatal("normal stop must not escalate on first block")
-	}
-	if d.Allow {
-		t.Fatal("normal stop must be blocked when no commit checkpoint exists")
-	}
-	if d.InjectMessage == "" {
-		t.Fatal("normal stop must inject a follow-up message")
+	if len(msgs) != 1 || strings.TrimSpace(msgs[0].Text()) == "" {
+		t.Fatalf("正常停机且无 commit 时必须注入一条催促使模型继续，got %v", msgs)
 	}
 }
 
@@ -83,25 +73,25 @@ func TestSubAgentGuard_NormalStopStillBlocks(t *testing.T) {
 func TestSubAgentGuard_ProgressBetweenBlocksResetsCounter(t *testing.T) {
 	s := newTestStore(t)
 	guard := NewWriterStopGuard(s, nil)
-	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+	info := normalStop()
 
 	// 拦截 → 落盘新草稿（有进展）→ 再拦截：往复超过阈值也不得升级。
-	for i := 0; i < subagentMaxConsecutiveBlocks+2; i++ {
-		if d := guard(context.Background(), normalStop); d.Escalate {
-			t.Fatalf("escalated at block %d despite progress between blocks", i)
+	for i := range subagentMaxConsecutiveBlocks + 2 {
+		if _, err := guard(context.Background(), info); err != nil {
+			t.Fatalf("escalated at block %d despite progress between blocks: %v", i, err)
 		}
 		if _, err := s.Checkpoints.Append(domain.ChapterScope(1), "draft", "drafts/01.draft.md", fmt.Sprintf("d%d", i)); err != nil {
 			t.Fatalf("append draft: %v", err)
 		}
 	}
 	// 停止进展：连续空转拦截攒满阈值后才升级。
-	for i := 0; i < subagentMaxConsecutiveBlocks; i++ {
-		if d := guard(context.Background(), normalStop); d.Escalate {
-			t.Fatalf("escalated too early at idle block %d", i)
+	for i := range subagentMaxConsecutiveBlocks {
+		if _, err := guard(context.Background(), info); err != nil {
+			t.Fatalf("escalated too early at idle block %d: %v", i, err)
 		}
 	}
-	if d := guard(context.Background(), normalStop); !d.Escalate {
-		t.Fatal("expected escalate after consecutive no-progress blocks")
+	if _, err := guard(context.Background(), info); !errors.Is(err, ErrStopGuardEscalated) {
+		t.Fatalf("expected escalate after consecutive no-progress blocks, got %v", err)
 	}
 }
 
@@ -110,30 +100,39 @@ func TestSubAgentGuard_ProgressBetweenBlocksResetsCounter(t *testing.T) {
 func TestWriterStopGuard_StageAwareBlockMessage(t *testing.T) {
 	s := newTestStore(t)
 	guard := NewWriterStopGuard(s, nil)
-	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+	info := normalStop()
 
 	// 无任何产物：应引导完整流程，而不是直接催 commit。
-	d := guard(context.Background(), normalStop)
-	if !strings.Contains(d.InjectMessage, "draft_chapter") || !strings.Contains(d.InjectMessage, "plan_chapter") {
-		t.Fatalf("no-draft message should walk through the protocol, got %q", d.InjectMessage)
+	msgs, err := guard(context.Background(), info)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("expected one blocking message, got %v err=%v", msgs, err)
+	}
+	if got := msgs[0].Text(); !strings.Contains(got, "draft_chapter") || !strings.Contains(got, "plan_chapter") {
+		t.Fatalf("no-draft message should walk through the protocol, got %q", got)
 	}
 
 	// 草稿已落盘：应催 check_consistency 收尾。
 	if _, err := s.Checkpoints.Append(domain.ChapterScope(1), "draft", "drafts/01.draft.md", "d1"); err != nil {
 		t.Fatalf("append draft: %v", err)
 	}
-	d = guard(context.Background(), normalStop)
-	if !strings.Contains(d.InjectMessage, "check_consistency") {
-		t.Fatalf("draft-only message should point to check_consistency, got %q", d.InjectMessage)
+	msgs, err = guard(context.Background(), info)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("expected one blocking message, got %v err=%v", msgs, err)
+	}
+	if got := msgs[0].Text(); !strings.Contains(got, "check_consistency") {
+		t.Fatalf("draft-only message should point to check_consistency, got %q", got)
 	}
 
 	// 草稿+一致性检查已完成：只差提交，且要为 commit 报错场景留出路。
 	if _, err := s.Checkpoints.Append(domain.ChapterScope(1), "consistency_check", "meta/checks/01.json", "c1"); err != nil {
 		t.Fatalf("append consistency_check: %v", err)
 	}
-	d = guard(context.Background(), normalStop)
-	if !strings.Contains(d.InjectMessage, "commit_chapter") || !strings.Contains(d.InjectMessage, "错误") {
-		t.Fatalf("ready-to-commit message should mention commit and error handling, got %q", d.InjectMessage)
+	msgs, err = guard(context.Background(), info)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("expected one blocking message, got %v err=%v", msgs, err)
+	}
+	if got := msgs[0].Text(); !strings.Contains(got, "commit_chapter") || !strings.Contains(got, "错误") {
+		t.Fatalf("ready-to-commit message should mention commit and error handling, got %q", got)
 	}
 }
 
@@ -146,10 +145,10 @@ func TestSubAgentGuard_BlockHookReceivesAgentAndReason(t *testing.T) {
 		agents = append(agents, agent)
 		reasons = append(reasons, reason)
 	})
-	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+	info := normalStop()
 
-	for i := 0; i < subagentMaxConsecutiveBlocks+1; i++ {
-		guard(context.Background(), normalStop)
+	for range subagentMaxConsecutiveBlocks + 1 {
+		_, _ = guard(context.Background(), info)
 	}
 	if len(reasons) != subagentMaxConsecutiveBlocks+1 {
 		t.Fatalf("hook called %d times, want %d", len(reasons), subagentMaxConsecutiveBlocks+1)
@@ -159,7 +158,7 @@ func TestSubAgentGuard_BlockHookReceivesAgentAndReason(t *testing.T) {
 			t.Fatalf("hook call %d: agent = %q, want writer", i, agent)
 		}
 	}
-	for i := 0; i < subagentMaxConsecutiveBlocks; i++ {
+	for i := range subagentMaxConsecutiveBlocks {
 		if reasons[i] != "blocked" {
 			t.Fatalf("reason[%d] = %q, want blocked", i, reasons[i])
 		}
@@ -173,10 +172,7 @@ func TestSubAgentGuard_BlockHookReceivesAgentAndReason(t *testing.T) {
 	hardGuard := NewWriterStopGuard(s, func(_, reason string, _ int32) {
 		hardReasons = append(hardReasons, reason)
 	})
-	hardGuard(context.Background(), agentcore.StopInfo{
-		TurnIndex: 1,
-		Message:   agentcore.Message{StopReason: agentcore.StopReason("safety")},
-	})
+	_, _ = hardGuard(context.Background(), agentcore.StopInfo{Turns: 1, Message: agentcore.Message{Stop: agentcore.StopSafety}})
 	if len(hardReasons) != 1 || hardReasons[0] != "hard_stop" {
 		t.Fatalf("hard stop hook reasons = %v, want [hard_stop]", hardReasons)
 	}
@@ -185,7 +181,7 @@ func TestSubAgentGuard_BlockHookReceivesAgentAndReason(t *testing.T) {
 // TestEditorStopGuard_TaskAware 验证任务感知：被派生成弧摘要时，仅 save_review（复核）
 // 不算完成，必须产出 arc_summary 才放行——封堵卷中骨架弧死循环的起点 Defect C。
 func TestEditorStopGuard_TaskAware(t *testing.T) {
-	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+	info := normalStop()
 
 	// 摘要任务 + 只存了 review → 必须阻拦（review 不满足 arc_summary 要求）。
 	t.Run("summary task blocks on review only", func(t *testing.T) {
@@ -194,8 +190,12 @@ func TestEditorStopGuard_TaskAware(t *testing.T) {
 		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "review", "reviews/v05a01.json", "d1"); err != nil {
 			t.Fatalf("append review: %v", err)
 		}
-		if d := guard(context.Background(), normalStop); d.Allow {
-			t.Fatal("summary task must NOT be satisfied by a review checkpoint")
+		msgs, err := guard(context.Background(), info)
+		if err != nil {
+			t.Fatalf("first block must not escalate: %v", err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("summary task must NOT be satisfied by a review checkpoint, got %v", msgs)
 		}
 	})
 
@@ -206,8 +206,9 @@ func TestEditorStopGuard_TaskAware(t *testing.T) {
 		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "arc_summary", "summaries/arc-v05a01.json", "d1"); err != nil {
 			t.Fatalf("append arc_summary: %v", err)
 		}
-		if d := guard(context.Background(), normalStop); !d.Allow {
-			t.Fatal("summary task must be satisfied by an arc_summary checkpoint")
+		msgs, err := guard(context.Background(), info)
+		if err != nil || len(msgs) != 0 {
+			t.Fatalf("summary task must be satisfied by an arc_summary checkpoint, got %v err=%v", msgs, err)
 		}
 	})
 
@@ -218,8 +219,9 @@ func TestEditorStopGuard_TaskAware(t *testing.T) {
 		if _, err := s.Checkpoints.Append(domain.ArcScope(5, 1), "review", "reviews/v05a01.json", "d1"); err != nil {
 			t.Fatalf("append review: %v", err)
 		}
-		if d := guard(context.Background(), normalStop); !d.Allow {
-			t.Fatal("review task must be satisfied by a review checkpoint")
+		msgs, err := guard(context.Background(), info)
+		if err != nil || len(msgs) != 0 {
+			t.Fatalf("review task must be satisfied by a review checkpoint, got %v err=%v", msgs, err)
 		}
 	})
 }

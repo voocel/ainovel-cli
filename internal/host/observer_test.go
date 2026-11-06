@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/progress"
+	"github.com/voocel/litellm"
 )
 
 func testObserver(events *[]Event) *observer {
@@ -22,6 +24,7 @@ func testObserver(events *[]Event) *observer {
 		modelStarts:         make(map[string]*activeCall),
 		toolStarts:          make(map[string]*activeCall),
 		streamExtractors:    make(map[string]*agentExtractor),
+		streamTools:         make(map[string]map[int]string),
 		retryEvents:         make(map[string]string),
 	}
 }
@@ -31,16 +34,13 @@ func TestObserverSubagentRetryEventsUpdateSameLinePerAgent(t *testing.T) {
 	o := testObserver(&events)
 
 	for i := 1; i <= 2; i++ {
-		o.handleToolUpdate(agentcore.Event{
-			Type: agentcore.EventToolExecUpdate,
-			Progress: &agentcore.ProgressPayload{
-				Kind:       agentcore.ProgressRetry,
-				Agent:      "writer",
-				Attempt:    i,
-				MaxRetries: 7,
-				Message:    "stream read error: INTERNAL_ERROR; received from peer [network, openai]",
-				Meta:       json.RawMessage(`{"retry_delay_ms":2000}`),
-			},
+		o.handleToolUpdate(progress.Event{
+			Kind:       progress.KindRetry,
+			Agent:      "writer",
+			Attempt:    i,
+			MaxRetries: 7,
+			Message:    "stream read error: INTERNAL_ERROR; received from peer [network, openai]",
+			Meta:       json.RawMessage(`{"retry_delay_ms":2000}`),
 		})
 	}
 
@@ -63,7 +63,7 @@ func TestObserverSubagentRetryEventsUpdateSameLinePerAgent(t *testing.T) {
 }
 
 func TestRetryProgressDelayRequiresReportedDelay(t *testing.T) {
-	p := &agentcore.ProgressPayload{Attempt: 3, MaxRetries: 7}
+	p := &progress.Event{Attempt: 3, MaxRetries: 7}
 	if got := retryProgressDelay(p); got != 0 {
 		t.Fatalf("unreported delay = %s, want 0", got)
 	}
@@ -115,15 +115,15 @@ func TestObserverSeparatesModelResponseFromToolExecution(t *testing.T) {
 	var events []Event
 	o := testObserver(&events)
 
-	o.handleWorkerEvent("writer", agentcore.Event{Type: agentcore.EventTurnStart})
-	o.handleThinkingProgress(agentcore.Event{Progress: &agentcore.ProgressPayload{
-		Agent: "writer", Thinking: "正在分析章节计划",
-	}})
-	o.handleSubagentDelta(&agentcore.ProgressPayload{
-		Kind:      agentcore.ProgressToolDelta,
+	o.handleWorkerEvent("writer", agentcore.MessageStart{})
+	o.handleThinkingProgress(progress.Event{
+		Kind: progress.KindThinking, Agent: "writer", Thinking: "正在分析章节计划",
+	})
+	o.handleSubagentDelta(&progress.Event{
+		Kind:      progress.KindToolDelta,
 		Agent:     "writer",
 		Tool:      "draft_chapter",
-		DeltaKind: agentcore.DeltaToolCall,
+		DeltaKind: progress.DeltaToolCall,
 		Delta:     `{"chapter":11,"content":"第十一章`,
 	})
 
@@ -143,17 +143,16 @@ func TestObserverSeparatesModelResponseFromToolExecution(t *testing.T) {
 		t.Fatal("生成工具参数时不应启动 TOOL 计时")
 	}
 
-	o.handleWorkerEvent("writer", agentcore.Event{
-		Type:    agentcore.EventMessageEnd,
-		Message: agentcore.Message{Role: agentcore.RoleAssistant},
+	o.handleWorkerEvent("writer", agentcore.MessageEnd{
+		Message: agentcore.Message{Role: litellm.RoleAssistant},
 	})
-	o.handleToolUpdate(agentcore.Event{Progress: &agentcore.ProgressPayload{
-		Kind: agentcore.ProgressToolStart, Agent: "writer", Tool: "draft_chapter",
+	o.handleToolUpdate(progress.Event{
+		Kind: progress.KindToolStart, Agent: "writer", Tool: "draft_chapter",
 		Args: json.RawMessage(`{"chapter":11}`),
-	}})
-	o.handleToolUpdate(agentcore.Event{Progress: &agentcore.ProgressPayload{
-		Kind: agentcore.ProgressToolEnd, Agent: "writer", Tool: "draft_chapter",
-	}})
+	})
+	o.handleToolUpdate(progress.Event{
+		Kind: progress.KindToolEnd, Agent: "writer", Tool: "draft_chapter",
+	})
 
 	if len(events) != 6 {
 		t.Fatalf("events = %d, want MODEL finish + TOOL start/finish", len(events))
@@ -176,22 +175,16 @@ func TestObserverToolErrorUpdatesSingleToolEventWithFullDetail(t *testing.T) {
 	fullError := "tool argument validation failed: unexpected end of JSON input\nraw args: " +
 		`{"chapter":1,"summary":"` + strings.Repeat("秦越在材料中发现线索", 30) + "<TAIL>"
 
-	o.handleToolUpdate(agentcore.Event{
-		Type: agentcore.EventToolExecUpdate,
-		Progress: &agentcore.ProgressPayload{
-			Kind:  agentcore.ProgressToolStart,
-			Agent: "writer",
-			Tool:  "edit_chapter",
-		},
+	o.handleToolUpdate(progress.Event{
+		Kind:  progress.KindToolStart,
+		Agent: "writer",
+		Tool:  "edit_chapter",
 	})
-	o.handleToolUpdate(agentcore.Event{
-		Type: agentcore.EventToolExecUpdate,
-		Progress: &agentcore.ProgressPayload{
-			Kind:    agentcore.ProgressToolError,
-			Agent:   "writer",
-			Tool:    "edit_chapter",
-			Message: fullError,
-		},
+	o.handleToolUpdate(progress.Event{
+		Kind:    progress.KindToolError,
+		Agent:   "writer",
+		Tool:    "edit_chapter",
+		Message: fullError,
 	})
 
 	if len(events) != 2 {
