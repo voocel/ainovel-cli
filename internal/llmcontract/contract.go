@@ -30,7 +30,9 @@ type Mode string
 const (
 	// ModeNativeJSONSchema 发送 response_format.json_schema，端点负责强制结构。
 	ModeNativeJSONSchema Mode = "native_json_schema"
-	// ModePromptContract 只开 JSON 模式（json_object），结构约束来自提示词。
+	// ModePromptContract 不发送 response_format：结构约束只来自提示词里的
+	// schema 契约。Anthropic/Bedrock 没有 json_object 等价物（Messages API 会
+	// 直接拒绝），所以 JSON 模式不是可移植的选择。
 	ModePromptContract Mode = "prompt_contract"
 )
 
@@ -111,11 +113,12 @@ func Resolve(m Model, c Contract) Resolution {
 }
 
 // Plan 解析协议并生成本次请求的 response_format:原生模式带命名 schema,
-// prompt contract 模式只开 JSON 模式。schema 无法序列化时返回错误,请求不发。
+// prompt contract 模式不发 response_format(nil)。schema 无法序列化时返回错误,
+// 请求不发。
 func Plan(m Model, c Contract) (*litellm.ResponseFormat, Resolution, error) {
 	res := Resolve(m, c)
 	if res.Mode != ModeNativeJSONSchema {
-		return litellm.NewResponseFormatJSONObject(), res, nil
+		return nil, res, nil
 	}
 	format, err := litellm.NewResponseFormatJSONSchema(c.Name, c.Description, c.Schema)
 	if err != nil {

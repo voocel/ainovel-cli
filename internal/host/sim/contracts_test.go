@@ -64,8 +64,11 @@ func TestAnalyzeSourcePromptModeRepairsMissingRequiredFields(t *testing.T) {
 		t.Fatalf("缺字段后应反馈自愈: report=%+v calls=%d", report, len(provider.Requests()))
 	}
 	for i, req := range provider.Requests() {
-		if req.ResponseFormat == nil || req.ResponseFormat.Type != litellm.ResponseFormatJSONObject {
-			t.Fatalf("第 %d 次请求应走 prompt contract(json_object): %#v", i+1, req.ResponseFormat)
+		if req.ResponseFormat != nil {
+			t.Fatalf("prompt 模式不应设置 response_format, got %v", req.ResponseFormat)
+		}
+		if !strings.Contains(blocksText(req.Messages[0].Blocks), "<output-json-schema>") {
+			t.Fatalf("第 %d 次请求应把 schema 放进提示词", i+1)
 		}
 	}
 }

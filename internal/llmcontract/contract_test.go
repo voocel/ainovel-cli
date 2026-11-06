@@ -2,14 +2,21 @@ package llmcontract
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/litellmtest"
+	"github.com/voocel/litellm/provider/anthropic"
 )
 
 // testModel 构造一次结构化调用的模型句柄：test client + 请求模板。
@@ -121,13 +128,13 @@ func TestPlanNativeFormat(t *testing.T) {
 	}
 }
 
-func TestPlanPromptContractUsesJSONMode(t *testing.T) {
+func TestPlanPromptContractSendsNoFormat(t *testing.T) {
 	format, res, err := Plan(testModel(t, litellmtest.New(), new(false)), testContract())
 	if err != nil || res.Mode != ModePromptContract {
 		t.Fatalf("Plan = %+v %v", res, err)
 	}
-	if format == nil || format.Type != litellm.ResponseFormatJSONObject || format.JSONSchema != nil {
-		t.Fatalf("prompt 模式应只开 JSON 模式: %+v", format)
+	if format != nil {
+		t.Fatalf("prompt contract 不应发送 response_format: %+v", format)
 	}
 }
 
@@ -267,8 +274,8 @@ func TestExecutePromptModeSelfHealsSchemaViolation(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("应在第二次成功，calls=%d", len(requests))
 	}
-	if requests[0].ResponseFormat == nil || requests[0].ResponseFormat.Type != litellm.ResponseFormatJSONObject {
-		t.Fatalf("prompt 模式应只开 JSON 模式: %+v", requests[0].ResponseFormat)
+	if requests[0].ResponseFormat != nil {
+		t.Fatalf("prompt contract 不应发送 response_format: %+v", requests[0].ResponseFormat)
 	}
 	if got := requests[0].Messages[0].Blocks[0].(litellm.TextBlock).Text; !strings.Contains(got, "<output-json-schema>") {
 		t.Fatalf("prompt 模式应把契约写进系统提示词:\n%s", got)
@@ -439,5 +446,149 @@ func TestWithProviderOptionsMerges(t *testing.T) {
 	}
 	if string(base["b"]) != "2" {
 		t.Fatalf("不应修改传入的模板选项: %s", base)
+	}
+}
+
+// messagesRequest 是假 Messages 端点收到的一次请求。
+type messagesRequest struct {
+	Raw  string
+	Body map[string]any
+}
+
+// newMessagesServer 起一个假的 Messages 端点：记录请求体，回一段合法 JSON 文本。
+func newMessagesServer(t *testing.T, reply string) (*httptest.Server, func() []messagesRequest) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		got = append(got, messagesRequest{Raw: string(raw), Body: body})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "msg_test",
+			"type":        "message",
+			"role":        "assistant",
+			"model":       "claude-test",
+			"content":     []any{map[string]any{"type": "text", "text": reply}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 10, "output_tokens": 20},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []messagesRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(got)
+	}
+}
+
+// anthropicModel 用真实 Anthropic 适配器（打到 httptest 端点）构造模型句柄。
+// Messages API 要求 max_tokens，模板按 bootstrap 的物理上限习惯填一个值。
+func anthropicModel(t *testing.T, baseURL string, override *bool) Model {
+	t.Helper()
+	provider, err := anthropic.New(anthropic.Config{APIKey: "test-key", BaseURL: baseURL})
+	if err != nil {
+		t.Fatalf("构造 anthropic provider: %v", err)
+	}
+	client, err := litellm.New(provider)
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return Model{
+		Core: agentcore.Model{
+			Client:  client,
+			Request: litellm.Request{Model: "claude-test", MaxTokens: new(1024)},
+		},
+		Provider:           "anthropic",
+		ModelName:          "claude-test",
+		JSONSchemaOverride: override,
+	}
+}
+
+// systemText 取请求体里 system 字段的文本：单块时适配器会折叠成字符串。
+func systemText(body map[string]any) string {
+	switch system := body["system"].(type) {
+	case string:
+		return system
+	case []any:
+		var out strings.Builder
+		for _, block := range system {
+			if m, ok := block.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok {
+					out.WriteString(text)
+				}
+			}
+		}
+		return out.String()
+	}
+	return ""
+}
+
+// 回归：Messages API 没有 json_object 等价物，prompt contract 必须不发任何格式字段。
+func TestExecutePromptContractOnAnthropicSendsNoFormat(t *testing.T) {
+	srv, requests := newMessagesServer(t, `{"action":"a","reason":"ok"}`)
+	out, err := Execute(t.Context(), anthropicModel(t, srv.URL, new(false)), Request[decision]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+	})
+	if err != nil || out.Action != "a" || out.Reason != "ok" {
+		t.Fatalf("prompt contract 调用失败: %+v %v", out, err)
+	}
+	sent := requests()
+	if len(sent) != 1 {
+		t.Fatalf("应只发一次请求, calls=%d", len(sent))
+	}
+	if _, ok := sent[0].Body["response_format"]; ok {
+		t.Fatalf("不应发送 response_format: %s", sent[0].Raw)
+	}
+	if config, ok := sent[0].Body["output_config"].(map[string]any); ok {
+		if _, exists := config["format"]; exists {
+			t.Fatalf("不应发送 output_config.format: %s", sent[0].Raw)
+		}
+	}
+	prompt := systemText(sent[0].Body)
+	if !strings.Contains(prompt, "<output-json-schema>") || !strings.Contains(prompt, `"action"`) {
+		t.Fatalf("prompt contract 应把 schema 契约写进提示词:\n%s", prompt)
+	}
+}
+
+// 原生模式：schema 走 output_config.format，提示词不再重复注入契约。
+func TestExecuteNativeContractOnAnthropicSendsJSONSchema(t *testing.T) {
+	srv, requests := newMessagesServer(t, `{"action":"b","reason":"ok"}`)
+	out, err := Execute(t.Context(), anthropicModel(t, srv.URL, new(true)), Request[decision]{
+		Contract: testContract(), SystemPrompt: "判断。", Payload: "输入",
+	})
+	if err != nil || out.Action != "b" {
+		t.Fatalf("原生调用失败: %+v %v", out, err)
+	}
+	sent := requests()
+	if len(sent) != 1 {
+		t.Fatalf("应只发一次请求, calls=%d", len(sent))
+	}
+	config, _ := sent[0].Body["output_config"].(map[string]any)
+	format, _ := config["format"].(map[string]any)
+	if format == nil || format["type"] != "json_schema" {
+		t.Fatalf("原生模式应发送 output_config.format: %s", sent[0].Raw)
+	}
+	schema, _ := format["schema"].(map[string]any)
+	if schema == nil || schema["properties"] == nil {
+		t.Fatalf("schema 未随请求发出: %v", format["schema"])
+	}
+	if prompt := systemText(sent[0].Body); prompt != "判断。" {
+		t.Fatalf("原生模式不应向提示词重复注入 schema:\n%s", prompt)
 	}
 }
