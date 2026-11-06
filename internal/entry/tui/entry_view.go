@@ -22,9 +22,14 @@ func pageTop(title, right string, width int) []string {
 	return []string{alignRight(left, right+" ", width), benchRule(width)}
 }
 
-// pageBottom 是底栏：反馈嵌在分隔线里，下一行是按键与靠右的 aside。
-func (m model) pageBottom(feedback, hint, aside string, width int) []string {
-	return []string{feedbackRule(feedback, width), " " + alignRight(m.keyHint(benchTheme.Muted.Render(hint)), aside, width-2)}
+// pageBottom 是底栏：反馈嵌在分隔线里，下一行是按键与靠右的 aside。clickable 的页面在按键
+// 前用强调色说明可以用鼠标点：很多人不知道终端界面也能像网页一样点。
+func (m model) pageBottom(feedback, hint, aside string, clickable bool, width int) []string {
+	keys := benchTheme.Muted.Render(hint)
+	if clickable {
+		keys = benchTheme.Accent.Render("可用鼠标点选") + benchTheme.Muted.Render(" · ") + keys
+	}
+	return []string{feedbackRule(feedback, width), " " + alignRight(m.keyHint(keys), aside, width-2)}
 }
 
 func problemFeedback(problem string) string {
@@ -45,7 +50,7 @@ func (m model) entryPage(title string, content []string, problem, hint string) s
 	for _, line := range fitBlock(strings.Join(append([]string{""}, content...), "\n"), inner, h-pageHeader-pageFooter) {
 		lines = append(lines, pad+line)
 	}
-	lines = append(lines, m.pageBottom(problemFeedback(problem), hint, "", w)...)
+	lines = append(lines, m.pageBottom(problemFeedback(problem), hint, "", false, w)...)
 	return strings.Join(fitBlock(strings.Join(lines, "\n"), w, h), "\n")
 }
 
@@ -88,29 +93,59 @@ func (c *pageColumn) item(row string, focus, index int) {
 	c.lines = append(c.lines, row)
 }
 
+// rowLabel 是表单行的标签列：焦点所在行用强调色。
+func rowLabel(focused bool, label string, width int) string {
+	style := benchTheme.Muted
+	if focused {
+		style = benchTheme.Accent.Bold(true)
+	}
+	return padLine(style.Render(label), width)
+}
+
 type styled struct {
 	text  string
 	style lipgloss.Style
 }
 
-// listRow 是列表的一行（连同两侧留白）：left 靠左、right 靠右。选中时整行铺选中底色、
-// 左侧竖线，片段各自的颜色让位给底色。
-func listRow(left, right []styled, width int, selected bool) string {
+// rowLook 是列表行的样子：选中整行铺选中底色、左侧竖线，片段各自的颜色让位给底色；
+// 指针悬停整行铺输入面底色，片段保留各自颜色。
+type rowLook int
+
+const (
+	rowPlain rowLook = iota
+	rowHovered
+	rowSelected
+)
+
+func lookOf(selected bool) rowLook {
+	if selected {
+		return rowSelected
+	}
+	return rowPlain
+}
+
+// listRow 是列表的一行（连同两侧留白）：left 靠左、right 靠右。
+func listRow(left, right []styled, width int, look rowLook) string {
 	var plainLeft, plainRight, styledLeft, styledRight strings.Builder
+	fill := lipgloss.NewStyle()
+	if look == rowHovered {
+		fill = fill.Background(benchColors.InputBackground)
+	}
 	for _, cell := range left {
 		plainLeft.WriteString(cell.text)
-		styledLeft.WriteString(cell.style.Render(cell.text))
+		styledLeft.WriteString(cell.style.Inherit(fill).Render(cell.text))
 	}
 	for _, cell := range right {
 		plainRight.WriteString(cell.text)
-		styledRight.WriteString(cell.style.Render(cell.text))
+		styledRight.WriteString(cell.style.Inherit(fill).Render(cell.text))
 	}
 	room := width - lipgloss.Width(plainRight.String())
-	gutter := strings.Repeat(" ", pageGutter)
-	if selected {
-		return benchTheme.Selected.Render("▎ " + padLine(plainLeft.String(), room) + plainRight.String() + gutter)
+	if look == rowSelected {
+		return benchTheme.Selected.Render("▎ " + padLine(plainLeft.String(), room) + plainRight.String() + strings.Repeat(" ", pageGutter))
 	}
-	return gutter + padLine(styledLeft.String(), room) + styledRight.String() + gutter
+	gutter := fill.Render(strings.Repeat(" ", pageGutter))
+	gap := fill.Render(strings.Repeat(" ", max(0, room-lipgloss.Width(plainLeft.String()))))
+	return gutter + styledLeft.String() + gap + styledRight.String() + gutter
 }
 
 // listWindow 是列表的可见区间：装不下时让选中项留在窗口中部。

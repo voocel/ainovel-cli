@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,11 @@ func TestHomeFramesFitSizesThemesAndStates(t *testing.T) {
 			next, _ := m.beginLibrarySearch()
 			return typeText(t, next.(model), "09")
 		},
+		"picker": func(m model) model {
+			m.home.setFocus(focusApproval)
+			m.home.picker = true
+			return m
+		},
 		"fixed": func(m model) model {
 			m.home.premise.SetValue(strings.Repeat("写一个关于旧信与雨夜的故事", 30))
 			m.home.fixed, m.home.chapters = true, 1000
@@ -99,21 +105,28 @@ func TestHomeFramesFitSizesThemesAndStates(t *testing.T) {
 	}
 }
 
-// 首页把选择全部摊开并各附一句说明：键盘左右切换、鼠标直接点选，在篇幅行敲数字即固定篇幅。
-func TestHomeChoicesAreVisibleExplainedAndSelectable(t *testing.T) {
+// 选项收在输入框底行，写着当前选择，框下一行说清它意味着什么；键盘左右切换、↓ 展开浮框，
+// 浮框里上下挑选、回车收起（不开始）；在篇幅上敲数字即固定篇幅。
+func TestHomeChoicesLiveInTheComposer(t *testing.T) {
 	m := homeFixture(t, 150, 40, 0)
 	requireContains(t, ansi.Strip(m.screen()),
-		"● AI 决定", "○ 固定章数", "● 自动推进", "○ 里程碑确认", "○ 逐章确认",
-		"写到合适处收官", "只在越界时停下来问你", "AI 不会改写", "开始创作 ↵",
+		"╭─ 新故事", "篇幅 AI 决定 ▾", "推进 自动推进 ▾", "设定 可选 ›", "开始创作 ↵",
+		"写到合适处收官", "只在越界时停下来问你",
 	)
 	m = tabTo(t, m, focusApproval)
 	m, _ = press(t, m, tea.KeyRight)
-	requireContains(t, ansi.Strip(m.screen()), "● 里程碑确认", "蓝图和每个新故事弧先给你过目")
-	m = clickOption(t, m, focusApproval, 2)
-	if m.home.approval != domainmodel.ApprovalManual || m.home.focus != focusApproval {
-		t.Fatalf("click did not choose manual: %v", m.home.approval)
+	requireContains(t, ansi.Strip(m.screen()), "推进 里程碑确认 ▾", "蓝图和每个新故事弧先给你过目")
+	m, _ = press(t, m, tea.KeyDown)
+	if !m.home.picker {
+		t.Fatal("down must open the picker")
 	}
-	requireContains(t, ansi.Strip(m.screen()), "● 逐章确认", "蓝图和每一章都等你确认")
+	requireContains(t, ansi.Strip(m.screen()), "○ 自动推进", "● 里程碑确认", "○ 逐章确认", "蓝图和每一章都等你确认后才入稿")
+	m, _ = press(t, m, tea.KeyDown)
+	m, _ = press(t, m, tea.KeyDown)
+	m, _ = press(t, m, tea.KeyEnter)
+	if m.home.approval != domainmodel.ApprovalManual || m.home.picker || m.page != pageHome {
+		t.Fatalf("enter in the picker must only close it: approval=%v picker=%v page=%v", m.home.approval, m.home.picker, m.page)
+	}
 
 	m = tabTo(t, m, focusLength)
 	m, _ = pressRune(t, m, '4')
@@ -121,7 +134,7 @@ func TestHomeChoicesAreVisibleExplainedAndSelectable(t *testing.T) {
 	if !m.home.fixed || m.home.chapters != 40 {
 		t.Fatalf("digits must fix the length: fixed=%v chapters=%d", m.home.fixed, m.home.chapters)
 	}
-	requireContains(t, ansi.Strip(m.screen()), "● 固定 40 章", "全书写满 40 章收官")
+	requireContains(t, ansi.Strip(m.screen()), "篇幅 固定 40 章 ▾", "全书写满 40 章收官")
 	m, _ = press(t, m, tea.KeyBackspace)
 	m, _ = press(t, m, tea.KeyLeft)
 	if m.home.fixed || m.home.chapters != 4 {
@@ -129,7 +142,11 @@ func TestHomeChoicesAreVisibleExplainedAndSelectable(t *testing.T) {
 	}
 
 	// 固定篇幅却没填章数、或没写故事，都不开始，并把焦点送到要补的地方。
+	m, _ = clickHome(t, m, focusLength)
 	m = clickOption(t, m, focusLength, 1)
+	if !m.home.fixed || m.home.picker {
+		t.Fatalf("clicking an option must choose it and close the picker: fixed=%v picker=%v", m.home.fixed, m.home.picker)
+	}
 	m.home.chapters = 0
 	m, _ = press(t, m, tea.KeyEnter)
 	if m.page != pageHome || m.home.focus != focusPremise || !strings.Contains(m.home.err, "先写下") {
@@ -142,6 +159,101 @@ func TestHomeChoicesAreVisibleExplainedAndSelectable(t *testing.T) {
 	}
 	if m.home.intent("一个失忆的邮差") != nil {
 		t.Fatal("no extra settings means the quick path, not a full intent")
+	}
+}
+
+// 浮框挂在新故事框的下边线上、盖在作品库上：框里只认选项，点框外先收起再照常处理；
+// 框上方的画面不动。
+func TestHomePickerFloatsOverTheLibrary(t *testing.T) {
+	m := homeFixture(t, 150, 40, 30)
+	m.home.setFocus(focusPremise)
+	closed := strings.Split(m.screen(), "\n")
+	m, _ = clickHome(t, m, focusApproval)
+	frame := m.homeFrame()
+	if !m.home.picker || frame.picker.height == 0 {
+		t.Fatal("clicking the chip must open its picker")
+	}
+	opened := strings.Split(frame.text, "\n")
+	if hang := ansi.Strip(opened[frame.picker.y-1]); !strings.Contains(hang, "┬") {
+		t.Fatalf("the picker must hang from the composer border: %q", hang)
+	}
+	for y := 0; y < frame.picker.y-1; y++ {
+		if y != frame.picker.y-2 && ansi.Strip(opened[y]) != ansi.Strip(closed[y]) {
+			t.Fatalf("row %d above the picker moved:\n%q\n%q", y, ansi.Strip(closed[y]), ansi.Strip(opened[y]))
+		}
+	}
+	covered := homeRect{x: frame.picker.x, y: frame.picker.y + frame.picker.height - 1, width: 1, height: 1}
+	next, _ := m.Update(tea.MouseClickMsg{X: covered.x + 2, Y: covered.y, Button: tea.MouseLeft})
+	m = next.(model)
+	if !m.home.picker || m.home.focus != focusApproval {
+		t.Fatal("a click inside the picker frame must not fall through to the library")
+	}
+	m, _ = clickHome(t, m, focusApproval)
+	if m.home.picker {
+		t.Fatal("clicking the open chip again must close its picker")
+	}
+	m, _ = clickHome(t, m, focusApproval)
+	m, _ = clickHome(t, m, focusPremise)
+	if m.home.picker || m.home.focus != focusPremise {
+		t.Fatal("a click elsewhere must close the picker")
+	}
+}
+
+// 首页像网页一样悬停高亮能点的东西：作品行铺浅底色、文字入口换色；指针离开就复原。
+// 只有首页主体要终端报告指针移动。
+func TestHomeHoverHighlightsClickables(t *testing.T) {
+	m := homeFixture(t, 150, 40, 3)
+	m.home.setFocus(focusPremise)
+	if m.View().MouseMode != tea.MouseModeAllMotion {
+		t.Fatal("the home page needs pointer motion for hover")
+	}
+	plain := m.screen()
+	var row, config pageHit
+	for _, hit := range m.homeFrame().hits {
+		switch {
+		case hit.row == 1:
+			row = hit
+		case hit.focus == focusConfig:
+			config = hit
+		}
+	}
+	move := func(m model, x, y int) model {
+		next, _ := m.Update(tea.MouseMotionMsg{X: x, Y: y})
+		return next.(model)
+	}
+	m = move(m, row.x+4, row.y)
+	if line := strings.Split(m.screen(), "\n")[row.y]; line == strings.Split(plain, "\n")[row.y] || m.home.focus != focusPremise {
+		t.Fatal("hovering a book must highlight its row without moving focus")
+	}
+	m = move(m, config.x, config.y)
+	if m.screen() == plain || !m.home.hovered(focusConfig, -1, -1) {
+		t.Fatal("hovering a link must highlight it")
+	}
+	m = move(m, 0, row.y+10)
+	if m.screen() != plain {
+		t.Fatal("leaving every control must clear the hover")
+	}
+	m.home.mode = homeSettings
+	if m.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("form pages take no hover")
+	}
+}
+
+// 一部作品都没有时不显示、也不进入搜索；开始按钮在写下故事前是淡的，写了才是主按钮。
+func TestHomeEmptyLibraryAndStartReadiness(t *testing.T) {
+	m := homeFixture(t, 150, 40, 0)
+	if strings.Contains(ansi.Strip(m.screen()), "/ 搜索") || slices.Contains(m.focusRing(), focusSearch) {
+		t.Fatal("an empty library has nothing to search")
+	}
+	m.home.setFocus(focusImport)
+	m, _ = pressRune(t, m, '/')
+	if m.home.searching {
+		t.Fatal("slash must not open search on an empty library")
+	}
+	empty := m.homeFrame().text
+	m.home.premise.SetValue("雨夜")
+	if m.homeFrame().text == empty || !strings.Contains(m.homeFrame().text, benchTheme.Primary.Render(" 开始创作 ↵ ")) {
+		t.Fatal("a written story must turn start into the primary button")
 	}
 }
 
@@ -316,5 +428,36 @@ func TestHomePremiseCursorFollowsCaret(t *testing.T) {
 	prefix, _, ok := strings.Cut(row, "雨夜来信")
 	if !ok || view.Cursor.X != lipgloss.Width(prefix+"雨夜来信") {
 		t.Fatalf("cursor %+v must sit right after the typed text on %q", view.Cursor, row)
+	}
+}
+
+// 新故事是整体的圆角框，焦点在框里时框线用强调色；能点的页面在底栏说明可以用鼠标点选，
+// 不接鼠标的表单页不说。
+func TestHomePremiseBoxAndMouseHint(t *testing.T) {
+	m := homeFixture(t, 150, 40, 0)
+	topBorder := func(m model) string {
+		for _, line := range strings.Split(m.screen(), "\n") {
+			if strings.Contains(ansi.Strip(line), "╭") {
+				return line
+			}
+		}
+		t.Fatal("the story input must be a boxed field")
+		return ""
+	}
+	focused := topBorder(m)
+	if !strings.Contains(ansi.Strip(m.screen()), "可用鼠标点选") {
+		t.Fatal("the home page must tell that it can be clicked")
+	}
+	m.home.setFocus(focusLength)
+	if topBorder(m) != focused {
+		t.Fatal("the frame stays lit while focus is inside the composer")
+	}
+	m.home.setFocus(focusImport)
+	if topBorder(m) == focused {
+		t.Fatal("leaving the composer must recolor its frame")
+	}
+	m.home.mode = homeSettings
+	if strings.Contains(ansi.Strip(m.screen()), "可用鼠标点选") {
+		t.Fatal("form pages take no clicks and must not claim they do")
 	}
 }

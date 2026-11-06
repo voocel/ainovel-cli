@@ -235,6 +235,10 @@ func (m model) View() tea.View {
 	view.Cursor = cursor
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
+	// 首页像网页一样悬停高亮能点的东西：要终端报告不按键时的指针移动。
+	if m.page == pageHome && m.home.mode == homeMain && !m.tooSmall() {
+		view.MouseMode = tea.MouseModeAllMotion
+	}
 	return view
 }
 

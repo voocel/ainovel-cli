@@ -19,7 +19,8 @@ import (
 
 // 首页（workbench §4）：上面写一个新故事，下面是作品库。新故事的输入只有一句话、
 // 篇幅、推进方式与可选设定；它们只产生不同的初始化输入，最终创建相同的 Project 与
-// CreationRun。选项全部摊开并附一句说明，不藏在要猜的标签后面。
+// CreationRun。选项收在输入框底行，始终写着当前选择，框下一行说清它意味着什么；
+// 点开浮框列出全部选项与各自的说明。
 type homeMode int
 
 const (
@@ -28,7 +29,8 @@ const (
 	homeImport
 )
 
-// 焦点按阅读顺序排列：左栏自上而下，再到右栏与页眉。
+// 焦点按阅读顺序排列：新故事框、作品库，再到页眉。开始按钮只是点击目标，不停焦点：
+// 新故事框里回车就是开始创作。
 const (
 	focusPremise = iota
 	focusLength
@@ -51,13 +53,17 @@ type homeState struct {
 	settings    []textinput.Model
 	settingStep int
 	focus       int
-	mode        homeMode
-	search      textinput.Model
-	searching   bool
-	importIn    textinput.Model
-	importing   bool
-	library     []libraryEntry
-	cursor      int
+	// picker 是焦点所在的篇幅或推进展开了浮框。
+	picker bool
+	// hover 是指针下的控件（宽为 0 表示不在任何控件上），只用来画悬停。
+	hover     pageHit
+	mode      homeMode
+	search    textinput.Model
+	searching bool
+	importIn  textinput.Model
+	importing bool
+	library   []libraryEntry
+	cursor    int
 	// clicked 是上一次单击的作品：同一部再点一次即打开。
 	clicked listClick
 	loaded  bool
@@ -260,7 +266,7 @@ func (m model) handleHomeKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if home.searching {
 		return m.handleSearchKey(key)
 	}
-	if key.String() == "/" && home.focus != focusPremise {
+	if key.String() == "/" && home.focus != focusPremise && len(home.library) > 0 {
 		return m.beginLibrarySearch()
 	}
 	// 作品库焦点下 d=删除选中作品（危险操作，二次确认）；其他任意键取消确认。
@@ -277,6 +283,20 @@ func (m model) handleHomeKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if home.confirmDelete != "" {
 		home.confirmDelete, home.notice = "", ""
 	}
+	// 展开的浮框里上下挑选（选择即时生效），回车、空格或 Esc 收起。
+	if home.picker {
+		switch key.String() {
+		case "up", "left":
+			home.step(-1)
+			return m, nil
+		case "down", "right":
+			home.step(1)
+			return m, nil
+		case "enter", "space", "esc":
+			home.picker = false
+			return m, nil
+		}
+	}
 	switch key.String() {
 	case "tab", "shift+tab":
 		delta := 1
@@ -292,18 +312,22 @@ func (m model) handleHomeKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if home.focus == focusLibrary {
 			return m.moveLibrary(key.String()), nil
 		}
-	case "left", "right":
-		delta := 1
-		if key.String() == "left" {
-			delta = -1
-		}
-		switch home.focus {
-		case focusLength:
-			home.fixed = !home.fixed
+		if key.String() == "down" && (home.focus == focusLength || home.focus == focusApproval) {
+			home.picker = true
 			return m, nil
-		case focusApproval:
-			index := slices.Index(approvalOrder, home.approval)
-			home.approval = approvalOrder[(index+delta+len(approvalOrder))%len(approvalOrder)]
+		}
+	case "left", "right":
+		if home.focus == focusLength || home.focus == focusApproval {
+			delta := 1
+			if key.String() == "left" {
+				delta = -1
+			}
+			home.step(delta)
+			return m, nil
+		}
+	case "space":
+		if home.focus == focusLength || home.focus == focusApproval {
+			home.picker = true
 			return m, nil
 		}
 	case "backspace":
@@ -312,7 +336,7 @@ func (m model) handleHomeKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	// 在篇幅行直接敲数字就是固定篇幅并填章数。
+	// 焦点在篇幅上直接敲数字就是固定篇幅并填章数。
 	if home.focus == focusLength && len(key.Text) == 1 && key.Text[0] >= '0' && key.Text[0] <= '9' {
 		home.fixed = true
 		if home.chapters < 1000 {
@@ -351,17 +375,21 @@ func (m model) handleHomePaste(paste tea.PasteMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// focusRing 是 Tab 遍历的控件；作品库没有可选作品时跳过它。
+// focusRing 是 Tab 遍历的控件；作品库没有可选作品时跳过它，一部作品都没有时也不搜索。
 func (m model) focusRing() []int {
-	ring := []int{focusPremise, focusLength, focusApproval, focusSettings, focusStart}
+	ring := []int{focusPremise, focusLength, focusApproval, focusSettings}
 	if len(m.libraryIndices()) > 0 {
 		ring = append(ring, focusLibrary)
 	}
-	return append(ring, focusSearch, focusImport, focusConfig)
+	if len(m.home.library) > 0 {
+		ring = append(ring, focusSearch)
+	}
+	return append(ring, focusImport, focusConfig)
 }
 
+// setFocus 移动焦点并收起浮框。
 func (h *homeState) setFocus(focus int) tea.Cmd {
-	h.focus = focus
+	h.focus, h.picker = focus, false
 	if focus == focusPremise {
 		return h.premise.Focus()
 	}
@@ -369,9 +397,11 @@ func (h *homeState) setFocus(focus int) tea.Cmd {
 	return nil
 }
 
-// activate 是回车与点击的同一入口：新故事一栏里的回车都是开始创作。
+// activate 是回车与点击的同一入口：新故事框里的回车都是开始创作（设定除外，它进入一页）。
+// 离开首页主体时悬停作废，回来以指针重新移动为准。
 func (m model) activate(focus int) (tea.Model, tea.Cmd) {
 	home := &m.home
+	home.hover = pageHit{}
 	switch focus {
 	case focusLibrary:
 		if len(m.libraryIndices()) > 0 {
@@ -419,12 +449,12 @@ func (m model) handleSettingsKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, home.settings[step].Focus()
 }
 
-// closeSettings 回到首页并停在「开始创作」上：再按一次回车就开写。
+// closeSettings 回到首页、焦点回到故事输入：再按一次回车就开写。
 func (m model) closeSettings() (tea.Model, tea.Cmd) {
 	home := &m.home
 	home.settings[home.settingStep].Blur()
 	home.settingStep, home.mode = 0, homeMain
-	return m, home.setFocus(focusStart)
+	return m, home.setFocus(focusPremise)
 }
 
 func (m model) handleImportKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

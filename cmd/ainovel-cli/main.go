@@ -28,7 +28,7 @@ const usage = `ainovel-cli — AI 小说创作
   ainovel-cli --version           显示版本
 
 可选参数：
-  --db <路径>                 作品库数据库位置（默认 ~/.ainovel/v1/ainovel.db）
+  --db <路径>                 作品库数据库位置（默认 ~/.ainovel/ainovel.db）
 `
 
 func main() {
@@ -44,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.Usage = func() { fmt.Fprint(stdout, usage) }
 	showVersion := flags.Bool("version", false, "显示版本")
 	headlessMode := flags.Bool("headless", false, "无交互执行动作，供脚本与外部集成使用")
-	databasePath := flags.String("db", "", "作品库数据库路径；默认 ~/.ainovel/v1/ainovel.db")
+	databasePath := flags.String("db", "", "作品库数据库路径；默认 ~/.ainovel/ainovel.db")
 	if err := flags.Parse(args); err != nil {
 		// --help 是程序级入口（workbench §3）：输出帮助属正常退出。
 		if errors.Is(err, flag.ErrHelp) {

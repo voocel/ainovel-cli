@@ -44,6 +44,9 @@ type benchStyles struct {
 	Text, Muted, Border, Accent, Focus lipgloss.Style
 	Selected, Warning, Error, Success  lipgloss.Style
 	Title, Thought                     lipgloss.Style
+	// Primary 是可以按下的主按钮：强调色底、反色字；Button 是次一级的按钮底色。Link 是可点的
+	// 文字入口，像网页链接一样带下划线。
+	Primary, Button, Link lipgloss.Style
 }
 
 var benchTheme = newBenchStyles()
@@ -62,5 +65,8 @@ func newBenchStyles() benchStyles {
 		Title:    lipgloss.NewStyle().Foreground(benchColors.Text).Bold(true),
 		// 模型的思考是过程不是产出：比说明再淡一层、斜体，让大纲、设定、正文站在前面。
 		Thought: lipgloss.NewStyle().Foreground(benchColors.Faint).Italic(true),
+		Primary: lipgloss.NewStyle().Foreground(benchColors.SelectedBackground).Background(benchColors.Accent).Bold(true),
+		Button:  lipgloss.NewStyle().Foreground(benchColors.SelectedText).Background(benchColors.SelectedBackground).Bold(true),
+		Link:    lipgloss.NewStyle().Foreground(benchColors.Muted).Underline(true),
 	}
 }

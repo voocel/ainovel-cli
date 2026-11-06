@@ -410,8 +410,8 @@ func TestHomeSettingsCreateProjectWithFullIntent(t *testing.T) {
 	}
 	m = typeText(t, m, "都市悬疑读者")          // 受众
 	m = pressTimes(t, m, tea.KeyEnter, 5) // 期待体验/必须/禁止/结局方向留空，最后一项回车完成
-	// 填完回到首页并停在「开始创作」上，已填的项目写在设定行里。
-	if m.home.mode != homeMain || m.home.focus != focusStart || !strings.Contains(ansi.Strip(m.screen()), "已填 受众") {
+	// 填完回到首页、焦点回到故事输入（回车即开写），设定选项写着已填几项。
+	if m.home.mode != homeMain || m.home.focus != focusPremise || !strings.Contains(ansi.Strip(m.screen()), "设定 已填 1 项") {
 		t.Fatalf("settings did not return to start: mode=%v focus=%d", m.home.mode, m.home.focus)
 	}
 	m, cmd := press(t, m, tea.KeyEnter)

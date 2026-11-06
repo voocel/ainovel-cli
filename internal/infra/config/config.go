@@ -224,17 +224,18 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// DefaultDir 是配置与作品库的默认位置（~/.ainovel/v1）。v1 与 v0 的配置格式
-// 不同且互不迁移，目录独立后两边各写各的文件，互不覆盖。
+// DefaultDir 是配置与作品库的默认位置（~/.ainovel）。v0 也写这个目录，v1 的文件
+// 与它没有同名的，两边互不读写、互不迁移。
 func DefaultDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".ainovel", "v1"), nil
+	return filepath.Join(home, ".ainovel"), nil
 }
 
-func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
+// ConfigPath 是模型配置文件：不叫 config.json，那是 v0 格式不同的配置，同在 ~/.ainovel。
+func ConfigPath(dir string) string { return filepath.Join(dir, "settings.json") }
 
 // DataPath 是作品库数据库位置：全部作品共用一库，作品身份与工作目录无关。
 func DataPath(dir string) string { return filepath.Join(dir, "ainovel.db") }

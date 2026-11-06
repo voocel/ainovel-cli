@@ -16,8 +16,9 @@ import (
 // 多少上下浮动）。每一行的文字与热区在同一遍里生成。
 
 const (
-	wizardWidth = 76 // 内容栏最宽
-	wizardLabel = 12 // 表单、角色与思考强度的标签列
+	wizardWidth     = 76 // 内容栏最宽
+	wizardLabel     = 12 // 表单、角色与思考强度的标签列
+	wizardOptionGap = 4  // 同一行单选之间的间隔
 )
 
 type wizardFrame struct {
@@ -77,7 +78,7 @@ func (m model) wizardFrame() wizardFrame {
 		}
 		feedback = style.Render(m.wizard.notice)
 	}
-	lines = append(lines, m.pageBottom(feedback, section.hint+" · Ctrl+C 退出", section.aside, w)...)
+	lines = append(lines, m.pageBottom(feedback, section.hint+" · Ctrl+C 退出", section.aside, true, w)...)
 	frame.text = strings.Join(fitBlock(strings.Join(lines, "\n"), w, h), "\n")
 	return frame
 }
@@ -220,7 +221,7 @@ func (m model) overviewRow(item overviewItem, width int, selected bool) string {
 	switch item.kind {
 	case itemConnection:
 		left := []styled{{item.connection, benchTheme.Title}, {"   " + connectionLabel(item.connection, config.Providers[item.connection]), benchTheme.Muted}}
-		return listRow(left, []styled{{"编辑 ›", benchTheme.Muted}}, width, selected)
+		return listRow(left, []styled{{"编辑 ›", benchTheme.Muted}}, width, lookOf(selected))
 	case itemModel:
 		mark, tone := "  ○ ", benchTheme.Muted
 		if item.connection == config.Provider && item.model == config.Model {
@@ -230,11 +231,11 @@ func (m model) overviewRow(item overviewItem, width int, selected bool) string {
 		if window := m.api.Models.ContextWindow(item.connection, item.model); window > 0 {
 			right = []styled{{formatWindow(window), benchTheme.Muted}}
 		}
-		return listRow([]styled{{mark, tone}, {item.model, benchTheme.Text}}, right, width, selected)
+		return listRow([]styled{{mark, tone}, {item.model, benchTheme.Text}}, right, width, lookOf(selected))
 	case itemAddModel:
-		return listRow([]styled{{"  + 添加模型", benchTheme.Accent}}, nil, width, selected)
+		return listRow([]styled{{"  + 添加模型", benchTheme.Accent}}, nil, width, lookOf(selected))
 	default:
-		return listRow([]styled{{"+ 添加连接", benchTheme.Accent}}, nil, width, selected)
+		return listRow([]styled{{"+ 添加连接", benchTheme.Accent}}, nil, width, lookOf(selected))
 	}
 }
 
@@ -297,14 +298,14 @@ func (m model) choiceLine(choice binding.Choice, width int, selected bool) strin
 	}
 	if choice.Connection == "" {
 		current := m.api.Models.Current("")
-		return listRow([]styled{{mark, tone}, {"跟随默认", benchTheme.Text}}, []styled{{current.Connection + " / " + current.Model, benchTheme.Muted}}, width, selected)
+		return listRow([]styled{{mark, tone}, {"跟随默认", benchTheme.Text}}, []styled{{current.Connection + " / " + current.Model, benchTheme.Muted}}, width, lookOf(selected))
 	}
 	var right []styled
 	if window := m.api.Models.ContextWindow(choice.Connection, choice.Model); window > 0 {
 		right = []styled{{formatWindow(window), benchTheme.Muted}}
 	}
 	left := []styled{{mark, tone}, {choice.Connection + " / ", benchTheme.Muted}, {choice.Model, benchTheme.Text}}
-	return listRow(left, right, width, selected)
+	return listRow(left, right, width, lookOf(selected))
 }
 
 // --- 服务商 ---
@@ -322,7 +323,7 @@ func (m model) providersView(c *pageColumn) wizardSection {
 	listTop := len(c.lines)
 	for i, preset := range wizardPresets {
 		left := []styled{{padLine(preset.label, 16), benchTheme.Text}, {preset.note, benchTheme.Muted}}
-		c.item(listRow(left, nil, c.width, i == w.cursor), 0, i)
+		c.item(listRow(left, nil, c.width, lookOf(i == w.cursor)), 0, i)
 	}
 	hint := "↑↓ 选择 · Enter 下一步"
 	if saved {
@@ -372,7 +373,7 @@ func (m model) connectionView(c *pageColumn) wizardSection {
 					text = benchTheme.Accent.Render("● ") + benchTheme.Text.Bold(focused).Render(label)
 				}
 				c.hit(lipgloss.Width(line), lipgloss.Width(text), int(row), -1, i)
-				line += text + strings.Repeat(" ", homeOptionGap)
+				line += text + strings.Repeat(" ", wizardOptionGap)
 			}
 		default:
 			input := w.inputs[map[formRow]int{rowAddress: inputAddress, rowKey: inputKey, rowName: inputName}[row]]
@@ -481,7 +482,7 @@ func (m model) modelsView(c *pageColumn, rows int) wizardSection {
 
 func (w wizardState) pickerLine(row pickerRow, width int, selected bool) string {
 	if row.option == nil {
-		return listRow([]styled{{"↵ 使用「" + row.id + "」", benchTheme.Accent}, {"  先试一句确认能用", benchTheme.Muted}}, nil, width, selected)
+		return listRow([]styled{{"↵ 使用「" + row.id + "」", benchTheme.Accent}, {"  先试一句确认能用", benchTheme.Muted}}, nil, width, lookOf(selected))
 	}
 	mark := "  "
 	if slices.Contains(w.models, row.id) {
@@ -498,7 +499,7 @@ func (w wizardState) pickerLine(row pickerRow, width int, selected bool) string 
 	if row.option.Input > 0 || row.option.Output > 0 {
 		price = fmt.Sprintf("$%.2f / $%.2f", row.option.Input, row.option.Output)
 	}
-	return listRow(left, []styled{{pickerFacts(window, price), benchTheme.Muted}}, width, selected)
+	return listRow(left, []styled{{pickerFacts(window, price), benchTheme.Muted}}, width, lookOf(selected))
 }
 
 // pickerFacts 是模型行右侧的两列：上下文窗口与标价，表头同一套宽度。

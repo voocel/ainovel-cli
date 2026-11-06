@@ -34,9 +34,11 @@ go run ./cmd/ainovel-cli --headless ...  # 无交互执行动作，供脚本与�
 go run ./cmd/ainovel-cli --version       # 程序级信息
 ```
 
-TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/v1/config.json`（v1 目录独立于 v0，格式不兼容也不迁移），之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/v1/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。模型配置只认 `config.json`，不读环境变量；脚本里换模型用 `ainovel-cli --headless model use`。
+TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服务商列出的模型里挑一个），配置保存在 `~/.ainovel/settings.json`，之后在首页输入一句话回车即开写。进了工作台，有什么想法直接跟主编说：提要求、退稿、改篇幅、问进度、讨论情节都行，它把你的话按原话落进作品、在对话里留回执，正文仍由创作团队写；通过稿件按 `y`，暂停按 Esc。作品库共用 `~/.ainovel/ainovel.db`，作品身份与工作目录无关；`--db` 可为脚本或测试指定其他库。模型配置只认 `settings.json`，不读环境变量；脚本里换模型用 `ainovel-cli --headless model use`。
 
-连接名称可以自定义：顶层 `provider` 引用 `providers` 中的连接，连接的 `type` 指定协议（如 `openai`），`api` 选择 OpenAI 的 `chat` 或 `responses` 接口。每个连接保存自己的密钥、地址和模型列表，参见 [配置示例](config.example.jsonc)。
+连接名称可以自定义：顶层 `provider` 引用 `providers` 中的连接，连接的 `type` 指定协议（如 `openai`），`api` 选择 OpenAI 的 `chat` 或 `responses` 接口。每个连接保存自己的密钥、地址和模型列表，参见 [配置示例](settings.example.json)。
+
+从 v0 升级：v1 不读取 v0 的配置与作品，首次启动重新设置一次模型即可。`~/.ainovel` 下 v0 留下的 `config.json`、`config.example.jsonc`、`models-cache.json`、`last-error.log`、`rules/`、`style/` 与 v1 互不影响，不再使用 v0 可以删除；v0 的作品在当时启动目录的 `output/` 里。
 
 Headless 一句话写全书（篇幅由 AI 在故事罗盘里给出上限并在合适时收官；`--chapters N` 可固定全书章数，续跑不传则沿用上一轮设定；完本后加 `--extend` 续写，撤回收官承诺、由 AI 决定再写多少，TUI 完本后跟主编说“接着写”同义）：
 
@@ -132,9 +134,9 @@ internal/
 
 ## 备份与升级
 
-作品库 `~/.ainovel/v1/ainovel.db` 连同同名的 `-wal`、`-shm` 文件和 `ainovel.db.artifacts/` 目录是一套，备份要一起拷：
+作品库 `~/.ainovel/ainovel.db` 连同同名的 `-wal`、`-shm` 文件和 `ainovel.db.artifacts/` 目录是一套，备份要一起拷：
 
-- 退出程序后整套复制最稳；程序开着时，用 `sqlite3 ~/.ainovel/v1/ainovel.db "VACUUM INTO '/备份路径/ainovel.db'"` 得到一份一致的库，再复制 `.artifacts` 目录。
+- 退出程序后整套复制最稳；程序开着时，用 `sqlite3 ~/.ainovel/ainovel.db "VACUUM INTO '/备份路径/ainovel.db'"` 得到一份一致的库，再复制 `.artifacts` 目录。
 - 不要把作品库放进同步盘、在两台电脑上同时打开：日志文件会被同步得前后不一致，库可能损坏。
 - 升级：v1.0.0 起，新版程序打开旧库时自动升级，升级前在旁边留一份 `ainovel.db.v<旧版本>.bak`；库比程序新时拒绝打开，提示升级程序。
 
