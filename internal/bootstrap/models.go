@@ -71,7 +71,9 @@ type Capabilities struct {
 	Thinking ThinkingCapabilities
 	Cache    CacheCapabilities
 
-	// MaxTokensRequired 表示协议要求必填输出上限（Anthropic / Bedrock）。
+	// MaxTokensRequired 表示协议要求必填输出上限（当前只有 Anthropic 适配器
+	// 声明；litellm 的 bedrock 适配器不声明该位，且 maxTokens 是 omitempty，
+	// 因此不走本路径）。
 	MaxTokensRequired bool
 	// ProviderOptions 是适配器认识的 Request.ProviderOptions 键，已排序。
 	ProviderOptions []string
@@ -282,18 +284,83 @@ func (e *endpoint) acceptsOption(key string) bool {
 }
 
 // protocolRequiredMaxTokens 返回协议要求必填的输出上限：只有声明
-// MaxTokensRequired 的适配器（Anthropic / Bedrock）需要，取注册表登记的物理上限；
-// 未知模型不猜，直接报错，避免发出未经验证的上限。其余协议返回 nil（不设上限）。
-func (e *endpoint) protocolRequiredMaxTokens(model string) (*int, error) {
+// MaxTokensRequired 的适配器需要（当前仅 Anthropic；bedrock 适配器不声明，
+// 请求也不发 max_tokens）。取值顺序：
+//  1. providers.<key>.models[].max_output_tokens 显式声明（override > 0）；
+//  2. 注册表登记的物理上限：原样名 → 去日期后缀（厂商实际 ID 常带发布日）。
+//
+// 未知模型不猜，直接报错并给出逃生口，避免发出未经验证的上限。其余协议返回
+// nil（不设上限）。
+func (e *endpoint) protocolRequiredMaxTokens(model string, override int) (*int, error) {
 	if !e.capsOK || !e.caps.MaxTokensRequired {
 		return nil, nil
 	}
-	if entry, ok := modelreg.DefaultRegistry().Resolve(model); ok && entry.MaxTokens > 0 {
-		limit := entry.MaxTokens
+	if override > 0 {
+		limit := override
 		return &limit, nil
 	}
-	return nil, fmt.Errorf("provider %q 的协议要求必填输出上限，但模型 %q 未在注册表中登记物理上限：请改用注册表认识的模型名: %w",
-		e.key, model, errs.ErrConfig)
+	if limit, ok := registryOutputLimit(model); ok {
+		return &limit, nil
+	}
+	return nil, fmt.Errorf("provider %q 的协议要求必填输出上限，但模型 %q 未在注册表中登记物理上限：可改用注册表认识的模型名，或在 providers.%s.models[] 里显式指定 max_output_tokens: %w",
+		e.key, model, e.key, errs.ErrConfig)
+}
+
+// registryOutputLimit 按"原样 → 去日期后缀"的顺序查询注册表里的物理输出上限。
+// 去掉发布日后缀后仍能命中别名条目，例如 claude-sonnet-4-20250514 →
+// claude-sonnet-4、claude-3-5-haiku-20241022 → claude-3.5-haiku。
+func registryOutputLimit(model string) (int, bool) {
+	registry := modelreg.DefaultRegistry()
+	for _, candidate := range outputLimitCandidates(model) {
+		if entry, ok := registry.Resolve(candidate); ok && entry.MaxTokens > 0 {
+			return entry.MaxTokens, true
+		}
+	}
+	return 0, false
+}
+
+// outputLimitCandidates 返回注册表查询名，保持命中优先级：原样 → 去日期后缀。
+func outputLimitCandidates(model string) []string {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return nil
+	}
+	candidates := []string{trimmed}
+	if base := trimDatedSuffix(trimmed); base != "" && base != trimmed {
+		candidates = append(candidates, base)
+	}
+	return candidates
+}
+
+// trimDatedSuffix 去掉结尾的 -YYYYMMDD 或 -YYYY-MM-DD；无日期后缀时原样返回。
+func trimDatedSuffix(model string) string {
+	const (
+		compactLen = 9  // "-20250219"
+		dashedLen  = 11 // "-2025-02-19"
+	)
+	if len(model) > compactLen {
+		suffix := model[len(model)-compactLen:]
+		if suffix[0] == '-' && allASCIIDigits(suffix[1:]) {
+			return model[:len(model)-compactLen]
+		}
+	}
+	if len(model) > dashedLen {
+		suffix := model[len(model)-dashedLen:]
+		if suffix[0] == '-' && allASCIIDigits(suffix[1:5]) && suffix[5] == '-' &&
+			allASCIIDigits(suffix[6:8]) && suffix[8] == '-' && allASCIIDigits(suffix[9:]) {
+			return model[:len(model)-dashedLen]
+		}
+	}
+	return model
+}
+
+func allASCIIDigits(s string) bool {
+	for i := range s {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // capabilities 返回端点的事实（不含模型名）。
@@ -324,7 +391,7 @@ func (f *modelFactory) target(providerKey, model string) (modelRef, error) {
 	if err != nil {
 		return modelRef{}, err
 	}
-	limit, err := endpoint.protocolRequiredMaxTokens(model)
+	limit, err := endpoint.protocolRequiredMaxTokens(model, f.cfg.ModelMaxOutputTokens(providerKey, model))
 	if err != nil {
 		return modelRef{}, err
 	}

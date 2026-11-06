@@ -1,7 +1,9 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -68,14 +70,20 @@ type modelCache struct {
 	Models    []ModelEntry `json:"models"`
 }
 
-// StartPricingRefresh 起后台 goroutine 刷新模型数据。
+// StartPricingRefresh 起后台 goroutine 刷新模型数据（异步兜底路径）。
 // 先读磁盘缓存（24h TTL），过期或不存在则拉新数据并落盘。
 // cacheDir 为空时跳过磁盘缓存，仍会尝试网络拉取。
+//
+// 启动期的同步点是 EnsureLoaded：需要"建模型前注册表已就绪"的调用方必须先走它，
+// 本函数不能保证返回时已完成任何事；它留给同步加载失败后的后台补刷，以及
+// 不关心时序的其它调用方。
 func StartPricingRefresh(registry *ModelRegistry, cacheDir string) {
 	go func() {
 		models := loadCache(cacheDir)
 		if models == nil {
-			fetched, err := fetchModels()
+			ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+			defer cancel()
+			fetched, err := fetchModels(ctx)
 			if err != nil {
 				slog.Warn("模型元数据刷新失败", "module", "models", "err", err)
 				return
@@ -86,6 +94,33 @@ func StartPricingRefresh(registry *ModelRegistry, cacheDir string) {
 		registry.MergeModels(models)
 		slog.Info("模型元数据已就绪", "module", "models", "count", len(models))
 	}()
+}
+
+// EnsureLoaded 同步（有界）把模型元数据装进注册表：TTL 内的磁盘缓存直接合并，
+// 否则按 ctx 期限拉取网络数据并落盘。
+//
+// 这是**启动同步点**：模型构建（窗口/输出上限/pricing 决策）依赖注册表已就绪，
+// 早先是 fire-and-forget goroutine，冷缓存时会与模型构建竞态。调用方应传入带
+// 超时的 ctx（如 3s）；超时/失败只返回 error、注册表保持编译期基线，调用方
+// 记录 warn 后继续——启动不能被外部网络阻塞。
+//
+// 并发安全：与 StartPricingRefresh 的 goroutine 可同时存在，MergeModels 内部加锁。
+func EnsureLoaded(ctx context.Context, registry *ModelRegistry, cacheDir string) error {
+	if registry == nil {
+		return errors.New("nil registry")
+	}
+	if entries := loadCache(cacheDir); entries != nil {
+		registry.MergeModels(entries)
+		return nil
+	}
+	entries, err := fetchModels(ctx)
+	if err != nil {
+		return err
+	}
+	saveCache(entries, cacheDir)
+	registry.MergeModels(entries)
+	slog.Info("模型元数据已同步加载", "module", "models", "count", len(entries))
+	return nil
 }
 
 func loadCache(cacheDir string) []ModelEntry {
@@ -135,9 +170,15 @@ func saveCache(models []ModelEntry, cacheDir string) {
 	}
 }
 
-func fetchModels() ([]ModelEntry, error) {
+// fetchModels 拉取 OpenRouter 模型元数据。ctx 控制调用期限（启动同步路径传有界
+// 超时），客户端另有 fetchTimeout 兜底。
+func fetchModels(ctx context.Context) ([]ModelEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterURL, nil)
+	if err != nil {
+		return nil, err
+	}
 	client := &http.Client{Timeout: fetchTimeout}
-	resp, err := client.Get(openRouterURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

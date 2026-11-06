@@ -125,7 +125,16 @@ func (w *WorkerSet) Run(ctx context.Context, name, task string) (string, error) 
 	observer, record := w.observer, w.record
 	w.mu.Unlock()
 
+	// Emit 是链式的：先交给调用方在 Config 上装的 Emit，再走 WorkerSet 自己的
+	// observer/落盘。调用方的 error 原样返回，保持 agentcore 的"Emit 失败即中止 run"
+	// 语义；内部记录只在调用方接受事件后发生，不覆盖调用方的决定。
+	callerEmit := cfg.Emit
 	cfg.Emit = func(ev agentcore.Event) error {
+		if callerEmit != nil {
+			if err := callerEmit(ev); err != nil {
+				return err
+			}
+		}
 		if observer != nil {
 			observer(name, ev)
 		}

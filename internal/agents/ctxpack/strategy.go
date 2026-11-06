@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -281,12 +282,18 @@ func (c *WriterCompactor) instruction(previous, task, focus string, splitTurn bo
 }
 
 // restoreMessage 返回缓存的恢复包消息；读不到或放不下时跳过，不因此让压缩失败。
+// 被丢弃时要留痕：从 CompactionEnd 看不出上下文少了什么，日志是唯一线索。
 func (c *WriterCompactor) restoreMessage() (agentcore.Message, bool) {
 	if c.restore == nil {
 		return agentcore.Message{}, false
 	}
 	msg, ok, err := c.restore.buildMessage(c.restoreTokenBudget)
-	if err != nil || !ok {
+	if err != nil {
+		slog.Warn("writer 恢复包被丢弃（超出预算或读取失败）",
+			"module", "ctxpack", "budget", c.restoreTokenBudget, "err", err)
+		return agentcore.Message{}, false
+	}
+	if !ok {
 		return agentcore.Message{}, false
 	}
 	return msg, true

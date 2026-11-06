@@ -102,6 +102,11 @@ const (
 // 可达分钟级,留足余量;超时按既有 degraded 路径降级为 raw preferences,不阻塞开书。
 const userRulesBuildTimeout = 3 * time.Minute
 
+// pricingLoadTimeout 封顶启动期同步等待模型元数据的时间。命中 TTL 内磁盘缓存时
+// 是纯本地读（毫秒级）；只有冷缓存才需要网络，3s 足够覆盖常见往返，超时即放弃
+// 本次刷新并退回编译期注册表，避免离线/代理故障拖慢启动。
+const pricingLoadTimeout = 3 * time.Second
+
 // New 创建 Host。
 func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Host, error) {
 	cfg.FillDefaults()
@@ -156,8 +161,22 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		return nil, fmt.Errorf("init run meta: %w", err)
 	}
-	// 起后台 goroutine 从 OpenRouter 刷新模型元数据（窗口/价格），磁盘缓存 24h。
-	modelreg.StartPricingRefresh(modelreg.DefaultRegistry(), bootstrap.DefaultConfigDir())
+	// 启动同步点：模型元数据（窗口/输出上限/pricing）必须在建模型之前就绪。
+	// 早先只起 fire-and-forget goroutine，冷缓存时 NewModelSet 会跑在刷新完成之前，
+	// 让模型构建读到编译期基线的窗口/价格（与输出上限、成本估算的决策叠加出错）。
+	// 这里最多等 pricingLoadTimeout：超时/失败只警告并继续用编译期注册表，启动不能
+	// 被外部网络阻塞。
+	if err := func() error {
+		readyCtx, readyCancel := context.WithTimeout(context.Background(), pricingLoadTimeout)
+		defer readyCancel()
+		return modelreg.EnsureLoaded(readyCtx, modelreg.DefaultRegistry(), bootstrap.DefaultConfigDir())
+	}(); err != nil {
+		slog.Warn("模型元数据未能在启动期就绪，本次使用编译期注册表",
+			"module", "models", "timeout", pricingLoadTimeout, "err", err)
+		// 同步加载已做过同样的读取/拉取，成功时无需再刷一次；只有失败才留给后台
+		// 用更长超时补一次（晚到的价格/窗口只对后续查询生效，本次模型构建已定）。
+		modelreg.StartPricingRefresh(modelreg.DefaultRegistry(), bootstrap.DefaultConfigDir())
+	}
 
 	models, err := bootstrap.NewModelSet(cfg)
 	if err != nil {
@@ -208,7 +227,6 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 		models:          models,
 		thinkingApplier: applyThinking,
 		writerRestore:   restore,
-		userRules:       userrules.NewService(store, models.ForRole("default"), rules.DefaultOptions()),
 		usage:           usage,
 		usageCancel:     usageCancel,
 		configPath:      bootstrap.EffectiveConfigPath(),
@@ -220,6 +238,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle, options ...NewOption) (*Hos
 		lifecycle:       lifecycleIdle,
 	}
 	h.runCtx, h.runCancel = context.WithCancel(context.Background())
+	// userRules 依赖 h（用量记录器），必须在 Host 构造后装配。
+	h.userRules = userrules.NewService(store, h.rulesModel(), rules.DefaultOptions())
 	h.observer = newObserver(store, h.emitEvent, h.emitDelta, h.emitClear)
 	workers.SetEventObserver(func(agent string, ev agentcore.Event) {
 		h.observer.handleWorkerEvent(agent, ev)
@@ -325,7 +345,7 @@ func (h *Host) PrepareUserRules(rawPrompt string) error {
 	// 超时落到既有 degraded 路径：宁可降级为 raw preferences 也不阻塞开书。
 	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
 	defer cancel()
-	svc := userrules.NewService(h.store, h.models.ForRole("default"), rules.DefaultOptions())
+	svc := userrules.NewService(h.store, h.rulesModel(), rules.DefaultOptions())
 	snap, err := runObservedStep(h.observer, "SYSTEM", "rules", "规则归一化",
 		func() (*rules.Snapshot, error) { return svc.Build(ctx, rawPrompt) })
 	if err != nil {
@@ -349,7 +369,7 @@ func (h *Host) ensureUserRules() {
 	// 同样必须可取消 + 有超时,否则恢复路径复现 issue #125 的静默卡死。
 	ctx, cancel := context.WithTimeout(h.runCtx, userRulesBuildTimeout)
 	defer cancel()
-	svc := userrules.NewService(h.store, h.models.ForRole("default"), rules.DefaultOptions())
+	svc := userrules.NewService(h.store, h.rulesModel(), rules.DefaultOptions())
 	snap, err := svc.GetOrBuild(ctx)
 	if err != nil {
 		slog.Warn("用户规则快照读取/生成失败，运行时将退到内置默认", "module", "rules", "err", err)
@@ -772,6 +792,17 @@ func newInterventionFailureEvent(err error) Event {
 		Kind:     errorKind(err, detail),
 		Level:    "error",
 	}
+}
+
+// rulesModel 返回带用量追踪的规则归一化模型。
+//
+// 归一化是启动期真实发生的 LLM 调用（新建书与恢复补生成两条路径都可能有），
+// 不包 TrackUsage 就会在 usage.json 里整笔丢失（实测 17 次调用只记到 16 次）。
+// 归属角色用 "default"：UsageTracker/ModelSet 的归一化把 ""/"default" 视为默认
+// 模型，per_agent 会单列一条 default 记录，但不影响 overall 与成本（成本按响应
+// 里的 provider/model 查注册表）。task 用 "rules" 标明这是规则归一化开销。
+func (h *Host) rulesModel() llmcontract.Model {
+	return bootstrap.TrackUsage(h.models.ForRole("default"), h.usageRecorder("default", "rules"))
 }
 
 // arbiterModel 返回带用量追踪的裁定模型(token/成本进预算与 usage 系统)。

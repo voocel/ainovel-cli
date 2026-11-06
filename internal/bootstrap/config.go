@@ -83,6 +83,12 @@ type ModelConfig struct {
 	// 支持（请求被拒绝时原样暴露，不静默降级）；false=强制走 prompt contract。
 	// 自定义代理与聚合网关的能力以用户声明为准，程序不探测。
 	JSONSchema *bool `json:"json_schema,omitempty"`
+	// MaxOutputTokens 是该模型的物理输出上限（单次请求的 max_tokens）。只对
+	// 协议要求必填输出上限的适配器生效（当前仅 anthropic；bedrock 适配器不
+	// 声明 MaxTokensRequired、请求也不带 max_tokens，故对 bedrock 目前无效）：
+	// 命中时优先于注册表登记的 MaxTokens，未配置时回退注册表。其余协议不设
+	// 请求级上限，该字段被忽略（0 表示未配置）。
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
 func (m *ModelConfig) UnmarshalJSON(data []byte) error {
@@ -122,6 +128,18 @@ func (c Config) ModelJSONSchema(provider, model string) *bool {
 		}
 	}
 	return nil
+}
+
+// ModelMaxOutputTokens 返回模型的显式物理输出上限；未列入 models 或未配置时
+// 返回 0（回退注册表）。只有声明协议必填输出上限的适配器（当前仅 anthropic）
+// 使用该值。
+func (c Config) ModelMaxOutputTokens(provider, model string) int {
+	if pc, ok := c.Providers[provider]; ok {
+		if mc, ok := pc.ModelConfig(model); ok && mc.MaxOutputTokens > 0 {
+			return mc.MaxOutputTokens
+		}
+	}
+	return 0
 }
 
 // defaultStreamIdleTimeout：长输出 + 长 ctx 场景下，reasoning-aware provider
@@ -400,6 +418,9 @@ func validateProviderConfigText(name string, pc ProviderConfig) error {
 		seenModels[modelName] = true
 		if model.ContextWindow < 0 {
 			return fmt.Errorf("provider %q model %q context_window must be >= 0: %w", name, modelName, errs.ErrConfig)
+		}
+		if model.MaxOutputTokens < 0 {
+			return fmt.Errorf("provider %q model %q max_output_tokens must be >= 0: %w", name, modelName, errs.ErrConfig)
 		}
 	}
 	switch pc.API {
