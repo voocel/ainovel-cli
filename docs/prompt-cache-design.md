@@ -430,17 +430,16 @@ X 在不在缓存前缀里？
 3. **验证口径**：会话 JSONL 不含 system prompt 和完整请求体，**逐请求 usage 序列
    （input vs cache_read）才是诊断金标准**。一个实用指纹：命中量若恰好钉在
    "system 提示词 token 数按 128 向下取整"，说明只有 system 段命中、消息段全 miss。
-4. **收益核算**：读价 0.1x、写价 1.25x，意味着一条缓存只要被读 1 次就回本。
-   多轮 agent 会话里断点几乎总是正收益，所以 `Config.Cache` 不设开关、默认开。
-5. **历史：#142 的 Responses 例外已经消失**。litellm v1.8.11 的 Responses 适配器
-   只允许断点落在 `input_text` 上，工具循环里断点会被贴到 tool_result
-   （`function_call_output`）并被本地校验拒绝
-   （`cache breakpoints are not supported on tool result blocks`）；当时的修法是
-   ainovel 侧对 `api: "responses"` 的 provider 关闭 `CacheLastMessage`、只保留
-   `prompt_cache_key`（PR #142）。**litellm ≥ v1.9.2 已支持在 tool result 块上落
-   断点，本项目升级到 v1.9.6 后该 gate 已删除**：`workerCache()` 对所有 provider
-   统一返回断点配置，Anthropic / chat / Responses 三条路径不再分叉。历史记录保留
-   在此，用来说明"临时 gate 必须随上游能力升级一起拆除"，而不是长期存在的行为。
+4. **收益核算（含 #142 的历史 gate）**：读价 0.1x、写价 1.25x，意味着一条缓存只要
+   被读 1 次就回本。多轮 agent 会话里断点几乎总是正收益，所以 `Config.Cache` 不设
+   开关、默认开。历史上有一个例外：litellm v1.8.11 的 Responses 适配器只允许断点
+   落在 `input_text` 上，工具循环里断点会被贴到 tool_result（`function_call_output`）
+   并被本地校验拒绝（`cache breakpoints are not supported on tool result blocks`），
+   于是 ainovel 侧对 `api: "responses"` 的 provider 关闭 `CacheLastMessage`、只保留
+   `prompt_cache_key`（PR #142）。**litellm ≥ v1.9.2 已支持在 tool result 块上落断点，
+   本项目升级到 v1.9.6 后该 gate 已删除**：`workerCache()` 对所有 provider 统一返回
+   断点配置，Anthropic / chat / Responses 三条路径不再分叉。这段历史留在文档里，是
+   提醒"临时 gate 必须随上游能力升级一起拆除"，不是当前行为。
 
 ---
 
@@ -460,7 +459,9 @@ teammate 用 `sessionID + "-" + name`。
 cfg := agentcore.Config{
 	System: []litellm.Block{litellm.TextBlock{Text: systemPrompt, Cache: cache}},
 	Cache:  &litellm.CacheControl{},           // 滚动尖端 + 回看断点；TTL 空 = provider 默认
-	Model:  withPromptCacheKey(model, stableIdentity), // OpenAI 路由身份
+	// OpenAI 路由身份（ainovel 封装为 bootstrap.WithPromptCacheKey）：
+	// model.Core.Request.ProviderOptions.Set(openai.ProviderOptionPromptCacheKey, stableIdentity)
+	Model: model,
 	// ...
 }
 history, err := agentcore.Run(ctx, cfg, history, agentcore.UserText(task))

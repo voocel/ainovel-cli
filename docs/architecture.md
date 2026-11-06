@@ -267,7 +267,7 @@ Worker 之间不直接通信，所有信息流经 Store 中的结构化工件：
 | 层 | 落点 | 作用 |
 |---|---|---|
 | `Result.Terminate`（`build.go` `terminateOn`） | `agents/build.go` 各 Worker 的工具集 | 关键工具成功即退出本轮 run（终态退出仍会经过 `OnStop`，见契约测试）。Writer `commit_chapter` 命中即停；Editor 的 `save_review`/`save_arc_summary`/`save_volume_summary`、Architect 弧/卷收尾同法 |
-| `CheckpointDeltaGuard` | `agents/guard/subagent_guards.go` | 以 baseline checkpoint 为分界，本轮结束前必须看到对应 step 的新 checkpoint；未看到时 `OnStop` 返回催促消息让模型继续，连续空转 3 次返回 error 终止本轮 run（弱模型死循环兜底）。Editor 的 guard 任务感知：被派生成摘要时仅复核不算完成 |
+| `CheckpointDeltaGuard` | `agents/guard/subagent_guards.go` | 以 baseline checkpoint 为分界，本轮结束前必须看到对应 step 的新 checkpoint；未看到时 `OnStop` 返回催促消息让模型继续；3 次催促后仍无新产物则第 4 次返回 error 终止本轮 run（弱模型死循环兜底）。Editor 的 guard 任务感知：被派生成摘要时仅复核不算完成 |
 | 工具内联 `next_step` | 各工具返回值字段 | 每个事实自带"下一步建议"，LLM 看到事实就知道下一步 |
 | 工具内归属/前置检查 | `edit_chapter` `commit_chapter` 等 | 数据层物理拦截：初稿定点编辑、改未入队的已完成章、空提交均被拒，`Parallel=false` 阻止并发竞态 |
 
@@ -275,7 +275,7 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 
 ### 6.4 agentcore 依赖
 
-`github.com/voocel/agentcore v1.8.8` + `github.com/voocel/litellm v1.9.6` 是普通模块依赖（`go.mod` 直接声明，无 `replace`、无 vendored 子模块）。Engine 用到的原语：`agentcore.Run`（无状态，返回结束时的 history，调用方必须落盘）、`agentcore.Config`（`System`/`Tools`/`Emit`/`Retry`/`MaxTurns`/`Cache`/`Compactor`/`CompactAt`/`OnStop`）、`agentcore.Tool` 结构体（`Result.Terminate` 表达终态工具）、`agentcore.ReportProgress` + `WithProgress`（进度中继）、`agentcore.Compactor`（上下文压缩接口，见 `docs/context-management.md`）。`agents.WorkerSet` 只做三件事：持有每个 Worker 的 history、装配 `OnStop`、把 `MessageEnd` 转交落盘。
+`github.com/voocel/agentcore v1.8.8` + `github.com/voocel/litellm v1.9.6` 是普通模块依赖（`go.mod` 直接声明，无 `replace`、无 vendored 子模块）。Engine 用到的原语：`agentcore.Run`（无状态，返回结束时的 history，调用方必须落盘）、`agentcore.Config`（`System`/`Tools`/`Emit`/`Retry`/`MaxTurns`/`Cache`/`Compactor`/`CompactAt`/`OnStop`）、`agentcore.Tool` 结构体（`Result.Terminate` 表达终态工具）、`agentcore.ReportProgress` + `WithProgress`（进度中继）、`agentcore.Compactor`（上下文压缩接口，见 `docs/context-management.md`）。`agents.WorkerSet` 只做三件事：持有每个 Worker 的 history、装配 `OnStop`、把 `MessageEnd` 转交落盘与观察者投影。
 
 `agentcore/subagent` 在 v1.8.8 起是**委派工具**（`subagent.New` 返回一个暴露给模型的工具），AINovel 不经过这层——Engine 直接程序化调用 Worker。`errors.Is(err, agents.ErrUnknownWorker)` 等类型化分类不依赖错误文案。
 
@@ -287,8 +287,8 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 
 **这是依赖版本契约，不是应用配置**：`go.mod` 要求 `agentcore v1.8.8` + `litellm v1.9.6` 起，客户端**一律不发送输出 token 上限**——`litellm.Request.MaxTokens` 保持 nil，生成长度与思考长度都交给 provider / 模型侧决定。
 
-- 旧版会在适配层注入固定上限（如 8192 / 65536），推理与正文共享同一预算时正文被截断；该写法已从依赖链和本仓库一并移除（`llmcontract` 不再有 output cap 选项）。
-- **唯一例外是协议必填**：Anthropic / Bedrock 的 `max_tokens` 不能省略，此时填模型注册表登记的物理上限；注册表未登记该模型时直接报错，绝不猜一个未经验证的值（`bootstrap.endpoint.protocolRequiredMaxTokens`）。
+- 旧链路把 `max_tokens` 当成必填的应用参数（`agentcore/llm` 的 `MaxTokens int`，`>0` 即写进请求），推理与正文共享同一预算时正文会被截断；该参数与 `llmcontract` 的 output cap 选项已一并移除。
+- **唯一例外是协议必填**：只有 litellm 能力声明 `MaxTokensRequired` 的适配器（Claude 协议：Anthropic，Bedrock 同族）需要 `max_tokens`，此时填模型注册表登记的物理上限；注册表未登记该模型时直接报错，绝不猜一个未经验证的值（`bootstrap.endpoint.protocolRequiredMaxTokens`）。
 - **推理预算只走 `litellm.Thinking`**（`effort` / `budget_tokens` / `disabled`），端点不支持则静默丢弃（`endpoint.shape`）；它与输出上限是两件事，不用调小输出上限来"省思考"。
 - `AnalyzeBudget.MaxOutputTokens` 之类只是导入管线的分批估算，不进请求。
 
@@ -300,7 +300,7 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 
 缓存收益的前提是**请求前缀字节稳定**，由三条纪律保证（都在 agentcore）：
 
-1. **tools 字节确定性** — Description/Schema 每次重建，任何 map 迭代都先排序
+1. **tools 字节确定性** — 工具集按固定切片顺序装配（不迭代 map），框架按声明顺序序列化
 2. **历史 append-only** — 消息只追加不改写；上下文压缩是"付一次全 miss 换窗口"的显式交易，压缩结果由框架一次性替换 history 后继续追加
 3. **动态内容进尾部** — 信封/指令全部尾部追加，永不回写早期消息
 

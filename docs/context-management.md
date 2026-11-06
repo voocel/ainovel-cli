@@ -235,6 +235,8 @@ msgs = append(msgs, c.microcompact(kept)...)              // 最近历史 + 工�
   并中止本轮。
 - `CompactionEnd` 是压缩结果写回 history 的唯一入口：`Compaction.Messages` 整体替换
   旧历史；`Compaction` 为 nil 表示没有可压的；`Err` 表示压缩失败（history 保持原样）。
+  应用若在这个事件上返回 error，框架同样保持历史原样并终止本轮——这也是需要"压缩
+  结果先落盘再采用"时的挂点。
 - `agentcore.Run` 无状态：结束时把 history 返回，`WorkerSet` 存回内存。**history 只在
   进程内**——重启后每个 Worker 从空历史开始，连续性完全来自 store 工件 +
   `novel_context` + 恢复包。这是刻意的：会话历史不是事实。
