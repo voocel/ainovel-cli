@@ -3,7 +3,7 @@
 //
 // 分层职责：
 //   - rules 包：纯数据 + 确定性合并（Snapshot / Candidate / BuildSnapshot / SystemDefaults）
-//   - 本包：LLM 归一化 + 编排 + 落盘（依赖 agentcore + store + rules）
+//   - 本包：LLM 归一化 + 编排 + 落盘（依赖 llmcontract + store + rules）
 //
 // 归一化是增强路径，不是主创作的前置条件：任何来源失败都降级为 raw preferences，主创作必须继续。
 package userrules
@@ -14,16 +14,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/rules"
 )
-
-// normalizeMaxTokens 单次归一化的输出上限（思考 token 与 JSON 输出共享这一预算）。
-// 归一化 JSON 本身很小（通常 <1k），这里留大头是给"无法关闭思考的推理模型"的思考预算——
-// 留窄了思考会挤占 JSON 导致截断、解析失败。max_tokens 是上限不是计费量，调大不增成本。
-const normalizeMaxTokens = 8192
 
 // normalizeContract 紧邻边界 DTO：全字段 required、fatigue_words 用对象数组
 // （strict 模式禁止动态 key 的 map），两种模式共用同一 DTO 约定。
@@ -47,16 +41,15 @@ var normalizeContract = llmcontract.Contract{
 
 // Normalizer 把单个来源的自然语言规则归一化成 rules.Candidate。
 type Normalizer struct {
-	model agentcore.ChatModel
+	model llmcontract.Model
 }
 
-// NewNormalizer 用一个 ChatModel 构造归一化器。归一化是一次性启动工具，
+// NewNormalizer 用一个模型句柄构造归一化器。归一化是一次性启动工具，
 // 应传入能力较强的模型（如 ModelSet 的默认模型），不必跟随写作的弱模型。
 //
 // 归一化不覆盖 thinking：显式 off 本身也是只有部分模型支持的推理参数，
-// 普通 chat 模型会拒绝它。沿用 provider/model 默认，由 normalizeMaxTokens
-// 为不可关闭思考的模型预留输出预算。
-func NewNormalizer(model agentcore.ChatModel) *Normalizer {
+// 普通 chat 模型会拒绝它。沿用 provider/model 默认，输出预算由端点裁决。
+func NewNormalizer(model llmcontract.Model) *Normalizer {
 	return &Normalizer{model: model}
 }
 
@@ -68,7 +61,7 @@ func (n *Normalizer) Normalize(ctx context.Context, source, text string) (rules.
 	if text == "" {
 		return rules.Candidate{Source: source}, nil
 	}
-	if n == nil || n.model == nil {
+	if n == nil || n.model.Core.Client == nil {
 		return rules.Candidate{}, fmt.Errorf("归一化模型未配置")
 	}
 
@@ -76,7 +69,6 @@ func (n *Normalizer) Normalize(ctx context.Context, source, text string) (rules.
 		Contract:     normalizeContract,
 		SystemPrompt: normalizerSystemPrompt,
 		Payload:      text,
-		Options:      []agentcore.CallOption{agentcore.WithMaxTokens(normalizeMaxTokens)},
 		Validate: func(out *normalizerOutput) error {
 			_, err := out.toCandidate(source)
 			return err

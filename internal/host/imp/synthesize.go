@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // 故事状态闭集（RFC §10.4）。
@@ -133,10 +134,10 @@ func compactFacts(facts []ImportedChapterFacts) string {
 // Synthesize 分层综合：短书直接出 BookSynthesis；长书先出 RangeDigest 再归并（RFC §10）。
 // bookPrompt 描述 BookSynthesis 契约，rangePrompt 描述 RangeDigest 契约——两阶段输出结构不同，
 // 必须各用对应系统提示词，否则模型收到 BookSynthesis 指令却被要求 RangeDigest，指令自相矛盾。
-func Synthesize(ctx context.Context, m callModel, bookPrompt, rangePrompt string, w *Workspace, facts []ImportedChapterFacts, budgetBytes, maxTokens int, prof callProfile) (*BookSynthesis, error) {
+func Synthesize(ctx context.Context, m llmcontract.Model, bookPrompt, rangePrompt string, w *Workspace, facts []ImportedChapterFacts, budgetBytes int, prof callProfile) (*BookSynthesis, error) {
 	ranges := planFactRanges(facts, budgetBytes)
 	if len(ranges) <= 1 {
-		return synthesizeBook(ctx, m, bookPrompt, compactFacts(facts), len(facts), maxTokens, prof)
+		return synthesizeBook(ctx, m, bookPrompt, compactFacts(facts), len(facts), prof)
 	}
 	digests := make([]RangeDigest, 0, len(ranges))
 	for ri, r := range ranges {
@@ -150,7 +151,7 @@ func Synthesize(ctx context.Context, m callModel, bookPrompt, rangePrompt string
 			continue
 		}
 		prof.step(ri+1, len(ranges), "区间摘要 %d/%d（第 %d-%d 章）...", ri+1, len(ranges), startCh, endCh)
-		rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildRangePayload(rangeFacts), maxTokens, prof, func(d *RangeDigest) error {
+		rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildRangePayload(rangeFacts), prof, func(d *RangeDigest) error {
 			return validateRangeDigest(d, startCh, endCh, "range digest")
 		})
 		if err != nil {
@@ -163,18 +164,18 @@ func Synthesize(ctx context.Context, m callModel, bookPrompt, rangePrompt string
 	}
 	// 递归 Reduce：区间摘要总量仍可能超过最终综合输入预算（把 #83 从"全部章节"推迟到"全部区间摘要"）。
 	// 逐层归并到可容纳，才真正无界扩展（RFC §10.2）。
-	digests, err := reduceToFit(ctx, m, rangePrompt, digests, budgetBytes, maxTokens, prof)
+	digests, err := reduceToFit(ctx, m, rangePrompt, digests, budgetBytes, prof)
 	if err != nil {
 		return nil, err
 	}
 	data, _ := json.Marshal(digests)
-	return synthesizeBook(ctx, m, bookPrompt, string(data), len(facts), maxTokens, prof)
+	return synthesizeBook(ctx, m, bookPrompt, string(data), len(facts), prof)
 }
 
 // reduceToFit 反复把连续区间摘要按预算分组归并，直到序列化后可容纳最终 BookSynthesis 输入预算。
 // 每轮严格减少摘要数量，故必然收敛；单个摘要即便超预算也不再拆（下层已是最小语义单元），
 // 交最终调用，若因此截断由 callStructured 显式报错而非静默溢出。
-func reduceToFit(ctx context.Context, m callModel, rangePrompt string, digests []RangeDigest, budgetBytes, maxTokens int, prof callProfile) ([]RangeDigest, error) {
+func reduceToFit(ctx context.Context, m llmcontract.Model, rangePrompt string, digests []RangeDigest, budgetBytes int, prof callProfile) ([]RangeDigest, error) {
 	round := 0
 	for len(digests) > 1 {
 		if budgetBytes <= 0 {
@@ -194,7 +195,7 @@ func reduceToFit(ctx context.Context, m callModel, rangePrompt string, digests [
 			startCh, endCh := g[0].StartChapter, g[len(g)-1].EndChapter
 			prof.step(gi+1, len(groups), "归并区间摘要（第 %d 轮 %d/%d，第 %d-%d 章）...",
 				round, gi+1, len(groups), startCh, endCh)
-			rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildDigestReducePayload(g), maxTokens, prof, func(d *RangeDigest) error {
+			rd, err := callStructured[RangeDigest](ctx, m, rangeContract, rangePrompt, buildDigestReducePayload(g), prof, func(d *RangeDigest) error {
 				return validateRangeDigest(d, startCh, endCh, "合并区间")
 			})
 			if err != nil {
@@ -254,9 +255,9 @@ func rangeInputDigest(facts []ImportedChapterFacts) string {
 	return Digest([]byte(fmt.Sprintf("range\x00%s\x00v%d\x00%s", rangePromptVersion, synthesisSchemaVersion, compactFacts(facts))))
 }
 
-func synthesizeBook(ctx context.Context, m callModel, systemPrompt, payload string, n, maxTokens int, prof callProfile) (*BookSynthesis, error) {
+func synthesizeBook(ctx context.Context, m llmcontract.Model, systemPrompt, payload string, n int, prof callProfile) (*BookSynthesis, error) {
 	prof.step(0, 0, "生成全书综合（作品信息/premise/characters/大纲结构）...")
-	s, err := callStructured[BookSynthesis](ctx, m, synthesisContract, systemPrompt, buildBookPayload(payload, n), maxTokens, prof, func(s *BookSynthesis) error {
+	s, err := callStructured[BookSynthesis](ctx, m, synthesisContract, systemPrompt, buildBookPayload(payload, n), prof, func(s *BookSynthesis) error {
 		return validateSynthesis(s, n)
 	})
 	if err != nil {

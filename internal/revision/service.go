@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -27,12 +27,12 @@ type Result struct {
 
 type Service struct {
 	store      *store.Store
-	model      agentcore.ChatModel
+	model      llmcontract.Model
 	prompt     string
 	styleIndex StyleIndex
 }
 
-func NewService(st *store.Store, model agentcore.ChatModel, prompt string, styleIndex StyleIndex) *Service {
+func NewService(st *store.Store, model llmcontract.Model, prompt string, styleIndex StyleIndex) *Service {
 	return &Service{store: st, model: model, prompt: prompt, styleIndex: styleIndex}
 }
 

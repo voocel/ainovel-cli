@@ -1,14 +1,24 @@
 package sim
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
+
+// blocksText 拼接消息里的文本块，用于断言提示词内容。
+func blocksText(blocks []litellm.Block) string {
+	var out strings.Builder
+	for _, block := range blocks {
+		if text, ok := block.(litellm.TextBlock); ok {
+			out.WriteString(text.Text)
+		}
+	}
+	return out.String()
+}
 
 func TestSimulationContractsAreStrictReady(t *testing.T) {
 	for _, contract := range []llmcontract.Contract{sourceReportContract, synthesisContract} {
@@ -18,32 +28,9 @@ func TestSimulationContractsAreStrictReady(t *testing.T) {
 	}
 }
 
-type nativeSimulationModel struct {
-	response string
-	messages []agentcore.Message
-	config   agentcore.CallConfig
-}
-
-func (m *nativeSimulationModel) Capabilities() llm.Capabilities {
-	return llm.Capabilities{
-		Provider:   "openai",
-		Model:      "gpt-test",
-		Structured: llm.StructuredCapabilities{JSONSchema: llm.SupportYes, Strict: llm.SupportYes},
-	}
-}
-
-func (m *nativeSimulationModel) Generate(_ context.Context, messages []agentcore.Message, _ []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.messages = messages
-	m.config = agentcore.ResolveCallConfig(opts)
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role:       agentcore.RoleAssistant,
-		Content:    []agentcore.ContentBlock{agentcore.TextBlock(m.response)},
-		StopReason: agentcore.StopReasonStop,
-	}}, nil
-}
-
 func TestAnalyzeSourceUsesNativeSchema(t *testing.T) {
-	model := &nativeSimulationModel{response: validSourceReportJSON("清晰摘要")}
+	provider := litellmtest.New(litellmtest.Text(validSourceReportJSON("清晰摘要")))
+	model := testModel(t, provider)
 	report, err := AnalyzeSource(t.Context(), model, "只分析写作方法。", scannedSource{})
 	if err != nil {
 		t.Fatalf("AnalyzeSource: %v", err)
@@ -51,27 +38,37 @@ func TestAnalyzeSourceUsesNativeSchema(t *testing.T) {
 	if report.Summary == "" {
 		t.Fatal("summary 为空")
 	}
-	format := model.config.ResponseFormat
+	requests := provider.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	format := requests[0].ResponseFormat
 	if format == nil || format.JSONSchema == nil || format.JSONSchema.Name != sourceReportContract.Name {
 		t.Fatalf("response format = %#v", format)
 	}
-	if strings.Contains(model.messages[0].TextContent(), "<output-json-schema>") {
-		t.Fatalf("native prompt 不应注入 schema: %s", model.messages[0].TextContent())
+	if prompt := blocksText(requests[0].Messages[0].Blocks); strings.Contains(prompt, "<output-json-schema>") {
+		t.Fatalf("native prompt 不应注入 schema: %s", prompt)
 	}
 }
 
 func TestAnalyzeSourcePromptModeRepairsMissingRequiredFields(t *testing.T) {
-	model := &scriptedLLM{responses: []string{
-		`{}`,
-		validSourceReportJSON("修正后的摘要"),
-	}}
+	model, provider := scriptedModel(t, `{}`, validSourceReportJSON("修正后的摘要"))
+	// 旧 fake 靠 llm.Capabilities 零值（不支持原生 schema）进入 prompt 模式；
+	// 新模型句柄用 JSONSchemaOverride=false 表达同一配置意图。
+	model.JSONSchemaOverride = new(false)
 	report, err := AnalyzeSource(t.Context(), model, "只分析写作方法。", scannedSource{})
 	if err != nil {
 		t.Fatalf("AnalyzeSource: %v", err)
 	}
-	if report.Summary != "修正后的摘要" || model.calls.Load() != 2 {
-		t.Fatalf("缺字段后应反馈自愈: report=%+v calls=%d", report, model.calls.Load())
+	if report.Summary != "修正后的摘要" || len(provider.Requests()) != 2 {
+		t.Fatalf("缺字段后应反馈自愈: report=%+v calls=%d", report, len(provider.Requests()))
+	}
+	for i, req := range provider.Requests() {
+		if req.ResponseFormat != nil {
+			t.Fatalf("prompt 模式不应设置 response_format, got %v", req.ResponseFormat)
+		}
+		if !strings.Contains(blocksText(req.Messages[0].Blocks), "<output-json-schema>") {
+			t.Fatalf("第 %d 次请求应把 schema 放进提示词", i+1)
+		}
 	}
 }
-
-var _ LLMChat = (*nativeSimulationModel)(nil)

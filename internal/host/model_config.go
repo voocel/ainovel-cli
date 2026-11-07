@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
+
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 )
 
@@ -394,7 +395,10 @@ func (h *Host) TestModelConnection(ctx context.Context, draft ModelConfiguration
 	if err != nil {
 		return fmt.Errorf("创建测试模型客户端失败: %w", err)
 	}
-	if _, err := models.Default.Generate(ctx, []agentcore.Message{agentcore.UserMsg("Reply OK.")}, nil); err != nil {
+	// 用模型模板发一次最小 Chat：maxTokens/thinking/provider options 按真实配置带上，
+	// 探测的才是"这条配置能不能被端点接受"，而不是另造一套请求。
+	probe := models.ForRole("default")
+	if _, err := bootstrap.Chat(ctx, probe, []litellm.Message{litellm.UserText("Reply OK.")}); err != nil {
 		return fmt.Errorf("连接测试失败（%s/%s）: %w", preparedDraft.draft.Provider, modelName, err)
 	}
 	return nil

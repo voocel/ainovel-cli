@@ -70,12 +70,12 @@ usage 序列（input vs cache_read）后定位出三个根因：
 ┌────────────────────────────────────────────────────────┐
 │ 应用层（ainovel-cli / codebot）                          │
 │   决定"缓存身份"取什么值：一书一基、一角色一名             │
-│   接入成本 = 每个 agent 两行配置                          │
+│   接入成本 = 每个 agent 两行配置 + system 块地板断点       │
 ├────────────────────────────────────────────────────────┤
 │ agentcore（Agent 框架）                                  │
-│   决定"断点放哪、key 何时派生"：                          │
-│   system 地板 + 末消息滚动尖端；spawn 追加 #seq；          │
-│   按 provider 能力门控，不支持则静默丢弃                   │
+│   决定"断点放哪、key 何时发出"：                          │
+│   滚动尖端 + 回看断点（Config.Cache）；                    │
+│   按端点能力门控，不支持则静默丢弃                        │
 ├────────────────────────────────────────────────────────┤
 │ litellm（LLM 网关）                                      │
 │   纯协议翻译：cache_control ↔ 各厂商字段、                │
@@ -100,17 +100,11 @@ agentcore/litellm）不用重写缓存逻辑。
 Go map 迭代——每次调用顺序随机，tools 字节每轮都变，coordinator 命中率因此只有 2.7%。
 （Claude Code 团队也被同款问题咬过：他们的全 fleet 曾因此多付 10.2% 的缓存写入。）
 
-修复（agentcore `subagent/subagent.go`）：
-
-```go
-// sortedAgentNames returns registered agent names in deterministic order.
-// Description and Schema are rebuilt on every LLM call; iterating the map
-// directly would shuffle their bytes across requests and defeat provider
-// prefix caching (tools serialize into the cached prompt prefix).
-func (t *Tool) sortedAgentNames() []string {
-	return slices.Sorted(maps.Keys(t.agents))
-}
-```
+当时修复在 agentcore 的 subagent 工具里：把注册 agent 名单排序后再生
+Description/Schema（`sortedAgentNames`）。v1.8.8 重写后这个工具改为按传入顺序
+构建（`subagent.New(tasks, agents...)` 直接遍历切片，不再迭代 map），并且
+ainovel 已不使用它——Worker 由 Engine 程序化调用，工具集在 `internal/agents/build.go`
+用固定切片装配。教训本身不变：
 
 > 教训的一般形式：**任何进入请求体的集合，序列化前必须排序**。Go 的 map 迭代
 > 随机化会把这个 bug 藏得很深——功能完全正常，只有账单不正常。
@@ -120,8 +114,10 @@ func (t *Tool) sortedAgentNames() []string {
 事故：writer 的上下文压缩策略是"投影"（每次调用时临时改写历史视图，但不落回
 基线）。一旦超过阈值，**每一轮都在重新改写整个前缀** → 每轮全 miss。
 
-修复：投影后提交（`CommitOnProject: true`），让改写只发生一次，之后恢复
-append-only，直到下次越过阈值。
+修复：**压缩结果一次性提交**。agentcore v1.8.8 起，`Compactor` 返回的是整段
+替换后的 history（`Compaction.Messages`），框架在 `CompactionEnd` 时直接写回，
+之后继续 append-only，直到下次越过阈值（`Config.CompactAt` 或 provider 报
+context overflow）。
 
 > 一般形式：上下文压缩是**计划内的一次性断裂**（重置前缀，付一次全价），
 > 这没问题；不能接受的是**每轮都断**。压缩要么不做，要么做完固化。
@@ -139,147 +135,157 @@ append-only，直到下次越过阈值。
 OpenAI 系的 `prompt_cache_key` 解决的是**路由问题**：字节相同的请求若被负载均衡到
 不同实例，照样 miss。key 的设计目标是"同一条缓存血统的请求，永远带同一个 key"。
 
-我们的三级身份（ainovel `internal/agents/build.go`）：
+### 5.1 基：书目录哈希
 
 ```go
 // promptCacheBase 从书目录派生稳定短哈希，作为提示词缓存身份前缀：同一本书
-// 跨进程重启共享路由桶，且不向 provider 泄露本地路径。角色后缀由调用方拼接，
-// subagent 每次 spawn 再追加 "#seq"（一次会话一个键）。
+// 跨进程重启共享路由桶，且不向 provider 泄露本地路径。角色后缀由调用方拼接。
 func promptCacheBase(bookDir string) string {
 	sum := sha256.Sum256([]byte(bookDir))
 	return "nvl-" + hex.EncodeToString(sum[:6])
 }
 ```
 
-应用层接入就是每个 agent 两行：
+### 5.2 名：角色后缀
+
+`internal/agents/build.go` 给每个 Worker 拼角色后缀，写进模型的请求选项
+（`bootstrap.WithPromptCacheKey` → `litellm.Request.ProviderOptions`）：
 
 ```go
-writer := subagent.Config{
-	// ...
-	CacheLastMessage: "ephemeral",                // Claude 断点开关（见 §6）
-	PromptCacheKey:   cacheBase + "-writer",      // OpenAI 路由身份（角色级）
-}
-// coordinator（顶层 Agent）同理：
-agentcore.WithCacheLastMessage("ephemeral"),
-agentcore.WithPromptCacheKey(cacheBase+"-coordinator"),
-```
-
-第三级（会话级）由 agentcore 自动派生——每次 spawn 一个新会话，就是一条新的
-缓存血统（agentcore `subagent/subagent.go`）：
-
-```go
-runSeq := t.runSeq.Add(1)
-
-// One conversation, one cache key: suffix the per-run sequence so each
-// spawn forms its own cache lineage instead of piling every run of this
-// agent into a single routing bucket.
-promptCacheKey := cfg.PromptCacheKey
-if promptCacheKey != "" {
-	promptCacheKey = fmt.Sprintf("%s#%d", promptCacheKey, runSeq)
+cfgs := map[string]agentcore.Config{
+	"writer": {
+		Model:  workerModel(writerModel, cacheBase+"-writer", writerThinking),
+		System: workerSystem(writerPrompt, cache),   // 地板断点，见 §6.1
+		Cache:  cache,                               // 滚动尖端 + 回看断点，见 §6.2
+		// ...
+	},
 }
 ```
 
-最终形态：`nvl-a1b2c3-writer#17` = 这本书、writer 角色、第 17 次 spawn 的会话。
+`prompt_cache_key` 是否真的出门由目标端点决定：只有声明支持该字段、且是官方
+`api.openai.com` 或显式开启 `prompt_cache_params` 的中转才会带上（见 §7.2）。
+Anthropic 与 Bedrock 不使用路由键，它们的身份由断点位置本身表达。
 
-> 为什么不是全局一个 key？不同会话前缀不同，混在一个路由桶里会稀释命中。
+### 5.3 键：一个 Worker 一条会话
+
+v1.8.8 起 Worker 不再"每次 spawn 一个新会话"：`agents.WorkerSet` 为每个 Worker
+保存一条**跨 run 累积的 history**（`agentcore.Run` 无状态，返回结束时的 history，
+WorkerSet 负责存回）。因此"一会话一键"退化为"一角色一键"——同一本书里 writer
+的所有章节写作共享同一条缓存血统，这恰恰是命中率最高的形态。
+
+最终形态：`nvl-a1b2c3-writer` = 这本书 + writer 角色。角色内的历史只追加，
+压缩才是一次计划内的断裂。
+
+> 为什么不是全局一个 key？不同角色的 system prompt 与 tools 不同，前缀本就不同，
+> 混在一个路由桶里会稀释命中。
 > 为什么不带时间戳/随机数？key 必须**跨请求稳定**，会话内每轮都要相同。
 
 codebot 的对应设计：key 语义 = SessionID（切会话 = 换血统），teammate 追加名字
-后缀，宿主复用同一 Agent 实例切会话时调 `Agent.SetPromptCacheKey` 重指身份。
+后缀。
 
 ---
 
-## 6. Claude 断点编排：地板 + 滚动尖端
+## 6. Claude 断点编排：三处断点
 
-Anthropic 不打断点 = 零缓存。我们的预算分配（上限 4 个断点/请求）：
+Anthropic 不打断点 = 零缓存。我们实际发出的断点有三处（每请求上限 4 个）：
 
 ```
-[tools][system ←断点①"地板"][...历史消息...][最新消息 ←断点②"滚动尖端"]
+[tools][system ←断点①地板][...历史消息...][上一条请求的末块 ←断点③回看][最新消息 ←断点②滚动尖端]
 ```
 
 ### 6.1 地板（floor）：钉住静态前缀
 
-system prompt 是最大的静态块。给它一个专属断点，保证**新会话/尾部缓存被逐出时，
-至少 system+tools 前缀仍然从缓存读**（agentcore `loop.go`）：
+system prompt 是最大的静态块。应用层把它包成带 `Cache` 的块，保证**新会话/尾部
+缓存被逐出时，至少 tools+system 前缀仍然从缓存读**（ainovel `internal/agents/build.go`）：
 
 ```go
-} else if agentCtx.SystemPrompt != "" {
-	m := SystemMsg(agentCtx.SystemPrompt)
-	if config.CacheLastMessage != "" {
-		// Cache floor: pin the static system prompt with its own
-		// breakpoint so a fresh session — or a turn whose tail entry was
-		// evicted — still reads the system+tools prefix from cache.
-		m.Metadata = map[string]any{"cache_control": config.CacheLastMessage}
-	}
-	prefix = append(prefix, m)
+// workerSystem 把提示词包成带缓存断点的 system 块（缓存地板）。
+func workerSystem(prompt string, cache *litellm.CacheControl) []litellm.Block {
+	return []litellm.Block{litellm.TextBlock{Text: prompt, Cache: cache}}
 }
 ```
+
+地板放在应用层而不是框架里：system prompt 是应用构造的，它是否值得一个专属断点
+只有应用知道。
 
 ### 6.2 滚动尖端（rolling tip）：每轮推进覆盖面
 
-把一个断点打在**最后一条非 system 消息**上。工具循环里每次 LLM 调用都会写一条
-覆盖到最新 tool_use+tool_result 的缓存，下一轮直接读，不再重传：
+`agentcore.Config.Cache` 一开，框架在 `BuildCall` 里放两类断点（agentcore
+`request.go` `markCache`）：**最后一条消息**（本轮写入，下轮读取），以及**上一条
+请求写过的位置**——最新 assistant 响应之前的那条消息。
 
 ```go
-// markLastMessageForCache returns a copy of messages with cache_control attached
-// to the metadata of the last non-system message. System messages are skipped so
-// trailing per-turn reminders (which change every turn) don't end up carrying
-// the breakpoint.
-func markLastMessageForCache(messages []Message, cacheControl string) []Message {
-	idx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != RoleSystem {
-			idx = i
-			break
+func markCache(msgs []litellm.Message, cache *litellm.CacheControl) {
+	last := len(msgs) - 1
+	if last < 0 || msgs[last].Role == litellm.RoleSystem {
+		return
+	}
+	mark(msgs, last, cache)
+	for i := last; i > 0; i-- {
+		if msgs[i].Role == litellm.RoleAssistant {
+			if msgs[i-1].Role != litellm.RoleSystem {
+				mark(msgs, i-1, cache)
+			}
+			return
 		}
 	}
-	// ...
 }
 ```
 
-注意跳过尾部 system reminder：它每轮都变，把断点打在它身上等于每轮写一条
-永远不会被复用的缓存。
+为什么需要第三个断点：provider 从断点回看已有写入的距离有限（Anthropic 是 20 个
+块），一轮里并行工具调用新增很多块时，如果只有尖端断点，下一轮可能回看不到上一轮
+写的位置。补一个"上一次请求末尾"的断点，就把它钉在实际写过的地方。
+
+尾部如果是 system reminder（每轮都变），框架直接不打断点——打在它身上等于每轮写
+一条永远不会被复用的缓存。
 
 ### 6.3 末块语义：一条消息只烧一个断点
 
-消息级的 `cache_control` 语义是"在这条消息之后写一个断点"。翻译到块级时只允许
-落在**最后一个可缓存块**上——给每个块都打标会把 4 个断点的预算烧穿；而 Anthropic
-拒绝 thinking 块携带 `cache_control`，所以从尾部扫、跳过 reasoning
-（agentcore `llm/litellm.go`）：
+消息级的断点语义是"在这条消息之后写一个断点"。落到块级时只允许打在**最后一个可
+缓存块**上——给每个块都打标会把 4 个断点的预算烧穿；而 Anthropic 拒绝 thinking
+块携带 `cache_control`，所以从尾部扫、跳过 reasoning 块（agentcore `request.go`
+`withCache`）：
 
 ```go
-if cache != nil {
-	// Anthropic rejects cache_control on thinking blocks — land the
-	// breakpoint on the last cacheable block instead.
-	for i := len(blocks) - 1; i >= 0; i-- {
-		if _, isReasoning := blocks[i].(litellm.ReasoningBlock); isReasoning {
-			continue
-		}
-		blocks[i] = withBlockCache(blocks[i], cache)
-		break
+func withCache(block litellm.Block, cache *litellm.CacheControl) (litellm.Block, bool) {
+	c := *cache
+	switch b := block.(type) {
+	case litellm.TextBlock:
+		b.Cache = &c
+		return b, true
+	case litellm.ToolUseBlock:
+		b.Cache = &c
+		return b, true
+	case litellm.ToolResultBlock:
+		b.Cache = &c
+		return b, true
+	// ...
 	}
+	return block, false
 }
 ```
 
-### 6.4 TTL 管道
+`ReasoningBlock` 不在这个 switch 里：它拿不到断点，扫描会继续向前找可缓存的块。
+tools 段由 provider 自己拼接在前缀最前面，不需要额外断点。
 
-配置值约定为 `"type[:ttl]"` 字符串，如 `"ephemeral"`（默认 5m）或 `"ephemeral:1h"`：
+### 6.4 TTL
+
+`litellm.CacheControl` 只有一个 `TTL` 字段，空值 = 交给 provider 默认
+（Anthropic / Bedrock 是 5 分钟）。ainovel 显式留空：
 
 ```go
-func cacheControlFromMetadata(metadata map[string]any) *litellm.CacheControl {
-	value, _ := metadata["cache_control"].(string)
-	if value == "" {
-		return nil
-	}
-	if typ, ttl, ok := strings.Cut(value, ":"); ok {
-		return &litellm.CacheControl{Type: typ, TTL: ttl}
-	}
-	return &litellm.CacheControl{Type: value}
+// workerCacheTTL 是显式缓存断点的 TTL；空 = 交给 provider 默认。litellm 把 TTL
+// 原样透传（anthropic 适配器拼进 cache_control.ttl），而 OpenAI 的
+// prompt_cache_breakpoint 没有 ttl 字段，因此这里不写死 "5m"。
+const workerCacheTTL = ""
+
+func workerCache() *litellm.CacheControl {
+	return &litellm.CacheControl{TTL: workerCacheTTL}
 }
 ```
 
 要不要升 1h 用数据说话：写价从 1.25x 涨到 2x，只有实测调用间隔经常超过 5 分钟
-才值得（我们实测 coordinator 中位间隔 172s，没升）。
+才值得（我们实测中位间隔 172s，没升）。
 
 ---
 
@@ -288,16 +294,40 @@ func cacheControlFromMetadata(metadata map[string]any) *litellm.CacheControl {
 ### 7.1 能力门控：不支持的字段不出门
 
 litellm 各 provider 对 `ProviderOptions` **严格校验**（未知键直接报错），所以
-agentcore 在发送前按能力声明门控（agentcore `llm/litellm.go`）：
+发送前必须只保留端点认识的键。agentcore v1.8.8 不再替应用做这件事：请求由调用方
+构造，`prompt_cache_key` 通过 `Request.ProviderOptions` 传入，门控落在 ainovel 的
+`internal/bootstrap/models.go`：
 
 ```go
-// Prompt-cache routing identity. Capability-gated: litellm providers
-// validate provider options strictly, so an unsupported key must be
-// dropped here rather than rejected there.
-if callCfg.PromptCacheKey != "" && caps.Cache.PromptKey == litellm.SupportYes {
-	req.ProviderOptions["prompt_cache_key"] = callCfg.PromptCacheKey
+// mergeOptions 保留调用方带的、目标端点认识的键（如 prompt_cache_key），
+// 丢弃它不认识的键（严格校验的端点会直接拒绝），再叠加 extra_body 基线。
+func (e *endpoint) mergeOptions(caller litellm.ProviderOptions) litellm.ProviderOptions {
+	merged := make(litellm.ProviderOptions, len(caller)+len(e.options))
+	for key, value := range caller {
+		if _, owned := e.options[key]; owned {
+			continue
+		}
+		if e.acceptsOption(key) {
+			merged[key] = value
+		}
+	}
+	for key, value := range e.options {
+		merged[key] = value
+	}
+	return merged
+}
+
+func (e *endpoint) acceptsOption(key string) bool {
+	if key == openai.ProviderOptionPromptCacheKey {
+		return e.promptCacheKey
+	}
+	return slices.Contains(e.caps.ProviderOptions, key)
 }
 ```
+
+`e.caps` 来自 litellm 的 `Capabilities()`；v1.9.6 的 OpenAI provider 把
+`prompt_cache_key` 列进 chat 与 responses 两侧的可用选项，因此剩下唯一的判定是
+"这个端点是否值得信任"（§7.2）。
 
 ### 7.2 官方端点判定：兼容生态没有未知字段契约
 
@@ -310,32 +340,26 @@ if callCfg.PromptCacheKey != "" && caps.Cache.PromptKey == litellm.SupportYes {
   结构体再 re-marshal，未知字段无声消失（发了白发）；
 - **宽松端忽略**：Ollama、当前版 vLLM、MiniMax。
 
-所以 litellm openai provider 的能力声明按 BaseURL **动态**判定
-（litellm `provider/openai/capabilities.go`）：
+所以"是否发路由键"由 BaseURL **动态**判定（ainovel `internal/bootstrap/models.go`；
+litellm v1.9.6 的 openai provider 允许兼容端透传未列出的选项，判定权因此回到应用层）：
 
 ```go
-// promptCacheParamsSupport reports whether this endpoint is trusted to accept
-// OpenAI's prompt cache params (prompt_cache_key / prompt_cache_retention).
-// Only the official endpoint guarantees the field contract.
-func (p *Provider) promptCacheParamsSupport() litellm.Support {
-	if p.cfg.PromptCacheParams || isOfficialBaseURL(p.cfg.BaseURL) {
-		return litellm.SupportYes
-	}
-	return litellm.SupportUnknown
-}
-
-func isOfficialBaseURL(baseURL string) bool {
-	u, err := url.Parse(baseURL)
-	if err != nil {
+// promptCacheKeyAllowed 复刻旧适配器的门控：只有确认透传 prompt_cache_key 的
+// OpenAI 端点才发路由键——官方端点，或 prompt_cache_params 显式开启的代理。
+func promptCacheKeyAllowed(typeName, baseURL string, caps litellm.Capabilities, capsOK, optIn bool) bool {
+	if !capsOK || typeName != "openai" {
 		return false
 	}
-	return strings.EqualFold(u.Hostname(), "api.openai.com")
+	if !slices.Contains(caps.ProviderOptions, openai.ProviderOptionPromptCacheKey) {
+		return false
+	}
+	return optIn || isOfficialOpenAI(baseURL)
 }
 ```
 
-官方 `api.openai.com` → `SupportYes`（发送）；第三方 BaseURL → `SupportUnknown`
-（§7.1 的门控自动不发，**默认永不炸任何端点**）；确认自己的中转原样透传的用户，
-在 provider 配置里显式 opt-in：
+官方 `api.openai.com` → 发送；第三方 BaseURL → 不发（§7.1 的门控自动丢弃，
+**默认永不炸任何端点**）；确认自己的中转原样透传的用户，在 provider 配置里显式
+opt-in：
 
 ```jsonc
 "my-relay": {
@@ -345,8 +369,46 @@ func isOfficialBaseURL(baseURL string) bool {
 }
 ```
 
-> 为什么开关做在 litellm 能力层而不是应用配置层？因为运行时 `/model` 切 provider
-> 会换 client，能力声明跟着 client 自动切换；应用构造期的判定覆盖不了运行时切换。
+> 为什么按端点而不是按模型判定？同一个 provider 键下多个模型共享一个 client，
+> 可信度是端点属性；运行时 `/model` 切换可能换端点，判定必须跟着端点走。
+
+### 7.3 厂商能力差异：断点只在有落点的适配器上出门
+
+§6 的断点编排是**请求侧意图**；断点能否真的写进请求体，取决于适配器有没有对应的
+协议落点。litellm v1.9.6 里有落点的只有这几类：
+
+| 适配器 | 断点落点（请求体字段） |
+|---|---|
+| `openai`（`api: "chat"` 与 `api: "responses"` 两侧都有） | 内容块上的 `prompt_cache_breakpoint: {"mode":"explicit"}` |
+| `anthropic` | 内容块上的 `cache_control` |
+| `bedrock` | 内容块上的 `cachePoint` |
+| `openrouter` | 内容块上的 `cache_control: {"type":"ephemeral"}` |
+
+其余内置兼容适配器（`deepseek` / `qwen` / `glm` / `mimo` / `minimax` / `compat` /
+`grok` / `ollama`）都走 `openaicompat`，而它们的 `Spec.Cache` 是 `nil`：
+
+```go
+// litellm v1.9.6 provider/internal/openaicompat/request.go
+func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) map[string]any {
+	if cache != nil {
+		maps.Copy(part, p.spec.Cache) // Spec.Cache 为 nil → 空操作
+	}
+	return part
+}
+```
+
+于是 `workerCache()`、system 地板断点、agentcore 的滚动尖端与回看断点在这些端点上
+**全部被静默丢弃**：不报错、不打 warning、也不降级提示。实测（2026-11，本地 stub
+端点逐厂商断言请求体）：`openai` 收到 `prompt_cache_breakpoint`、`openrouter` 收到
+`cache_control`，而上述八个兼容厂商的请求体里既没有 `prompt_cache_breakpoint` 也没有
+`cache_control`。两个直接推论：
+
+- **别用"没报错"判断断点生效**。这些端点上缓存能否命中，只取决于厂商自己的服务端
+  隐式前缀缓存；客户端唯一还能做的是 §4 的前缀字节稳定。路由键也基本帮不上——
+  `prompt_cache_key` 的发送按 §7.2 只对 `type: "openai"` 端点开放。
+- **换适配器 = 换缓存语义**。把 `type` 从 `openai` 换成 `deepseek` 后，`Cache` 配置
+  看起来没变，实际缓存收益可能归零；成本评估必须按适配器分别量，口径仍是 §8 的
+  逐请求 usage 序列。
 
 ---
 
@@ -359,9 +421,10 @@ promptCacheBreakDetection，做了轻量版）。
 
 ```go
 // 同一会话（role+task）内：前缀未缩短，而命中量较上次下降 >5% 且降幅 ≥2000 tokens
+prefix := u.InputTokens // litellm.Usage.InputTokens 含缓存读写
 broke := prevPrefix > 0 && prefix >= prevPrefix &&
-	float64(u.CacheRead) < float64(prevRead)*cacheBreakKeepRatio &&
-	prevRead-u.CacheRead >= cacheBreakMinDropTokens
+	float64(u.CacheReadTokens) < float64(prevRead)*cacheBreakKeepRatio &&
+	prevRead-u.CacheReadTokens >= cacheBreakMinDropTokens
 ```
 
 四个关键设计，每个都对应一类误报：
@@ -369,7 +432,7 @@ broke := prevPrefix > 0 && prefix >= prevPrefix &&
 | 设计 | 防的误报 |
 |---|---|
 | **双阈值**（相对 5% 且绝对 2000） | 单一相对阈值被小前缀噪声淹没；单一绝对阈值漏掉大前缀退化 |
-| **基线跟随会话（role+task）** | 检测维度必须与 `prompt_cache_key` 的会话粒度（`#seq`）对齐；按 role 跨会话比较，会在"上一会话很短、新会话首请求前缀反而更长"时误报（Codex review 抓到的真实缺口） |
+| **基线按 role+task** | 检测维度必须与缓存血统对齐；按 role 跨任务比较，会在"上一任务很短、新任务首请求前缀反而更长"时误报（Codex review 抓到的真实缺口） |
 | **前缀缩短 = 合法重置** | 上下文压缩是计划内断裂，重置基线不告警 |
 | **replay 不检测** | 启动时重放历史会把陈年断裂刷成新告警 |
 
@@ -386,9 +449,12 @@ broke := prevPrefix > 0 && prefix >= prevPrefix &&
 > **一切会进入缓存前缀的量（system prompt、tools、thinking 参数、采样参数），
 > 在会话内首次计算后必须冻结——宁可陈旧，不可破缓存。**
 
-例子:"运行时调 thinking 强度"这类功能，如果让新强度立即作用于进行中的会话，
-等于每次调整都重写前缀、作废全部缓存。正确做法是新值只对**新 spawn 的会话**生效。
-任何"运行时可调 X"的需求评审，第一个问题都是：X 在不在缓存前缀里？
+例:"运行时调 thinking 强度"这类功能——它只改模型请求参数（`WorkerSet.SetThinking`
+下一次 `Run` 生效），不碰 system、不碰 tools、不重写 history，因此不破缓存，
+可以放心做成运行时开关。反过来，任何会改动 system prompt 文本、tools 集合/顺序、
+或早期消息的"运行时能力"，都必须等下一次会话（本项目里是下一次 `Run` 的新历史，
+或先做一次计划内压缩）再落地。任何"运行时可调 X"的需求评审，第一个问题都是：
+X 在不在缓存前缀里？
 
 ---
 
@@ -402,42 +468,47 @@ broke := prevPrefix > 0 && prefix >= prevPrefix &&
 3. **验证口径**：会话 JSONL 不含 system prompt 和完整请求体，**逐请求 usage 序列
    （input vs cache_read）才是诊断金标准**。一个实用指纹：命中量若恰好钉在
    "system 提示词 token 数按 128 向下取整"，说明只有 system 段命中、消息段全 miss。
-4. **收益核算**：读价 0.1x、写价 1.25x，意味着一条缓存只要被读 1 次就回本。
-   多轮 agent 会话里断点几乎总是正收益，所以 `CacheLastMessage` 不设开关、默认开。
-   **例外（Responses 端点）**：litellm v1.8.11 的 Responses 适配器只允许断点落在
-   `input_text` 上；agentcore 的滚动尖端会贴到最后一条非 system 消息，工具循环里
-   就是 tool_result（`function_call_output`），本地校验直接拒绝、请求发不出去
-   （`cache breakpoints are not supported on tool result blocks`）。因此
-   `internal/agents/build.go` 的 `explicitCacheControl` 对 `api: "responses"` 的
-   provider 关闭 `CacheLastMessage`，只保留 `prompt_cache_key` 路由亲和；Anthropic
-   与 chat 端点不受影响。
+4. **收益核算（含 #142 的历史 gate）**：读价 0.1x、写价 1.25x，意味着一条缓存只要
+   被读 1 次就回本。多轮 agent 会话里断点几乎总是正收益，所以 `Config.Cache` 不设
+   开关、默认开。历史上有一个例外：litellm v1.8.11 的 Responses 适配器只允许断点
+   落在 `input_text` 上，工具循环里断点会被贴到 tool_result（`function_call_output`）
+   并被本地校验拒绝（`cache breakpoints are not supported on tool result blocks`），
+   于是 ainovel 侧对 `api: "responses"` 的 provider 关闭 `CacheLastMessage`、只保留
+   `prompt_cache_key`（PR #142）。**litellm ≥ v1.9.2 已支持在 tool result 块上落断点，
+   本项目升级到 v1.9.6 后该 gate 已删除**：`workerCache()` 对所有 provider 统一返回
+   断点配置，Anthropic / chat / Responses 三条路径不再分叉。这段历史留在文档里，是
+   提醒"临时 gate 必须随上游能力升级一起拆除"，不是当前行为。
 
 ---
 
 ## 11. 接入指南速查
 
-**ainovel-cli**（已内置）：每个 agent 配 `CacheLastMessage: "ephemeral"` +
-`PromptCacheKey: promptCacheBase(bookDir) + "-<role>"`，其余全自动。provider 声明
-`api: "responses"` 时断点自动关闭（litellm v1.8.11 的 Responses 适配器不接受
-tool_result 上的断点，见 §10.4），`prompt_cache_key` 照旧。
+**ainovel-cli**（已内置）：每个 Worker 一套 `Config`——
+`Cache: workerCache()`（滚动尖端 + 回看断点）、system 块带同一个 `CacheControl`
+（地板）、`WithPromptCacheKey(promptCacheBase(bookDir) + "-<role>")`（路由身份）。
+所有 provider 一致，没有按 `api` 分叉的开关。
 
-**codebot**（已内置）：key = SessionID；`Reset`/`SwitchSession` 时
-`agent.SetPromptCacheKey(newSessionID)`；teammate 用 `sessionID + "-" + name`。
+**codebot**（已内置）：key = SessionID；`Reset`/`SwitchSession` 时换 key；
+teammate 用 `sessionID + "-" + name`。
 
-**新应用接 agentcore** 的最小清单：
+**新应用接 agentcore** 的最小清单（v1.8.8 API）：
 
 ```go
-agentcore.NewAgent(
-	agentcore.WithCacheLastMessage("ephemeral"),   // Claude 断点：地板+滚动尖端
-	agentcore.WithPromptCacheKey(stableIdentity),  // OpenAI 路由：稳定、每会话唯一
+cfg := agentcore.Config{
+	System: []litellm.Block{litellm.TextBlock{Text: systemPrompt, Cache: cache}},
+	Cache:  &litellm.CacheControl{},           // 滚动尖端 + 回看断点；TTL 空 = provider 默认
+	// OpenAI 路由身份（ainovel 封装为 bootstrap.WithPromptCacheKey）：
+	// model.Core.Request.ProviderOptions.Set(openai.ProviderOptionPromptCacheKey, stableIdentity)
+	Model: model,
 	// ...
-)
+}
+history, err := agentcore.Run(ctx, cfg, history, agentcore.UserText(task))
 ```
 
 外加自查三问（对应三纪律）：
 
 1. 我的 tools 序列化是字节确定的吗？（集合都排序了吗）
-2. 我的历史是 append-only 的吗？（压缩会提交吗）
+2. 我的历史是 append-only 的吗？（压缩结果会一次性提交吗）
 3. 我每轮变化的内容都在尾部吗？
 
 ---
@@ -459,13 +530,13 @@ agentcore.NewAgent(
 
 | 主题 | 位置 |
 |---|---|
-| tools 确定性排序 | agentcore `subagent/subagent.go` `sortedAgentNames` |
-| 会话级 key 派生（#seq） | agentcore `subagent/subagent.go` `runAgent` |
-| system 地板 + 滚动尖端 | agentcore `loop.go` `callLLM` / `markLastMessageForCache` |
-| 末块断点 + 跳 thinking | agentcore `llm/litellm.go` `convertAgentBlocks` |
-| TTL 解析（"ephemeral:1h"） | agentcore `llm/litellm.go` `cacheControlFromMetadata` |
-| 能力门控 | agentcore `llm/litellm.go` `applyCallConfig` |
-| 官方端点判定 + opt-in | litellm `provider/openai/capabilities.go` / `provider.go Config` |
+| tools 确定性排序 | litellm `Capabilities` 按 API 排序；本项目工具集在 `internal/tools` 侧按固定顺序装配 |
+| system 地板断点 | ainovel `internal/agents/build.go` `workerSystem` |
+| 滚动尖端 + 回看断点 | agentcore `request.go` `markCache` |
+| 末块断点 + 跳 thinking | agentcore `request.go` `withCache` |
+| 断点 TTL | ainovel `internal/agents/build.go` `workerCache` / `workerCacheTTL` |
+| 能力门控 | ainovel `internal/bootstrap/models.go` `endpoint.mergeOptions` / `acceptsOption` |
+| 官方端点判定 + opt-in | ainovel `internal/bootstrap/models.go` `promptCacheKeyAllowed` |
 | 缓存身份（一书一基） | ainovel `internal/agents/build.go` `promptCacheBase` |
 | 断裂检测 | ainovel `internal/host/usage.go` `noteCacheBreak` |
 | 架构定位 | ainovel `docs/architecture.md` §6.6 |

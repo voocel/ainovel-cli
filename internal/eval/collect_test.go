@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 func TestCollectReadsStyleUsageAndToolCalls(t *testing.T) {
@@ -49,10 +50,10 @@ func TestCollectReadsStyleUsageAndToolCalls(t *testing.T) {
 		t.Fatalf("save usage: %v", err)
 	}
 	writeSessionLine(t, dir, "meta/sessions/agents/writer-ch01.jsonl", agentcore.Message{
-		Role: agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{
-			agentcore.ToolCallBlock(agentcore.ToolCall{Name: "dispatch"}),
-			agentcore.ToolCallBlock(agentcore.ToolCall{Name: "novel_context"}),
+		Role: litellm.RoleAssistant,
+		Blocks: []litellm.Block{
+			litellm.ToolUseBlock{ID: "call_1", Name: "dispatch", Arguments: "{}"},
+			litellm.ToolUseBlock{ID: "call_2", Name: "novel_context", Arguments: "{}"},
 		},
 	})
 

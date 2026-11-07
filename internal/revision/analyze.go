@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/chapterfacts"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -45,8 +44,8 @@ func revisionAnalysisSchema() map[string]any {
 	)
 }
 
-func Analyze(ctx context.Context, model agentcore.ChatModel, systemPrompt string, change Change, previous domain.ChapterRecord, downstream []domain.ChapterSummary) (domain.RevisionAnalysis, error) {
-	if model == nil {
+func Analyze(ctx context.Context, model llmcontract.Model, systemPrompt string, change Change, previous domain.ChapterRecord, downstream []domain.ChapterSummary) (domain.RevisionAnalysis, error) {
+	if model.Core.Client == nil {
 		return domain.RevisionAnalysis{}, fmt.Errorf("revision model is required")
 	}
 	if strings.TrimSpace(systemPrompt) == "" {

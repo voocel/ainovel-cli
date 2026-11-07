@@ -1,13 +1,12 @@
 package imp
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
 func TestStructuredContractsAreStrictReady(t *testing.T) {
@@ -18,57 +17,44 @@ func TestStructuredContractsAreStrictReady(t *testing.T) {
 	}
 }
 
-type nativeImportModel struct {
-	*mockModel
-	messages []agentcore.Message
-	config   agentcore.CallConfig
-}
-
-func (m *nativeImportModel) Capabilities() llm.Capabilities {
-	return llm.Capabilities{
-		Provider:   "openai",
-		Model:      "gpt-test",
-		Structured: llm.StructuredCapabilities{JSONSchema: llm.SupportYes, Strict: llm.SupportYes},
+// requestText 拼接一条请求消息里的文本块，用于断言提示词注入。
+func requestText(m litellm.Message) string {
+	var out strings.Builder
+	for _, block := range m.Blocks {
+		if text, ok := block.(litellm.TextBlock); ok {
+			out.WriteString(text.Text)
+		}
 	}
-}
-
-func (m *nativeImportModel) Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.messages = messages
-	m.config = agentcore.ResolveCallConfig(opts)
-	return m.mockModel.Generate(ctx, messages, tools, opts...)
+	return out.String()
 }
 
 func TestCallStructuredUsesNativeSchemaWithoutPromptDuplication(t *testing.T) {
-	model := &nativeImportModel{mockModel: &mockModel{responses: []string{`{"boundaries":[]}`}}}
+	provider := litellmtest.New(litellmtest.Text(`{"boundaries":[]}`))
+	model := modelHandle(t, provider, new(true))
 	const prompt = "判断真实边界。"
-	_, err := callStructured[boundaryBatch](t.Context(), model, segmentContract, prompt, `{}`, 100, callProfile{}, nil)
-	if err != nil {
+	if _, err := callStructured[boundaryBatch](t.Context(), model, segmentContract, prompt, `{}`, callProfile{}, nil); err != nil {
 		t.Fatalf("callStructured: %v", err)
 	}
-	format := model.config.ResponseFormat
-	if format == nil || format.JSONSchema == nil || format.JSONSchema.Name != segmentContract.Name {
+	req := provider.Requests()[0]
+	if format := req.ResponseFormat; format == nil || format.JSONSchema == nil || format.JSONSchema.Name != segmentContract.Name {
 		t.Fatalf("response format = %#v", format)
 	}
-	if got := model.messages[0].TextContent(); got != prompt {
+	if got := requestText(req.Messages[0]); got != prompt {
 		t.Fatalf("native prompt 被重复注入 schema: %s", got)
 	}
 }
 
 func TestCallStructuredPromptModeInjectsContract(t *testing.T) {
-	model := &nativeImportModel{mockModel: &mockModel{responses: []string{`{"boundaries":[]}`}}}
-	modelCaps := &promptImportModel{nativeImportModel: model}
-	_, err := callStructured[boundaryBatch](t.Context(), modelCaps, segmentContract, "判断真实边界。", `{}`, 100, callProfile{}, nil)
-	if err != nil {
+	provider := litellmtest.New(litellmtest.Text(`{"boundaries":[]}`))
+	model := modelHandle(t, provider, new(false))
+	if _, err := callStructured[boundaryBatch](t.Context(), model, segmentContract, "判断真实边界。", `{}`, callProfile{}, nil); err != nil {
 		t.Fatalf("callStructured: %v", err)
 	}
-	if model.config.ResponseFormat != nil {
-		t.Fatalf("prompt mode 不应发送 response_format: %#v", model.config.ResponseFormat)
+	req := provider.Requests()[0]
+	if format := req.ResponseFormat; format != nil && format.JSONSchema != nil {
+		t.Fatalf("prompt mode 不应发送原生 schema: %#v", format)
 	}
-	if !strings.Contains(model.messages[0].TextContent(), "<output-json-schema>") {
-		t.Fatalf("prompt mode 未注入契约: %s", model.messages[0].TextContent())
+	if !strings.Contains(requestText(req.Messages[0]), "<output-json-schema>") {
+		t.Fatalf("prompt mode 未注入契约: %s", requestText(req.Messages[0]))
 	}
 }
-
-type promptImportModel struct{ *nativeImportModel }
-
-func (m *promptImportModel) Capabilities() llm.Capabilities { return llm.Capabilities{} }

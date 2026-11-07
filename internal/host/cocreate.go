@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // 冷启动共创：从零澄清需求，产出整本书的创作指令。
@@ -90,8 +90,11 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 	}
 
 	model := models.ForRole("thinking")
+	if model.Core.Client == nil {
+		return CoCreateReply{}, fmt.Errorf("cocreate 模型未配置")
+	}
 
-	msgs := []agentcore.Message{agentcore.SystemMsg(sysPrompt)}
+	msgs := []litellm.Message{litellm.System(sysPrompt)}
 	for _, item := range history {
 		content := strings.TrimSpace(item.Content)
 		if content == "" {
@@ -99,9 +102,9 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 		}
 		switch strings.ToLower(strings.TrimSpace(item.Role)) {
 		case "assistant":
-			msgs = append(msgs, assistantMsg(content))
+			msgs = append(msgs, litellm.AssistantText(content))
 		default:
-			msgs = append(msgs, agentcore.UserMsg(content))
+			msgs = append(msgs, litellm.UserText(content))
 		}
 	}
 
@@ -131,37 +134,51 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 		}
 	}()
 
-	// 不另设输出上限：思考 token 与回复共享 max_tokens，收窄会让推理模型把预算耗在
-	// 思考上、回复为空或被截断。
-	streamCh, err := model.GenerateStream(ctx, msgs, nil)
+	// 不另设输出上限：思考 token 与回复共享生成预算，收窄会让推理模型把预算耗在
+	// 思考上、回复为空或被截断。请求模板（模型身份、思考、provider 选项）原样沿用，
+	// 只填本次的消息。
+	req := model.Core.Request
+	req.Messages = msgs
+	req.Tools = nil
+	req.ToolChoice = nil
+
+	stream, err := model.Core.Client.Stream(ctx, req)
 	if err != nil {
 		return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", err)
 	}
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			slog.Warn("cocreate stream close failed", "module", "cocreate", "err", closeErr)
+		}
+	}()
 
-	var streamed bool
-	for ev := range streamCh {
-		switch ev.Type {
-		case agentcore.StreamEventThinkingDelta:
-			thinking.WriteString(ev.Delta)
+	resp, err := litellm.Handle(stream, func(ev litellm.Event) error {
+		switch e := ev.(type) {
+		case litellm.ReasoningDelta:
+			thinking.WriteString(e.Text)
 			if onProgress != nil {
 				onProgress(CoCreateProgressThinking, thinking.String())
 			}
-		case agentcore.StreamEventTextDelta:
-			streamed = true
-			raw.WriteString(ev.Delta)
+		case litellm.TextDelta:
+			raw.WriteString(e.Text)
 			if onProgress != nil {
 				onProgress(CoCreateProgressReply, extractReplyPreview(raw.String()))
 			}
-		case agentcore.StreamEventDone:
-			if !streamed {
-				raw.WriteString(ev.Message.TextContent())
-			}
-		case agentcore.StreamEventError:
-			if ev.Err != nil {
-				return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", ev.Err)
-			}
-			return CoCreateReply{}, fmt.Errorf("cocreate generate failed")
 		}
+		return nil
+	})
+	if err != nil {
+		return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", err)
+	}
+	// 聚合结果才是权威内容：端点可能把整段文本/思考放在块起始里（没有对应 delta），
+	// 也可能在块结束时补齐元数据。delta 累积只用于流式进度。
+	if text := resp.Text(); text != "" {
+		raw.Reset()
+		raw.WriteString(text)
+	}
+	if reasoning := resp.Reasoning(); reasoning != "" {
+		thinking.Reset()
+		thinking.WriteString(reasoning)
 	}
 
 	reply, err = parseCoCreateResponse(raw.String())
@@ -189,14 +206,6 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func assistantMsg(text string) agentcore.Message {
-	return agentcore.Message{
-		Role:      agentcore.RoleAssistant,
-		Content:   []agentcore.ContentBlock{agentcore.TextBlock(text)},
-		Timestamp: time.Now(),
-	}
 }
 
 // parseCoCreateResponse 解析 XML 标签输出。模型若没遵守协议（直接说自然语言），

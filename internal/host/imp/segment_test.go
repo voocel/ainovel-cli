@@ -6,9 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
 func TestUnitLessNumericNotLexical(t *testing.T) {
@@ -303,9 +308,9 @@ func TestChunkValidatorOwnedDiscipline(t *testing.T) {
 func TestSegmentClearsChunksOnResolveFailure(t *testing.T) {
 	norm, units := segFixture()
 	// 模型把全书标成 front_matter：无章节，Go 无法确定性修复，终局失败。
-	m := &mockModel{responses: []string{boundariesJSON(boundaryFixture("L1", "", kindFrontMatter, "前言"))}}
+	m := &mockProvider{responses: []string{boundariesJSON(boundaryFixture("L1", "", kindFrontMatter, "前言"))}}
 	w := &Workspace{dir: t.TempDir()}
-	_, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, w, "id-1")
+	_, err := Segment(context.Background(), scriptModel(t, m), "sys", norm, units, "", 0, 0, callProfile{}, w, "id-1")
 	if err == nil {
 		t.Fatal("无章节应终局失败")
 	}
@@ -318,31 +323,104 @@ func TestSegmentClearsChunksOnResolveFailure(t *testing.T) {
 	}
 }
 
-// mockModel 顺序返回预设响应，供 typed-call 契约测试。
-// stops 可为每次调用指定 stop reason；缺省用 stop 或 StopReasonStop。
-type mockModel struct {
-	responses []string
-	stops     []agentcore.StopReason
-	i         int
-	stop      agentcore.StopReason
+// modelHandle 把 provider 包装成导入语义调用使用的模型句柄。
+// override 为 nil 时结构化协议交给 adapter；true/false 显式声明原生 schema / 提示词契约。
+func modelHandle(t *testing.T, provider litellm.Provider, override *bool) llmcontract.Model {
+	t.Helper()
+	client, err := litellm.New(provider)
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return llmcontract.Model{
+		Core:               agentcore.Model{Client: client, Request: litellm.Request{Model: "test-model"}},
+		Provider:           provider.Name(),
+		ModelName:          "test-model",
+		JSONSchemaOverride: override,
+	}
 }
 
-func (m *mockModel) Generate(_ context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	idx := m.i
-	r := m.responses[idx%len(m.responses)]
-	sr := m.stop
-	if idx < len(m.stops) {
-		sr = m.stops[idx]
+// scriptModel 以提示词契约模式包装假 provider：导入层的自愈重问语义依赖它，
+// 原生 schema 违约会立即暴露而不是反馈重问。
+func scriptModel(t *testing.T, provider litellm.Provider) llmcontract.Model {
+	t.Helper()
+	return modelHandle(t, provider, new(false))
+}
+
+// nativeScriptModel 以原生 schema 模式包装假 provider。
+func nativeScriptModel(t *testing.T, provider litellm.Provider) llmcontract.Model {
+	t.Helper()
+	return modelHandle(t, provider, new(true))
+}
+
+// mockProvider 是脚本化假 provider：按顺序循环返回预设文本，可为每次调用指定
+// finish reason，或在开头 failFirst 次调用前以临时错误失败（守护重试路径）。
+// calls 记录全部请求次数（含被重试的失败调用），served 记录已消费的脚本响应。
+type mockProvider struct {
+	mu        sync.Mutex
+	responses []string
+	stops     []litellm.FinishReason
+	stop      litellm.FinishReason
+	failFirst int
+	calls     int
+	served    int
+}
+
+func (p *mockProvider) Name() string { return "mock" }
+
+func (p *mockProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	provider, err := p.script()
+	if err != nil {
+		return nil, err
 	}
-	if sr == "" {
-		sr = agentcore.StopReasonStop
+	return provider.Chat(ctx, req)
+}
+
+func (p *mockProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
+	provider, err := p.script()
+	if err != nil {
+		return nil, err
 	}
-	m.i++
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role:       agentcore.RoleAssistant,
-		Content:    []agentcore.ContentBlock{agentcore.TextBlock(r)},
-		StopReason: sr,
-	}}, nil
+	return provider.Stream(ctx, req)
+}
+
+// callCount 返回已发出的请求次数，含被重试的失败调用。
+func (p *mockProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// script 取本次调用的脚本：失败调用返回临时错误，其余返回一个只含该响应的 provider。
+func (p *mockProvider) script() (*litellmtest.Provider, error) {
+	p.mu.Lock()
+	attempt := p.calls
+	p.calls++
+	if attempt < p.failFirst {
+		p.mu.Unlock()
+		return nil, temporaryFailure()
+	}
+	idx := p.served
+	p.served++
+	text := ""
+	if len(p.responses) > 0 {
+		text = p.responses[idx%len(p.responses)]
+	}
+	finish := p.stop
+	if idx < len(p.stops) {
+		finish = p.stops[idx]
+	}
+	p.mu.Unlock()
+	return litellmtest.New(litellmtest.Reply{
+		Blocks:       []litellm.Block{litellm.Text(text)},
+		FinishReason: finish,
+	}), nil
+}
+
+// temporaryFailure 是 provider 声明的限流错误：退避取毫秒级，测试不必等待。
+func temporaryFailure() error {
+	err := litellm.NewError("mock", litellm.ErrorTypeRateLimit, "rate limited", nil)
+	err.RetryAfter = time.Millisecond
+	return err
 }
 
 // TestResolveSegmentationSingleLineChapters 守护 #9：无换行的单行段（锚点切分场景）整段即正文，
@@ -374,8 +452,8 @@ func TestSegmentWithMockModel(t *testing.T) {
 		boundaryFixture("L5", "", kindGroup, "卷二"),
 		boundaryFixture("L6", "", kindChapter, "第二章 云涌"),
 	)
-	m := &mockModel{responses: []string{resp}}
-	seg, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, nil, "")
+	m := &mockProvider{responses: []string{resp}}
+	seg, err := Segment(context.Background(), scriptModel(t, m), "sys", norm, units, "", 0, 0, callProfile{}, nil, "")
 	if err != nil {
 		t.Fatalf("Segment: %v", err)
 	}
@@ -448,7 +526,7 @@ func TestSegmentClipsContextBoundaries(t *testing.T) {
 			clipNotes++
 		}
 	}}
-	seg, err := Segment(context.Background(), &mockModel{responses: responses}, "sys", norm, units, "", 40, 2, 4096, prof, nil, "")
+	seg, err := Segment(context.Background(), scriptModel(t, &mockProvider{responses: responses}), "sys", norm, units, "", 40, 2, prof, nil, "")
 	if err != nil {
 		t.Fatalf("上下文区边界应被裁掉而非失败：%v", err)
 	}
@@ -470,32 +548,32 @@ func TestSegmentReusesChunkArtifacts(t *testing.T) {
 		responses[ci] = boundariesJSON(boundaryFixture(units[owned[0]].ID, "", kindChapter, ""))
 	}
 	w := &Workspace{dir: t.TempDir()}
-	m1 := &mockModel{responses: responses}
-	seg1, err := Segment(context.Background(), m1, "sys", norm, units, "", 40, 2, 4096, callProfile{}, w, "id-1")
+	m1 := &mockProvider{responses: responses}
+	seg1, err := Segment(context.Background(), scriptModel(t, m1), "sys", norm, units, "", 40, 2, callProfile{}, w, "id-1")
 	if err != nil {
 		t.Fatalf("首跑：%v", err)
 	}
-	if m1.i != len(chunks) {
-		t.Fatalf("首跑应调用 %d 次，得 %d", len(chunks), m1.i)
+	if m1.callCount() != len(chunks) {
+		t.Fatalf("首跑应调用 %d 次，得 %d", len(chunks), m1.callCount())
 	}
-	m2 := &mockModel{responses: responses}
-	seg2, err := Segment(context.Background(), m2, "sys", norm, units, "", 40, 2, 4096, callProfile{}, w, "id-1")
+	m2 := &mockProvider{responses: responses}
+	seg2, err := Segment(context.Background(), scriptModel(t, m2), "sys", norm, units, "", 40, 2, callProfile{}, w, "id-1")
 	if err != nil {
 		t.Fatalf("重跑：%v", err)
 	}
-	if m2.i != 0 {
-		t.Fatalf("digest 匹配的块应零调用复用，实际调用 %d 次", m2.i)
+	if m2.callCount() != 0 {
+		t.Fatalf("digest 匹配的块应零调用复用，实际调用 %d 次", m2.callCount())
 	}
 	if len(seg2.Chapters) != len(seg1.Chapters) {
 		t.Fatalf("复用结果应一致：%d != %d", len(seg2.Chapters), len(seg1.Chapters))
 	}
 	// 身份变化（换 prompt 版本/指导/源）→ 缓存自然失配，全部重做。
-	m3 := &mockModel{responses: responses}
-	if _, err := Segment(context.Background(), m3, "sys", norm, units, "", 40, 2, 4096, callProfile{}, w, "id-2"); err != nil {
+	m3 := &mockProvider{responses: responses}
+	if _, err := Segment(context.Background(), scriptModel(t, m3), "sys", norm, units, "", 40, 2, callProfile{}, w, "id-2"); err != nil {
 		t.Fatalf("身份变化重跑：%v", err)
 	}
-	if m3.i != len(chunks) {
-		t.Fatalf("身份变化应全部重做（%d 次调用），得 %d", len(chunks), m3.i)
+	if m3.callCount() != len(chunks) {
+		t.Fatalf("身份变化应全部重做（%d 次调用），得 %d", len(chunks), m3.callCount())
 	}
 }
 
@@ -505,16 +583,16 @@ func TestSegmentShrinksChunkOnTruncation(t *testing.T) {
 	norm, units := segFixture() // 7 个 unit，单块 [0,7)，mid=3
 	left := boundariesJSON(boundaryFixture("L1", "", kindChapter, ""))
 	right := boundariesJSON(boundaryFixture("L6", "", kindChapter, "第二章 云涌"))
-	m := &mockModel{
+	m := &mockProvider{
 		responses: []string{`{"boundaries":[]}`, left, right},
-		stops:     []agentcore.StopReason{agentcore.StopReasonLength}, // 首调截断，两个半块正常
+		stops:     []litellm.FinishReason{litellm.FinishReasonLength}, // 首调截断，两个半块正常
 	}
-	seg, err := Segment(context.Background(), m, "sys", norm, units, "", 0, 0, 4096, callProfile{}, nil, "")
+	seg, err := Segment(context.Background(), scriptModel(t, m), "sys", norm, units, "", 0, 0, callProfile{}, nil, "")
 	if err != nil {
 		t.Fatalf("截断应缩块重试而非失败：%v", err)
 	}
-	if m.i != 3 {
-		t.Fatalf("应为 1 次截断 + 2 次半块调用，得 %d", m.i)
+	if m.callCount() != 3 {
+		t.Fatalf("应为 1 次截断 + 2 次半块调用，得 %d", m.callCount())
 	}
 	if len(seg.Chapters) != 2 {
 		t.Fatalf("缩块结果应完整覆盖（2 章），得 %d", len(seg.Chapters))
@@ -547,8 +625,8 @@ func TestBuildProjectionContextByteCap(t *testing.T) {
 }
 
 func TestCallStructuredTruncation(t *testing.T) {
-	m := &mockModel{responses: []string{`{"boundaries":[]}`}, stop: agentcore.StopReasonLength}
-	_, err := callStructured[boundaryBatch](context.Background(), m, segmentContract, "s", "p", 16, callProfile{}, nil)
+	m := &mockProvider{responses: []string{`{"boundaries":[]}`}, stop: litellm.FinishReasonLength}
+	_, err := callStructured[boundaryBatch](context.Background(), scriptModel(t, m), segmentContract, "s", "p", callProfile{}, nil)
 	var trunc *errTruncated
 	if err == nil || !asTruncated(err, &trunc) {
 		t.Fatalf("长度截断应返回 *errTruncated，得 %v", err)

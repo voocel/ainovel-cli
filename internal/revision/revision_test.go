@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
 func TestAnalysisContractIsStrictReady(t *testing.T) {
@@ -531,7 +532,7 @@ func TestServiceAcceptsRevisionAndRefreshesFacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(st.Dir(), "chapters", "01.md"), []byte("林墨连夜离开城市。"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	model := &revisionModel{response: `{
+	model := revisionTestModel(t, `{
   "change_summary":"林墨由留城改为连夜离城",
   "story_changed":true,
   "facts":{
@@ -544,7 +545,7 @@ func TestServiceAcceptsRevisionAndRefreshesFacts(t *testing.T) {
   "style_delta":{"prose":["动作表达直接，不补充解释"],"dialogue":[],"taboos":[]},
   "outline_impact":{"deviation":"主角已提前离城","suggestion":"后续从城外承接"},
   "downstream_issues":[]
-}`}
+}`)
 	index := &recordingStyleIndex{}
 	result, err := NewService(st, model, "分析用户修订", index).Sync(context.Background())
 	if err != nil {
@@ -594,7 +595,7 @@ func TestServiceResumesProjectionWithoutCallingModel(t *testing.T) {
 	if err := st.Revisions.SavePending(pending); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewService(st, nil, "", nil).Sync(context.Background()); err != nil {
+	if _, err := NewService(st, llmcontract.Model{}, "", nil).Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	summary, _ := st.Summaries.LoadSummary(1)
@@ -634,7 +635,7 @@ func TestServiceResumesPreparedAfterRecordWasAlreadyWritten(t *testing.T) {
 	if err := st.Revisions.SavePending(pending); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewService(st, nil, "", nil).Sync(context.Background()); err != nil {
+	if _, err := NewService(st, llmcontract.Model{}, "", nil).Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	summary, _ := st.Summaries.LoadSummary(1)
@@ -678,7 +679,7 @@ func TestServiceResumesPartiallyWrittenPreparedBatch(t *testing.T) {
 	if err := st.Revisions.SavePending(pending); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewService(st, nil, "", nil).Sync(context.Background()); err != nil {
+	if _, err := NewService(st, llmcontract.Model{}, "", nil).Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for chapter := 1; chapter <= 2; chapter++ {
@@ -715,7 +716,7 @@ func TestServiceRejectsAndClearsStalePreparedAnalysis(t *testing.T) {
 	if err := os.WriteFile(path, []byte("第二次修改"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewService(st, nil, "", nil).Sync(context.Background()); err == nil {
+	if _, err := NewService(st, llmcontract.Model{}, "", nil).Sync(context.Background()); err == nil {
 		t.Fatal("分析后再次修改正文应拒绝应用")
 	}
 	if pending, _ := st.Revisions.LoadPending(); pending != nil {
@@ -723,23 +724,19 @@ func TestServiceRejectsAndClearsStalePreparedAnalysis(t *testing.T) {
 	}
 }
 
-type revisionModel struct{ response string }
-
-func (m *revisionModel) Capabilities() llm.Capabilities {
-	return llm.Capabilities{Structured: llm.StructuredCapabilities{JSONSchema: llm.SupportYes, Strict: llm.SupportYes}}
+// revisionTestModel 构造无网络的修订模型：litellmtest provider 按脚本返回文本。
+func revisionTestModel(t *testing.T, response string) llmcontract.Model {
+	t.Helper()
+	client, err := litellm.New(litellmtest.New(litellmtest.Text(response)))
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return llmcontract.Model{
+		Core:      agentcore.Model{Client: client, Request: litellm.Request{Model: "test-model"}},
+		Provider:  "test",
+		ModelName: "test-model",
+	}
 }
-
-func (m *revisionModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	return &agentcore.LLMResponse{Message: agentcore.Message{
-		Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock(m.response)}, StopReason: agentcore.StopReasonStop,
-	}}, nil
-}
-
-func (m *revisionModel) GenerateStream(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
-	return nil, nil
-}
-
-func (m *revisionModel) SupportsTools() bool { return true }
 
 type recordingStyleIndex struct {
 	chapter int

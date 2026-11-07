@@ -2,12 +2,14 @@ package userrules
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // nil 模型 + 空规则目录：归一化全降级，但快照仍可产出（system_defaults 兜底）并落盘。
@@ -15,7 +17,7 @@ import (
 func newDegradedService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
 	st := store.NewStore(t.TempDir())
-	return NewService(st, nil, rules.LoadOptions{}), st
+	return NewService(st, llmcontract.Model{}, rules.LoadOptions{}), st
 }
 
 func TestService_Build_DegradesButPersists(t *testing.T) {
@@ -93,20 +95,38 @@ func TestService_AddRuntimeRule_PersistsAndReturnsCandidate(t *testing.T) {
 	}
 }
 
-// alwaysRetryableModel 恒返回 retryable 错误：llmretry 会一直退避重试，
+// alwaysRetryableProvider 恒返回 retryable 错误：llmretry 会一直退避重试，
 // 只有 context 能终止它——这正是 issue #125 的卡死形态。
-type alwaysRetryableModel struct{ scriptedModel }
+type alwaysRetryableProvider struct {
+	mu    sync.Mutex
+	calls int
+}
 
-func (m *alwaysRetryableModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	m.calls++
-	return nil, retryableTestError{}
+func (p *alwaysRetryableProvider) Name() string { return "test" }
+
+func (p *alwaysRetryableProvider) Chat(context.Context, *litellm.Request) (*litellm.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return nil, rateLimitErr()
+}
+
+func (p *alwaysRetryableProvider) Stream(context.Context, *litellm.Request) (litellm.Stream, error) {
+	return nil, rateLimitErr()
+}
+
+func (p *alwaysRetryableProvider) Calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
 // issue #125 回归：provider 持续限流/不可用时，Build 必须由 context 终止并降级，
 // 不得无限重试卡死开书流程。
 func TestService_BuildStopsAtContextDeadline(t *testing.T) {
 	st := store.NewStore(t.TempDir())
-	svc := NewService(st, &alwaysRetryableModel{}, rules.LoadOptions{})
+	provider := &alwaysRetryableProvider{}
+	svc := NewService(st, rulesModel(t, provider, nil), rules.LoadOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -131,6 +151,9 @@ func TestService_BuildStopsAtContextDeadline(t *testing.T) {
 		}
 		if got.snap.Preferences == "" {
 			t.Fatal("降级应保留启动 prompt 原文")
+		}
+		if provider.Calls() == 0 {
+			t.Fatal("应至少尝试过一次请求")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Build 未受 context 约束，已卡死（issue #125）")

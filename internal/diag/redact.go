@@ -10,6 +10,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // SkelEvent 是一条会话消息脱敏后的行为骨架：保留结构信号（角色 / 工具 / 错误 /
@@ -29,37 +30,45 @@ type SkelEvent struct {
 type SkelTool struct {
 	Name     string            // 工具名（结构信号，不含正文）
 	Args     map[string]string // key → 标量原值 / 短字符串带引号 / "<redacted len sha>"
-	Invalid  bool              // ArgsInvalid：模型发来的参数无法解析（#34 信号）
-	ParseErr string            // ArgsParseError：解析失败原因
+	Invalid  bool              // 模型发来的参数不是合法 JSON（#34 信号，如输出被截断）
+	ParseErr string            // 解析失败原因
 }
 
 // redactMessage 把一条 agentcore.Message 投影成行为骨架。
 func redactMessage(agent string, m agentcore.Message) SkelEvent {
 	ev := SkelEvent{Agent: agent, Role: string(m.Role)}
-	isErr, _ := m.Metadata["is_error"].(bool)
 
 	var text strings.Builder
-	for _, b := range m.Content {
-		switch b.Type {
-		case agentcore.ContentText:
-			// tool 错误结果保留首行：这是我们自己的错误串（如 InputValidationError），
-			// 不含正文，且是定位循环的关键。其余文本一律进打码池。
-			if m.Role == agentcore.RoleTool && isErr && ev.ErrClass == "" {
-				ev.ErrClass = firstLine(b.Text, 160)
-				continue
-			}
+	for _, block := range m.Blocks {
+		switch b := block.(type) {
+		case litellm.TextBlock:
 			if strings.TrimSpace(b.Text) != "" {
 				text.WriteString(b.Text)
 				ev.Redacted++
 			}
-		case agentcore.ContentThinking:
-			if strings.TrimSpace(b.Thinking) != "" {
-				text.WriteString(b.Thinking)
+		case litellm.ReasoningBlock:
+			if strings.TrimSpace(b.Text) != "" {
+				text.WriteString(b.Text)
 				ev.Redacted++
 			}
-		case agentcore.ContentToolCall:
-			if b.ToolCall != nil {
-				ev.Tools = append(ev.Tools, redactToolCall(b.ToolCall))
+		case litellm.ToolUseBlock:
+			ev.Tools = append(ev.Tools, redactToolUse(b))
+		case litellm.ToolResultBlock:
+			// tool 错误结果保留首行：这是我们自己的错误串（如 InputValidationError），
+			// 不含正文，且是定位循环的关键。其余文本一律进打码池。
+			for _, content := range b.Content {
+				tb, ok := content.(litellm.TextBlock)
+				if !ok {
+					continue
+				}
+				if b.IsError && ev.ErrClass == "" {
+					ev.ErrClass = firstLine(tb.Text, 160)
+					continue
+				}
+				if strings.TrimSpace(tb.Text) != "" {
+					text.WriteString(tb.Text)
+					ev.Redacted++
+				}
 			}
 		}
 	}
@@ -69,24 +78,28 @@ func redactMessage(agent string, m agentcore.Message) SkelEvent {
 	return ev
 }
 
-// redactToolCall 投影一次工具调用：工具名 + 参数（值脱敏）+ 解析异常标记。
-func redactToolCall(tc *agentcore.ToolCall) SkelTool {
-	return SkelTool{
-		Name:     tc.Name,
-		Args:     redactArgs(tc.Args),
-		Invalid:  tc.ArgsInvalid,
-		ParseErr: tc.ArgsParseError,
+// redactToolUse 投影一次工具调用：工具名 + 参数（值脱敏）+ 解析异常标记。
+// agentcore v1.8.8 不再替模型解析参数：Arguments 是模型产出的原文，可能不是
+// 合法 JSON（例如输出在长度上限处被截断），这里自己判定解析异常。
+func redactToolUse(b litellm.ToolUseBlock) SkelTool {
+	t := SkelTool{Name: b.Name}
+	raw := strings.TrimSpace(b.Arguments)
+	if raw == "" {
+		return t // 无参数调用，不是异常
 	}
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		t.Invalid = true
+		t.ParseErr = err.Error()
+		return t
+	}
+	t.Args = projectArgs(args)
+	return t
 }
 
-// redactArgs 把工具参数对象投影成 key → 脱敏值。非对象参数返回 nil
-// （ArgsInvalid/ParseErr 已在 SkelTool 另行记录）。
-func redactArgs(raw json.RawMessage) map[string]string {
-	if len(raw) == 0 {
-		return nil
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
+// projectArgs 把已解析的工具参数对象投影成 key → 脱敏值。
+func projectArgs(m map[string]json.RawMessage) map[string]string {
+	if len(m) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(m))

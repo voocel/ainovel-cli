@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
@@ -14,7 +14,7 @@ type modelRuntime interface {
 	ConfiguredProviders() []string
 	ConfiguredModelOptions(provider string) []host.ConfiguredModel
 	CurrentModelSelection(role string) (string, string, bool)
-	AvailableThinking(role string) []agentcore.ThinkingLevel
+	AvailableThinking(role string) []bootstrap.ThinkingLevel
 	CurrentThinking(role string) string
 	SwitchModel(role, provider, model string) error
 	SetRoleThinking(role, level string) error

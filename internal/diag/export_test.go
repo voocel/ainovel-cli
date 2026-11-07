@@ -9,6 +9,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // sentinel 是一段绝不该出现在导出里的"小说正文"。
@@ -43,18 +44,25 @@ func writeSessionAt(t *testing.T, dir, rel string, msgs []agentcore.Message) {
 }
 
 func commitCall(chapterRaw string) agentcore.Message {
-	args := json.RawMessage(`{"chapter":` + chapterRaw + `,"content":"` + sentinel + sentinel + `"}`)
+	args := `{"chapter":` + chapterRaw + `,"content":"` + sentinel + sentinel + `"}`
 	return agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.ToolCallBlock(agentcore.ToolCall{Name: "commit_chapter", Args: args})},
+		Role: litellm.RoleAssistant,
+		Blocks: []litellm.Block{
+			litellm.ToolUseBlock{ID: "call_commit", Name: "commit_chapter", Arguments: args},
+		},
 	}
 }
 
 func errResult(msg string) agentcore.Message {
 	return agentcore.Message{
-		Role:     agentcore.RoleTool,
-		Content:  []agentcore.ContentBlock{agentcore.TextBlock(msg)},
-		Metadata: map[string]any{"is_error": true},
+		Role: litellm.RoleTool,
+		Blocks: []litellm.Block{
+			litellm.ToolResultBlock{
+				ToolUseID: "call_commit",
+				Content:   []litellm.Block{litellm.TextBlock{Text: msg}},
+				IsError:   true,
+			},
+		},
 	}
 }
 
@@ -64,8 +72,8 @@ func TestExport_DeathLoopShape(t *testing.T) {
 	var msgs []agentcore.Message
 	// 一段 Worker 输出的裸正文（<4KB，绕过 session_compact），必须被打码。
 	msgs = append(msgs, agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.TextBlock(sentinel)},
+		Role:   litellm.RoleAssistant,
+		Blocks: []litellm.Block{litellm.TextBlock{Text: sentinel}},
 	})
 	// 14 轮 commit_chapter(chapter:"7") + InputValidationError。
 	for range 14 {
@@ -167,12 +175,12 @@ func TestWriteExport_WritesFile(t *testing.T) {
 // TestRedactMessage_DupSha 证明同一段文本反复出现产生同 sha（循环信号）。
 func TestRedactMessage_DupSha(t *testing.T) {
 	a := redactMessage("writer-ch07", agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.TextBlock(sentinel)},
+		Role:   litellm.RoleAssistant,
+		Blocks: []litellm.Block{litellm.TextBlock{Text: sentinel}},
 	})
 	b := redactMessage("writer-ch07", agentcore.Message{
-		Role:    agentcore.RoleAssistant,
-		Content: []agentcore.ContentBlock{agentcore.TextBlock(sentinel)},
+		Role:   litellm.RoleAssistant,
+		Blocks: []litellm.Block{litellm.TextBlock{Text: sentinel}},
 	})
 	if a.TextSha == "" || a.TextSha != b.TextSha {
 		t.Errorf("相同正文应得相同 sha：%q vs %q", a.TextSha, b.TextSha)

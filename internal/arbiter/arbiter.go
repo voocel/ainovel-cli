@@ -19,22 +19,17 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
-// decideMaxTokens 单次裁定的输出上限;裁定 JSON 很小,大头留给推理模型的思考预算
-// (与 userrules.normalizeMaxTokens 同理)。
-const decideMaxTokens = 8192
-
 // decide 将场景契约与业务校验交给统一结构化执行器。除模型调用外无 IO。
-func decide[T any](ctx context.Context, model agentcore.ChatModel, contract llmcontract.Contract, systemPrompt, payload string, validate func(*T) error) (T, error) {
+// 不设置输出上限与思考覆盖:生成预算由 provider/model 的请求模板决定。
+func decide[T any](ctx context.Context, model llmcontract.Model, contract llmcontract.Contract, systemPrompt, payload string, validate func(*T) error) (T, error) {
 	out, err := llmcontract.Execute(ctx, model, llmcontract.Request[T]{
 		Contract:     contract,
 		SystemPrompt: systemPrompt,
 		Payload:      payload,
-		Options:      []agentcore.CallOption{agentcore.WithMaxTokens(decideMaxTokens)},
 		Validate:     validate,
 		Agent:        "arbiter",
 		Hooks: llmcontract.Hooks{

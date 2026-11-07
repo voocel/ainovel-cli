@@ -1,20 +1,15 @@
 package sim
 
 import (
-	"context"
 	"time"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-type LLMChat interface {
-	Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error)
-}
-
 type Deps struct {
 	Store   *store.Store
-	LLM     LLMChat
+	LLM     llmcontract.Model
 	Prompts Prompts
 }
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	agentcoretools "github.com/voocel/agentcore/tools"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -21,17 +23,18 @@ import (
 // Seed 语义：drafts 不存在但 chapters 有 → 自动把 chapters 复制到 drafts 作为起点。
 // 归属检查：仅允许编辑已完成且位于 PendingRewrites 队列中的章节。
 //
-// 本工具是 agentcore.EditTool 的薄封装，找-换逻辑（多级容错匹配、diff 输出、行尾/BOM 保留）
-// 全部复用上游实现。
+// 找-换逻辑（多级容错匹配、diff 输出、行尾/BOM 保留）全部复用
+// agentcore/tools 的 Workspace.Edit()（v1.8.8 已移除根包 EditTool）。
 type EditChapterTool struct {
 	store *store.Store
-	edit  *agentcoretools.EditTool
+	edit  agentcore.Tool
 }
 
 func NewEditChapterTool(s *store.Store) *EditChapterTool {
 	return &EditChapterTool{
 		store: s,
-		edit:  agentcoretools.NewEdit(s.Dir(), nil),
+		// Files 留空：读前校验由调用方流程保证（本工具先自行 ensureDraft）。
+		edit: agentcoretools.Workspace{Dir: s.Dir()}.Edit(),
 	}
 }
 
@@ -129,36 +132,43 @@ func (t *EditChapterTool) Execute(ctx context.Context, args json.RawMessage) (js
 		}
 	}
 
-	// 委托 agentcore.EditTool 完成找-换
+	// 委托 agentcore/tools 的 edit 完成找-换。
+	// v1.8.8 的 Tool 拆成 Check（预览/校验，不写盘）与 Run（写盘），
+	// 用 Check 拿到与旧版一致的 diff，再交给 Run 落盘。
+	relPath := fmt.Sprintf("drafts/%02d.draft.md", a.Chapter)
+	// 用绝对路径：Workspace 会优先按 ctx 里的 cwd 解析相对路径，
+	// 绝对路径可确保只改本次 store 目录下的草稿。
+	absPath, err := filepath.Abs(filepath.Join(t.store.Dir(), filepath.FromSlash(relPath)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve draft path: %w: %w", errs.ErrStoreRead, err)
+	}
 	subArgs, _ := json.Marshal(map[string]any{
-		"path":        fmt.Sprintf("drafts/%02d.draft.md", a.Chapter),
-		"file_path":   fmt.Sprintf("drafts/%02d.draft.md", a.Chapter),
-		"old_text":    a.OldString,
+		"file_path":   absPath,
 		"old_string":  a.OldString,
-		"new_text":    a.NewString,
 		"new_string":  a.NewString,
 		"replace_all": a.ReplaceAll,
 	})
-	result, err := t.edit.Execute(ctx, subArgs)
+	diff, err := t.edit.Check(ctx, subArgs)
 	if err != nil {
+		return nil, fmt.Errorf("apply edit: %w: %w", errs.ErrToolPrecondition, err)
+	}
+	if _, err := t.edit.Run(ctx, subArgs); err != nil {
 		return nil, fmt.Errorf("apply edit: %w: %w", errs.ErrToolPrecondition, err)
 	}
 
 	if _, err := t.store.Checkpoints.AppendArtifact(
-		domain.ChapterScope(a.Chapter), "edit",
-		fmt.Sprintf("drafts/%02d.draft.md", a.Chapter),
+		domain.ChapterScope(a.Chapter), "edit", relPath,
 	); err != nil {
 		return nil, fmt.Errorf("checkpoint edit: %w: %w", errs.ErrStoreWrite, err)
 	}
 
 	// 附加指引：让 writer 知道后续步骤，避免遗漏 check_consistency / commit_chapter
-	var passthrough map[string]any
-	if err := json.Unmarshal(result, &passthrough); err != nil {
-		return result, nil
-	}
-	passthrough["chapter"] = a.Chapter
-	passthrough["next_step"] = "edit 已落盘。仍有硬伤可再次 edit_chapter；否则 check_consistency 后 commit_chapter"
-	return json.Marshal(passthrough)
+	return json.Marshal(map[string]any{
+		"message":   fmt.Sprintf("Successfully replaced text in %s.", relPath),
+		"diff":      diff,
+		"chapter":   a.Chapter,
+		"next_step": "edit 已落盘。仍有硬伤可再次 edit_chapter；否则 check_consistency 后 commit_chapter",
+	})
 }
 
 // ensureDraft 保证 drafts/{ch}.draft.md 存在：

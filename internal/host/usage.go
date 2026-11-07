@@ -14,6 +14,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/models"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
 )
 
 // recentSampleCap 是滑动窗大小：只保留每个 role 最近 N 次调用的 (cacheRead, input)
@@ -88,7 +89,7 @@ type usageSample struct {
 // cacheTrackState 是一个 role 当前会话的缓存链基线。task（spawn 任务文本）是
 // 会话身份：换 task = 新 spawn = 新缓存血统（prompt_cache_key 带 #seq），首请求
 // 命中低是常态，直接换基线不比较——否则"上一会话很短、新会话首请求前缀反而更长"
-// 时会误报断裂。Input 语义（含 CacheRead，见 computeCost 注释）恰好等于"服务端
+// 时会误报断裂。InputTokens 语义（含缓存读写，见 computeCost 注释）恰好等于"服务端
 // 处理的前缀长度"，据此可区分三种走向：前缀缩短 = 会话内压缩（合法，重置基线）；
 // 前缀增长且命中跟涨 = 链路健康；前缀增长而命中骤降 = 断裂。
 type cacheTrackState struct {
@@ -130,26 +131,31 @@ func NewUsageTracker(set *bootstrap.ModelSet, store *storepkg.Store) *UsageTrack
 //
 // 累加只看 Usage 是否存在——"哪条消息带 Usage" 是 agentcore/litellm adapter
 // 装配细节（上游协议把 usage 放在响应顶层），未来装配规则变了也不用动这里。
-// 诊断要求 Role=Assistant 且 Content 非空，避免 AbortMsg / 异常恢复 / tool /
+// 诊断要求 Role=Assistant 且 Blocks 非空，避免 AbortMsg / 异常恢复 / tool /
 // user 消息污染 missingAssistantUsage 计数。
-func (t *UsageTracker) Record(agentName, task string, msg agentcore.AgentMessage) {
+func (t *UsageTracker) Record(agentName, task string, msg agentcore.Message) {
 	if t == nil {
 		return
 	}
-	m, ok := msg.(agentcore.Message)
-	if !ok {
-		return
-	}
-	if m.Usage == nil {
-		if m.Role == agentcore.RoleAssistant && len(m.Content) > 0 {
+	if msg.Usage == nil {
+		if msg.Role == litellm.RoleAssistant && len(msg.Blocks) > 0 {
 			t.flagMissingUsage(agentName)
 		}
 		return
 	}
+	provider, modelName := usageActualModel(msg)
+	t.RecordUsage(agentName, task, provider, modelName, msg.Usage)
+}
+
+// RecordUsage 记录一次已明确模型归属的用量，供只有 provider 响应、没有完整
+// agentcore.Message 的调用方（如 bootstrap.TrackUsage 的响应钩子）使用。
+func (t *UsageTracker) RecordUsage(agentName, task, provider, modelName string, u *agentcore.Usage) {
+	if t == nil || u == nil {
+		return
+	}
 	role := agentRoleName(agentName)
-	t.noteCacheBreak(role, task, *m.Usage)
-	provider, modelName := usageActualModel(m.Usage)
-	t.accumulate(role, provider, modelName, *m.Usage)
+	t.noteCacheBreak(role, task, *u)
+	t.accumulate(role, provider, modelName, *u)
 }
 
 // noteCacheBreak 是缓存链断裂检测（纯观测，不修复，只在 live Record 路径调用）。
@@ -161,21 +167,21 @@ func (t *UsageTracker) Record(agentName, task string, msg agentcore.AgentMessage
 // 路由漂移（中转站轮询上游是常见原因）。
 func (t *UsageTracker) noteCacheBreak(role, task string, u agentcore.Usage) {
 	now := time.Now()
-	prefix := u.Input // litellm 各 provider 保证 Input 含 CacheRead
+	prefix := u.InputTokens // litellm.Usage.InputTokens 含缓存读写
 
 	t.mu.Lock()
 	st := t.cacheTrack[role]
 	if st == nil || st.task != task {
-		t.cacheTrack[role] = &cacheTrackState{task: task, lastPrefix: prefix, lastCacheRead: u.CacheRead, lastAt: now}
+		t.cacheTrack[role] = &cacheTrackState{task: task, lastPrefix: prefix, lastCacheRead: u.CacheReadTokens, lastAt: now}
 		t.mu.Unlock()
 		return
 	}
 	prevPrefix, prevRead, prevAt := st.lastPrefix, st.lastCacheRead, st.lastAt
-	st.lastPrefix, st.lastCacheRead, st.lastAt = prefix, u.CacheRead, now
+	st.lastPrefix, st.lastCacheRead, st.lastAt = prefix, u.CacheReadTokens, now
 
 	broke := prevPrefix > 0 && prefix >= prevPrefix &&
-		float64(u.CacheRead) < float64(prevRead)*cacheBreakKeepRatio &&
-		prevRead-u.CacheRead >= cacheBreakMinDropTokens
+		float64(u.CacheReadTokens) < float64(prevRead)*cacheBreakKeepRatio &&
+		prevRead-u.CacheReadTokens >= cacheBreakMinDropTokens
 	if broke {
 		t.overall.CacheBreaks++
 		per := t.perAgent[role]
@@ -199,17 +205,14 @@ func (t *UsageTracker) noteCacheBreak(role, task string, u agentcore.Usage) {
 	}
 	slog.Warn("缓存链断裂：前缀未缩短而命中骤降",
 		"module", "usage", "role", role,
-		"cache_read", fmt.Sprintf("%d→%d", prevRead, u.CacheRead),
+		"cache_read", fmt.Sprintf("%d→%d", prevRead, u.CacheReadTokens),
 		"prefix", fmt.Sprintf("%d→%d", prevPrefix, prefix),
 		"gap", gap.String(), "hint", hint)
 	t.notifyDirty()
 }
 
-func usageActualModel(u *agentcore.Usage) (provider, modelName string) {
-	if u == nil {
-		return "", ""
-	}
-	return strings.TrimSpace(u.Provider), strings.TrimSpace(u.Model)
+func usageActualModel(msg agentcore.Message) (provider, modelName string) {
+	return strings.TrimSpace(msg.Provider), strings.TrimSpace(msg.Model)
 }
 
 // flagMissingUsage 累计一次"看似真 LLM 响应却没拿到 usage"事件，整会话只打一次
@@ -335,16 +338,16 @@ func modelUsageKey(provider, modelName string) string {
 // 因为自建 backend 模型（mimo-v2.5-pro / 国内代理等）通常不在 BerriAI/litellm
 // pricing 索引里，但实际 Usage 里完全有 cache 数据，UI 不该误判为"未启用"。
 func addUsage(t *agentTotals, u agentcore.Usage, cost, saved float64, capable bool) {
-	t.Input += u.Input
-	t.Output += u.Output
-	t.CacheRead += u.CacheRead
-	t.CacheWrite += u.CacheWrite
+	t.Input += u.InputTokens
+	t.Output += u.OutputTokens
+	t.CacheRead += u.CacheReadTokens
+	t.CacheWrite += u.CacheWriteTokens
 	t.Cost += cost
 	t.Saved += saved
-	if capable || u.CacheRead > 0 || u.CacheWrite > 0 {
+	if capable || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
 		t.CacheCapable = true
 	}
-	pushSample(t, u.CacheRead, u.Input)
+	pushSample(t, u.CacheReadTokens, u.InputTokens)
 }
 
 // pushSample 向 ring buffer 推一个样本。前 recentSampleCap 次纯 append，之后轮转覆盖。
@@ -734,24 +737,24 @@ func agentRoleName(agentName string) string {
 
 // computeCost 按 $/1M tokens 单价计算本次调用的美元开销。
 //
-// 语义前提（由 litellm 各 provider 统一保证，参见 anthropic.go / bedrock.go /
-// openai.go / gemini.go / compat.go 的 Usage 装配点）：
+// 语义前提（litellm.Usage 的契约：InputTokens 含缓存读写）：
 //
-//	u.Input  = 全部输入 token，**包含** CacheRead；不含 CacheWrite
-//	u.Output = 输出 token
+//	u.InputTokens  = 全部输入 token，**包含** CacheRead 与 CacheWrite
+//	u.OutputTokens = 输出 token（含 reasoning）
 //
-// 因此 nonCachedInput = u.Input - u.CacheRead 在所有 provider 都成立。
+// 因此 nonCachedInput = InputTokens - CacheReadTokens - CacheWriteTokens 在所有
+// provider 都成立；缓存读写的单价单独累加，避免重复计费。
 // 兜底分支保留是为了应对未来某个 provider 误返脏数据时不至于崩。
 func computeCost(u agentcore.Usage, e models.ModelEntry) float64 {
-	nonCachedInput := u.Input - u.CacheRead
+	nonCachedInput := u.InputTokens - u.CacheReadTokens - u.CacheWriteTokens
 	if nonCachedInput < 0 {
-		nonCachedInput = u.Input
+		nonCachedInput = u.InputTokens
 	}
 	c := 0.0
 	c += float64(nonCachedInput) * e.InputCostPer1M / 1_000_000
-	c += float64(u.Output) * e.OutputCostPer1M / 1_000_000
-	c += float64(u.CacheRead) * e.CacheReadCostPer1M / 1_000_000
-	c += float64(u.CacheWrite) * e.CacheWriteCostPer1M / 1_000_000
+	c += float64(u.OutputTokens) * e.OutputCostPer1M / 1_000_000
+	c += float64(u.CacheReadTokens) * e.CacheReadCostPer1M / 1_000_000
+	c += float64(u.CacheWriteTokens) * e.CacheWriteCostPer1M / 1_000_000
 	return c
 }
 
@@ -759,12 +762,12 @@ func computeCost(u agentcore.Usage, e models.ModelEntry) float64 {
 // 注意 CacheWrite 的溢价不抵扣 — 它属于"为后续命中铺路"的必要投入，
 // 真实收益靠后续 CacheRead 累计回收。
 func computeSaved(u agentcore.Usage, e models.ModelEntry) float64 {
-	if u.CacheRead <= 0 || e.InputCostPer1M <= 0 {
+	if u.CacheReadTokens <= 0 || e.InputCostPer1M <= 0 {
 		return 0
 	}
 	delta := e.InputCostPer1M - e.CacheReadCostPer1M
 	if delta <= 0 {
 		return 0
 	}
-	return float64(u.CacheRead) * delta / 1_000_000
+	return float64(u.CacheReadTokens) * delta / 1_000_000
 }

@@ -12,13 +12,16 @@ import (
 	"time"
 
 	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/subagent"
+	"github.com/voocel/litellm"
 
+	"github.com/voocel/ainovel-cli/internal/agents"
 	"github.com/voocel/ainovel-cli/internal/arbiter"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
 	"github.com/voocel/ainovel-cli/internal/flow"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/notify"
+	"github.com/voocel/ainovel-cli/internal/progress"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
@@ -28,9 +31,9 @@ import (
 // (docs/engine-rfc.md)。单 goroutine 串行,控制状态只在循环边界变更。
 type engine struct {
 	store   *storepkg.Store
-	workers *subagent.Runner
+	workers *agents.WorkerSet
 
-	arbiterModel    agentcore.ChatModel
+	arbiterModel    llmcontract.Model
 	failurePrompt   string
 	planStartPrompt string // 启动裁定系统提示词:裁定从未完成时引擎据 StartPrompt 现场补裁
 	style           string // 风格名,补裁时传给 DecidePlanStart
@@ -93,7 +96,11 @@ func (e *engine) start(initial *flow.Instruction) bool {
 		return false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = agentcore.WithToolProgress(ctx, e.observer.workerProgress)
+	ctx = agentcore.WithProgress(ctx, func(p any) {
+		if ev, ok := p.(progress.Event); ok {
+			e.observer.workerProgress(ev)
+		}
+	})
 	e.cancel = cancel
 	e.running = true
 	// initial 为空时不覆盖 e.next——停机期干预可能已通过 applyControlOp 排入
@@ -489,9 +496,11 @@ func (e *engine) runWorker(ctx context.Context, inst *flow.Instruction) error {
 		}
 	}
 
-	// Worker 进度经 ctx ToolProgress 中继到 observer。
-	runCtx := agentcore.WithToolProgress(ctx, func(p agentcore.ProgressPayload) {
-		e.observer.workerProgress(p)
+	// Worker 进度经 ctx WithProgress 中继到 observer。
+	runCtx := agentcore.WithProgress(ctx, func(p any) {
+		if ev, ok := p.(progress.Event); ok {
+			e.observer.workerProgress(ev)
+		}
 	})
 	_, err := e.workers.Run(runCtx, inst.Agent, inst.Task)
 	if err == nil {
@@ -585,23 +594,22 @@ func (e *engine) discardNonSemanticDeadlockAttempt(inst *flow.Instruction, werr 
 }
 
 // isNonSemanticWorkerFailure 仅识别“本次模型执行没有产生可判断语义”的错误。
-// 优先依赖 agentcore 的错误链契约；错误链被供应商扁平化时复用日志分类。
+// 优先依赖 litellm 的错误链类型；错误链被供应商扁平化时复用日志分类。
 func isNonSemanticWorkerFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, agentcore.ErrContextOverflow) || errors.Is(err, agentcore.ErrStreamPartial) {
+	switch litellm.ErrorTypeOf(err) {
+	case litellm.ErrorTypeContextOverflow,
+		litellm.ErrorTypeQuota,
+		litellm.ErrorTypeRateLimit,
+		litellm.ErrorTypeTimeout,
+		litellm.ErrorTypeAuth,
+		litellm.ErrorTypeNetwork,
+		litellm.ErrorTypeOverloaded:
 		return true
 	}
-	providerErr := agentcore.ClassifyProvider(err)
-	classified := errors.Is(providerErr, agentcore.ErrProviderStreamIdle) ||
-		errors.Is(providerErr, agentcore.ErrProviderQuota) ||
-		errors.Is(providerErr, agentcore.ErrProviderRateLimit) ||
-		errors.Is(providerErr, agentcore.ErrProviderTimeout) ||
-		errors.Is(providerErr, agentcore.ErrProviderAuth) ||
-		errors.Is(providerErr, agentcore.ErrProviderNetwork) ||
-		errors.Is(providerErr, agentcore.ErrProviderOverloaded)
-	return classified || errorKind(err, err.Error()) == "overloaded"
+	return errorKind(err, err.Error()) == "overloaded"
 }
 
 func instructionKey(inst *flow.Instruction) string {
@@ -631,7 +639,7 @@ func (e *engine) workerErrorFor(inst *flow.Instruction) error {
 // 拦截本身不提前熔断——换上下文重派对它有真实自愈率(ch21-24 实测),
 // 走完"免费重试→仲裁"再暂停。
 func contentFilterAdvice(werr error) string {
-	if !errors.Is(werr, agentcore.ErrProviderContentFilter) {
+	if litellm.ErrorTypeOf(werr) != litellm.ErrorTypeContentFilter {
 		return ""
 	}
 	return "。这是服务商内容审核拦截(非本地错误),可选: /model 切到无审核层的服务商后输入「继续」;或修改本章草稿(drafts/)措辞后再继续;原样重试大概率仍被拦"

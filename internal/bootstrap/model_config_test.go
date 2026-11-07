@@ -106,9 +106,9 @@ func TestSwappableModelJSONSchemaOverrideFollowsSwap(t *testing.T) {
 	if v := ms.Default.JSONSchemaOverride(); v == nil || !*v {
 		t.Fatalf("初始应为 true, got %v", v)
 	}
-	facts := ms.Default.StructuredOutputFacts()
-	if facts.Info.Name != "a" || facts.Info.Provider != "openai" || facts.JSONSchemaOverride == nil || !*facts.JSONSchemaOverride {
-		t.Fatalf("初始结构化事实快照不一致: %+v", facts)
+	snapshot := ms.Default.Model()
+	if snapshot.ModelName != "a" || snapshot.Provider != "proxy" || snapshot.JSONSchemaOverride == nil || !*snapshot.JSONSchemaOverride {
+		t.Fatalf("初始模型快照不一致: %+v", snapshot)
 	}
 	if err := ms.Swap("default", "proxy", "b"); err != nil {
 		t.Fatalf("swap b: %v", err)
@@ -116,9 +116,9 @@ func TestSwappableModelJSONSchemaOverrideFollowsSwap(t *testing.T) {
 	if v := ms.Default.JSONSchemaOverride(); v == nil || *v {
 		t.Fatalf("切到 b 后应为 false, got %v", v)
 	}
-	facts = ms.Default.StructuredOutputFacts()
-	if facts.Info.Name != "b" || facts.JSONSchemaOverride == nil || *facts.JSONSchemaOverride {
-		t.Fatalf("切换后结构化事实快照不一致: %+v", facts)
+	snapshot = ms.Default.Model()
+	if snapshot.ModelName != "b" || snapshot.JSONSchemaOverride == nil || *snapshot.JSONSchemaOverride {
+		t.Fatalf("切换后模型快照不一致: %+v", snapshot)
 	}
 	if err := ms.Swap("default", "proxy", "c"); err != nil {
 		t.Fatalf("swap c: %v", err)

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
@@ -68,7 +67,7 @@ var failureContract = llmcontract.Contract{
 
 // DecideFailure 失败/僵局咨询。失败语义:返回 error → Engine 按最保守路径处理
 // (暂停 + notify),绝不无限咨询。
-func DecideFailure(ctx context.Context, model agentcore.ChatModel, systemPrompt string, facts FailureFacts) (FailureDecision, error) {
+func DecideFailure(ctx context.Context, model llmcontract.Model, systemPrompt string, facts FailureFacts) (FailureDecision, error) {
 	payload, err := marshalPayload(facts)
 	if err != nil {
 		return FailureDecision{}, err

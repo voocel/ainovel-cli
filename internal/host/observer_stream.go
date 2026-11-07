@@ -1,15 +1,23 @@
 package host
 
 import (
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/progress"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
-// handleSubagentDelta 分流 subagent 的文本与工具调用参数：
+// handleSubagentDelta 分流 Worker 流式增量：
 // - DeltaText 直接作为 markdown 流出
+// - DeltaThinking 走 thinking 通道
 // - DeltaToolCall 只对已知的长内容工具（如 draft_chapter.content）抽取字段流出；其他工具的参数 JSON 全部丢弃
-func (o *observer) handleSubagentDelta(p *agentcore.ProgressPayload) {
-	if p.DeltaKind != agentcore.DeltaToolCall {
+func (o *observer) handleSubagentDelta(p *progress.Event) {
+	switch p.DeltaKind {
+	case progress.DeltaThinking:
+		o.updateModelState(p.Agent, "思考中")
+		o.emitStreamDelta(p.Delta, true)
+		return
+	case progress.DeltaToolCall:
+		// 工具调用参数：只对已知的长内容工具抽取字段流出。
+	default:
 		o.updateModelState(p.Agent, "生成回复")
 		o.emitStreamDelta(p.Delta, false)
 		return

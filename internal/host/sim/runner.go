@@ -17,7 +17,7 @@ import (
 const maxSourceRunes = 60000
 
 func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
-	if deps.Store == nil || deps.LLM == nil {
+	if deps.Store == nil || deps.LLM.Core.Client == nil {
 		return nil, fmt.Errorf("deps incomplete")
 	}
 	if strings.TrimSpace(opts.SourceDir) == "" {
@@ -89,7 +89,7 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 	return events, nil
 }
 
-func AnalyzeSource(ctx context.Context, llm LLMChat, systemPrompt string, source scannedSource) (*domain.SimulationSourceReport, error) {
+func AnalyzeSource(ctx context.Context, llm llmcontract.Model, systemPrompt string, source scannedSource) (*domain.SimulationSourceReport, error) {
 	if strings.TrimSpace(systemPrompt) == "" {
 		return nil, fmt.Errorf("source prompt is required")
 	}
@@ -110,7 +110,7 @@ func AnalyzeSource(ctx context.Context, llm LLMChat, systemPrompt string, source
 	return &report, nil
 }
 
-func MergeSynthesis(ctx context.Context, llm LLMChat, systemPrompt string, existing *domain.SimulationProfile, reports []domain.SimulationSourceReport) (*domain.SimulationSynthesis, error) {
+func MergeSynthesis(ctx context.Context, llm llmcontract.Model, systemPrompt string, existing *domain.SimulationProfile, reports []domain.SimulationSourceReport) (*domain.SimulationSynthesis, error) {
 	if strings.TrimSpace(systemPrompt) == "" {
 		return nil, fmt.Errorf("merge prompt is required")
 	}
@@ -121,7 +121,7 @@ func MergeSynthesis(ctx context.Context, llm LLMChat, systemPrompt string, exist
 	return &synthesis, nil
 }
 
-func generateStructured[T any](ctx context.Context, model LLMChat, contract llmcontract.Contract, systemPrompt, payload string, validate func(*T) error) (T, error) {
+func generateStructured[T any](ctx context.Context, model llmcontract.Model, contract llmcontract.Contract, systemPrompt, payload string, validate func(*T) error) (T, error) {
 	out, err := llmcontract.Execute(ctx, model, llmcontract.Request[T]{
 		Contract:     contract,
 		SystemPrompt: systemPrompt,

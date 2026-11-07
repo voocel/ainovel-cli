@@ -6,32 +6,39 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
-type scriptedLLM struct {
-	responses []string
-	calls     atomic.Int32
+// testModel 构造仿真用的模型句柄：litellmtest provider + 请求模板，无网络。
+func testModel(t *testing.T, provider litellm.Provider) llmcontract.Model {
+	t.Helper()
+	client, err := litellm.New(provider)
+	if err != nil {
+		t.Fatalf("构造 client: %v", err)
+	}
+	return llmcontract.Model{
+		Core:      agentcore.Model{Client: client, Request: litellm.Request{Model: "test-model"}},
+		Provider:  provider.Name(),
+		ModelName: "test-model",
+	}
 }
 
-func (s *scriptedLLM) Generate(_ context.Context, _ []agentcore.Message, _ []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
-	idx := int(s.calls.Add(1)) - 1
-	if idx >= len(s.responses) {
-		return nil, fmt.Errorf("scriptedLLM exhausted at call %d", idx+1)
+// scriptedModel 按顺序返回给定文本，并暴露 provider 以断言调用次数和请求内容。
+func scriptedModel(t *testing.T, responses ...string) (llmcontract.Model, *litellmtest.Provider) {
+	t.Helper()
+	replies := make([]litellmtest.Reply, 0, len(responses))
+	for _, response := range responses {
+		replies = append(replies, litellmtest.Text(response))
 	}
-	return &agentcore.LLMResponse{
-		Message: agentcore.Message{
-			Role:      agentcore.RoleAssistant,
-			Content:   []agentcore.ContentBlock{agentcore.TextBlock(s.responses[idx])},
-			Timestamp: time.Now(),
-		},
-	}, nil
+	provider := litellmtest.New(replies...)
+	return testModel(t, provider), provider
 }
 
 func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
@@ -54,11 +61,7 @@ func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	llm := &scriptedLLM{responses: []string{
-		validSourceReportJSON("a tone"),
-		validSourceReportJSON("b tone"),
-		validSynthesisJSON("tight pacing"),
-	}}
+	llm, provider := scriptedModel(t, validSourceReportJSON("a tone"), validSourceReportJSON("b tone"), validSynthesisJSON("tight pacing"))
 
 	events, err := Run(context.Background(), Deps{
 		Store:   st,
@@ -78,7 +81,7 @@ func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
 	if last.Stage != StageDone {
 		t.Fatalf("last stage = %s, want %s", last.Stage, StageDone)
 	}
-	if got := llm.calls.Load(); got != 3 {
+	if got := len(provider.Requests()); got != 3 {
 		t.Fatalf("first run LLM calls = %d, want 3", got)
 	}
 	profile, err := st.Simulation.Load()
@@ -89,7 +92,7 @@ func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
 		t.Fatalf("profile not persisted with two sources: %+v", profile)
 	}
 
-	llm2 := &scriptedLLM{}
+	llm2, provider2 := scriptedModel(t)
 	events, err = Run(context.Background(), Deps{
 		Store:   st,
 		LLM:     llm2,
@@ -110,7 +113,7 @@ func TestRunnerGeneratesProfileThenSkipsUnchanged(t *testing.T) {
 	if !upToDate {
 		t.Fatal("expected up-to-date message")
 	}
-	if got := llm2.calls.Load(); got != 0 {
+	if got := len(provider2.Requests()); got != 0 {
 		t.Fatalf("unchanged rerun LLM calls = %d, want 0", got)
 	}
 }
@@ -130,24 +133,24 @@ func TestRunnerIncrementallyAnalyzesNewAndChangedSources(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	firstLLM := &scriptedLLM{responses: []string{
+	firstLLM, firstProvider := scriptedModel(t,
 		validSourceReportJSON("first tone"),
 		validSynthesisJSON("first synthesis"),
-	}}
+	)
 	drainRun(t, st, firstLLM, sourceDir)
-	if got := firstLLM.calls.Load(); got != 2 {
+	if got := len(firstProvider.Requests()); got != 2 {
 		t.Fatalf("first run calls = %d, want 2", got)
 	}
 
 	if err := os.WriteFile(filepath.Join(sourceDir, "c.markdown"), []byte("new material"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	addLLM := &scriptedLLM{responses: []string{
+	addLLM, addProvider := scriptedModel(t,
 		validSourceReportJSON("new tone"),
 		validSynthesisJSON("expanded synthesis"),
-	}}
+	)
 	drainRun(t, st, addLLM, sourceDir)
-	if got := addLLM.calls.Load(); got != 2 {
+	if got := len(addProvider.Requests()); got != 2 {
 		t.Fatalf("new source run calls = %d, want 2", got)
 	}
 	profile, _ := st.Simulation.Load()
@@ -159,12 +162,12 @@ func TestRunnerIncrementallyAnalyzesNewAndChangedSources(t *testing.T) {
 	if err := os.WriteFile(aPath, []byte("changed version"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changeLLM := &scriptedLLM{responses: []string{
+	changeLLM, changeProvider := scriptedModel(t,
 		validSourceReportJSON("changed tone"),
 		validSynthesisJSON("changed synthesis"),
-	}}
+	)
 	drainRun(t, st, changeLLM, sourceDir)
-	if got := changeLLM.calls.Load(); got != 2 {
+	if got := len(changeProvider.Requests()); got != 2 {
 		t.Fatalf("changed source run calls = %d, want 2", got)
 	}
 	profile, _ = st.Simulation.Load()
@@ -176,7 +179,7 @@ func TestRunnerIncrementallyAnalyzesNewAndChangedSources(t *testing.T) {
 	}
 }
 
-func drainRun(t *testing.T, st *store.Store, llm *scriptedLLM, sourceDir string) {
+func drainRun(t *testing.T, st *store.Store, llm llmcontract.Model, sourceDir string) {
 	t.Helper()
 	events, err := Run(context.Background(), Deps{
 		Store:   st,

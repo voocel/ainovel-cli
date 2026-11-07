@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
@@ -50,7 +49,7 @@ type planStartPayload struct {
 // DecidePlanStart 启动裁定:根据用户需求选规划师;需求过短(<20 字)时在 task 里
 // 自主补充差异化方向、目标读者与核心消费点、至少一个非常规钩子。
 // 失败语义:返回 error → 调用方显式报错中止启动(启动期用户在场,报错优于猜测)。
-func DecidePlanStart(ctx context.Context, model agentcore.ChatModel, systemPrompt, requirement, style string) (PlanStartDecision, error) {
+func DecidePlanStart(ctx context.Context, model llmcontract.Model, systemPrompt, requirement, style string) (PlanStartDecision, error) {
 	payload, err := marshalPayload(planStartPayload{Requirement: requirement, Style: style})
 	if err != nil {
 		return PlanStartDecision{}, err

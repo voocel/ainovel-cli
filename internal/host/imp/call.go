@@ -8,16 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/llmretry"
 	"github.com/voocel/litellm"
 )
-
-// callModel 是内核对模型的最小依赖，便于测试注入 mock。
-type callModel interface {
-	Generate(ctx context.Context, messages []agentcore.Message, tools []agentcore.ToolSpec, opts ...agentcore.CallOption) (*agentcore.LLMResponse, error)
-}
 
 // errTruncated 表示模型因长度停止（容量错误）。携带原始文本供调用方决定失败或前缀打捞（§9.5）。
 type errTruncated struct {
@@ -39,7 +33,7 @@ func (e *errSemantic) Unwrap() error { return e.Err }
 // callProfile 承载 thinking 与可观测性选项，由 Host 探测的 ModelRuntime 派生。
 // 结构化协议由 callStructured 依据模型事实和静态 Contract 独立选择。
 type callProfile struct {
-	thinking agentcore.ThinkingLevel
+	thinking llmcontract.ThinkingLevel
 	// notify 可选：把请求退避重试/校验重问回显给界面；nil 时静默（§14.1）。
 	// retryAt 非零 = 下次重试的截止时刻，UI 据此渲染逐秒倒计时（事件只带截止点，剩余时间渲染时算）。
 	notify func(msg string, retryAt time.Time)
@@ -112,16 +106,16 @@ var errTypeLabels = map[litellm.ErrorType]string{
 	litellm.ErrorTypeContentFilter:   "内容过滤拦截",
 }
 
-// modelErrDetail 从错误链提取适配器的结构化事实（错误分类、HTTP 状态、provider、模型）。
+// modelErrDetail 从错误链提取适配器的结构化事实（错误分类、HTTP 状态、provider）。
 // 网关的 message 常常只有一句空泛的 "Provider returned error"，单靠它无法判断是配置错、
-// 上游故障还是限流；这些事实 litellm 一直带着，只是不进 Error() 文案。agentcore 适配器的
-// Unwrap 明确允许知道 litellm 的调用方 errors.As 取原始错误。非模型调用错误返回空串。
+// 上游故障还是限流；这些事实 litellm 一直带着，错误文案里也未必排在最前。错误链里的
+// *litellm.Error 保留原始归属，调用方可以 errors.As 继续细分。非模型调用错误返回空串。
 func modelErrDetail(err error) string {
-	var le *litellm.LiteLLMError
+	var le *litellm.Error
 	if !errors.As(err, &le) {
 		return ""
 	}
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 3)
 	if label := errTypeLabels[le.Type]; label != "" {
 		parts = append(parts, label)
 	}
@@ -131,29 +125,25 @@ func modelErrDetail(err error) string {
 	if le.Provider != "" {
 		parts = append(parts, le.Provider)
 	}
-	if le.Model != "" {
-		parts = append(parts, le.Model)
-	}
 	return strings.Join(parts, "，")
 }
 
-// callOptions 组装本次调用的 CallOption：始终带输出上限；按能力可选 thinking。
-// thinking 仅在非 Auto 时发送——对不支持 thinking 的模型发任何等级（含 off）都是非法参数（与 arbiter 同策略）。
-func (p callProfile) callOptions(maxTokens int) []agentcore.CallOption {
-	opts := []agentcore.CallOption{agentcore.WithMaxTokens(maxTokens)}
-	if p.thinking != agentcore.ThinkingAuto {
-		opts = append(opts, agentcore.WithThinking(p.thinking))
+// callOptions 组装本次调用的 Option：thinking 已按能力 resolve，Auto（零值）不发任何覆盖，
+// 其余等级原样透传。这里不提供输出上限——生成预算由 provider/model 决定，客户端不设上限。
+func (p callProfile) callOptions() []llmcontract.Option {
+	if p.thinking == llmcontract.ThinkingAuto {
+		return nil
 	}
-	return opts
+	return []llmcontract.Option{llmcontract.WithThinking(p.thinking)}
 }
 
 // callStructured 为导入层适配统一结构化执行器，并把通用失败映射为导入工件语义。
-func callStructured[T any](ctx context.Context, m callModel, contract llmcontract.Contract, systemPrompt, payload string, maxTokens int, prof callProfile, validate func(*T) error) (T, error) {
+func callStructured[T any](ctx context.Context, m llmcontract.Model, contract llmcontract.Contract, systemPrompt, payload string, prof callProfile, validate func(*T) error) (T, error) {
 	out, err := llmcontract.Execute(ctx, m, llmcontract.Request[T]{
 		Contract:     contract,
 		SystemPrompt: systemPrompt,
 		Payload:      payload,
-		Options:      prof.callOptions(maxTokens),
+		Options:      prof.callOptions(),
 		Validate:     validate,
 		Agent:        "import",
 		Hooks: llmcontract.Hooks{

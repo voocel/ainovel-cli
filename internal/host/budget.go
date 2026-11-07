@@ -97,7 +97,8 @@ func (s *BudgetSentinel) HandleEvent(ev agentcore.Event) {
 	if s == nil {
 		return
 	}
-	if ev.Type != agentcore.EventToolExecEnd || ev.Tool != "subagent" {
+	end, ok := ev.(agentcore.ToolEnd)
+	if !ok || end.Call.Name != "subagent" {
 		return
 	}
 	s.HandleBoundary()

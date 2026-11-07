@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/voocel/agentcore"
-	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -67,6 +66,9 @@ func buildWriterStoreSummaryText(s *store.Store, budgetTokens int) (string, bool
 	return strings.Join(parts, "\n\n"), true, nil
 }
 
+// restoreWrapperReserveTokens 是 <post-compact-context> wrapper 自身占用的 token 预留。
+const restoreWrapperReserveTokens = 32
+
 func buildWriterRestoreText(s *store.Store, budgetTokens int) (string, bool, error) {
 	state, ok, err := loadWriterStoreSummaryState(s)
 	if err != nil {
@@ -84,7 +86,8 @@ func buildWriterRestoreText(s *store.Store, budgetTokens int) (string, bool, err
 	if budgetTokens <= 0 {
 		budgetTokens = restoreBudgetTokens
 	}
-	parts := renderWriterStoreSections(state, budgetTokens, writerRestoreSections(state))
+	// 留出 <post-compact-context> wrapper 自身的 token，渲染满预算也不会超出恢复包预算。
+	parts := renderWriterStoreSections(state, budgetTokens-restoreWrapperReserveTokens, writerRestoreSections(state))
 	if len(parts) == 0 {
 		return "", false, nil
 	}
@@ -427,7 +430,7 @@ func appendJSONSection(parts *[]string, heading string, data any, remaining *int
 
 func estimateCompactSectionTokens(heading, body string) int {
 	section := fmt.Sprintf("## %s\n%s", heading, body)
-	return corecontext.EstimateTokens(agentcore.UserMsg(section))
+	return agentcore.EstimateMessage(agentcore.UserText(section))
 }
 
 func isEmptySummarySection(data any) bool {

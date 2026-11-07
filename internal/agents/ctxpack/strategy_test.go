@@ -9,9 +9,10 @@ import (
 	"testing"
 
 	"github.com/voocel/agentcore"
-	corecontext "github.com/voocel/agentcore/context"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/litellmtest"
 )
 
 func TestWriterRestoreIncludesOptionalDataWarnings(t *testing.T) {
@@ -29,44 +30,79 @@ func TestWriterRestoreIncludesOptionalDataWarnings(t *testing.T) {
 	}
 }
 
-func TestStoreSummaryCompactApplyFallsBackWhenStoreDataInsufficient(t *testing.T) {
-	dir := t.TempDir()
-	s := storepkg.NewStore(dir)
+// store 里还没有可用的章节事实（第 1 章）时，压缩不能变成空转：退回模型摘要。
+func TestWriterCompactorFallsBackToModelSummary(t *testing.T) {
+	s := storepkg.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if err := s.Progress.Save(&domain.Progress{
-		Phase:             domain.PhaseWriting,
-		CurrentChapter:    1,
-		TotalChapters:     3,
-		CompletedChapters: nil,
+		Phase:          domain.PhaseWriting,
+		CurrentChapter: 1,
+		TotalChapters:  3,
 	}); err != nil {
 		t.Fatalf("Save progress: %v", err)
 	}
 
-	strategy := NewStoreSummaryCompact(StoreSummaryCompactConfig{Store: s, KeepRecentTokens: 20})
-	msgs := []agentcore.AgentMessage{
-		agentcore.UserMsg(strings.Repeat("旧上下文", 40)),
-		agentcore.Message{
-			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.TextBlock(strings.Repeat("旧回复", 40))},
-		},
+	provider := litellmtest.New(litellmtest.Text("<analysis>思考</analysis><summary>## 当前任务\n写第一章\n\n## 当前进度\n开场</summary>"))
+	client, err := litellm.New(provider)
+	if err != nil {
+		t.Fatalf("New client: %v", err)
 	}
 
-	out, result, err := strategy.Apply(context.Background(), msgs, msgs, corecontext.Budget{
-		Tokens:    corecontext.EstimateTotal(msgs),
-		Window:    64,
-		Threshold: 16,
-	})
+	compactor := NewWriterCompactor(WriterCompactConfig{Store: s, KeepRecentTokens: 200})
+	msgs := []agentcore.Message{
+		agentcore.UserText(strings.Repeat("旧上下文", 100)),
+		{Role: litellm.RoleAssistant, Blocks: []litellm.Block{litellm.Text(strings.Repeat("旧回复", 100))}},
+		agentcore.UserText(strings.Repeat("旧任务", 100)),
+		{Role: litellm.RoleAssistant, Blocks: []litellm.Block{litellm.Text(strings.Repeat("旧结论", 100))}},
+		agentcore.UserText(strings.Repeat("最近的任务", 100)),
+	}
+	call := func([]agentcore.Message) agentcore.Call {
+		return agentcore.Call{Client: client, Request: litellm.Request{Model: "writer"}}
+	}
+
+	out, err := compactor.Compact(context.Background(), msgs, call, "")
 	if err != nil {
-		t.Fatalf("Apply: %v", err)
+		t.Fatalf("Compact: %v", err)
 	}
-	if result.Applied {
-		t.Fatal("expected no-op when persistent memory is insufficient")
+	if out == nil {
+		t.Fatal("expected a model-written checkpoint when store facts are insufficient")
 	}
-	if len(out) != len(msgs) {
-		t.Fatalf("expected messages unchanged, got %d", len(out))
+	if out.Replaced != 4 || len(out.Messages) != 2 {
+		t.Fatalf("expected summary + one kept message, got Replaced=%d len=%d", out.Replaced, len(out.Messages))
 	}
+	if out.Messages[0].Kind != agentcore.KindSummary {
+		t.Fatalf("expected a summary message first, got %q", out.Messages[0].Kind)
+	}
+	if summary := agentcore.SummaryText(out.Messages[0]); !strings.Contains(summary, "## 当前进度") {
+		t.Fatalf("expected the tagged checkpoint, got %q", summary)
+	}
+	if got := out.Messages[1].Role; got != litellm.RoleUser {
+		t.Fatalf("recent history must be kept verbatim, got %q", got)
+	}
+	requests := provider.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("expected exactly one summary call, got %d", len(requests))
+	}
+	if !requestTextContains(requests[0], WriterSummaryPrompt) {
+		t.Fatal("expected the writer summary prompt in the summary request")
+	}
+	if !requestTextContains(requests[0], WriterSummarySystemPrompt) {
+		t.Fatal("expected the writer summary system prompt in the summary request")
+	}
+}
+
+// requestTextContains 报告请求的任意消息文本里是否含 want。
+func requestTextContains(req litellm.Request, want string) bool {
+	for _, msg := range req.Messages {
+		for _, block := range msg.Blocks {
+			if text, ok := block.(litellm.TextBlock); ok && strings.Contains(text.Text, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
@@ -81,7 +117,7 @@ func TestWriterRestorePackRefreshReusesStoreBuilder(t *testing.T) {
 	if !ok {
 		t.Fatal("expected restore pack message")
 	}
-	text := msg.TextContent()
+	text := msg.Text()
 	if !strings.Contains(text, "<post-compact-context>") {
 		t.Fatalf("expected wrapped restore context, got %q", text)
 	}
@@ -190,62 +226,139 @@ func seededWriterStore(t *testing.T) *storepkg.Store {
 	return s
 }
 
-func toolGroup(id, name, result string) []agentcore.AgentMessage {
-	return []agentcore.AgentMessage{
-		agentcore.Message{
-			Role:    agentcore.RoleAssistant,
-			Content: []agentcore.ContentBlock{agentcore.ToolCallBlock(agentcore.ToolCall{ID: id, Name: name, Args: []byte(`{}`)})},
+func toolGroup(id, name, result string) []agentcore.Message {
+	return []agentcore.Message{
+		{
+			Role:   litellm.RoleAssistant,
+			Blocks: []litellm.Block{litellm.ToolUseBlock{ID: id, Name: name, Arguments: `{}`}},
 		},
-		agentcore.ToolResultMsg(id, []byte(strconv.Quote(result)), false),
+		agentcore.ToolResult(id, agentcore.TextResult(result)),
 	}
 }
 
 // Writer 一次运行只有一条任务消息，其余全是工具组：压缩必须落在工具循环内部，
 // 摘要来自 store 事实，任务文本跟着摘要走，再次压缩也不能丢。
-func TestStoreSummaryCompactCompactsToolLoop(t *testing.T) {
+func TestWriterCompactorCompactsToolLoop(t *testing.T) {
 	const task = "返工第 3 章：结尾要承接第二章的仓库线索\n\n补充：结尾留一个钩子"
-	strategy := NewStoreSummaryCompact(StoreSummaryCompactConfig{
+	compactor := NewWriterCompactor(WriterCompactConfig{
 		Store:              seededWriterStore(t),
 		KeepRecentTokens:   600,
 		SummaryTokenBudget: 2000,
 	})
-	msgs := []agentcore.AgentMessage{agentcore.UserMsg(task)}
+	msgs := []agentcore.Message{agentcore.UserText(task)}
 	for i := 1; i <= 6; i++ {
 		msgs = append(msgs, toolGroup("t"+strconv.Itoa(i), "read_chapter", strings.Repeat("a", 1600))...)
 	}
 
-	compact := func(in []agentcore.AgentMessage) []agentcore.AgentMessage {
-		out, result, err := strategy.Apply(context.Background(), in, in, corecontext.Budget{
-			Tokens: corecontext.EstimateTotal(in), Window: 4000, Threshold: 1000,
-		})
+	compact := func(in []agentcore.Message) *agentcore.Compaction {
+		out, err := compactor.Compact(context.Background(), in, func([]agentcore.Message) agentcore.Call {
+			t.Fatal("store summary must apply without a model call")
+			return agentcore.Call{}
+		}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !result.Applied || result.Info == nil || result.Info.CompactedCount <= 0 {
-			t.Fatalf("store summary must apply inside a tool loop, got %+v", result)
+		if out == nil || out.Replaced <= 0 {
+			t.Fatalf("store summary must apply inside a tool loop, got %+v", out)
 		}
-		summary, ok := out[0].(corecontext.ContextSummary)
-		if !ok || !strings.Contains(summary.Summary, taskHeading+task+"\n\n## ") {
-			t.Fatalf("summary must carry the task section verbatim, got %T", out[0])
+		if out.Messages[0].Kind != agentcore.KindSummary {
+			t.Fatalf("expected a summary message first, got %q", out.Messages[0].Kind)
+		}
+		summary := agentcore.SummaryText(out.Messages[0])
+		if !strings.Contains(summary, taskHeading+task+"\n\n## ") {
+			t.Fatalf("summary must carry the task section verbatim, got %q", summary)
 		}
 		for _, want := range []string{"最近章节摘要", "当前章节计划", "活跃伏笔", "待修审稿问题", "仓库线索需要再蓄压一拍"} {
-			if !strings.Contains(summary.Summary, want) {
+			if !strings.Contains(summary, want) {
 				t.Fatalf("expected %q in store checkpoint", want)
 			}
 		}
-		if next, ok := out[1].(agentcore.Message); !ok || !next.HasToolCalls() {
-			t.Fatalf("kept suffix must start with a tool call, got %T", out[1])
+		if next := out.Messages[1]; len(next.ToolCalls()) == 0 {
+			t.Fatalf("kept suffix must start with a tool call, got %+v", next.Blocks)
 		}
 		return out
 	}
 
 	first := compact(msgs)
-	if len(first) >= len(msgs) {
-		t.Fatalf("expected compaction, %d -> %d", len(msgs), len(first))
+	if len(first.Messages) >= len(msgs) {
+		t.Fatalf("expected compaction, %d -> %d", len(msgs), len(first.Messages))
 	}
-	compact(append(first, toolGroup("t7", "read_chapter", strings.Repeat("a", 1600))...))
+	second := compact(append(first.Messages, toolGroup("t7", "read_chapter", strings.Repeat("a", 1600))...))
+	if summary := agentcore.SummaryText(second.Messages[0]); !strings.Contains(summary, taskHeading+task) {
+		t.Fatalf("task must survive a second compaction, got %q", summary)
+	}
+}
 
-	// 中间经过 FullSummary：LLM 摘要按 WriterSummaryPrompt 格式重写，任务仍在固定一节
-	llmSummary := corecontext.ContextSummary{Summary: taskHeading + task + "\n\n## 当前进度\n第 3 章进行中"}
-	compact(append([]agentcore.AgentMessage{llmSummary}, msgs[1:]...))
+// 压缩产出的历史是：摘要 → 恢复包 → 最近原文。
+func TestWriterCompactorInjectsRestorePack(t *testing.T) {
+	s := seededWriterStore(t)
+	pack := &WriterRestorePack{}
+	pack.Refresh(s)
+	compactor := NewWriterCompactor(WriterCompactConfig{
+		Store:              s,
+		Restore:            pack,
+		KeepRecentTokens:   600,
+		SummaryTokenBudget: 2000,
+	})
+	msgs := []agentcore.Message{agentcore.UserText("继续写第 3 章")}
+	for i := 1; i <= 6; i++ {
+		msgs = append(msgs, toolGroup("t"+strconv.Itoa(i), "read_chapter", strings.Repeat("a", 1600))...)
+	}
+
+	out, err := compactor.Compact(context.Background(), msgs, nil, "")
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if out == nil || len(out.Messages) < 3 {
+		t.Fatalf("expected summary + restore + kept history, got %+v", out)
+	}
+	restore := out.Messages[1].Text()
+	if !strings.Contains(restore, "<post-compact-context>") || !strings.Contains(restore, "当前章节计划") {
+		t.Fatalf("expected the restore pack after the summary, got %q", restore)
+	}
+	if len(out.Messages) > 4 {
+		t.Fatalf("expected exactly one restore message, got %d messages", len(out.Messages))
+	}
+}
+
+// 保留段里陈旧的工具结果被就地清理，最新几条保持原文。
+func TestWriterCompactorClearsStaleToolResults(t *testing.T) {
+	compactor := NewWriterCompactor(WriterCompactConfig{
+		Store:              seededWriterStore(t),
+		KeepRecentTokens:   4000,
+		SummaryTokenBudget: 2000,
+	})
+	msgs := []agentcore.Message{agentcore.UserText("继续写第 3 章")}
+	for i := 1; i <= 12; i++ {
+		msgs = append(msgs, toolGroup("t"+strconv.Itoa(i), "read_chapter", strings.Repeat("a", 1600))...)
+	}
+
+	out, err := compactor.Compact(context.Background(), msgs, nil, "")
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected compaction")
+	}
+	var cleared, full int
+	for _, m := range out.Messages {
+		if m.Role != litellm.RoleTool {
+			continue
+		}
+		if m.Text() == clearedToolResult {
+			cleared++
+			continue
+		}
+		full++
+	}
+	if cleared == 0 {
+		t.Fatal("expected stale tool results in the kept suffix to be cleared")
+	}
+	if full < keepRecentToolResults {
+		t.Fatalf("expected at least %d recent tool results kept verbatim, got %d", keepRecentToolResults, full)
+	}
+	last := out.Messages[len(out.Messages)-1]
+	if last.Role != litellm.RoleTool || last.Text() == clearedToolResult {
+		t.Fatal("the newest tool result must stay verbatim")
+	}
 }

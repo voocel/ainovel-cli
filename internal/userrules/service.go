@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/voocel/agentcore"
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -21,9 +21,9 @@ type Service struct {
 	rulesOpts rules.LoadOptions
 }
 
-// NewService 构造服务。model 用于归一化（应为能力较强的模型）；model 为 nil 时
-// 所有来源降级为 raw preferences（仍可产出快照，机械检查由 system_defaults 兜底）。
-func NewService(st *store.Store, model agentcore.ChatModel, opts rules.LoadOptions) *Service {
+// NewService 构造服务。model 用于归一化（应为能力较强的模型）；model 未配置客户端
+// （零值）时所有来源降级为 raw preferences（仍可产出快照，机械检查由 system_defaults 兜底）。
+func NewService(st *store.Store, model llmcontract.Model, opts rules.LoadOptions) *Service {
 	return &Service{store: st, norm: NewNormalizer(model), rulesOpts: opts}
 }
 

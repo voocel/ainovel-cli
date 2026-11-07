@@ -9,7 +9,7 @@
 
 项目的 founding assumption——"一次 Prompt、一个常驻 LLM 长循环驱动整本书"——已过时。4 月 Hybrid 重构后,决策权实际在 `flow.Route` 手里,Coordinator 在主循环 90% 的调用只做**原样转发**。为"维持一个不该停的 LLM 会话"付出的补丁生态:
 
-1. StopGuard + blockMessage 动态文案工程
+1. 子代理停机守卫 + blockMessage 动态文案工程
 2. Dispatcher 重复指令协议("第 N 次下达")
 3. coordinator.md 行为规训(恢复特例 / 查询类必须同轮派单 / 不得用停机表达立场)
 4. completePhaseGate / writerExpandedChapterGate
@@ -168,13 +168,41 @@ type PlanStartRecord struct {
 | 0 | 无条件项:规划补齐入 Router(穷举规格先行);decisions.jsonl 审计。实现改进:规划师身份从既有 `RunMeta.PlanningTier` 推导,无需新增记录机制 | ✅ 2026-07-12 |
 | 1 | 文风层交付(docs/voice-layer.md) | ✅ 2026-07-12 |
 | 2 | Step 2 RFC 定稿(docs/engine-rfc.md,七道必答题) | ✅ 2026-07-12 |
-| 3 | WorkerRunner:以 subagent.Runner 程序化直调,事件经 ctx ToolProgress 中继 | ✅ 2026-07-22 |
+| 3 | WorkerRunner:以 `agents.WorkerSet` 程序化直调(每个 Worker 一条跨 run 累积的 history),事件经 `Emit` 中继 | ✅ 2026-07-22（v1.8.8 迁移后落地形态见 §7.1） |
 | 4-5 | Engine 接管全部派发 + Arbiter 四场景接线(plan_start/intervention/failure/deadlock),直连 Engine 执行器(实施中发现 Engine 先行使 steering 过渡管线整个不用建,4/5 合并落地) | ✅ 2026-07-12 |
 | 6 | 删除 Coordinator 及全部配套(§十清单全部执行);端到端集成测试(真实工具写完整书/失败裁定/僵局裁定) | ✅ 2026-07-12 |
 
+### 7.1 v1.8.8 迁移后的运行面：WorkerSet + OnStop 三结局
+
+旧的 Runner 式 Worker 调用面已在 agentcore v1.8.8 移除（`subagent` 现在是一个
+"把子代理暴露给模型"的委派工具，本项目不使用）。Engine 侧的实际形态：
+
+```
+Engine ── agents.WorkerSet.Run(ctx, agent, task) ──▶ agentcore.Run(ctx, Config, history, prompt)
+                                                      │ Emit: MessageEnd 落盘 + 观察者投影
+                                                      │ Config.Compactor + CompactAt
+                                                      └ OnStop: 每次 run 现场构建的停机守卫
+```
+
+- **history 归属**：`agentcore.Run` 无状态，返回结束时的 history（含压缩替换）；
+  `WorkerSet` 按 Worker 名存回，同一 Worker 的 run 串行推进。
+- **停机守卫**：v1.8.8 用 `Config.OnStop` 取代原先的 guard 三态接口，语义仍是一对一：
+
+| 结局 | `OnStop` 返回 | 效果 |
+|---|---|---|
+| **继续** | 一条消息 | 消息进入 history，模型获得新一轮（催促继续推进） |
+| **结束** | `nil` | run 正常结束，Engine 按 store 事实重算 Route |
+| **升级** | `error` | 以该错误结束本轮 run；错误链可 `errors.Is` 匹配，Engine 据此重派或上抛 |
+
+- `CheckpointDeltaGuard` 仍以 baseline checkpoint 为分界：本轮未看到必需 step 的新
+  checkpoint 就"继续"；3 次催促后仍无产物则"升级"，provider 拒答（`StopSafety`）立即升级。
+- 终态工具（`Result.Terminate`）退出仍会经过 `OnStop`，所以任务感知的 Editor 守卫
+  能否决"被派生成摘要却只做了复核"的提前退出——这条由契约测试「终态工具退出仍
+  会咨询 `OnStop`」一项钉死。
+
 ## 八、Step 2 RFC 必答题(未定稿不进入步骤 3)
 
-1. **Worker 提取面**:WorkerRunner API;build.go 装配件全量的所有权与生命周期——角色模型/failover、prompt cache key、ThinkingLevel、UsageRecorder、SessionLogger、Writer ContextManagerFactory、RestorePack、StopGuardFactory、StopAfterTools、Observer 嵌套事件投影
+1. **Worker 提取面**:WorkerRunner API;build.go 装配件全量的所有权与生命周期——角色模型/failover、prompt cache key、思考强度、UsageRecorder/SessionLogger(`Emit` 的 `MessageEnd`)、Writer `Compactor` + `CompactAt`、RestorePack、`OnStop` 停机守卫、`Result.Terminate`、Observer 事件投影
 2. **Engine 生命周期**:启动/暂停/中止/恢复;单 Worker 串行保证;/model 与 thinking 运行时切换
 3. **状态提交协议完整化**:§五 的 Expect 对账全场景化;Gate 拆除后 Engine 前置条件清单
 4. **错误分类学**:确定性分类(retry/reroute/terminal)先行,仅无出路者送 `worker_failure`;与 agentcore 层重试的分层
@@ -195,7 +223,7 @@ type PlanStartRecord struct {
 
 ## 十、终态删除清单
 
-Coordinator 及其会话恢复逻辑、Coordinator StopGuard、Dispatcher steering 协议与 `[Host 下达指令]` 文本协议、FlowBoundaryHook、completePhaseGate / writerExpandedChapterGate(校验平移为 Engine 前置条件)、MaxTurns=100_000、coordinator.md 全部行为规训。
+Coordinator 及其会话恢复逻辑、Coordinator 停机守卫、Dispatcher steering 协议与 `[Host 下达指令]` 文本协议、FlowBoundaryHook、completePhaseGate / writerExpandedChapterGate(校验平移为 Engine 前置条件)、MaxTurns=100_000、coordinator.md 全部行为规训。
 
 ## 十一、异议与评审记录
 

@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
-// testDeps 构造三个语义函数同用一个 mock 档位的最小 Deps。
-func testDeps(st *store.Store, m callModel) Deps {
+// testDeps 构造三个语义函数同用一个假模型档位的最小 Deps。
+func testDeps(st *store.Store, m llmcontract.Model) Deps {
 	c := Caller{Model: m}
 	return Deps{
 		Store:         st,
@@ -44,9 +45,9 @@ func TestRunEndToEnd(t *testing.T) {
 	)
 	ana := `{"chapters":[` + factsJSON(1, "第一章") + `,` + factsJSON(2, "第二章") + `]}`
 	syn := synthesisFixtureJSON(2, storyClosed)
-	m := &mockModel{responses: []string{seg, ana, syn}}
+	m := &mockProvider{responses: []string{seg, ana, syn}}
 
-	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true, ContinueAfter: true})
+	ch, err := Run(context.Background(), testDeps(st, scriptModel(t, m)), Options{SourcePath: src, AutoConfirm: true, ContinueAfter: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -107,9 +108,9 @@ func TestRunSetsCompletionHold(t *testing.T) {
 	)
 	ana := `{"chapters":[` + factsJSON(1, "第一章") + `,` + factsJSON(2, "第二章") + `]}`
 	syn := synthesisFixtureJSON(2, storyClosed)
-	m := &mockModel{responses: []string{seg, ana, syn}}
+	m := &mockProvider{responses: []string{seg, ana, syn}}
 
-	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true}) // 无 --continue
+	ch, err := Run(context.Background(), testDeps(st, scriptModel(t, m)), Options{SourcePath: src, AutoConfirm: true}) // 无 --continue
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestRunRejectsDifferentSource(t *testing.T) {
 	if err := os.WriteFile(b, []byte("完全不同的另一本书\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ch, err := Run(context.Background(), testDeps(st, &mockModel{responses: []string{"{}"}}), Options{SourcePath: b})
+	ch, err := Run(context.Background(), testDeps(st, scriptModel(t, &mockProvider{responses: []string{"{}"}})), Options{SourcePath: b})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -240,8 +241,8 @@ func TestBudgetsFromDepsPerTier(t *testing.T) {
 	if b.SegmentChunkBytes >= b.Analyze.ContextBytes {
 		t.Fatalf("segment 小档位窗口应只约束自身：seg=%d analyze=%d", b.SegmentChunkBytes, b.Analyze.ContextBytes)
 	}
-	if b.Analyze.MaxOutputTokens != maxOutputTokens || b.SegmentMaxTokens != 8000 {
-		t.Fatalf("输出预算应各取自身档位上限：analyze=%d segment=%d", b.Analyze.MaxOutputTokens, b.SegmentMaxTokens)
+	if b.Analyze.MaxOutputTokens != maxOutputTokens {
+		t.Fatalf("输出预算应取自身档位上限：analyze=%d", b.Analyze.MaxOutputTokens)
 	}
 }
 
@@ -257,8 +258,8 @@ func TestRunSavesFailureOnContractViolation(t *testing.T) {
 	if err := os.WriteFile(src, []byte("第一章\n正文\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &nativeImportModel{mockModel: &mockModel{responses: []string{"这不是 JSON"}}}
-	ch, err := Run(context.Background(), testDeps(st, m), Options{SourcePath: src, AutoConfirm: true})
+	m := &mockProvider{responses: []string{"这不是 JSON"}}
+	ch, err := Run(context.Background(), testDeps(st, nativeScriptModel(t, m)), Options{SourcePath: src, AutoConfirm: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -309,7 +310,7 @@ func TestRunGuidanceResegments(t *testing.T) {
 	}
 	// 首次交互导入：模型把全书切成 1 章，停在确认。
 	one := boundariesJSON(boundaryFixture("L1", "", kindChapter, "第一章"))
-	ch, err := Run(context.Background(), testDeps(st, &mockModel{responses: []string{one}}), Options{SourcePath: src})
+	ch, err := Run(context.Background(), testDeps(st, scriptModel(t, &mockProvider{responses: []string{one}})), Options{SourcePath: src})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -322,7 +323,7 @@ func TestRunGuidanceResegments(t *testing.T) {
 		boundaryFixture("L3", "", kindChapter, "第二章"),
 	)
 	guidance := "第二章也是独立章节"
-	ch2, err := Run(context.Background(), testDeps(st, &mockModel{responses: []string{two}}), Options{Guidance: guidance})
+	ch2, err := Run(context.Background(), testDeps(st, scriptModel(t, &mockProvider{responses: []string{two}})), Options{Guidance: guidance})
 	if err != nil {
 		t.Fatalf("恢复 Run: %v", err)
 	}
@@ -380,13 +381,13 @@ func TestProfileForKeyPolicy(t *testing.T) {
 	}
 }
 
-// TestCallProfileOptions 验证 callProfile 只负责输出预算与 thinking；response_format
-// 由 callStructured 根据模型事实和 Contract 选择，不能在 Profile 中重复组装。
+// TestCallProfileOptions 验证 callProfile 只负责 thinking；不提供输出上限（生成预算
+// 由 provider/model 决定），response_format 由 callStructured 依据模型事实和 Contract 选择。
 func TestCallProfileOptions(t *testing.T) {
-	if got := (callProfile{}).callOptions(100); len(got) != 1 {
-		t.Fatalf("零值只应带 maxTokens，得 %d 个 option", len(got))
+	if got := (callProfile{}).callOptions(); len(got) != 0 {
+		t.Fatalf("零值不应发任何覆盖，得 %d 个 option", len(got))
 	}
-	if got := (callProfile{thinking: "high"}).callOptions(100); len(got) != 2 {
-		t.Fatalf("thinking 应带 2 个 option，得 %d", len(got))
+	if got := (callProfile{thinking: llmcontract.ThinkingHigh}).callOptions(); len(got) != 1 {
+		t.Fatalf("thinking 应带 1 个 option，得 %d", len(got))
 	}
 }
