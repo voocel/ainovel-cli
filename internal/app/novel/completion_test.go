@@ -20,11 +20,11 @@ func TestNothingLeftToWriteNeedsAKnownFinal(t *testing.T) {
 		},
 	}
 	// 篇幅交给 AI 且尚未收官：内容再齐也要接着扩写蓝图。
-	if next, ok := nextUpcoming(project, Length{Compass: &model.Compass{ScaleMax: 10, Ending: "收束"}}); !ok || next.write != nil || next.covered != 2 {
+	if next, ok := nextUpcoming(project, Length{Compass: &model.Compass{Ending: "收束"}}); !ok || next.write != nil || next.covered != 2 {
 		t.Fatalf("open-phase next = %+v, %v", next, ok)
 	}
 	committed := project
-	committed.Compass = &model.Compass{ScaleMax: 10, Ending: "收束", Final: 2}
+	committed.Compass = &model.Compass{Ending: "收束", Final: 2}
 	if next, ok := nextUpcoming(committed, lengthOf(committed, 0)); ok {
 		t.Fatalf("committed finale still has work: %+v", next)
 	}

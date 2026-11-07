@@ -392,7 +392,7 @@ func planWork(run model.CreationRun, length Length, pending []string) creation.W
 // 末章的裁定为基线（D51），裁定失效则扩窗任务失效。已覆盖的末章作为全书结局写成时是续写（D63）。
 func extendWork(run model.CreationRun, length Length, ledger reviewLedger, covered int) creation.WorkItem {
 	concluded := ledger.concluded(covered)
-	goal := "展开下一个故事弧的章节：已有章节保持不变，只在末尾追加并挂在所属故事弧下；下一弧已有骨架就按已发生的故事修订后展开，没有就新建；本卷的故事弧都已写完时先判断故事是否到了终点，未到终点才新开一卷，新卷只搭它自己的故事弧骨架；这一弧多少章由你按故事走向决定；结合审阅意见调整后续走向，为 pending_requirements 中尚未兑现的要求安排落点；对照罗盘里各条长线停了几章（quiet）与下一次的安排（next）规划这一弧，新章用 threads 标明推进的长线、用 turn 写明转折，答案落在哪一章就给那条长线写上 answer，故事里出现新的长线就立起来；已有人物与事物的状态随章节正文记录，规划不改写；" + length.planningGoal()
+	goal := "展开下一个故事弧的章节：已有章节保持不变，只在末尾追加并挂在所属故事弧下；下一弧已有骨架就按已发生的故事修订后展开，没有就在当前卷里新建；故事进入新的大阶段才新开一卷；这一弧多少章由你按故事走向决定；结合审阅意见调整后续走向，为 pending_requirements 中尚未兑现的要求安排落点；对照罗盘里各条长线停了几章（quiet）与下一次的安排（next）规划这一弧，新章用 threads 标明推进的长线、用 turn 写明转折，答案落在哪一章就给那条长线写上 answer，故事里出现新的长线就立起来；已有人物与事物的状态随章节正文记录，规划不改写；" + length.planningGoal()
 	parts := []string{"plan", "extend", strconv.Itoa(covered), length.inputID()}
 	start := fmt.Sprintf("扩展蓝图：前 %d 章已审完，展开下一个故事弧", covered)
 	if concluded {
@@ -410,7 +410,7 @@ func extendWork(run model.CreationRun, length Length, ledger reviewLedger, cover
 		Reasons: creation.WorkReasons{
 			Start:   start,
 			Done:    "后续章节的蓝图已生效",
-			Waiting: "后续章节的蓝图已拟好（可能含预计篇幅调整），等你确认后继续",
+			Waiting: "后续章节的蓝图已拟好（可能含篇幅上限调整），等你确认后继续",
 			Failure: "后续章节的蓝图这次没能扩展完成",
 			Stuck:   "蓝图扩展任务已结束但章节数没有增加，需要人工检查规划",
 		},

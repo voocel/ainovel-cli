@@ -109,12 +109,37 @@ func TestResolvePlanEditsAssignIDsAndKeepNumbering(t *testing.T) {
 	}
 }
 
+// 篇幅上限只为超过护栏而设（D96）：规划改终局与收官时省略它，用户认可的上限不丢；护栏以内的
+// 数字是预计篇幅，不收；故事需要更长时给出更高的上限。
+func TestCompassEditKeepsTheLimitUnlessRaised(t *testing.T) {
+	content := fixture().content
+	content.Compass = &model.Compass{ScaleMax: 450, Ending: "林凡入内门"}
+	story := New(content)
+	patches, err := story.Resolve(&model.RevisePlanInput{}, Submission{Compass: &CompassEdit{Ending: "林凡入内门", Final: 3}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compass := decodePatch[model.Compass](t, patches, "compass:root"); compass.ScaleMax != 450 || compass.Final != 3 {
+		t.Fatalf("omitted scale_max dropped the approved limit: %+v", compass)
+	}
+	if _, err := story.Resolve(&model.RevisePlanInput{}, Submission{Compass: &CompassEdit{ScaleMax: 280, Ending: "林凡入内门"}}, nil); !errors.Is(err, model.ErrInvalid) {
+		t.Fatalf("an estimate within the guardrail = %v", err)
+	}
+	patches, err = story.Resolve(&model.RevisePlanInput{}, Submission{Compass: &CompassEdit{ScaleMax: 600, Ending: "林凡入内门"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compass := decodePatch[model.Compass](t, patches, "compass:root"); compass.ScaleMax != 600 {
+		t.Fatalf("raised limit = %+v", compass)
+	}
+}
+
 // 长线（D91）：按短名新立、引用与作答，ID 由宿主给；模型视图只见短名，统计每条长线最近推进
 // 的已写章、此后停了几章与下一次的安排。
 func TestResolveThreadsByNameAndCountTheirQuiet(t *testing.T) {
 	story := fixture()
 	patches, err := story.Resolve(&model.RevisePlanInput{}, Submission{
-		Compass: &CompassEdit{ScaleMax: 20, Ending: "林凡入内门"},
+		Compass: &CompassEdit{Ending: "林凡入内门"},
 		Threads: []ThreadEdit{{Name: "内门", Question: "林凡能否入内门", Answer: 4}, {Name: "苏晴", Question: "苏晴为何入宗"}},
 		Chapters: []ChapterEdit{
 			{Chapter: 3, Threads: []string{"苏晴"}},
@@ -126,7 +151,7 @@ func TestResolveThreadsByNameAndCountTheirQuiet(t *testing.T) {
 	}
 	compass := decodePatch[model.Compass](t, patches, "compass:root")
 	if len(compass.Threads) != 2 || compass.Threads[0] != (model.StoryThread{ID: "t1", Name: "内门", Question: "林凡能否入内门", Answer: "c4"}) ||
-		compass.Threads[1].ID != "t2" || compass.Threads[1].Answer != "" || compass.ScaleMax != 20 {
+		compass.Threads[1].ID != "t2" || compass.Threads[1].Answer != "" || compass.ScaleMax != 0 {
 		t.Fatalf("compass = %+v", compass)
 	}
 	if third := decodePatch[model.PlanNode](t, patches, "plan:c3"); !slices.Equal(third.Threads, []string{"t2"}) || third.Summary != "下山" {
@@ -150,7 +175,7 @@ func TestResolveThreadsByNameAndCountTheirQuiet(t *testing.T) {
 	if advanced := New(content).Compass().Threads[0]; advanced.Advanced != 1 || advanced.Quiet != 1 || advanced.Next != 4 {
 		t.Fatalf("advanced in chapter 1 = %+v", advanced)
 	}
-	content.Compass = &model.Compass{ScaleMax: 20, Ending: "林凡入内门", Threads: []model.StoryThread{{ID: "t1", Name: "内门", Question: "林凡能否入内门", Answer: "c2"}}}
+	content.Compass = &model.Compass{Ending: "林凡入内门", Threads: []model.StoryThread{{ID: "t1", Name: "内门", Question: "林凡能否入内门", Answer: "c2"}}}
 	if answered := New(content).Compass().Threads[0]; !answered.Answered || answered.Advanced != 2 || answered.Quiet != 0 {
 		t.Fatalf("answered in chapter 2 = %+v", answered)
 	}

@@ -367,7 +367,7 @@ func TestContextKeyIsCanonicalAndBoundToKindAndVersion(t *testing.T) {
 	if base == key(model.OperationRewriteChapter, `{"chapter_plan_id":"c","directives":[]}`) {
 		t.Fatal("operation kind is not part of the context key")
 	}
-	if ViewKind != "model_view.v2" {
+	if ViewKind != "model_view.v3" {
 		t.Fatalf("schema version = %q", ViewKind)
 	}
 	for name, invalid := range map[string]struct {

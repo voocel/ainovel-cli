@@ -59,8 +59,8 @@ func TestDocumentDependenciesIncludeStableParentAndPlan(t *testing.T) {
 }
 
 // 蓝图不变量（§6.3 D63/D67）：规划任务至少追加一章（或以现有章数收官），固定篇幅不超过
-// 全书章数；AI 定篇幅时罗盘必填，收官后按收官章数封顶，未收官不得触及预计篇幅；罗盘
-// 只能由规划任务修改。
+// 全书章数；AI 定篇幅时罗盘必填，收官后按收官章数封顶，未收官不超过篇幅上限（D96）；
+// 罗盘只能由规划任务修改。
 func TestValidateBlueprint(t *testing.T) {
 	chapters := func(ids ...int) []PlanNode {
 		var nodes []PlanNode
@@ -108,10 +108,20 @@ func TestValidateBlueprint(t *testing.T) {
 		}
 		return s
 	}
-	base := blueprint(&Compass{ScaleMax: 10, Ending: "称帝"}, chapters(1, 2, 3)...)
-	nearCap := blueprint(&Compass{ScaleMax: 4, Ending: "称帝"}, chapters(1, 2, 3)...)
+	upTo := func(n int) []PlanNode {
+		ids := make([]int, n)
+		for i := range ids {
+			ids[i] = i + 1
+		}
+		return chapters(ids...)
+	}
+	base := blueprint(&Compass{Ending: "称帝"}, chapters(1, 2, 3)...)
+	nearCap := blueprint(&Compass{Ending: "称帝"}, upTo(CompassAutonomyCeiling-1)...)
+	atCap := blueprint(&Compass{Ending: "称帝"}, upTo(CompassAutonomyCeiling)...)
 	unbounded := blueprint(nil, chapters(1, 2, 3)...)
 	open := func(t *testing.T) Operation { return extend(t, 0, 3) }
+	nearCapOp := func(t *testing.T) Operation { return extend(t, 0, CompassAutonomyCeiling-1) }
+	atCapOp := func(t *testing.T) Operation { return extend(t, 0, CompassAutonomyCeiling) }
 	fixedSix := func(t *testing.T) Operation { return extend(t, 6, 3) }
 	chapterOp, _ := json.Marshal(WriteChapterInput{ChapterPlanID: "chapter-1"})
 	for _, c := range []struct {
@@ -128,26 +138,31 @@ func TestValidateBlueprint(t *testing.T) {
 			func(t *testing.T) []Patch { return plans(t, 4) }, true},
 		{"open phase must append at least one chapter", open, base,
 			func(t *testing.T) []Patch { return plans(t, 3) }, false},
-		{"reaching scale_max without a final is rejected", open, base,
-			func(t *testing.T) []Patch { return plans(t, 4, 5, 6, 7, 8, 9, 10) }, false},
-		{"raising scale_max unblocks the plan", open, base,
-			func(t *testing.T) []Patch { return append(plans(t, 4, 5, 6, 7, 8, 9, 10), compass(t, 20, 0)) }, true},
-		{"one short of scale_max needs a final or a raise", open, nearCap,
-			func(t *testing.T) []Patch { return plans(t, 4) }, false},
-		{"one short of scale_max closes with a final", open, nearCap,
-			func(t *testing.T) []Patch { return append(plans(t, 4), compass(t, 4, 4)) }, true},
+		// 篇幅不预计（D96）：未收官的蓝图只受护栏约束，触及时收官或申请更高的上限。
+		{"an unfinished plan may reach the guardrail", nearCapOp, nearCap,
+			func(t *testing.T) []Patch { return plans(t, CompassAutonomyCeiling) }, true},
+		{"an unfinished plan cannot pass the guardrail", nearCapOp, nearCap,
+			func(t *testing.T) []Patch { return plans(t, CompassAutonomyCeiling, CompassAutonomyCeiling+1) }, false},
+		{"a higher limit lets the plan pass the guardrail", nearCapOp, nearCap,
+			func(t *testing.T) []Patch {
+				return append(plans(t, CompassAutonomyCeiling, CompassAutonomyCeiling+1), compass(t, CompassAutonomyCeiling+100, 0))
+			}, true},
+		{"at the guardrail the plan closes with a final", atCapOp, atCap,
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, CompassAutonomyCeiling)} }, true},
+		{"at the guardrail an unfinished plan cannot grow", atCapOp, atCap,
+			func(t *testing.T) []Patch { return plans(t, CompassAutonomyCeiling+1) }, false},
 		{"final may roll below it", open, base,
-			func(t *testing.T) []Patch { return append(plans(t, 4, 5), compass(t, 10, 8)) }, true},
+			func(t *testing.T) []Patch { return append(plans(t, 4, 5), compass(t, 0, 8)) }, true},
 		{"final may close on the existing chapters", open, base,
-			func(t *testing.T) []Patch { return []Patch{compass(t, 10, 3)} }, true},
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 3)} }, true},
 		{"final cannot be passed", open, base,
-			func(t *testing.T) []Patch { return append(plans(t, 4, 5, 6), compass(t, 10, 5)) }, false},
+			func(t *testing.T) []Patch { return append(plans(t, 4, 5, 6), compass(t, 0, 5)) }, false},
 		{"final ahead still needs progress", open, base,
-			func(t *testing.T) []Patch { return []Patch{compass(t, 10, 5)} }, false},
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 5)} }, false},
 		{"final below the planned chapters is rejected", open, base,
-			func(t *testing.T) []Patch { return []Patch{compass(t, 10, 2)} }, false},
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 2)} }, false},
 		{"first plan may declare a final beyond its chapters", func(t *testing.T) Operation { return develop(t, 0) }, blueprint(nil),
-			func(t *testing.T) []Patch { return append(plans(t, 1, 2), compass(t, 10, 5)) }, true},
+			func(t *testing.T) []Patch { return append(plans(t, 1, 2), compass(t, 0, 5)) }, true},
 		{"AI length requires a compass", open, unbounded,
 			func(t *testing.T) []Patch { return plans(t, 4, 5, 6) }, false},
 		{"fixed length allows any count up to it", fixedSix, unbounded,
@@ -159,28 +174,26 @@ func TestValidateBlueprint(t *testing.T) {
 		{"fixed length must append a chapter", fixedSix, unbounded,
 			func(t *testing.T) []Patch { return plans(t, 3) }, false},
 		{"only planning tasks may change the compass", func(*testing.T) Operation { return Operation{Kind: OperationWriteChapter, Input: chapterOp} }, base,
-			func(t *testing.T) []Patch { return []Patch{compass(t, 20, 0)} }, false},
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 3)} }, false},
 		{"non-planning tasks cannot add chapter nodes", func(*testing.T) Operation { return Operation{Kind: OperationWriteChapter, Input: chapterOp} }, base,
 			func(t *testing.T) []Patch { return plans(t, 4) }, false},
 		{"non-planning tasks may edit existing nodes", func(*testing.T) Operation { return Operation{Kind: OperationWriteChapter, Input: chapterOp} }, base,
 			func(t *testing.T) []Patch { return plans(t, 3) }, true},
 		{"fixed length leaves the compass to the user", fixedSix, base,
 			func(t *testing.T) []Patch { return append(plans(t, 4, 5, 6), compass(t, 6, 6)) }, false},
-		// 终局方向总由规划写（D70）：固定篇幅时罗盘只有终局，篇幅交给 AI 时还要有上限。
+		// 终局方向总由规划写（D70）：两种篇幅下罗盘都可以只有终局（D96）。
 		{"fixed length writes an ending-only compass", fixedSix, unbounded,
 			func(t *testing.T) []Patch { return append(plans(t, 4), compass(t, 0, 0)) }, true},
-		{"AI length rejects an ending-only compass", open, unbounded,
-			func(t *testing.T) []Patch { return append(plans(t, 4, 5), compass(t, 0, 0)) }, false},
-		{"an ending-only compass needs a scale_max once the AI decides", open, blueprint(&Compass{Ending: "称帝"}, chapters(1, 2, 3)...),
-			func(t *testing.T) []Patch { return plans(t, 4) }, false},
+		{"AI length accepts an ending-only compass", open, unbounded,
+			func(t *testing.T) []Patch { return append(plans(t, 4, 5), compass(t, 0, 0)) }, true},
 		{"planning may not remove chapter nodes", open, base,
 			func(t *testing.T) []Patch {
-				return []Patch{{Document: DocumentRef{Kind: DocumentPlan, ID: "chapter-3"}, Operation: PatchDelete}, compass(t, 10, 5)}
+				return []Patch{{Document: DocumentRef{Kind: DocumentPlan, ID: "chapter-3"}, Operation: PatchDelete}, compass(t, 0, 5)}
 			}, false},
 		{"deleting the compass keeps a node named root", open,
-			blueprint(&Compass{ScaleMax: 10, Ending: "称帝"}, append(chapters(1, 2), PlanNode{ID: "root", Kind: PlanChapter, Turn: "转折", ParentID: "arc-1", Order: 3, Title: "章", Summary: "推进"})...),
+			blueprint(&Compass{Ending: "称帝"}, append(chapters(1, 2), PlanNode{ID: "root", Kind: PlanChapter, Turn: "转折", ParentID: "arc-1", Order: 3, Title: "章", Summary: "推进"})...),
 			func(t *testing.T) []Patch {
-				return append(plans(t, 4, 5, 6), Patch{Document: DocumentRef{Kind: DocumentCompass, ID: SingletonDocumentID}, Operation: PatchDelete}, compass(t, 10, 0))
+				return append(plans(t, 4, 5, 6), Patch{Document: DocumentRef{Kind: DocumentCompass, ID: SingletonDocumentID}, Operation: PatchDelete}, compass(t, 0, 0))
 			}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -246,15 +259,15 @@ func TestCompassValidateAndNeverDependency(t *testing.T) {
 		compass Compass
 		ok      bool
 	}{
-		{Compass{ScaleMax: 60, Ending: "称帝"}, true},
-		{Compass{ScaleMax: 60, Ending: "称帝", Final: 60}, true},
-		// 用户固定篇幅时罗盘只有终局（D70）：没有上限就不能有收官承诺。
+		// 收官承诺不超过篇幅上限：护栏，或用户认可的更高上限（D96）。
 		{Compass{Ending: "称帝"}, true},
-		{Compass{Ending: "称帝", Final: 10}, false},
+		{Compass{Ending: "称帝", Final: CompassAutonomyCeiling}, true},
+		{Compass{Ending: "称帝", Final: CompassAutonomyCeiling + 1}, false},
+		{Compass{ScaleMax: 450, Ending: "称帝", Final: 450}, true},
+		{Compass{ScaleMax: 450, Ending: "称帝", Final: 451}, false},
 		{Compass{ScaleMax: -1, Ending: "称帝"}, false},
-		{Compass{ScaleMax: 60}, false},
-		{Compass{ScaleMax: 60, Ending: "称帝", Final: 61}, false},
-		{Compass{ScaleMax: 60, Ending: "称帝", Final: -1}, false},
+		{Compass{ScaleMax: 450}, false},
+		{Compass{Ending: "称帝", Final: -1}, false},
 		// 长线（D91）：每条有问题，ID 与短名各不相同。
 		{Compass{Ending: "称帝", Threads: []StoryThread{{ID: "t1", Name: "王位", Question: "能否称帝"}, {ID: "t2", Name: "旧债", Question: "父仇谁报"}}}, true},
 		{Compass{Ending: "称帝", Threads: []StoryThread{{ID: "t1", Name: "王位"}}}, false},

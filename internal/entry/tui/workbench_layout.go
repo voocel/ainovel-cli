@@ -151,15 +151,15 @@ func (m model) benchHeader(l benchLayout) []string {
 }
 
 // progressLabel 是头部的入稿进度（D63 三态）：全书章数已知时给分母，AI 收官后注明；
-// 开放期还有已规划到第几章与预计篇幅（滚动规划，D73）。
+// 开放期还有已规划到第几章（滚动规划，D73）；篇幅不预计（D96）。
 func progressLabel(done, planned int, length novel.Length) string {
 	switch {
 	case length.Final > 0 && length.Fixed == 0:
 		return fmt.Sprintf("已入稿 %d / %d 章 · 收官", done, length.Final)
 	case length.Final > 0:
 		return fmt.Sprintf("已入稿 %d / %d 章", done, length.Final)
-	case length.Compass != nil && length.Compass.ScaleMax > 0:
-		return fmt.Sprintf("已入稿 %d 章 · 已规划 %d · 预计 %d", done, planned, length.Compass.ScaleMax)
+	case length.Compass != nil:
+		return fmt.Sprintf("已入稿 %d 章 · 已规划 %d", done, planned)
 	default:
 		return fmt.Sprintf("已入稿 %d 章 · 篇幅待定", done)
 	}
@@ -172,8 +172,6 @@ func lengthStatus(length novel.Length) string {
 		return fmt.Sprintf("固定 %d 章", length.Fixed)
 	case length.Final > 0:
 		return fmt.Sprintf("AI 已承诺 %d 章收官", length.Final)
-	case length.Compass != nil && length.Compass.ScaleMax > 0:
-		return fmt.Sprintf("AI 决定，预计 %d 章", length.Compass.ScaleMax)
 	default:
 		return "AI 决定"
 	}

@@ -67,7 +67,7 @@ func TestPendingProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 		put(model.DocumentPlan, "plan-chapter-3", model.PlanNode{ID: "plan-chapter-3", Kind: model.PlanChapter, Turn: "转折", ParentID: newArc.ID, Order: 3, Title: "旧友", Summary: "相认"}),
 		put(model.DocumentEntity, "entity-su", model.Entity{ID: "entity-su", Kind: model.EntityCharacter, Name: "苏晚", Aliases: []string{"晚晚"}}),
 		put(model.DocumentCanon, "fact-su", model.CanonFact{ID: "fact-su", Kind: model.CanonState, SubjectID: "entity-su", Predicate: "state.identity", Value: json.RawMessage(`"陈渡的旧友"`)}),
-		put(model.DocumentCompass, model.SingletonDocumentID, model.Compass{ScaleMax: 60, Ending: "真相大白"}),
+		put(model.DocumentCompass, model.SingletonDocumentID, model.Compass{ScaleMax: 450, Ending: "真相大白"}),
 		put(model.DocumentOverlay, model.SingletonDocumentID, map[string]string{}),
 	}}
 
@@ -84,7 +84,7 @@ func TestPendingProposalReadsAsStoryAndPreviewsInOutline(t *testing.T) {
 		t.Fatalf("outline tree = %+v", view.Outline)
 	}
 	if len(view.Entities) != 1 || view.Entities[0].Name != "苏晚" || view.Facts[0] != (Fact{Kind: model.CanonState, Subject: "苏晚", Text: "陈渡的旧友"}) ||
-		view.Compass == nil || view.Compass.ScaleMax != 60 || !slices.Equal(view.Other, []string{"书级创作规则"}) {
+		view.Compass == nil || view.Compass.ScaleMax != 450 || !slices.Equal(view.Other, []string{"书级创作规则"}) {
 		t.Fatalf("view = %+v", view)
 	}
 	encoded, err := json.Marshal(view)

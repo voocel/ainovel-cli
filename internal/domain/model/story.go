@@ -25,10 +25,11 @@ func (v Intent) Validate() error {
 }
 
 // Compass 是故事罗盘（D63）：AI 在蓝图里给出的终局、长线与篇幅，随滚动规划修订，只有
-// 规划任务能写。终局方向总由 AI 定；篇幅只在交给 AI 时才有（D70）：ScaleMax 是
-// 预计篇幅（D73），Final 是收官承诺（全书章数，0 表示尚未收官）；用户固定篇幅时二者为 0。
+// 规划任务能写。终局方向总由 AI 定；篇幅只在交给 AI 时才有（D70）：Final 是收官承诺
+// （全书章数，0 表示尚未收官），ScaleMax 是超过护栏的篇幅上限（D96）；用户固定篇幅时二者为 0。
 type Compass struct {
-	// ScaleMax 是 AI 对全书章数的当前估计，随故事上调或下调；蓝图触及它时必须收官或修订它。
+	// ScaleMax 是 AI 申请、经用户认可的篇幅上限，只在故事需要超过护栏时才有（D96）；
+	// 篇幅不预计，0 表示上限就是护栏。
 	ScaleMax int    `json:"scale_max,omitempty"`
 	Ending   string `json:"ending"` // 终局方向
 	Final    int    `json:"final,omitempty"`
@@ -55,21 +56,21 @@ func (v Compass) Thread(id string) (StoryThread, bool) {
 	return StoryThread{}, false
 }
 
-// CompassAutonomyCeiling 是无人值守的篇幅护栏（D63/D73）：预计篇幅超过它，AI 须经用户裁决。
+// CompassAutonomyCeiling 是无人值守的篇幅护栏（D63/D96）：未收官的蓝图超过它，AI 须经用户裁决。
 const CompassAutonomyCeiling = 300
 
-// AutonomousScale 是 AI 不经用户就能定下的预计篇幅（D73）：护栏以内自行修订，护栏以上
-// 只到用户已经认可的值。审批判定与规划任务的说明共用这一条规则。
-func AutonomousScale(current Compass) int {
-	return max(CompassAutonomyCeiling, current.ScaleMax)
+// Limit 是 AI 不经用户就能规划到的章数（D96）：护栏，或用户已经认可的更高上限。提交边界与
+// 审批判定共用这一条规则。
+func (v Compass) Limit() int {
+	return max(CompassAutonomyCeiling, v.ScaleMax)
 }
 
 func (v Compass) Validate() error {
 	if strings.TrimSpace(v.Ending) == "" {
 		return fmt.Errorf("compass requires an ending: %w", ErrInvalid)
 	}
-	if v.Final < 0 || v.Final > v.ScaleMax {
-		return fmt.Errorf("compass final %d must be within scale_max %d: %w", v.Final, v.ScaleMax, ErrInvalid)
+	if v.ScaleMax < 0 || v.Final < 0 || v.Final > v.Limit() {
+		return fmt.Errorf("compass final %d must be within the length limit %d (a higher scale_max raises it, with the user's approval): %w", v.Final, v.Limit(), ErrInvalid)
 	}
 	ids, names := make([]string, len(v.Threads)), make([]string, len(v.Threads))
 	for i, thread := range v.Threads {

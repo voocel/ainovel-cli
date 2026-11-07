@@ -42,12 +42,12 @@ type ChapterPlanView struct {
 	Written bool     `json:"written,omitempty"`
 }
 
-// CompassView 是故事罗盘：终局、篇幅与长线走到了哪。
+// CompassView 是故事罗盘：终局、收官承诺与长线走到了哪。篇幅上限不进视图（D96）：规划
+// 按故事判断何时收官，触及上限时由提交边界说明。
 type CompassView struct {
-	Ending   string       `json:"ending"`
-	ScaleMax int          `json:"scale_max,omitempty"`
-	Final    int          `json:"final,omitempty"`
-	Threads  []ThreadView `json:"threads,omitempty"`
+	Ending  string       `json:"ending"`
+	Final   int          `json:"final,omitempty"`
+	Threads []ThreadView `json:"threads,omitempty"`
 }
 
 // ThreadView 是一条长线（D91）。章号由宿主按章节计划的引用推出：作答的章也算推进。
@@ -136,7 +136,7 @@ func (s *Story) Compass() *CompassView {
 	if compass == nil {
 		return nil
 	}
-	view := &CompassView{Ending: compass.Ending, ScaleMax: compass.ScaleMax, Final: compass.Final}
+	view := &CompassView{Ending: compass.Ending, Final: compass.Final}
 	for _, thread := range compass.Threads {
 		view.Threads = append(view.Threads, s.threadView(thread))
 	}

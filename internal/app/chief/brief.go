@@ -76,8 +76,6 @@ func progress(snap workbench.WorkbenchSnapshot) string {
 		return text + fmt.Sprintf("；篇幅由用户固定为 %d 章", length.Fixed)
 	case length.Final > 0:
 		return text + fmt.Sprintf("；篇幅交给 AI，已承诺 %d 章收官", length.Final)
-	case length.Compass != nil && length.Compass.ScaleMax > 0:
-		return text + fmt.Sprintf("；篇幅交给 AI，预计 %d 章", length.Compass.ScaleMax)
 	default:
 		return text + "；篇幅交给 AI"
 	}

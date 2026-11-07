@@ -11,7 +11,7 @@ import (
 
 // RequiresUser 返回 AI 变更即使在 auto 档下也必须由用户裁决的原因，空串表示无需：
 //   - Intent 只装用户的原话（D25/D70）：AI 的任何改动都等用户裁决；
-//   - 故事罗盘的篇幅护栏（D63/D73）：删除罗盘、预计篇幅超出 AI 可自行决定的范围。
+//   - 故事罗盘的篇幅护栏（D63/D96）：删除罗盘、篇幅上限超出 AI 可自行决定的范围。
 func RequiresUser(proposal Proposal, base DocumentSet) (string, error) {
 	for _, patch := range proposal.Patches {
 		switch patch.Document.Kind {
@@ -41,7 +41,7 @@ func compassBeyondAutonomy(base DocumentSet, patch Patch) (string, error) {
 			return "", fmt.Errorf("decode base compass: %w", err)
 		}
 	}
-	if limit := AutonomousScale(current); next.ScaleMax > limit {
+	if limit := current.Limit(); next.ScaleMax > limit {
 		return fmt.Sprintf("a compass scale_max of %d (above %d) requires user approval", next.ScaleMax, limit), nil
 	}
 	return "", nil

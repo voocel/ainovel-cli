@@ -27,7 +27,8 @@ type Submission struct {
 	Outline *OutlineEdit `json:"outline,omitempty"`
 }
 
-// CompassEdit 整体替换罗盘的终局与篇幅；长线另按 ThreadEdit 编辑。
+// CompassEdit 替换罗盘的终局与收官承诺；ScaleMax 只在申请超过上限时给出，省略保持原样
+// （D96）。长线另按 ThreadEdit 编辑。
 type CompassEdit struct {
 	ScaleMax int    `json:"scale_max,omitempty"`
 	Ending   string `json:"ending"`
@@ -284,8 +285,8 @@ func (r *resolver) plan(kind, parentKind model.PlanNodeKind, edits []planEdit) e
 	return nil
 }
 
-// defineThreads 处理罗盘（D91）：终局与篇幅随 compass 整体替换；长线按短名定位，已有的
-// 改问题，新的分配 ID。罗盘在全部编辑之后写一次。
+// defineThreads 处理罗盘（D91）：终局与收官承诺随 compass 替换，篇幅上限只在给出时改；
+// 长线按短名定位，已有的改问题，新的分配 ID。罗盘在全部编辑之后写一次。
 func (r *resolver) defineThreads(edit *CompassEdit, threads []ThreadEdit) error {
 	if edit == nil && len(threads) == 0 {
 		return nil
@@ -294,7 +295,14 @@ func (r *resolver) defineThreads(edit *CompassEdit, threads []ThreadEdit) error 
 		r.compass = new(model.Compass)
 	}
 	if edit != nil {
-		r.compass.ScaleMax, r.compass.Ending, r.compass.Final = edit.ScaleMax, edit.Ending, edit.Final
+		// 上限只为超过护栏而设（D96），护栏以内的数字就是预计篇幅，不收。
+		if edit.ScaleMax != 0 && edit.ScaleMax <= model.CompassAutonomyCeiling {
+			return fmt.Errorf("scale_max 只在故事需要超过 %d 章时给出，省略即可: %w", model.CompassAutonomyCeiling, model.ErrInvalid)
+		}
+		if edit.ScaleMax != 0 {
+			r.compass.ScaleMax = edit.ScaleMax
+		}
+		r.compass.Ending, r.compass.Final = edit.Ending, edit.Final
 	}
 	seen := make(map[string]bool)
 	for _, thread := range threads {

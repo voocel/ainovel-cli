@@ -162,7 +162,7 @@ func planningModel(t *testing.T, width, height int) model {
 		{ID: 10, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Thinking, At: at.Add(time.Second),
 			Text: []byte("先让信件本身成为悬念：没有邮戳、潮湿、收件人已经去世。")},
 		{ID: 11, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Item, Section: "大纲", At: at.Add(31 * time.Second),
-			Text: []byte("故事罗盘 · 终局：陈渡寄出最后一封信 · 预计 60 章\n第 1 卷 · 未寄出的信 —— 镇上最后一间邮局开始收到亡者来信\n第 1 个故事弧 · 雨夜 —— 第一封信抵达\n第 1 章 · 无人签收 —— 柜台最底下多了一封没有邮戳的信\n第 2 章 · 雨夜来客 —— 不留水迹的来客问有没有他的信")},
+			Text: []byte("故事罗盘 · 终局：陈渡寄出最后一封信\n第 1 卷 · 未寄出的信 —— 镇上最后一间邮局开始收到亡者来信\n第 1 个故事弧 · 雨夜 —— 第一封信抵达\n第 1 章 · 无人签收 —— 柜台最底下多了一封没有邮戳的信\n第 2 章 · 雨夜来客 —— 不留水迹的来客问有没有他的信")},
 		{ID: 12, Version: 1, OperationID: "planning", TaskLabel: "全书规划", Kind: activity.Item, Section: "设定", At: at.Add(60 * time.Second),
 			Text: []byte("陈渡（人物） 又名 邮差\n镇邮局（地点）\n「陈渡」state.job：镇上最后一位邮差")},
 	}

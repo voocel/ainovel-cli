@@ -296,7 +296,7 @@ func BenchmarkProseExtractorByteWise(b *testing.B) {
 }
 
 // 规划提交里各类条目混排，字符串里夹着括号、引号与 \u 转义：任何切分都交出同样的条目。
-const planPayload = `{"reason":"首次规划","compass":{"ending":"他终于寄出那封\"不该寄的信\"","scale_max":60},` +
+const planPayload = `{"reason":"首次规划","compass":{"ending":"他终于寄出那封\"不该寄的信\"","scale_max":450},` +
 	`"volumes":[{"volume":1,"title":"未寄出的信","summary":"邮差替亡者送信。\n他想起自己的过去。"}],` +
 	`"arcs":[{"arc":1,"volume":1,"title":"雨夜","summary":"第一封 {信} 抵达]"}],` +
 	`"chapters":[{"chapter":1,"arc":1,"title":"无人签收","summary":"没有邮戳的信"},{"chapter":2,"arc":1,"title":"雨夜来客"}],` +
@@ -306,7 +306,7 @@ const planPayload = `{"reason":"首次规划","compass":{"ending":"他终于寄�
 	`"remove_facts":[{"subject":"陈渡","predicate":"state.home"}]}`
 
 var planLines = []liveLine{
-	{sectionOutline, `故事罗盘 · 终局：他终于寄出那封"不该寄的信" · 预计 60 章`},
+	{sectionOutline, `故事罗盘 · 终局：他终于寄出那封"不该寄的信" · 上限 450 章`},
 	{sectionOutline, "第 1 卷 · 未寄出的信 —— 邮差替亡者送信。 他想起自己的过去。"},
 	{sectionOutline, "第 1 个故事弧 · 雨夜 —— 第一封 {信} 抵达]"},
 	{sectionOutline, "第 1 章 · 无人签收 —— 没有邮戳的信"},

@@ -285,6 +285,59 @@ func TestPlanningContextAnchorsAtFirstUnwrittenChapter(t *testing.T) {
 	}
 }
 
+// 规划的工作对象是全书走向（D95）：写到第 200 章，事实早已超出预算，全书的卷与故事弧
+// 仍完整装入，裁掉的是事实；约束照旧排在最前。
+func TestPlanningContextKeepsTheWholeStructure(t *testing.T) {
+	context, err := selectContext(longBook(250, 200), model.OperationRevisePlan, json.RawMessage(`{"existing_chapters":250}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keySet(context)
+	for arc := 1; arc <= 25; arc++ {
+		if !keys[fmt.Sprintf("plan:arc-%02d", arc)] {
+			t.Fatalf("planning lost arc %d: omitted %v", arc, context.Budget.Omitted)
+		}
+	}
+	if !keys["canon:rule-origin"] || !keys["canon:hook-main"] {
+		t.Fatal("structure displaced the constraints")
+	}
+	if context.Budget.Omitted[model.DocumentCanon] == 0 || context.Budget.Used > context.Budget.Limit {
+		t.Fatalf("facts must yield within the budget: omitted %v, used %d / %d", context.Budget.Omitted, context.Budget.Used, context.Budget.Limit)
+	}
+}
+
+// 结构本身超出预算时，先装全书各卷，再由近到远装故事弧。
+func TestPlanningContextTrimsOldArcsBeforeVolumes(t *testing.T) {
+	content := longBook(250, 200)
+	for volume := 2; volume <= 5; volume++ {
+		content.Plan = append(content.Plan, model.PlanNode{ID: fmt.Sprintf("volume-%d", volume), Kind: model.PlanVolume, Order: volume, Title: "卷"})
+	}
+	for i, node := range content.Plan {
+		switch node.Kind {
+		case model.PlanVolume:
+			content.Plan[i].Summary = strings.Repeat("卷", 1000)
+		case model.PlanArc:
+			arc := (node.Order-1)/10 + 1
+			content.Plan[i].ParentID = fmt.Sprintf("volume-%d", (arc-1)/5+1)
+			content.Plan[i].Summary = strings.Repeat("弧", 1500)
+		}
+	}
+	context, err := selectContext(content, model.OperationRevisePlan, json.RawMessage(`{"existing_chapters":250}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keySet(context)
+	for volume := 1; volume <= 5; volume++ {
+		if !keys[fmt.Sprintf("plan:volume-%d", volume)] {
+			t.Fatalf("planning lost volume %d", volume)
+		}
+	}
+	if !keys["plan:arc-19"] || keys["plan:arc-01"] || context.Budget.Used > context.Budget.Limit {
+		t.Fatalf("arcs must fill from the newest: arc-19 %v, arc-01 %v, used %d / %d",
+			keys["plan:arc-19"], keys["plan:arc-01"], context.Budget.Used, context.Budget.Limit)
+	}
+}
+
 // 输入顺序不影响结果：缓存键相同的上下文必须逐字节一致。
 func TestStoryContextIsDeterministicUnderInputOrder(t *testing.T) {
 	content := longBook(80, 70)

@@ -128,7 +128,7 @@ func TestNewBookCompilesOfficialPackIntoWorkerPrompt(t *testing.T) {
 		t.Fatalf("writer prompt does not carry exactly the writer slots:\n%s", text)
 	}
 	if !slices.ContainsFunc(sources, func(source prompt.Source) bool {
-		return source.Layer == "pack_defaults" && source.ID == "official@7"
+		return source.Layer == "pack_defaults" && source.ID == "official@8"
 	}) {
 		t.Fatalf("sources = %#v", sources)
 	}

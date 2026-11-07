@@ -1079,7 +1079,7 @@ func (u *liveUser) book(chapters int, start workbench.WorkbenchSnapshot) []model
 			100*float64(usage.Usage.Input)/float64(total.Input), usage.Usage.Output/1000, usage.Usage.Cost, usage.Worked.Round(time.Second))
 	}
 	if compass := snap.Length.Compass; chapters == 0 && compass != nil {
-		u.log("篇幅交给 AI：预计至多 %d 章，承诺 %d 章收官", compass.ScaleMax, compass.Final)
+		u.log("篇幅交给 AI：上限 %d 章，承诺 %d 章收官", compass.Limit(), compass.Final)
 	}
 	if chapters > 0 && len(snap.Manuscript) != chapters {
 		u.t.Fatalf("写了 %d 章，要的是 %d 章", len(snap.Manuscript), chapters)

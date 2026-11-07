@@ -252,8 +252,8 @@ func (s *Application) ensureQuickProject(ctx context.Context, command QuickWrite
 }
 
 // reconcileCompass 让罗盘跟随用户的篇幅意图（D63），罗盘进每个任务的上下文，篇幅只能
-// 有一个口径：固定篇幅时撤下 AI 的预计篇幅与收官，罗盘只留终局（D70）；续写时撤回收官
-// 承诺，预计篇幅不动——还有余量就直接续写，没有余量由 AI 修订预计（护栏以上需用户确认，D73）。
+// 有一个口径：固定篇幅时撤下篇幅上限与收官，罗盘只留终局（D70）；续写时撤回收官承诺，
+// 篇幅上限不动——上限以内直接续写，超过时由 AI 申请、用户确认（D96）。
 // 罗盘不在任何证据基线里，这些用户变更不作废审阅。
 func (s *Application) reconcileCompass(ctx context.Context, command QuickWriteCommand, project projectdoc.Snapshot) (projectdoc.Snapshot, error) {
 	if project.Compass == nil {
@@ -261,7 +261,7 @@ func (s *Application) reconcileCompass(ctx context.Context, command QuickWriteCo
 	}
 	compass, action, reason := *project.Compass, "", ""
 	switch {
-	// 固定篇幅后篇幅只有用户的一个口径（D70）：罗盘撤下 AI 的预计篇幅与收官，只留终局。
+	// 固定篇幅后篇幅只有用户的一个口径（D70）：罗盘撤下篇幅上限与收官，只留终局。
 	case command.Chapters > 0 && (compass.ScaleMax != 0 || compass.Final != 0):
 		compass.Final, compass.ScaleMax = 0, 0
 		action, reason = "length:"+strconv.Itoa(command.Chapters), fmt.Sprintf("篇幅固定为 %d 章，罗盘只保留终局方向", command.Chapters)

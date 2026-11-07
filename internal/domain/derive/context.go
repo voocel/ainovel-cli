@@ -15,7 +15,7 @@ import (
 
 // ViewKind 是模型视图的显式 schema 版本：视图结构或故事语言渲染演进时必须升版，
 // 旧 Execution Profile 仍按其记录的版本解释，不做静默兼容。
-const ViewKind = "model_view.v2" // v2：罗盘渲染成故事语言，带长线（D91）
+const ViewKind = "model_view.v3" // v3：规划任务先装卷弧结构（D95），罗盘不带篇幅数字（D96）
 
 // contextPolicy 是有界装配参数（§6.5）。它进入 ViewKey，改参数即换缓存键。
 type contextPolicy struct {
@@ -228,7 +228,8 @@ type selector struct {
 	facts       map[string]model.CanonFact
 	sourced     map[string][]string // 来源章 → 事实 ID（升序）
 	entities    []model.Entity
-	structure   []model.PlanNode // 卷与弧
+	volumes     []model.PlanNode // 按卷号
+	arcs        []model.PlanNode // 按故事弧号
 	chapters    []model.PlanNode // 章节计划，按唯一排序口径
 	position    map[string]int   // 章节计划 ID → 下标
 	written     map[string]model.ManuscriptChapter
@@ -242,6 +243,7 @@ func newSelector(content ProjectContent, limit int) (*selector, error) {
 	s := &selector{
 		documents: make(map[string]ContextDocument), facts: make(map[string]model.CanonFact),
 		sourced: make(map[string][]string), entities: content.Entities,
+		volumes: model.PlanNodesInOrder(content.Plan, model.PlanVolume), arcs: model.PlanNodesInOrder(content.Plan, model.PlanArc),
 		chapters: model.ChapterPlansInOrder(content.Plan), position: make(map[string]int),
 		written: make(map[string]model.ManuscriptChapter), manuscripts: make(map[string]model.ManuscriptChapter),
 		ownership: content.Ownership, selected: make(map[string]ContextDocument), limit: limit,
@@ -260,9 +262,6 @@ func newSelector(content ProjectContent, limit int) (*selector, error) {
 		}
 	}
 	for _, node := range content.Plan {
-		if node.Kind == model.PlanVolume || node.Kind == model.PlanArc {
-			s.structure = append(s.structure, node)
-		}
 		if err := add(model.DocumentRef{Kind: model.DocumentPlan, ID: node.ID}, node); err != nil {
 			return nil, err
 		}
@@ -362,17 +361,23 @@ func (s *selector) assemble(f focus, policy contextPolicy) error {
 			return err
 		}
 	}
-	return s.rank()
+	return s.rank(f.planning)
 }
 
 // rank 是唯一的裁剪点，优先级依次为：
 //  0. 约束——受保护事实、世界规则、未回收伏笔，由早到晚（越早立下越要记住）；
 //  1. 相关实体的当前事实，由近到远；
 //  2. 其余当前事实，由近到远；
-//  3. 卷弧结构。
+//  3. 卷，由近到远；
+//  4. 故事弧，由近到远。
 //
-// 事件与已回收伏笔只经窗口或重写目标进入。
-func (s *selector) rank() error {
+// 规划任务的工作对象是全书走向，卷弧结构提到约束之后、事实之前（D95）：先有全书各卷，
+// 再由近到远补故事弧。事件与已回收伏笔只经窗口或重写目标进入。
+func (s *selector) rank(planning bool) error {
+	factRank, structureRank := 1, 3
+	if planning {
+		factRank, structureRank = 3, 1
+	}
 	relevant := s.relevantEntities()
 	guarded := make(map[string]bool)
 	for _, rule := range s.ownership {
@@ -390,18 +395,20 @@ func (s *selector) rank() error {
 		if _, done := s.selected[ref.Key()]; done || fact.IsEvent() || fact.Resolved {
 			continue
 		}
-		rank := 2
+		rank := factRank + 1
 		switch {
 		case guarded[ref.Key()] || fact.Kind == model.CanonWorldRule || fact.Kind == model.CanonForeshadow:
 			rank = 0
 		case relevant[fact.SubjectID]:
-			rank = 1
+			rank = factRank
 		}
 		candidates = append(candidates, candidate{ref: ref, rank: rank, position: s.chapterPosition(fact.EffectiveChapter())})
 	}
-	for _, node := range s.structure {
-		if _, done := s.selected[planRef(node.ID).Key()]; !done {
-			candidates = append(candidates, candidate{ref: planRef(node.ID), rank: 3, position: -1})
+	for offset, nodes := range [][]model.PlanNode{s.volumes, s.arcs} {
+		for index, node := range nodes {
+			if _, done := s.selected[planRef(node.ID).Key()]; !done {
+				candidates = append(candidates, candidate{ref: planRef(node.ID), rank: structureRank + offset, position: index})
+			}
 		}
 	}
 	slices.SortFunc(candidates, func(left, right candidate) int {

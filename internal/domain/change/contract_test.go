@@ -50,7 +50,7 @@ func TestTaskContractHoldsOnEveryPath(t *testing.T) {
 	smuggled := pendingChange("smuggled", target, 1, model.AuthorAI, model.Patch{
 		Document:  model.DocumentRef{Kind: model.DocumentCompass, ID: model.SingletonDocumentID},
 		Operation: model.PatchPut,
-		Content:   documentJSON(t, model.Compass{ScaleMax: 8, Ending: "送完最后一封信"}),
+		Content:   documentJSON(t, model.Compass{Ending: "送完最后一封信", Final: 8}),
 	})
 	smuggled.OperationID = claimed.ID
 	violates := func(err error) bool {

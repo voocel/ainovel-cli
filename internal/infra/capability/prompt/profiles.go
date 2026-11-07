@@ -260,9 +260,9 @@ func planEditSchema(number, parent, parentDescription string) map[string]any {
 const turnDescription = "本章的转折：读完这一章，读者在它推进的长线上多知道了哪件具体的事，或局面变成了什么；写成一件会发生的事，不写气氛与感悟"
 
 const compassSchema = `{"type":"object","description":"故事罗盘的终局与篇幅（长线另在 threads 里编辑），只有规划任务可写。ending 是终局方向：故事最终要回答的问题或抵达的状态，` +
-	`首次规划必须给出，之后只在有变化时提交，给出时三项整体替换。scale_max 是预计全书篇幅（章），随故事修订；final 是收官承诺（全书章数，未收官时省略）：` +
-	`任务有 fixed_chapters 时篇幅由用户固定，二者都不写；篇幅交给 AI 时首次规划必须给出 scale_max，未收官时蓝图章节总数必须小于它，` +
-	`临近时声明 final 收官，故事需要更长就上调 scale_max（超出任务说明的自主范围需用户同意）；给出 final 后蓝图不超过第 final 章，可分次规划到它",` +
+	`首次规划必须给出，之后只在有变化时提交，给出时 ending 与 final 一起替换。final 是收官承诺（全书章数，未收官时省略）：故事到了收束点才声明，` +
+	`给出后蓝图不超过第 final 章，可分次规划到它。任务有 fixed_chapters 时篇幅由用户固定，final 与 scale_max 都不写。` +
+	`scale_max 是篇幅上限，平时不写：未收官的蓝图触及上限时提交会被退回并说明上限，故事确实需要更长才给出更高的上限，需用户同意；省略保持原样",` +
 	`"properties":{"scale_max":{"type":"integer","minimum":1},"ending":{"type":"string"},"final":{"type":"integer","minimum":1}},` +
 	`"required":["ending"],"additionalProperties":false}`
 

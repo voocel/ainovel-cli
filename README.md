@@ -40,7 +40,7 @@ TUI 首次启动会进入模型设置（选服务商、填 API Key，再从服�
 
 从 v0 升级：v1 不读取 v0 的配置与作品，首次启动重新设置一次模型即可。`~/.ainovel` 下 v0 留下的 `config.json`、`config.example.jsonc`、`models-cache.json`、`last-error.log`、`rules/`、`style/` 与 v1 互不影响，不再使用 v0 可以删除；v0 的作品在当时启动目录的 `output/` 里。
 
-Headless 一句话写全书（篇幅由 AI 在故事罗盘里给出上限并在合适时收官；`--chapters N` 可固定全书章数，续跑不传则沿用上一轮设定；完本后加 `--extend` 续写，撤回收官承诺、由 AI 决定再写多少，TUI 完本后跟主编说“接着写”同义）：
+Headless 一句话写全书（篇幅由 AI 按故事在合适时收官，无人值守最多规划 300 章，更长需你确认；`--chapters N` 可固定全书章数，续跑不传则沿用上一轮设定；完本后加 `--extend` 续写，撤回收官承诺、由 AI 决定再写多少，TUI 完本后跟主编说“接着写”同义）：
 
 ```bash
 go run ./cmd/ainovel-cli --headless quick write \

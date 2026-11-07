@@ -153,7 +153,7 @@ func compassLine(raw []byte) (string, bool) {
 		parts = append(parts, "终局："+ending)
 	}
 	if compass.ScaleMax > 0 {
-		parts = append(parts, fmt.Sprintf("预计 %d 章", compass.ScaleMax))
+		parts = append(parts, fmt.Sprintf("上限 %d 章", compass.ScaleMax))
 	}
 	if compass.Final > 0 {
 		parts = append(parts, fmt.Sprintf("收官 %d 章", compass.Final))

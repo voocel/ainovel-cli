@@ -615,7 +615,7 @@ func TestOutlineHierarchyAndUnexpandedArcs(t *testing.T) {
 	m.width, m.height = 180, 40
 	m.bench.snap = workbench.WorkbenchSnapshot{
 		ProjectID: "book-rolling", Intent: domainmodel.Intent{Premise: "滚动规划"},
-		Length: novel.Length{Compass: &domainmodel.Compass{ScaleMax: 80, Ending: "e"}},
+		Length: novel.Length{Compass: &domainmodel.Compass{Ending: "e"}},
 		Outline: []workbench.OutlineNode{
 			{Node: domainmodel.PlanNode{ID: "v1", Kind: domainmodel.PlanVolume, Title: "漏根"}, Volume: 1},
 			{Node: domainmodel.PlanNode{ID: "a1", Kind: domainmodel.PlanArc, ParentID: "v1", Title: "残页"}},
@@ -854,15 +854,17 @@ func TestMouseWheelScrollsAndClickSelectsOutline(t *testing.T) {
 	}
 }
 
-// 头部进度三态（D63）：固定篇幅给分母；AI 收官后给分母并注明；开放期是已入稿、已规划与预计篇幅。
+// 头部进度三态（D63）：固定篇幅给分母；AI 收官后给分母并注明；开放期是已入稿与已规划，篇幅
+// 不预计，上限不显示（D96）。
 func TestProgressLabelFollowsLength(t *testing.T) {
 	for _, c := range []struct {
 		length novel.Length
 		want   string
 	}{
 		{novel.Length{Fixed: 8, Final: 8}, "已入稿 3 / 8 章"},
-		{novel.Length{Compass: &domainmodel.Compass{ScaleMax: 60, Ending: "e", Final: 40}, Final: 40}, "已入稿 3 / 40 章 · 收官"},
-		{novel.Length{Compass: &domainmodel.Compass{ScaleMax: 60, Ending: "e"}}, "已入稿 3 章 · 已规划 8 · 预计 60"},
+		{novel.Length{Compass: &domainmodel.Compass{Ending: "e", Final: 40}, Final: 40}, "已入稿 3 / 40 章 · 收官"},
+		{novel.Length{Compass: &domainmodel.Compass{Ending: "e"}}, "已入稿 3 章 · 已规划 8"},
+		{novel.Length{Compass: &domainmodel.Compass{ScaleMax: 450, Ending: "e"}}, "已入稿 3 章 · 已规划 8"},
 		{novel.Length{}, "已入稿 3 章 · 篇幅待定"},
 	} {
 		if got := progressLabel(3, 8, c.length); got != c.want {
@@ -871,25 +873,25 @@ func TestProgressLabelFollowsLength(t *testing.T) {
 	}
 }
 
-// 决定卡把罗盘变化说成人话：AI 把预计篇幅定到护栏以上时这正是等你裁决的内容；固定篇幅下
-// 罗盘只有终局方向，不出现「预计 0 章」。
+// 决定卡把罗盘变化说成人话：AI 申请超过护栏的篇幅上限时这正是等你裁决的内容（D96）；固定
+// 篇幅下罗盘只有终局方向，不出现「上限 0 章」。
 func TestCompassSummaryDescribesTheChange(t *testing.T) {
-	current := &domainmodel.Compass{ScaleMax: 60, Ending: "称帝"}
-	threaded := &domainmodel.Compass{ScaleMax: 60, Ending: "称帝", Threads: []domainmodel.StoryThread{{ID: "t1", Name: "王位", Question: "能否称帝"}}}
+	current := &domainmodel.Compass{ScaleMax: 450, Ending: "称帝"}
+	threaded := &domainmodel.Compass{ScaleMax: 450, Ending: "称帝", Threads: []domainmodel.StoryThread{{ID: "t1", Name: "王位", Question: "能否称帝"}}}
 	for _, c := range []struct {
 		current *domainmodel.Compass
 		next    domainmodel.Compass
 		want    string
 	}{
-		{nil, domainmodel.Compass{ScaleMax: 60, Ending: "称帝"}, "预计篇幅 60 章 · 终局：称帝"},
+		{nil, domainmodel.Compass{ScaleMax: 450, Ending: "称帝"}, "篇幅上限 450 章 · 终局：称帝"},
 		{nil, domainmodel.Compass{Ending: "称帝"}, "终局：称帝"},
-		{current, domainmodel.Compass{ScaleMax: 120, Ending: "称帝"}, "预计篇幅 60 → 120 章"},
-		{current, domainmodel.Compass{ScaleMax: 60, Ending: "称帝", Final: 48}, "收官 48 章"},
-		{current, domainmodel.Compass{Ending: "归隐"}, "取消预计篇幅（原 60 章） · 终局：归隐"},
-		{&domainmodel.Compass{ScaleMax: 60, Ending: "称帝", Final: 40}, domainmodel.Compass{ScaleMax: 60, Ending: "称帝"}, "撤回收官（原 40 章）"},
+		{current, domainmodel.Compass{ScaleMax: 600, Ending: "称帝"}, "篇幅上限 450 → 600 章"},
+		{current, domainmodel.Compass{ScaleMax: 450, Ending: "称帝", Final: 420}, "收官 420 章"},
+		{current, domainmodel.Compass{Ending: "归隐"}, "取消篇幅上限（原 450 章） · 终局：归隐"},
+		{&domainmodel.Compass{ScaleMax: 450, Ending: "称帝", Final: 400}, domainmodel.Compass{ScaleMax: 450, Ending: "称帝"}, "撤回收官（原 400 章）"},
 		{current, *current, "故事罗盘未变"},
 		// 长线（D91）：新立的、改了问题的、定下或改了作答章的。
-		{threaded, domainmodel.Compass{ScaleMax: 60, Ending: "称帝", Threads: []domainmodel.StoryThread{
+		{threaded, domainmodel.Compass{ScaleMax: 450, Ending: "称帝", Threads: []domainmodel.StoryThread{
 			{ID: "t1", Name: "王位", Question: "能否守住王位", Answer: "plan-9"},
 			{ID: "t2", Name: "旧债", Question: "父仇谁报"},
 		}}, "长线「王位」改问：能否守住王位 · 新立长线：旧债 · 定下作答章：王位"},

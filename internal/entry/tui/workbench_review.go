@@ -169,8 +169,8 @@ func (m model) decisionActions() string {
 	}
 }
 
-// compassSummary 把罗盘变化说成人话（D63）：AI 把预计篇幅定到护栏以上时，这正是等你
-// 裁决的内容（D73）；固定篇幅下罗盘只有终局方向，没有预计篇幅与收官。
+// compassSummary 把罗盘变化说成人话（D63）：AI 申请超过护栏的篇幅上限时，这正是等你
+// 裁决的内容（D96）；固定篇幅下罗盘只有终局方向，没有篇幅上限与收官。
 func compassSummary(current *domainmodel.Compass, next domainmodel.Compass) string {
 	var before domainmodel.Compass
 	if current != nil {
@@ -180,11 +180,11 @@ func compassSummary(current *domainmodel.Compass, next domainmodel.Compass) stri
 	switch {
 	case before.ScaleMax == next.ScaleMax:
 	case next.ScaleMax == 0:
-		parts = append(parts, fmt.Sprintf("取消预计篇幅（原 %d 章）", before.ScaleMax))
+		parts = append(parts, fmt.Sprintf("取消篇幅上限（原 %d 章）", before.ScaleMax))
 	case before.ScaleMax == 0:
-		parts = append(parts, fmt.Sprintf("预计篇幅 %d 章", next.ScaleMax))
+		parts = append(parts, fmt.Sprintf("篇幅上限 %d 章", next.ScaleMax))
 	default:
-		parts = append(parts, fmt.Sprintf("预计篇幅 %d → %d 章", before.ScaleMax, next.ScaleMax))
+		parts = append(parts, fmt.Sprintf("篇幅上限 %d → %d 章", before.ScaleMax, next.ScaleMax))
 	}
 	switch {
 	case before.Final == next.Final:
