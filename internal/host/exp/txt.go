@@ -2,7 +2,6 @@ package exp
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -56,39 +55,6 @@ func buildLocations(volumes []domain.VolumeOutline) map[int]chapterLocation {
 	return locs
 }
 
-// chapterHeaderRe 匹配带章号的 Markdown 标题首行（# 第N章 / ## 第 12 章 ...）。
-var chapterHeaderRe = regexp.MustCompile(`^#+\s+第.+?章`)
-
-// atxTitleRe 提取 ATX 标题（# 标题）的文字部分。
-var atxTitleRe = regexp.MustCompile(`^#{1,6}\s+(.+?)\s*$`)
-
-// stripChapterTitleHeader 若首行是会与导出器统一标题重复的章节标题则剥掉。
-// 两种情形：① "# 第N章 …"（带章号）；② markdown 标题且其文字恰是本章标题
-// （writer 常把纯章节名当标题写进正文首行，如 "# 边村浮生"，与导出器生成的
-// "第 N 章 边村浮生" 重复）。其它 h1（如 "# 序章"）视为正文一部分，保留。
-// 调用方负责先 TrimSpace，因此前导空行不在考虑范围内。
-func stripChapterTitleHeader(content, title string) string {
-	first, rest, hasNewline := strings.Cut(content, "\n")
-	if !isChapterTitleLine(first, title) {
-		return content
-	}
-	if !hasNewline {
-		return ""
-	}
-	return strings.TrimLeft(rest, "\n")
-}
-
-func isChapterTitleLine(line, title string) bool {
-	if chapterHeaderRe.MatchString(line) {
-		return true
-	}
-	if title = strings.TrimSpace(title); title == "" {
-		return false
-	}
-	m := atxTitleRe.FindStringSubmatch(line)
-	return len(m) == 2 && strings.TrimSpace(m[1]) == title
-}
-
 // renderTXT 拼接最终文本。
 //
 // 章节顺序由 chapters 决定（调用方已按章号升序去重）。bodies/titleIdx/locations
@@ -126,7 +92,7 @@ func renderTXT(
 			fmt.Fprintf(&b, "第 %d 章\n\n", ch)
 		}
 
-		body := stripChapterTitleHeader(strings.TrimSpace(bodies[ch]), title)
+		body := domain.ChapterBody(strings.TrimSpace(bodies[ch]), title)
 		b.WriteString(body)
 		b.WriteString("\n")
 		if i < len(chapters)-1 {

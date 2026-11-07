@@ -2,6 +2,8 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -30,4 +32,26 @@ func ShouldArcReview(isArcEnd, isVolumeEnd bool, volume, arc int) (bool, string)
 // WordCount 按 rune 计算字数。
 func WordCount(content string) int {
 	return utf8.RuneCountInString(content)
+}
+
+// chapterHeadingRe 匹配以「第 N 章」开头的标题行，可带 Markdown 井号。
+var chapterHeadingRe = regexp.MustCompile(`^(#{1,6}\s*)?第\s*[0-9零〇一二三四五六七八九十百千两]+\s*章`)
+
+// ChapterBody 去掉正文开头的章节标题行。writer 写进正文的标题格式不一（「第 N 章 标题」、
+// 「第N章《标题》」「# 标题」或只有标题），章号与标题以提交的 title 为准由系统统一生成。
+// 首行是「第 N 章…」（可带 #），或去掉 # 与书名号后恰是本章标题时才剥掉；其他首行（如 # 序章）属正文。
+func ChapterBody(content, title string) string {
+	content = strings.TrimLeft(content, "\r\n")
+	first, rest, _ := strings.Cut(content, "\n")
+	first = strings.TrimSpace(first)
+	bare := strings.Trim(strings.TrimSpace(strings.TrimLeft(first, "#")), "《》")
+	if !chapterHeadingRe.MatchString(first) && (title == "" || bare != strings.TrimSpace(title)) {
+		return content
+	}
+	return strings.TrimLeft(rest, "\r\n")
+}
+
+// ChapterText 是终稿的统一格式：「# 第 N 章 标题」加去掉原标题行的正文。
+func ChapterText(chapter int, title, content string) string {
+	return fmt.Sprintf("# 第 %d 章 %s\n\n%s", chapter, strings.TrimSpace(title), ChapterBody(content, title))
 }

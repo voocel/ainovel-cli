@@ -223,6 +223,9 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		if loadErr != nil {
 			return nil, fmt.Errorf("load chapter content: %w: %w", errs.ErrStoreRead, loadErr)
 		}
+		if content != "" {
+			content = domain.ChapterText(a.Chapter, a.Title, content)
+		}
 	}
 	if content == "" {
 		return nil, fmt.Errorf("no content found for chapter %d: %w", a.Chapter, errs.ErrToolPrecondition)
@@ -474,6 +477,7 @@ func (t *CommitChapterTool) validateRewriteDraft(chapter int, title string, prog
 	if content == "" {
 		return "", fmt.Errorf("no content found for chapter %d: %w", chapter, errs.ErrToolPrecondition)
 	}
+	content = domain.ChapterText(chapter, title, content)
 	changed, err := t.rewriteChanged(chapter, content, title)
 	if err != nil {
 		return "", err
@@ -494,7 +498,8 @@ func (t *CommitChapterTool) rewriteChanged(chapter int, content, title string) (
 	if err != nil {
 		return false, fmt.Errorf("rewrite: load final chapter: %w: %w", errs.ErrStoreRead, err)
 	}
-	if existingFinal != content {
+	// 只比正文：旧终稿的标题行写法不一，规整格式不算改动。
+	if domain.ChapterBody(existingFinal, title) != domain.ChapterBody(content, title) {
 		return true, nil
 	}
 	summary, err := t.store.Summaries.LoadSummary(chapter)

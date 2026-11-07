@@ -62,7 +62,7 @@ func renderEPUB(
 	for _, ch := range chapters {
 		loc, hasLoc := locations[ch]
 		title := strings.TrimSpace(titleIdx[ch])
-		body := stripChapterTitleHeader(strings.TrimSpace(bodies[ch]), title)
+		body := domain.ChapterBody(strings.TrimSpace(bodies[ch]), title)
 		xhtml := renderChapterXHTML(ch, title, loc, hasLoc, body)
 		if err := zipDeflate(zw, "OEBPS/"+chapterFileName(ch), xhtml); err != nil {
 			return nil, err
