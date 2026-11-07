@@ -3,6 +3,8 @@ package tools
 import (
 	"fmt"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
@@ -420,13 +422,9 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 		return
 	}
 
-	var titles []string
-	if outline, err := t.store.Outline.LoadOutline(); err == nil {
-		for _, entry := range outline {
-			titles = append(titles, entry.Title)
-		}
-	} else {
-		reads.warn("style_stats.outline", err)
+	titles := make([]string, len(state.progress.CompletedChapters))
+	for i, chapter := range state.progress.CompletedChapters {
+		titles[i] = t.styleStatsTitle(chapter, reads)
 	}
 
 	stats, err := t.styleStats.Snapshot(
@@ -442,6 +440,60 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 		return
 	}
 	envelope.Episodic["style_stats"] = stats
+}
+
+// styleStatsTitleScanBytes 限制从终稿或摘要标题里检查的前缀。
+// 章节正文可以任意大；title_formats 只需要第一行非空内容。整章 Split
+// 会按行数无界分配，返回的子串还会把整章缓冲留在统计缓存里。
+const styleStatsTitleScanBytes = 4096
+
+func (t *ContextTool) styleStatsTitle(chapter int, reads *contextReads) string {
+	text, err := t.store.Drafts.LoadChapterText(chapter)
+	if err != nil {
+		reads.warn("style_stats.titles", err)
+	}
+	if title := firstNonEmptyLineLimited(text, styleStatsTitleScanBytes); title != "" {
+		return title
+	}
+	title, err := t.store.Summaries.LoadSummaryTitle(chapter)
+	if err != nil {
+		reads.warn("style_stats.titles", err)
+	}
+	return trimmedPrefixLimited(title, styleStatsTitleScanBytes)
+}
+
+// firstNonEmptyLineLimited 只扫描 text 的前 limit 个字节，返回第一行非空内容的独立拷贝。
+func firstNonEmptyLineLimited(text string, limit int) string {
+	text = clipPrefixBytes(text, limit)
+	for text != "" {
+		line, rest, _ := strings.Cut(text, "\n")
+		if title := strings.TrimSpace(line); title != "" {
+			return strings.Clone(title)
+		}
+		text = rest
+	}
+	return ""
+}
+
+// trimmedPrefixLimited 截断并 TrimSpace 摘要标题。超限标题只保留前缀，避免无界分配。
+func trimmedPrefixLimited(s string, limit int) string {
+	s = strings.TrimSpace(clipPrefixBytes(s, limit))
+	if s == "" {
+		return ""
+	}
+	return strings.Clone(s)
+}
+
+func clipPrefixBytes(s string, limit int) string {
+	if limit < 0 || len(s) <= limit {
+		return s
+	}
+	s = s[:limit]
+	// 截断可能落在 UTF-8 序列中间，只丢掉不完整的尾字节。
+	for i := 0; i < utf8.UTFMax-1 && len(s) > 0 && !utf8.ValidString(s); i++ {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // styleStopwords 收集角色名与别名供短语挖掘过滤——出场人名天然高频，不是文风问题。
