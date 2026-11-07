@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
@@ -361,7 +362,7 @@ func (s *ProgressStore) SetPendingRewrites(chapters []int, reason string) error 
 }
 
 // ApplyReviewOutcome 原子应用审阅产生的流程状态。审阅语义由上层决定；Store 只负责
-// 校验 Flow 迁移和返工章节，并保证 Flow、PendingRewrites、RewriteReason 不出现中间态。
+// 校验 Flow 迁移和返工章节，追加未完成任务，并保证 Flow、PendingRewrites、RewriteReason 不出现中间态。
 func (s *ProgressStore) ApplyReviewOutcome(flow domain.FlowState, chapters []int, reason string) (*domain.Progress, error) {
 	var latest *domain.Progress
 	err := s.io.WithWriteLock(func() error {
@@ -379,9 +380,18 @@ func (s *ProgressStore) ApplyReviewOutcome(flow domain.FlowState, chapters []int
 			if err := domain.ValidateFlowTransition(p.Flow, flow); err != nil {
 				return err
 			}
-			normalized, err := normalizePendingRewrites(chapters, p.CompletedChapters)
+			// 新审阅只追加要求，不具备取消已有任务的语义。保留队列顺序，
+			// 重复章节由 normalizePendingRewrites 去重，工件写失败后可安全重放。
+			normalized, err := normalizePendingRewrites(slices.Concat(p.PendingRewrites, chapters), p.CompletedChapters)
 			if err != nil {
 				return err
+			}
+			if len(p.PendingRewrites) > 0 && p.RewriteReason != "" {
+				if reason == "" || p.RewriteReason == reason || strings.HasSuffix(p.RewriteReason, "\n\n"+reason) {
+					reason = p.RewriteReason
+				} else {
+					reason = p.RewriteReason + "\n\n" + reason
+				}
 			}
 			p.PendingRewrites = normalized
 			p.RewriteReason = reason

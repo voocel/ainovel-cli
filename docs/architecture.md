@@ -208,6 +208,9 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 `commit_chapter` 承担弧/卷/全书完成检测，返回结构化事实；`save_review` 不做文学阈值裁定，只校验审阅事实并把 Editor 给出的 verdict 原子映射为 Flow 与返工队列。
 
+新增审阅只追加返工要求：保留 `PendingRewrites` 既有顺序和理由，去重追加新章节，不能隐式取消尚未完成的任务。
+审阅通过也不会清空旧队列；只有实际完成相应章节或显式取消任务才能出队。
+
 `edit_chapter` 是 `agentcore.EditTool` 的薄封装，仅允许编辑已完成且位于 `PendingRewrites` 的章节；新章初稿需通过 `draft_chapter(mode="write")` 整章覆盖。
 
 ### 5.3 错误分层

@@ -356,6 +356,20 @@ func (s *WorldStore) LoadStyleRules() (*domain.WritingStyleRules, error) {
 	return &rules, nil
 }
 
+// LoadStyleRulesBefore 只返回目标弧之前提炼的规则。旧数据只保留最新一份，
+// 若来源不明或来自目标弧及之后，则没有可用的历史规则，返回 nil。
+func (s *WorldStore) LoadStyleRulesBefore(volume, arc int) (*domain.WritingStyleRules, error) {
+	rules, err := s.LoadStyleRules()
+	if err != nil || rules == nil {
+		return nil, err
+	}
+	if rules.Volume > 0 && rules.Arc > 0 &&
+		(rules.Volume < volume || (rules.Volume == volume && rules.Arc < arc)) {
+		return rules, nil
+	}
+	return nil, nil
+}
+
 func (s *WorldStore) SaveAuthorRevisionStyle(style domain.AuthorRevisionStyle) error {
 	return s.io.WriteJSON("meta/author_revision_style.json", style)
 }

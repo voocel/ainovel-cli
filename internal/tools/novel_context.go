@@ -400,11 +400,17 @@ func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summa
 		return
 	}
 
-	// 1. 已完成卷的卷摘要
-	if volSummaries, err := t.store.Summaries.LoadAllVolumeSummaries(); err == nil && len(volSummaries) > 0 {
-		result["volume_summaries"] = volSummaries
-	} else {
+	// 1. 仅目标卷之前的卷摘要；返工时全书可能已完成，不能据此注入未来卷。
+	var volSummaries []domain.VolumeSummary
+	for volume := 1; volume < vol; volume++ {
+		summary, err := t.store.Summaries.LoadVolumeSummary(volume)
 		reads.require("volume_summaries", err)
+		if summary != nil {
+			volSummaries = append(volSummaries, *summary)
+		}
+	}
+	if len(volSummaries) > 0 {
+		result["volume_summaries"] = volSummaries
 	}
 
 	// 2. 当前卷内已完成弧的弧摘要（不含当前弧）
@@ -430,9 +436,9 @@ func (t *ContextTool) loadLayeredSummaries(result map[string]any, chapter, summa
 	}
 }
 
-// loadLayeredCharacters Layered 模式下的角色加载：优先用最近快照，回退到原始设定 + Tier 过滤。
+// loadLayeredCharacters 优先用目标章之前的最近快照，缺失时回到原始设定 + Tier 过滤。
 func (t *ContextTool) loadLayeredCharacters(result map[string]any, chapter int, reads *contextReads) {
-	snapshots, err := t.store.Characters.LoadLatestSnapshots()
+	snapshots, err := t.store.Characters.LoadSnapshotsBefore(chapter)
 	if err == nil && len(snapshots) > 0 {
 		result["character_snapshots"] = snapshots
 		// 同时保留原始设定中的 core/important 角色（快照可能不含新登场角色）

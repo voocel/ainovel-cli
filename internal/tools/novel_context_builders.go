@@ -6,6 +6,7 @@ import (
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 type contextBuildState struct {
@@ -15,6 +16,7 @@ type contextBuildState struct {
 	runMeta         *domain.RunMeta
 	outline         []domain.OutlineEntry
 	currentEntry    *domain.OutlineEntry
+	boundary        *store.ArcBoundary
 	chapterPlan     *domain.ChapterPlan
 	storyThreads    []domain.RecallItem
 	foreshadow      []domain.ForeshadowEntry
@@ -275,6 +277,10 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		envelope.Working["current_chapter_outline"] = currentEntry
 	}
 	state.currentEntry = currentEntry
+	if progress != nil && progress.Layered {
+		state.boundary, err = t.store.Outline.CheckArcBoundary(chapter)
+		reads.require("arc_boundary", err)
+	}
 
 	chapterPlan, chapterPlanErr := t.store.Drafts.LoadChapterPlan(chapter)
 	if chapterPlanErr == nil && chapterPlan != nil {
@@ -382,9 +388,14 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		}
 	}
 
-	styleRules, styleErr := t.store.World.LoadStyleRules()
-	reads.require("style_rules", styleErr)
-	state.styleRules = styleRules
+	if progress != nil && progress.Layered {
+		if b := state.boundary; b != nil {
+			state.styleRules, err = t.store.World.LoadStyleRulesBefore(b.Volume, b.Arc)
+		}
+	} else {
+		state.styleRules, err = t.store.World.LoadStyleRules()
+	}
+	reads.require("style_rules", err)
 	state.storyThreads = t.selectStoryThreads(state)
 	if len(state.storyThreads) > 0 && len(state.storyThreads) < storyThreadRecallMinSelected {
 		state.storyThreads = nil
@@ -473,10 +484,8 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 		//（收官卷写完即自动完结，此时新埋的伏笔永远没有机会回收）。
 		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
 			if fv := domain.FinaleVolume(volumes); fv > 0 {
-				if b, boundaryErr := t.store.Outline.CheckArcBoundary(state.chapter); boundaryErr == nil && b != nil && b.Volume == fv {
+				if b := state.boundary; b != nil && b.Volume == fv {
 					envelope.Working["finale"] = "本卷为全书收官卷：不再新开长线或埋新伏笔，优先回收既有伏笔、收拢关系线，按大纲把故事推向终局。"
-				} else {
-					reads.require("arc_boundary", boundaryErr)
 				}
 			}
 		} else {
@@ -604,28 +613,24 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 		}
 	}
 
-	if state.profile.Layered && state.progress != nil {
+	if b := state.boundary; b != nil {
 		pos := map[string]any{
-			"volume": state.progress.CurrentVolume,
-			"arc":    state.progress.CurrentArc,
+			"volume":             b.Volume,
+			"arc":                b.Arc,
+			"arc_total_chapters": b.EndChapter - b.StartChapter + 1,
+			"arc_chapter_index":  state.chapter - b.StartChapter + 1,
 		}
 		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
-			globalCh := 1
 			for _, v := range volumes {
-				if v.Index == state.progress.CurrentVolume {
+				if v.Index == b.Volume {
 					pos["volume_title"] = v.Title
 					pos["volume_theme"] = v.Theme
 				}
 				for _, arc := range v.Arcs {
-					if v.Index == state.progress.CurrentVolume && arc.Index == state.progress.CurrentArc {
+					if v.Index == b.Volume && arc.Index == b.Arc {
 						pos["arc_title"] = arc.Title
 						pos["arc_goal"] = arc.Goal
-						if n := len(arc.Chapters); n > 0 {
-							pos["arc_total_chapters"] = n
-							pos["arc_chapter_index"] = state.chapter - globalCh + 1
-						}
 					}
-					globalCh += len(arc.Chapters)
 				}
 			}
 		} else {
@@ -647,7 +652,7 @@ func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope
 	} else {
 		var maxCompleted int
 		if state.progress != nil {
-			maxCompleted = maxCompletedChapter(state.progress.CompletedChapters)
+			maxCompleted = min(maxCompletedChapter(state.progress.CompletedChapters), state.chapter-1)
 		}
 		anchors, err := t.store.Drafts.ExtractStyleAnchors(3, maxCompleted)
 		reads.warn("style_anchors", err)
