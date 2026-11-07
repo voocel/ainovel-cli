@@ -40,12 +40,14 @@ usage 序列（input vs cache_read）后定位出三个根因：
 
 ### 2.1 OpenAI：自动前缀缓存（隐式）
 
-- 服务端自动对 **≥1024 tokens** 的前缀做缓存，无需客户端声明；
-- 命中按 128-token 对齐的粒度增长；
+- 服务端自动缓存满足模型最短长度要求的前缀，无需客户端显式声明断点；
 - 请求可带 `prompt_cache_key`（官方字段）做**路由亲和**——同 key 的请求尽量落到
   同一缓存分片；
-- usage 里 `cached_tokens` 报告命中量；**缓存写入永远不上报**（`cache_write` 恒 0
-  是正常现象，不是 bug）。
+- usage 里 `cached_tokens` 报告命中量；缓存写入是否单独上报依模型而异。
+
+官方 GPT-5.6 及后续模型支持显式断点，较早模型仅支持自动缓存；兼容端点的支持情况还可能不同。
+本项目当前默认使用自动缓存，避免发送不适用的显式参数，见 §7.3。
+具体协议与模型差异见 [OpenAI 官方缓存文档](https://developers.openai.com/api/docs/guides/prompt-caching)。
 
 ### 2.2 Anthropic：显式断点（cache_control）
 
@@ -348,6 +350,20 @@ func isOfficialBaseURL(baseURL string) bool {
 > 为什么开关做在 litellm 能力层而不是应用配置层？因为运行时 `/model` 切 provider
 > 会换 client，能力声明跟着 client 自动切换；应用构造期的判定覆盖不了运行时切换。
 
+### 7.3 显式断点随实际客户端处理
+
+`litellm v1.8.11` 会把 OpenAI 消息上的 `cache_control` 转为 `prompt_cache_breakpoint`，
+但没有按具体模型区分支持情况，部分模型/中转会返回 `invalid_parameter`（#141）；
+Responses 的 `tool_result` 带断点还会在本地被拒绝（#142）。
+
+因此，`internal/bootstrap/models_cache.go` 在 OpenAI 客户端请求边界移除这类消息元数据，
+保留自动缓存及按 §7.1–7.2 门控的 `prompt_cache_key`。消息历史与其他元数据不变，
+Anthropic / OpenRouter 继续发送原生 `cache_control`。
+
+Worker 的 `CacheLastMessage` 始终保留 `ephemeral`，不再按启动时的 provider 固定开关。
+这样 `/model`、配置更新和 fallback 换到 OpenAI 时不会携带不兼容断点，换回 Anthropic 时也能恢复显式缓存。
+`extra.prompt_cache_params` 仍只控制 OpenAI 路由键等参数的透传，不能据此推断模型支持显式断点。
+
 ---
 
 ## 8. 观测：缓存链断裂检测
@@ -403,23 +419,16 @@ broke := prevPrefix > 0 && prefix >= prevPrefix &&
    （input vs cache_read）才是诊断金标准**。一个实用指纹：命中量若恰好钉在
    "system 提示词 token 数按 128 向下取整"，说明只有 system 段命中、消息段全 miss。
 4. **收益核算**：读价 0.1x、写价 1.25x，意味着一条缓存只要被读 1 次就回本。
-   多轮 agent 会话里断点几乎总是正收益，所以 `CacheLastMessage` 不设开关、默认开。
-   **例外（Responses 端点）**：litellm v1.8.11 的 Responses 适配器只允许断点落在
-   `input_text` 上；agentcore 的滚动尖端会贴到最后一条非 system 消息，工具循环里
-   就是 tool_result（`function_call_output`），本地校验直接拒绝、请求发不出去
-   （`cache breakpoints are not supported on tool result blocks`）。因此
-   `internal/agents/build.go` 的 `explicitCacheControl` 对 `api: "responses"` 的
-   provider 关闭 `CacheLastMessage`，只保留 `prompt_cache_key` 路由亲和；Anthropic
-   与 chat 端点不受影响。
+   Anthropic 等显式缓存端点在多轮会话里可复用这些断点，所以 Worker 的 `CacheLastMessage` 默认开。
+   OpenAI 请求在实际客户端边界移除显式断点，使用自动缓存，避免 #141 / #142 的兼容问题（见 §7.3）。
 
 ---
 
 ## 11. 接入指南速查
 
 **ainovel-cli**（已内置）：每个 agent 配 `CacheLastMessage: "ephemeral"` +
-`PromptCacheKey: promptCacheBase(bookDir) + "-<role>"`，其余全自动。provider 声明
-`api: "responses"` 时断点自动关闭（litellm v1.8.11 的 Responses 适配器不接受
-tool_result 上的断点，见 §10.4），`prompt_cache_key` 照旧。
+`PromptCacheKey: promptCacheBase(bookDir) + "-<role>"`，其余全自动。OpenAI 的 Chat / Responses
+客户端移除显式断点，`prompt_cache_key` 仍按端点能力发送；Anthropic / OpenRouter 保留显式缓存。
 
 **codebot**（已内置）：key = SessionID；`Reset`/`SwitchSession` 时
 `agent.SetPromptCacheKey(newSessionID)`；teammate 用 `sessionID + "-" + name`。

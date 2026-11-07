@@ -47,22 +47,6 @@ const subagentMaxRetries = 7
 // cacheControlEphemeral 是显式缓存断点的默认 TTL 档（provider 默认 5m）。
 const cacheControlEphemeral = "ephemeral"
 
-// explicitCacheControl 决定某 provider 是否携带显式缓存断点。
-// agentcore 的"滚动尖端"把断点贴到最后一条非 system 消息，工具循环里即
-// tool_result；而 litellm v1.8.11 的 Responses 适配器只允许断点落在 input_text
-// 块上，遇到 tool_result 的 function_call_output 直接本地校验失败（请求发不出去）。
-// 因此 Responses 端点的角色不开显式断点；prompt_cache_key 路由亲和仍保留，
-// OpenAI 系的自动前缀缓存不受影响。Anthropic 等 block 缓存端点照旧。
-// 注意：subagent.Config 在构建期固定，运行时 /model 把角色切到 Responses 端点
-// 不会重算此值（切到 Anthropic/chat 只会少写缓存，不会报错）；升级到
-// litellm ≥ v1.9.2 后可整体解除该限制。
-func explicitCacheControl(cfg bootstrap.Config, provider string) string {
-	if strings.EqualFold(strings.TrimSpace(cfg.Providers[provider].API), "responses") {
-		return ""
-	}
-	return cacheControlEphemeral
-}
-
 // UsageRecorder 是 BuildWorkers 可选的用量回调；签名与 OnMessage 一致，
 // 每条 agent 消息都会调一次，由 Host 层负责聚合。task 是本次 spawn 的任务文本
 // 作为会话身份，供缓存链断裂检测按会话重置基线。
@@ -212,12 +196,9 @@ func BuildWorkers(
 	// 提示词缓存：一书一基、一角色一名、一会话一键（subagent spawn 追加 #seq）。
 	// OpenAI 系用 prompt_cache_key 做路由亲和；Claude 系用 cache_control 滚动断点
 	//（system 地板 + 末消息尖端）。provider 不支持时由 agentcore 按能力静默丢弃，
-	// 多轮会话下读缓存收益恒为正，故不设开关。例外：Responses 端点的断点表示
-	// 在 litellm v1.8.11 里不覆盖 tool result，必须显式关掉（见 explicitCacheControl）。
+	// Worker 始终保留缓存意图；OpenAI 的断点兼容由实际模型客户端处理，
+	// 避免 /model 或 fallback 切换 provider 后仍沿用启动时的策略。
 	cacheBase := promptCacheBase(store.Dir())
-	architectCache := explicitCacheControl(cfg, architectProvider)
-	writerCache := explicitCacheControl(cfg, writerProvider)
-	editorCache := explicitCacheControl(cfg, editorProvider)
 
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
 		return guard.NewArchitectStopGuard(store, onGuardBlock)
@@ -240,7 +221,7 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         architectThinking,
 		OnMessage:             onMsg,
-		CacheLastMessage:      architectCache,
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-architect_short",
 		ContextManagerFactory: roleContextFactory(architectContextProfile),
 		StopAfterToolResult: func(toolName string, result json.RawMessage) bool {
@@ -258,7 +239,7 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         architectThinking,
 		OnMessage:             onMsg,
-		CacheLastMessage:      architectCache,
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-architect_long",
 		ContextManagerFactory: roleContextFactory(architectContextProfile),
 		StopAfterToolResult:   architectLongShouldStopAfterToolResult,
@@ -283,7 +264,7 @@ func BuildWorkers(
 		ThinkingLevel:    resolvedRoleThinking(writerModel, cfg, "writer"),
 		StopAfterTools:   []string{"commit_chapter"},
 		OnMessage:        onMsg,
-		CacheLastMessage: writerCache,
+		CacheLastMessage: cacheControlEphemeral,
 		PromptCacheKey:   cacheBase + "-writer",
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
 			return guard.NewWriterStopGuard(store, onGuardBlock)
@@ -328,7 +309,7 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         resolvedRoleThinking(editorModel, cfg, "editor"),
 		OnMessage:             onMsg,
-		CacheLastMessage:      editorCache,
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-editor",
 		ContextManagerFactory: roleContextFactory(editorContextProfile),
 		// 终态产物命中即停。终态退出仍会咨询 StopGuard（契约测试 TestContract_

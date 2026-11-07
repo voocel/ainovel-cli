@@ -9,11 +9,9 @@ import (
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
-// Responses 端点不接受贴在 tool_result 上的显式断点（litellm v1.8.11 的
-// responses 适配器只允许 input_text 携带断点），工具循环第一轮就会被本地校验
-// 拒绝。BuildWorkers 必须按 provider 的 api 关掉 CacheLastMessage，同时保留
-// prompt_cache_key 路由亲和；chat/anthropic 端点的断点不能一起丢。
-func TestBuildWorkersExplicitCacheFollowsProviderAPI(t *testing.T) {
+// Worker 保留缓存意图，使 Responses 启动后切到 Anthropic 也能恢复显式缓存。
+// 实际 OpenAI 请求不含不兼容断点的契约由 bootstrap 的真实适配器测试守护。
+func TestBuildWorkersKeepCacheIntentAcrossProviderSelection(t *testing.T) {
 	cfg := bootstrap.Config{
 		Provider:  "chat",
 		ModelName: "chat-model",
@@ -51,24 +49,16 @@ func TestBuildWorkersExplicitCacheFollowsProviderAPI(t *testing.T) {
 	}
 	runner, _, _ := BuildWorkers(cfg, st, tools.NewStyleStatsIndex(st), models, assets.Load("", assets.LoadOptions{}), nil, nil)
 
-	for _, name := range []string{"architect_short", "architect_long"} {
+	for _, name := range []string{"architect_short", "architect_long", "writer", "editor"} {
 		c, ok := runner.AgentConfig(name)
 		if !ok {
 			t.Fatalf("agent %s not registered", name)
 		}
-		if c.CacheLastMessage != "" {
-			t.Fatalf("%s 走 responses 端点，显式断点会打在 tool_result 上被适配器拒绝，CacheLastMessage=%q", name, c.CacheLastMessage)
+		if c.CacheLastMessage != cacheControlEphemeral {
+			t.Fatalf("%s 必须保留缓存意图供实际客户端处理，CacheLastMessage=%q", name, c.CacheLastMessage)
 		}
 		if c.PromptCacheKey == "" {
-			t.Fatalf("%s 的 prompt_cache_key 路由亲和不能随断点一起关闭", name)
+			t.Fatalf("%s 的 prompt_cache_key 路由亲和必须保留", name)
 		}
-	}
-
-	writer, ok := runner.AgentConfig("writer")
-	if !ok {
-		t.Fatal("writer not registered")
-	}
-	if writer.CacheLastMessage != cacheControlEphemeral {
-		t.Fatalf("chat 端点应保留显式断点，CacheLastMessage=%q", writer.CacheLastMessage)
 	}
 }

@@ -294,7 +294,7 @@ writer.md 只承担：执行协议、断点续跑认知模型、章节契约解�
 2. **历史 append-only** — 消息只追加不改写；上下文压缩是"付一次全 miss 换窗口"的显式交易，投影必须 `CommitOnProject`
 3. **动态内容进尾部** — 信封/指令全部尾部追加，永不回写早期消息
 
-配置为「一书一基、一角色一名、一会话一键」：OpenAI 系 `PromptCacheKey = nvl-<书哈希>-<角色>#<spawn序号>` 做路由亲和（默认只对官方端发送，中转可显式开启）；Claude 系 `CacheLastMessage: "ephemeral"` 滚动断点 + system 地板断点。例外：provider 声明 `api: "responses"` 时关闭 `CacheLastMessage`——litellm v1.8.11 的 Responses 适配器只允许断点落在 `input_text` 块上，工具循环里断点会被贴到 tool_result 并被本地校验拒绝（见 `docs/prompt-cache-design.md` §10.4）。**闩锁红线**：一切进缓存键的量会话内首算即冻结，宁陈旧不破缓存。断裂检测（`host/usage.go noteCacheBreak`）纯观测不修复，计数进 `usage.json cache_breaks` 与 TUI 缓存面板。
+配置为「一书一基、一角色一名、一会话一键」：OpenAI 系 `PromptCacheKey = nvl-<书哈希>-<角色>#<spawn序号>` 做路由亲和（默认只对官方端发送，中转可显式开启）；Claude 系 `CacheLastMessage: "ephemeral"` 滚动断点 + system 地板断点。Worker 始终声明缓存意图，OpenAI 客户端在请求边界移除显式断点，默认使用自动缓存，避免部分模型拒绝 `prompt_cache_breakpoint` 或 Responses 工具结果在本地校验失败。策略随实际客户端切换，覆盖 `/model`、配置更新及 fallback（见 `docs/prompt-cache-design.md` §7.3）。**闩锁红线**：一切进缓存键的量会话内首算即冻结，宁陈旧不破缓存。断裂检测（`host/usage.go noteCacheBreak`）纯观测不修复，计数进 `usage.json cache_breaks` 与 TUI 缓存面板。
 
 ---
 
