@@ -49,11 +49,13 @@ type OutlineEdit struct {
 	Turn    string `json:"turn"`
 }
 
-// 计划编辑按序号定位：已有序号是修改（空字段保持原值），紧接末尾的序号是新增。
+// 计划编辑按序号定位：已有序号是修改（空字段保持原值），紧接末尾的序号是新增；Remove 删去
+// 下面还没有节点的卷与故事弧（D97）。
 type VolumeEdit struct {
 	Volume  int    `json:"volume"`
 	Title   string `json:"title,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Remove  bool   `json:"remove,omitempty"`
 }
 
 type ArcEdit struct {
@@ -61,6 +63,7 @@ type ArcEdit struct {
 	Volume  int    `json:"volume,omitempty"`
 	Title   string `json:"title,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Remove  bool   `json:"remove,omitempty"`
 }
 
 type ChapterEdit struct {
@@ -112,7 +115,7 @@ func (s *Story) Resolve(input model.TaskInput, submission Submission, drafts []m
 
 func (s *Story) resolver(direct bool) *resolver {
 	r := &resolver{
-		story: s, ids: s.allocator(), created: make(map[model.PlanNodeKind][]string),
+		story: s, ids: s.allocator(), created: make(map[model.PlanNodeKind][]string), removed: make(map[string]bool),
 		names: make(map[string]string), touched: make(map[string]bool), chapters: make(map[int]string), direct: direct,
 	}
 	if s.content.Compass != nil {
@@ -184,6 +187,7 @@ type resolver struct {
 	// compass 是解析中的罗盘：基线的副本加本次的编辑，尚未规划时为 nil。
 	compass  *model.Compass
 	created  map[model.PlanNodeKind][]string // 本次新增的计划节点，按序号
+	removed  map[string]bool                 // 本次删去的计划节点
 	names    map[string]string               // 本次提交的实体名称与别名 → ID
 	touched  map[string]bool                 // 本次已处理的事实
 	scope    []string                        // 事实可以来源的正文章节
@@ -207,12 +211,13 @@ type planEdit struct {
 	title, summary string
 	turn           string   // 仅章
 	threads        []string // 长线短名；nil 保持原样
+	remove         bool     // 仅卷与故事弧
 }
 
 func volumeEdits(edits []VolumeEdit) []planEdit {
 	result := make([]planEdit, len(edits))
 	for i, edit := range edits {
-		result[i] = planEdit{number: edit.Volume, title: edit.Title, summary: edit.Summary}
+		result[i] = planEdit{number: edit.Volume, title: edit.Title, summary: edit.Summary, remove: edit.Remove}
 	}
 	return result
 }
@@ -220,7 +225,7 @@ func volumeEdits(edits []VolumeEdit) []planEdit {
 func arcEdits(edits []ArcEdit) []planEdit {
 	result := make([]planEdit, len(edits))
 	for i, edit := range edits {
-		result[i] = planEdit{number: edit.Arc, parent: edit.Volume, title: edit.Title, summary: edit.Summary}
+		result[i] = planEdit{number: edit.Arc, parent: edit.Volume, title: edit.Title, summary: edit.Summary, remove: edit.Remove}
 	}
 	return result
 }
@@ -245,6 +250,12 @@ func (r *resolver) plan(kind, parentKind model.PlanNodeKind, edits []planEdit) e
 	for i, edit := range edits {
 		if i > 0 && edits[i-1].number == edit.number {
 			return fmt.Errorf("第 %d 个%s提交了两次: %w", edit.number, name, model.ErrInvalid)
+		}
+		if edit.remove {
+			if err := r.remove(kind, edit.number); err != nil {
+				return err
+			}
+			continue
 		}
 		var node model.PlanNode
 		switch next := len(existing) + len(r.created[kind]) + 1; {
@@ -385,9 +396,26 @@ func (r *resolver) threadIDs(chapter int, names []string) ([]string, error) {
 }
 
 // planID 按序号找计划节点：已有的与本次新增的。
+// remove 删去还没展开的卷或故事弧（D97）：故事提前到了终点，写不到它了。
+func (r *resolver) remove(kind model.PlanNodeKind, number int) error {
+	existing := r.story.ordered[kind]
+	if number < 1 || number > len(existing) {
+		return fmt.Errorf("要删去的第 %d 个%s不存在: %w", number, kindName(kind), model.ErrInvalid)
+	}
+	id := existing[number-1].ID
+	if slices.ContainsFunc(r.story.content.Plan, func(node model.PlanNode) bool { return node.ParentID == id }) {
+		return fmt.Errorf("第 %d 个%s下面已有节点，不能删去: %w", number, kindName(kind), model.ErrInvalid)
+	}
+	r.removed[id] = true
+	r.patches = append(r.patches, model.Patch{Document: model.DocumentRef{Kind: model.DocumentPlan, ID: id}, Operation: model.PatchDelete})
+	return nil
+}
+
 func (r *resolver) planID(kind model.PlanNodeKind, number int) (string, error) {
 	existing := r.story.ordered[kind]
 	switch {
+	case number >= 1 && number <= len(existing) && r.removed[existing[number-1].ID]:
+		return "", fmt.Errorf("第 %d 个%s这次删去了，不能再挂节点: %w", number, kindName(kind), model.ErrInvalid)
 	case number >= 1 && number <= len(existing):
 		return existing[number-1].ID, nil
 	case number > len(existing) && number <= len(existing)+len(r.created[kind]):

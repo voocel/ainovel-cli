@@ -30,9 +30,9 @@ func extendPlan(id string) stepWant {
 		if input.ExistingChapters != 3 || input.FixedChapters != 0 || !strings.Contains(input.Goal, "这一弧多少章由你按故事走向决定") {
 			t.Fatalf("extend input = %+v", input)
 		}
-		// 篇幅不预计（D96）：规划的说明里没有篇幅数字；新弧接在当前卷里，故事进入新的大阶段才开卷。
+		// 篇幅不预计（D96）：规划的说明里没有篇幅数字；当前卷的阶段讲完才进入下一卷（D97）。
 		if strings.Contains(input.Goal, "预计") || strings.Contains(input.Goal, "scale_max") || strings.Contains(input.Goal, "300") ||
-			!strings.Contains(input.Goal, "没有就在当前卷里新建") || strings.Contains(input.Goal, "本卷的故事弧都已写完") {
+			!strings.Contains(input.Goal, "当前卷的阶段讲完了才进入下一卷") {
 			t.Fatalf("extend goal = %s", input.Goal)
 		}
 		if successorSuffix.MatchString(work.ID) {
@@ -54,6 +54,7 @@ func TestAILengthRollsWithTheCompass(t *testing.T) {
 		check: func(t *testing.T, work creation.WorkItem) {
 			if input := work.Input.(model.DevelopPlanInput); input.FixedChapters != 0 ||
 				!strings.Contains(input.Goal, "必须给出故事罗盘") || !strings.Contains(input.Goal, "只为第一个故事弧展开章节") ||
+				!strings.Contains(input.Goal, "卷一直搭到终局") || strings.Contains(input.Goal, "只搭近处") ||
 				strings.Contains(input.Goal, "预计") || strings.Contains(input.Goal, "scale_max") || strings.Contains(input.Goal, "300") {
 				t.Fatalf("develop input = %+v", input)
 			}
@@ -70,6 +71,13 @@ func TestAILengthRollsWithTheCompass(t *testing.T) {
 		{"committed final extends toward it", withCompass(written, 4), extendPlan("run:book:1:plan:extend:3:f0:s0:e4")},
 	} {
 		t.Run(c.name, func(t *testing.T) { assertStep(t, c.project, run, reviewed, c.want) })
+	}
+	// 收官时删去写不到的卷与故事弧（D97）：开放期与收官期的说明都交代。
+	for _, project := range []projectdoc.Snapshot{withCompass(written, 0), withCompass(written, 4)} {
+		next, _ := Policy{}.Next(project, run, reviewed)
+		if goal := next.Work.Input.(model.RevisePlanInput).Goal; !strings.Contains(goal, "删去写不到的卷与故事弧") {
+			t.Fatalf("closing goal = %s", goal)
+		}
 	}
 
 	// 收官章所在窗口必须对收官要求下结论；满足后完成，章数等于收官承诺。

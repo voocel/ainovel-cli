@@ -134,6 +134,39 @@ func TestCompassEditKeepsTheLimitUnlessRaised(t *testing.T) {
 	}
 }
 
+// 提前收官时删去写不到的卷与故事弧（D97）：只能删下面还没有节点的，删去的不能再挂节点。
+func TestRemoveUnexpandedVolumesAndArcs(t *testing.T) {
+	content := fixture().content
+	content.Plan = append(content.Plan,
+		model.PlanNode{ID: "a2", Kind: model.PlanArc, ParentID: "v1", Order: 2, Title: "历练", Summary: "下山历练"},
+		model.PlanNode{ID: "v2", Kind: model.PlanVolume, Order: 2, Title: "内门", Summary: "内门争锋"})
+	story := New(content)
+	patches, err := story.Resolve(&model.RevisePlanInput{}, Submission{
+		Volumes: []VolumeEdit{{Volume: 2, Remove: true}}, Arcs: []ArcEdit{{Arc: 2, Remove: true}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(patches) != 2 || patches[0].Document.ID != "v2" || patches[1].Document.ID != "a2" ||
+		patches[0].Operation != model.PatchDelete || patches[1].Operation != model.PatchDelete {
+		t.Fatalf("patches = %+v", patches)
+	}
+	for _, c := range []struct {
+		name       string
+		submission Submission
+	}{
+		{"a volume with arcs", Submission{Volumes: []VolumeEdit{{Volume: 1, Remove: true}}}},
+		{"an arc with chapters", Submission{Arcs: []ArcEdit{{Arc: 1, Remove: true}}}},
+		{"a missing volume", Submission{Volumes: []VolumeEdit{{Volume: 3, Remove: true}}}},
+		{"an arc under a removed volume", Submission{Volumes: []VolumeEdit{{Volume: 2, Remove: true}},
+			Arcs: []ArcEdit{{Arc: 3, Volume: 2, Title: "争锋", Summary: "内门大比"}}}},
+	} {
+		if _, err := story.Resolve(&model.RevisePlanInput{}, c.submission, nil); !errors.Is(err, model.ErrInvalid) {
+			t.Fatalf("%s = %v", c.name, err)
+		}
+	}
+}
+
 // 长线（D91）：按短名新立、引用与作答，ID 由宿主给；模型视图只见短名，统计每条长线最近推进
 // 的已写章、此后停了几章与下一次的安排。
 func TestResolveThreadsByNameAndCountTheirQuiet(t *testing.T) {

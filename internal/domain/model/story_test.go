@@ -119,6 +119,9 @@ func TestValidateBlueprint(t *testing.T) {
 	nearCap := blueprint(&Compass{Ending: "称帝"}, upTo(CompassAutonomyCeiling-1)...)
 	atCap := blueprint(&Compass{Ending: "称帝"}, upTo(CompassAutonomyCeiling)...)
 	unbounded := blueprint(nil, chapters(1, 2, 3)...)
+	stage := PlanNode{ID: "volume-2", Kind: PlanVolume, Order: 2, Title: "卷", Summary: "下一阶段"}
+	staged := blueprint(&Compass{Ending: "称帝"}, append(chapters(1, 2, 3), stage)...)
+	dropStage := Patch{Document: DocumentRef{Kind: DocumentPlan, ID: stage.ID}, Operation: PatchDelete}
 	open := func(t *testing.T) Operation { return extend(t, 0, 3) }
 	nearCapOp := func(t *testing.T) Operation { return extend(t, 0, CompassAutonomyCeiling-1) }
 	atCapOp := func(t *testing.T) Operation { return extend(t, 0, CompassAutonomyCeiling) }
@@ -161,6 +164,15 @@ func TestValidateBlueprint(t *testing.T) {
 			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 5)} }, false},
 		{"final below the planned chapters is rejected", open, base,
 			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 2)} }, false},
+		// 写到最后一章的蓝图就是全书（D97）：没展开的卷要删去，收官章还没规划完时可以留着。
+		{"closing cannot leave an unexpanded volume", open, staged,
+			func(t *testing.T) []Patch { return []Patch{compass(t, 0, 3)} }, false},
+		{"closing removes the unexpanded volume", open, staged,
+			func(t *testing.T) []Patch { return []Patch{dropStage, compass(t, 0, 3)} }, true},
+		{"an unexpanded volume waits while the final is ahead", open, staged,
+			func(t *testing.T) []Patch { return append(plans(t, 4), compass(t, 0, 6)) }, true},
+		{"a fixed length plan cannot leave an unexpanded volume", fixedSix, blueprint(nil, append(chapters(1, 2, 3), stage)...),
+			func(t *testing.T) []Patch { return plans(t, 4, 5, 6) }, false},
 		{"first plan may declare a final beyond its chapters", func(t *testing.T) Operation { return develop(t, 0) }, blueprint(nil),
 			func(t *testing.T) []Patch { return append(plans(t, 1, 2), compass(t, 0, 5)) }, true},
 		{"AI length requires a compass", open, unbounded,

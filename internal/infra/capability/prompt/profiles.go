@@ -250,6 +250,8 @@ func planEditSchema(number, parent, parentDescription string) map[string]any {
 		properties["turn"] = map[string]any{"type": "string", "description": turnDescription + "；新增的章必填"}
 		properties["threads"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"},
 			"description": "本章推进的长线（罗盘里长线的 name）：可以没有；给出即整体替换，省略保持原样"}
+	} else {
+		properties["remove"] = map[string]any{"type": "boolean", "description": "删去它：下面还没有节点才能删，用于故事提前到了终点、写不到它了"}
 	}
 	return map[string]any{"type": "array", "items": map[string]any{
 		"type": "object", "properties": properties, "required": []string{number}, "additionalProperties": false,
@@ -330,7 +332,7 @@ func proposalTool(can submission) ToolSchema {
 		chapters["description"] = "章节大纲。只有规划任务能新增章节，追加多少章由你按故事走向决定：至少一章，除非以现有章数声明收官；篇幅上界见 fixed_chapters 与 compass"
 		properties["chapters"] = chapters
 		description += `卷（volumes）、故事弧（arcs）、章（chapters）按序号编辑：已有序号是修改，省略的字段保持原值；` +
-			`新增的紧接 story_context.totals 的现有总数连续编号，并给出 title、summary、上级序号，章还要给 turn；只能在末尾追加，不能插入或删除；已写的章不改。` +
+			`新增的紧接 story_context.totals 的现有总数连续编号，并给出 title、summary、上级序号，章还要给 turn；只能在末尾追加，不能插入；章不能删，还没有下级节点的卷与故事弧可以 remove；已写的章不改。` +
 			`长线（threads）至少一条，章节用 threads 引用它们；story_context.compass 里每条长线带着最近推进它的已写章（advanced）、此后停了几章（quiet）与下一次的安排（next）。`
 	}
 	return tool(ToolProposalSubmit, description, mustSchema(map[string]any{

@@ -376,7 +376,7 @@ func planWork(run model.CreationRun, length Length, pending []string) creation.W
 		ID: runQuickID(run.ID, "plan", length.inputID()), Kind: model.OperationDevelopPlan,
 		Input: model.DevelopPlanInput{
 			FixedChapters: length.Fixed, PendingRequirements: pending,
-			Goal: "设计可直接用于连续创作的卷、故事弧与章节大纲：只搭近处——第一卷的故事弧骨架（看得清时可再搭下一卷），更远的卷写到时按已发生的故事再定，终局只作为方向写进罗盘；立起长线（threads）：全书在追问、终局要回答的几个问题；这次只为第一个故事弧展开章节，这一弧多少章由你按故事走向决定，每章挂在所属故事弧下，用 threads 标明它推进哪几条长线，用 turn 写明它的转折；为 pending_requirements 中的要求安排落点，指明了章的就落在那几章；" + length.planningGoal(),
+			Goal: "设计可直接用于连续创作的卷、故事弧与章节大纲：卷一直搭到终局，每卷是故事的一个大阶段，写明这一阶段的处境与冲突，后面的卷写到时按已发生的故事修订；故事弧只搭第一卷的骨架，终局方向写进罗盘；立起长线（threads）：全书在追问、终局要回答的几个问题；这次只为第一个故事弧展开章节，这一弧多少章由你按故事走向决定，每章挂在所属故事弧下，用 threads 标明它推进哪几条长线，用 turn 写明它的转折；为 pending_requirements 中的要求安排落点，指明了章的就落在那几章；" + length.planningGoal(),
 		},
 		Reasons: creation.WorkReasons{
 			Start:   "规划故事蓝图：搭起卷与故事弧，展开第一个故事弧的章节",
@@ -392,7 +392,7 @@ func planWork(run model.CreationRun, length Length, pending []string) creation.W
 // 末章的裁定为基线（D51），裁定失效则扩窗任务失效。已覆盖的末章作为全书结局写成时是续写（D63）。
 func extendWork(run model.CreationRun, length Length, ledger reviewLedger, covered int) creation.WorkItem {
 	concluded := ledger.concluded(covered)
-	goal := "展开下一个故事弧的章节：已有章节保持不变，只在末尾追加并挂在所属故事弧下；下一弧已有骨架就按已发生的故事修订后展开，没有就在当前卷里新建；故事进入新的大阶段才新开一卷；这一弧多少章由你按故事走向决定；结合审阅意见调整后续走向，为 pending_requirements 中尚未兑现的要求安排落点；对照罗盘里各条长线停了几章（quiet）与下一次的安排（next）规划这一弧，新章用 threads 标明推进的长线、用 turn 写明转折，答案落在哪一章就给那条长线写上 answer，故事里出现新的长线就立起来；已有人物与事物的状态随章节正文记录，规划不改写；" + length.planningGoal()
+	goal := "展开下一个故事弧的章节：已有章节保持不变，只在末尾追加并挂在所属故事弧下；下一弧已有骨架就按已发生的故事修订后展开，没有就新建：当前卷的阶段讲完了才进入下一卷，并按已发生的故事修订它（没有下一卷就新增）；这一弧多少章由你按故事走向决定；结合审阅意见调整后续走向，为 pending_requirements 中尚未兑现的要求安排落点；对照罗盘里各条长线停了几章（quiet）与下一次的安排（next）规划这一弧，新章用 threads 标明推进的长线、用 turn 写明转折，答案落在哪一章就给那条长线写上 answer，故事里出现新的长线就立起来；已有人物与事物的状态随章节正文记录，规划不改写；" + length.planningGoal()
 	parts := []string{"plan", "extend", strconv.Itoa(covered), length.inputID()}
 	start := fmt.Sprintf("扩展蓝图：前 %d 章已审完，展开下一个故事弧", covered)
 	if concluded {

@@ -161,6 +161,24 @@ func (s story) validateThreadRefs() error {
 	return nil
 }
 
+// unexpanded 是下面没有节点的卷与故事弧，按卷号与故事弧号描述。
+func (s story) unexpanded() []string {
+	parents := make(map[string]bool, len(s.plans))
+	for _, node := range s.plans {
+		parents[node.ParentID] = true
+	}
+	plan := slices.Collect(maps.Values(s.plans))
+	var empty []string
+	for _, kind := range []PlanNodeKind{PlanVolume, PlanArc} {
+		for index, node := range PlanNodesInOrder(plan, kind) {
+			if !parents[node.ID] {
+				empty = append(empty, fmt.Sprintf("%s %d", kind, index+1))
+			}
+		}
+	}
+	return empty
+}
+
 // writtenPlans 是已有正文的章节计划 ID。
 func (s story) writtenPlans() map[string]bool {
 	written := make(map[string]bool, len(s.chapters))
@@ -492,6 +510,17 @@ func validateBlueprint(input TaskInput, base, projected story, patches []Patch) 
 		return fmt.Errorf("an unfinished plan may reach %d chapters without the user: declare the final chapter count (not below the %d planned chapters), or set scale_max above %d for the user to approve if the story needs more: %w", compass.Limit(), existing, compass.Limit(), ErrInvalid)
 	case chapters <= existing:
 		return noProgress(existing)
+	}
+	// 写到最后一章的蓝图就是全书（D97）：下面没有节点的卷与故事弧再也写不到了。
+	final := fixed
+	if fixed == 0 && compass != nil {
+		final = compass.Final
+	}
+	if planning && final > 0 && chapters == final {
+		if empty := projected.unexpanded(); len(empty) > 0 {
+			return fmt.Errorf("the plan reaches the final chapter %d, so %s with nothing under them will never be written: remove them, or put the final chapters under them: %w",
+				final, strings.Join(empty, ", "), ErrInvalid)
+		}
 	}
 	return nil
 }

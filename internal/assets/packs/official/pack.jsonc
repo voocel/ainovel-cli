@@ -1,7 +1,7 @@
 {
 	// 官方内置包（D65）：随二进制发布，新书默认启用。只写创作方法，协议与工具形状归代码。
 	"id": "official",
-	"version": "8",
+	"version": "9",
 	"name": "官方基线",
 	"prompts": {
 		"architect.story_design": "prompts/architect-story-design.md",

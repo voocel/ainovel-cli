@@ -50,19 +50,22 @@ func CommittedFinal(compass *model.Compass, planned int) int {
 func (l Length) planningGoal() string {
 	switch {
 	case l.Fixed > 0 && l.Compass == nil:
-		return fmt.Sprintf("全书固定 %d 章：本次必须给出故事罗盘 compass，只写终局方向 ending（篇幅已由用户固定，不写 scale_max 与 final）；规划到第 %d 章时收束主线，给每条未答的长线定下作答的章，把未回收的伏笔分配进收官章节", l.Fixed, l.Fixed)
+		return fmt.Sprintf("全书固定 %d 章：本次必须给出故事罗盘 compass，只写终局方向 ending（篇幅已由用户固定，不写 scale_max 与 final）；规划到第 %d 章时收束主线，%s", l.Fixed, l.Fixed, closing)
 	case l.Fixed > 0:
-		return fmt.Sprintf("全书固定 %d 章：规划到第 %d 章时收束主线，给每条未答的长线定下作答的章，把未回收的伏笔分配进收官章节；终局方向有变化时修订 compass.ending", l.Fixed, l.Fixed)
+		return fmt.Sprintf("全书固定 %d 章：规划到第 %d 章时收束主线，%s；终局方向有变化时修订 compass.ending", l.Fixed, l.Fixed, closing)
 	case l.Compass == nil:
 		return "篇幅由你决定：本次必须给出故事罗盘 compass，写下终局方向 ending；规划已到故事终点时同时声明收官 final"
 	case l.Compass.Final > 0 && l.Final == 0:
 		return fmt.Sprintf("篇幅由你决定：罗盘的收官承诺 %d 章已少于蓝图章数而失效，本次必须修订 compass.final（不少于已规划章数）或撤回收官（省略 final）", l.Compass.Final)
 	case l.Final > 0:
-		return fmt.Sprintf("已承诺全书 %d 章收官：规划到第 %d 章时收束主线，给每条未答的长线定下作答的章，把未回收的伏笔分配进收官章节；确需调整就修订 compass.final", l.Final, l.Final)
+		return fmt.Sprintf("已承诺全书 %d 章收官：规划到第 %d 章时收束主线，%s；确需调整就修订 compass.final", l.Final, l.Final, closing)
 	default:
-		return "篇幅由你决定：故事已到收束点时声明收官 final（全书章数，不少于已规划章数），并给每条未答的长线定下作答的章、把未回收的伏笔分配进收官章节"
+		return "篇幅由你决定：故事已到收束点时声明收官 final（全书章数，不少于已规划章数），并" + closing
 	}
 }
+
+// closing 是收官时对蓝图的交代：长线有答案，伏笔回收，写不到的卷与故事弧删去（D97）。
+const closing = "给每条未答的长线定下作答的章，把未回收的伏笔分配进收官章节，删去写不到的卷与故事弧"
 
 // inputID 是规划任务 ID 中标识篇幅输入的一段（D67）：固定章数、篇幅上限与收官承诺
 // 原值决定目标文案与提交边界，任一变化即是新任务。
