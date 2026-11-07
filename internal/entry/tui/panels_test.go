@@ -67,6 +67,21 @@ func TestRenderRunningModelShowsStateAndElapsed(t *testing.T) {
 	}
 }
 
+// 模型响应只在等待时占一行：成功返回即移出事件流，随后的同 ID 更新落到正确的行；失败保留。
+func TestFinishedModelResponseLeavesTheEventStream(t *testing.T) {
+	m := Model{eventIndex: map[string]int{}}
+	start := time.Now()
+	m.applyEventProjection(host.Event{ID: "model-1", Time: start, Category: "MODEL", Summary: "等待模型", Depth: 1})
+	m.applyEventProjection(host.Event{ID: "model-1", Time: start, FinishedAt: start.Add(time.Second), Category: "MODEL", Summary: "模型响应", Depth: 1})
+	m.applyEventProjection(host.Event{ID: "tool-1", Time: start, Category: "TOOL", Summary: "draft_chapter", Depth: 1})
+	m.applyEventProjection(host.Event{ID: "model-2", Time: start, Category: "MODEL", Summary: "等待模型", Depth: 1})
+	m.applyEventProjection(host.Event{ID: "model-2", Time: start, FinishedAt: start.Add(time.Second), Failed: true, Category: "MODEL", Summary: "模型响应 错误: 超时", Depth: 1})
+	m.applyEventProjection(host.Event{ID: "tool-1", FinishedAt: start.Add(time.Second), Category: "TOOL"})
+	if len(m.events) != 2 || m.events[0].ID != "tool-1" || m.events[0].Running() || m.events[1].ID != "model-2" || !m.events[1].Failed {
+		t.Fatalf("events = %+v", m.events)
+	}
+}
+
 // TestRenderStatusBar 守护底部状态栏的信息契约：模型身份（窗口+思考）、会话令牌、
 // 花费/预算、书目录都必须在（样式剥离后按纯文本断言）。
 func TestRenderStatusBar(t *testing.T) {

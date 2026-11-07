@@ -874,6 +874,12 @@ func (m *Model) applyEvent(ev host.Event) {
 func (m *Model) applyEventProjection(ev host.Event) {
 	if ev.ID != "" {
 		if idx, ok := m.eventIndex[ev.ID]; ok && idx >= 0 && idx < len(m.events) {
+			// 模型响应只在等待时占一行：成功返回后由随后的工具行接续，不留痕迹；失败保留。
+			if ev.Category == "MODEL" && !ev.FinishedAt.IsZero() && !ev.Failed {
+				m.events = slices.Delete(m.events, idx, idx+1)
+				m.rebuildEventIndex()
+				return
+			}
 			existing := &m.events[idx]
 			if !ev.FinishedAt.IsZero() {
 				existing.FinishedAt = ev.FinishedAt

@@ -105,17 +105,15 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 		return line
 
 	case ev.Category == "MODEL":
+		// 成功的模型响应返回即移出事件流（applyEventProjection），这里只有进行中与失败两态。
 		var icon, sum string
 		if running {
 			icon = lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render(runningSpinner(spinnerFrame))
 			sum = lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render(truncate(ev.Summary, maxSumW))
 			durStr = renderEventDuration(time.Since(ev.Time))
-		} else if ev.Failed {
+		} else {
 			icon = lipgloss.NewStyle().Foreground(colorError).Render("✕")
 			sum = lipgloss.NewStyle().Foreground(colorError).Render(truncate(ev.Summary, maxSumW))
-		} else {
-			icon = lipgloss.NewStyle().Foreground(colorDim).Render("├")
-			sum = lipgloss.NewStyle().Foreground(colorContext).Render(truncate(ev.Summary, maxSumW))
 		}
 		return tsStr + " " + indent + icon + " " + sum + durStr
 
