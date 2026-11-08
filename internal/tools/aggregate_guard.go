@@ -16,6 +16,9 @@ func requireAggregateTarget(st *store.Store, kind flow.AggregateKind, volume, ar
 	if err != nil {
 		return fmt.Errorf("load aggregate state: %w: %w", errs.ErrStoreRead, err)
 	}
+	if state.ReviewRecheck != nil {
+		return fmt.Errorf("须先完成当前正文返工复核: %w", errs.ErrToolPrecondition)
+	}
 	due := state.AggregateRefresh
 	if due == nil {
 		return fmt.Errorf("当前没有待处理的 %s 工件: %w", kind, errs.ErrToolPrecondition)

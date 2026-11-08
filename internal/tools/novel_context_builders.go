@@ -3,11 +3,11 @@ package tools
 import (
 	"fmt"
 	"slices"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
+	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/stylestat"
 )
 
 type contextBuildState struct {
@@ -17,6 +17,7 @@ type contextBuildState struct {
 	runMeta         *domain.RunMeta
 	outline         []domain.OutlineEntry
 	currentEntry    *domain.OutlineEntry
+	boundary        *store.ArcBoundary
 	chapterPlan     *domain.ChapterPlan
 	storyThreads    []domain.RecallItem
 	foreshadow      []domain.ForeshadowEntry
@@ -277,6 +278,10 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		envelope.Working["current_chapter_outline"] = currentEntry
 	}
 	state.currentEntry = currentEntry
+	if progress != nil && progress.Layered {
+		state.boundary, err = t.store.Outline.CheckArcBoundary(chapter)
+		reads.require("arc_boundary", err)
+	}
 
 	chapterPlan, chapterPlanErr := t.store.Drafts.LoadChapterPlan(chapter)
 	if chapterPlanErr == nil && chapterPlan != nil {
@@ -384,9 +389,14 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 		}
 	}
 
-	styleRules, styleErr := t.store.World.LoadStyleRules()
-	reads.require("style_rules", styleErr)
-	state.styleRules = styleRules
+	if progress != nil && progress.Layered {
+		if b := state.boundary; b != nil {
+			state.styleRules, err = t.store.World.LoadStyleRulesBefore(b.Volume, b.Arc)
+		}
+	} else {
+		state.styleRules, err = t.store.World.LoadStyleRules()
+	}
+	reads.require("style_rules", err)
 	state.storyThreads = t.selectStoryThreads(state)
 	if len(state.storyThreads) > 0 && len(state.storyThreads) < storyThreadRecallMinSelected {
 		state.storyThreads = nil
@@ -442,58 +452,19 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 	envelope.Episodic["style_stats"] = stats
 }
 
-// styleStatsTitleScanBytes 限制从终稿或摘要标题里检查的前缀。
-// 章节正文可以任意大；title_formats 只需要第一行非空内容。整章 Split
-// 会按行数无界分配，返回的子串还会把整章缓冲留在统计缓存里。
-const styleStatsTitleScanBytes = 4096
-
 func (t *ContextTool) styleStatsTitle(chapter int, reads *contextReads) string {
 	text, err := t.store.Drafts.LoadChapterText(chapter)
 	if err != nil {
 		reads.warn("style_stats.titles", err)
 	}
-	if title := firstNonEmptyLineLimited(text, styleStatsTitleScanBytes); title != "" {
+	if title := stylestat.TitleFromChapter(text, ""); title != "" {
 		return title
 	}
 	title, err := t.store.Summaries.LoadSummaryTitle(chapter)
 	if err != nil {
 		reads.warn("style_stats.titles", err)
 	}
-	return trimmedPrefixLimited(title, styleStatsTitleScanBytes)
-}
-
-// firstNonEmptyLineLimited 只扫描 text 的前 limit 个字节，返回第一行非空内容的独立拷贝。
-func firstNonEmptyLineLimited(text string, limit int) string {
-	text = clipPrefixBytes(text, limit)
-	for text != "" {
-		line, rest, _ := strings.Cut(text, "\n")
-		if title := strings.TrimSpace(line); title != "" {
-			return strings.Clone(title)
-		}
-		text = rest
-	}
-	return ""
-}
-
-// trimmedPrefixLimited 截断并 TrimSpace 摘要标题。超限标题只保留前缀，避免无界分配。
-func trimmedPrefixLimited(s string, limit int) string {
-	s = strings.TrimSpace(clipPrefixBytes(s, limit))
-	if s == "" {
-		return ""
-	}
-	return strings.Clone(s)
-}
-
-func clipPrefixBytes(s string, limit int) string {
-	if limit < 0 || len(s) <= limit {
-		return s
-	}
-	s = s[:limit]
-	// 截断可能落在 UTF-8 序列中间，只丢掉不完整的尾字节。
-	for i := 0; i < utf8.UTFMax-1 && len(s) > 0 && !utf8.ValidString(s); i++ {
-		s = s[:len(s)-1]
-	}
-	return s
+	return stylestat.TitleFromChapter("", title)
 }
 
 // styleStopwords 收集角色名与别名供短语挖掘过滤——出场人名天然高频，不是文风问题。
@@ -525,10 +496,8 @@ func (t *ContextTool) buildChapterWorkingMemory(envelope *chapterContextEnvelope
 		//（收官卷写完即自动完结，此时新埋的伏笔永远没有机会回收）。
 		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
 			if fv := domain.FinaleVolume(volumes); fv > 0 {
-				if b, boundaryErr := t.store.Outline.CheckArcBoundary(state.chapter); boundaryErr == nil && b != nil && b.Volume == fv {
+				if b := state.boundary; b != nil && b.Volume == fv {
 					envelope.Working["finale"] = "本卷为全书收官卷：不再新开长线或埋新伏笔，优先回收既有伏笔、收拢关系线，按大纲把故事推向终局。"
-				} else {
-					reads.require("arc_boundary", boundaryErr)
 				}
 			}
 		} else {
@@ -656,28 +625,24 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 		}
 	}
 
-	if state.profile.Layered && state.progress != nil {
+	if b := state.boundary; b != nil {
 		pos := map[string]any{
-			"volume": state.progress.CurrentVolume,
-			"arc":    state.progress.CurrentArc,
+			"volume":             b.Volume,
+			"arc":                b.Arc,
+			"arc_total_chapters": b.EndChapter - b.StartChapter + 1,
+			"arc_chapter_index":  state.chapter - b.StartChapter + 1,
 		}
 		if volumes, err := t.store.Outline.LoadLayeredOutline(); err == nil {
-			globalCh := 1
 			for _, v := range volumes {
-				if v.Index == state.progress.CurrentVolume {
+				if v.Index == b.Volume {
 					pos["volume_title"] = v.Title
 					pos["volume_theme"] = v.Theme
 				}
 				for _, arc := range v.Arcs {
-					if v.Index == state.progress.CurrentVolume && arc.Index == state.progress.CurrentArc {
+					if v.Index == b.Volume && arc.Index == b.Arc {
 						pos["arc_title"] = arc.Title
 						pos["arc_goal"] = arc.Goal
-						if n := len(arc.Chapters); n > 0 {
-							pos["arc_total_chapters"] = n
-							pos["arc_chapter_index"] = state.chapter - globalCh + 1
-						}
 					}
-					globalCh += len(arc.Chapters)
 				}
 			}
 		} else {
@@ -699,7 +664,7 @@ func (t *ContextTool) buildChapterReferencePack(envelope *chapterContextEnvelope
 	} else {
 		var maxCompleted int
 		if state.progress != nil {
-			maxCompleted = maxCompletedChapter(state.progress.CompletedChapters)
+			maxCompleted = min(maxCompletedChapter(state.progress.CompletedChapters), state.chapter-1)
 		}
 		anchors, err := t.store.Drafts.ExtractStyleAnchors(3, maxCompleted)
 		reads.warn("style_anchors", err)
@@ -753,6 +718,23 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 	}
 	progress, progressErr := t.store.Progress.Load()
 	reads.require("progress_for_planning", progressErr)
+	if progress != nil && progress.LatestCompleted() > 0 {
+		review, err := t.store.World.LoadReview(progress.LatestCompleted())
+		reads.require("previous_review", err)
+		if review != nil {
+			issues := make([]map[string]any, 0, len(review.Issues))
+			for i, issue := range review.Issues {
+				issues = append(issues, map[string]any{
+					"number": i + 1, "type": issue.Type, "severity": issue.Severity,
+					"description": issue.Description, "suggestion": issue.Suggestion,
+				})
+			}
+			envelope.Planning["previous_review"] = map[string]any{
+				"chapter": review.Chapter, "summary": review.Summary,
+				"issues": issues, "recheck": review.Recheck,
+			}
+		}
+	}
 
 	layered, err := t.store.Outline.LoadLayeredOutline()
 	reads.require("layered_outline", err)

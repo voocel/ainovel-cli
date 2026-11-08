@@ -356,6 +356,20 @@ func (s *WorldStore) LoadStyleRules() (*domain.WritingStyleRules, error) {
 	return &rules, nil
 }
 
+// LoadStyleRulesBefore 只返回目标弧之前提炼的规则。旧数据只保留最新一份，
+// 若来源不明或来自目标弧及之后，则没有可用的历史规则，返回 nil。
+func (s *WorldStore) LoadStyleRulesBefore(volume, arc int) (*domain.WritingStyleRules, error) {
+	rules, err := s.LoadStyleRules()
+	if err != nil || rules == nil {
+		return nil, err
+	}
+	if rules.Volume > 0 && rules.Arc > 0 &&
+		(rules.Volume < volume || (rules.Volume == volume && rules.Arc < arc)) {
+		return rules, nil
+	}
+	return nil, nil
+}
+
 func (s *WorldStore) SaveAuthorRevisionStyle(style domain.AuthorRevisionStyle) error {
 	return s.io.WriteJSON("meta/author_revision_style.json", style)
 }
@@ -443,6 +457,24 @@ func (s *WorldStore) LoadLastReview(fromChapter int) (*domain.ReviewEntry, error
 // LoadReviewsAffectingChapter 返回所有明确把 chapter 纳入返工队列的评审，
 // 新到旧排列。弧/全局评审存放在评审终点，不能再按目标章节文件名查找。
 func (s *WorldStore) LoadReviewsAffectingChapter(chapter int) ([]domain.ReviewEntry, error) {
+	all, err := s.loadReviews()
+	if err != nil {
+		return nil, err
+	}
+	var reviews []domain.ReviewEntry
+	for _, review := range all {
+		if slices.Contains(review.AffectedChapters, chapter) ||
+			(review.Scope == "chapter" && review.Chapter == chapter && review.Verdict != "accept" && len(review.AffectedChapters) == 0) {
+			reviews = append(reviews, review)
+		}
+	}
+	slices.SortFunc(reviews, func(a, b domain.ReviewEntry) int {
+		return b.Chapter - a.Chapter
+	})
+	return reviews, nil
+}
+
+func (s *WorldStore) loadReviews() ([]domain.ReviewEntry, error) {
 	entries, err := os.ReadDir(s.io.path("reviews"))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -463,14 +495,8 @@ func (s *WorldStore) LoadReviewsAffectingChapter(chapter int) ([]domain.ReviewEn
 		if err := json.Unmarshal(data, &review); err != nil {
 			return nil, fmt.Errorf("parse reviews/%s: %w", entry.Name(), err)
 		}
-		if slices.Contains(review.AffectedChapters, chapter) ||
-			(review.Scope == "chapter" && review.Chapter == chapter && review.Verdict != "accept" && len(review.AffectedChapters) == 0) {
-			reviews = append(reviews, review)
-		}
+		reviews = append(reviews, review)
 	}
-	slices.SortFunc(reviews, func(a, b domain.ReviewEntry) int {
-		return b.Chapter - a.Chapter
-	})
 	return reviews, nil
 }
 

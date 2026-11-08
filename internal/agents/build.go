@@ -44,6 +44,9 @@ func promptCacheBase(bookDir string) string {
 // 短暂网络抖动可以在 Worker 内安全重试，不会重放工具副作用。
 const subagentMaxRetries = 7
 
+// cacheControlEphemeral 是显式缓存断点的默认 TTL 档（provider 默认 5m）。
+const cacheControlEphemeral = "ephemeral"
+
 // UsageRecorder 是 BuildWorkers 可选的用量回调；签名与 OnMessage 一致，
 // 每条 agent 消息都会调一次，由 Host 层负责聚合。task 是本次 spawn 的任务文本
 // 作为会话身份，供缓存链断裂检测按会话重置基线。
@@ -142,6 +145,7 @@ func BuildWorkers(
 		contextTool,
 		readChapter,
 		tools.NewSaveReviewTool(store),
+		tools.NewSaveReviewCheckTool(store),
 		tools.NewSaveArcSummaryTool(store),
 		tools.NewSaveVolumeSummaryTool(store),
 	}
@@ -193,7 +197,8 @@ func BuildWorkers(
 	// 提示词缓存：一书一基、一角色一名、一会话一键（subagent spawn 追加 #seq）。
 	// OpenAI 系用 prompt_cache_key 做路由亲和；Claude 系用 cache_control 滚动断点
 	//（system 地板 + 末消息尖端）。provider 不支持时由 agentcore 按能力静默丢弃，
-	// 多轮会话下读缓存收益恒为正，故不设开关。
+	// Worker 始终保留缓存意图；OpenAI 的断点兼容由实际模型客户端处理，
+	// 避免 /model 或 fallback 切换 provider 后仍沿用启动时的策略。
 	cacheBase := promptCacheBase(store.Dir())
 
 	architectStopGuardFactory := func(_, _ string) agentcore.StopGuard {
@@ -217,7 +222,7 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         architectThinking,
 		OnMessage:             onMsg,
-		CacheLastMessage:      "ephemeral",
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-architect_short",
 		ContextManagerFactory: roleContextFactory(architectContextProfile),
 		StopAfterToolResult: func(toolName string, result json.RawMessage) bool {
@@ -235,7 +240,7 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         architectThinking,
 		OnMessage:             onMsg,
-		CacheLastMessage:      "ephemeral",
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-architect_long",
 		ContextManagerFactory: roleContextFactory(architectContextProfile),
 		StopAfterToolResult:   architectLongShouldStopAfterToolResult,
@@ -260,7 +265,7 @@ func BuildWorkers(
 		ThinkingLevel:    resolvedRoleThinking(writerModel, cfg, "writer"),
 		StopAfterTools:   []string{"commit_chapter"},
 		OnMessage:        onMsg,
-		CacheLastMessage: "ephemeral",
+		CacheLastMessage: cacheControlEphemeral,
 		PromptCacheKey:   cacheBase + "-writer",
 		StopGuardFactory: func(_, _ string) agentcore.StopGuard {
 			return guard.NewWriterStopGuard(store, onGuardBlock)
@@ -305,14 +310,14 @@ func BuildWorkers(
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         resolvedRoleThinking(editorModel, cfg, "editor"),
 		OnMessage:             onMsg,
-		CacheLastMessage:      "ephemeral",
+		CacheLastMessage:      cacheControlEphemeral,
 		PromptCacheKey:        cacheBase + "-editor",
 		ContextManagerFactory: roleContextFactory(editorContextProfile),
 		// 终态产物命中即停。终态退出仍会咨询 StopGuard（契约测试 TestContract_
 		// TerminalToolExitConsultsStopGuard），任务感知的 NewEditorStopGuard 负责
 		// 否决"被派生成摘要却只做了复核"的提前退出，所以 save_review 可以安全硬停。
 		StopAfterToolResult: func(toolName string, _ json.RawMessage) bool {
-			return toolName == "save_review" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
+			return toolName == "save_review" || toolName == "save_review_check" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
 		},
 		StopGuardFactory: func(_, task string) agentcore.StopGuard {
 			return guard.NewEditorStopGuard(store, task, onGuardBlock)

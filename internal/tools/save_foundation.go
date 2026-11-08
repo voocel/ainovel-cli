@@ -266,6 +266,13 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if len(progress.PendingRewrites) > 0 {
 			return nil, fmt.Errorf("还有 %d 章在返工队列中，处理完再调 complete_book: %w", len(progress.PendingRewrites), errs.ErrToolPrecondition)
 		}
+		check, err := t.store.World.LoadPendingReviewRecheck()
+		if err != nil {
+			return nil, fmt.Errorf("load review recheck: %w: %w", errs.ErrStoreRead, err)
+		}
+		if check != nil {
+			return nil, fmt.Errorf("第 %d 章评审的返工尚待复核，不可完本: %w", check.Chapter, errs.ErrToolPrecondition)
+		}
 		// 可枚举的完本前置校验必须在代码层(三分法),不能只依赖提示词里的
 		// "完结判定清单"——真实事故:规划刚落盘 phase 翻到 writing,弱模型顺手
 		// 误调 complete_book,0/68 章被直接标记完本。

@@ -96,6 +96,19 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 	artifact := fmt.Sprintf("reviews/%02d.json", r.Chapter)
 	var existing *domain.ReviewEntry
 	switch r.Scope {
+	case "chapter":
+		// 只识别已有返工评审的重放；写入目标尚不是文件时，仍须先持久化
+		// 新的返工意图，再由 SaveReview 显式报告工件写入失败。
+		reviews, err := t.store.World.LoadReviewsAffectingChapter(r.Chapter)
+		if err != nil {
+			return nil, fmt.Errorf("load chapter review: %w", err)
+		}
+		for i := range reviews {
+			if reviews[i].Chapter == r.Chapter && reviews[i].Scope == "chapter" {
+				existing = &reviews[i]
+				break
+			}
+		}
 	case "arc":
 		scope = domain.ArcScope(boundary.Volume, boundary.Arc)
 		existing, err = t.store.World.LoadReview(r.Chapter)
@@ -113,10 +126,21 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		}
 	}
 	if existing != nil {
-		if !reflect.DeepEqual(*existing, r) {
+		original := *existing
+		original.Recheck = nil // 系统登记的返工复核不改变原评审的幂等身份。
+		if reflect.DeepEqual(original, r) {
+			return t.finishReview(r, progress, scope, artifact)
+		}
+		if r.Scope != "chapter" {
 			return nil, fmt.Errorf("第 %d 章聚合评审已存在且内容不同，拒绝覆盖: %w", r.Chapter, errs.ErrToolConflict)
 		}
-		return t.finishReview(r, progress, scope, artifact)
+	}
+	check, err := t.store.World.LoadPendingReviewRecheck()
+	if err != nil {
+		return nil, fmt.Errorf("load review recheck: %w", err)
+	}
+	if check != nil && len(progress.PendingRewrites) == 0 {
+		return nil, fmt.Errorf("须先用 save_review_check 完成当前定向复核，不得发起下一轮返工: %w", errs.ErrToolPrecondition)
 	}
 	switch r.Scope {
 	case "arc":
@@ -173,6 +197,9 @@ func (t *SaveReviewTool) finishReview(
 }
 
 func (t *SaveReviewTool) normalizeReviewEntry(r *domain.ReviewEntry) (*store.ArcBoundary, error) {
+	if r.Recheck != nil {
+		return nil, fmt.Errorf("recheck is maintained by the system; use save_review_check for its result")
+	}
 	switch r.Scope {
 	case "chapter", "global", "arc":
 	default:

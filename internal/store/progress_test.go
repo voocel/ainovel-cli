@@ -1,6 +1,8 @@
 package store
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -234,6 +236,38 @@ func TestApplyReviewOutcomePreservesExistingRewriteQueue(t *testing.T) {
 	}
 	if p.Flow != domain.FlowRewriting || len(p.PendingRewrites) != 2 {
 		t.Fatalf("新审阅通过不能遗弃既有返工队列: flow=%s queue=%v", p.Flow, p.PendingRewrites)
+	}
+}
+
+func TestApplyReviewOutcomeMergesPendingWork(t *testing.T) {
+	for _, flow := range []domain.FlowState{domain.FlowRewriting, domain.FlowPolishing} {
+		t.Run(string(flow), func(t *testing.T) {
+			s := NewStore(t.TempDir())
+			if err := s.Progress.Save(&domain.Progress{
+				Phase: domain.PhaseWriting, Flow: flow,
+				CompletedChapters: []int{1, 2, 3}, PendingRewrites: []int{3, 1},
+				RewriteReason: "原有返工要求",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var reason string
+			for attempt := 0; attempt < 2; attempt++ {
+				p, err := s.Progress.ApplyReviewOutcome(flow, []int{1, 2, 2}, "追加审阅要求")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(p.PendingRewrites, []int{3, 1, 2}) || p.Flow != flow {
+					t.Fatalf("新增审阅必须保留原顺序并去重追加: %+v", p)
+				}
+				if !strings.Contains(p.RewriteReason, "原有返工要求") || !strings.Contains(p.RewriteReason, "追加审阅要求") {
+					t.Fatalf("返工理由丢失: %q", p.RewriteReason)
+				}
+				if attempt > 0 && p.RewriteReason != reason {
+					t.Fatalf("重放审阅不得重复追加理由: %q -> %q", reason, p.RewriteReason)
+				}
+				reason = p.RewriteReason
+			}
+		})
 	}
 }
 

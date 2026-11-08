@@ -131,10 +131,7 @@ func (p *WriterRestorePack) Refresh(s *store.Store) {
 		p.Clear()
 		return
 	}
-	ch := progress.CurrentChapter
-	if progress.InProgressChapter > 0 {
-		ch = progress.InProgressChapter
-	}
+	ch := writerContextChapter(progress)
 	if ch <= 0 {
 		p.Clear()
 		return

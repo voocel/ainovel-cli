@@ -1167,8 +1167,9 @@ func TestCommitChapterAllowsTitleOnlyRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final != body {
-		t.Fatalf("title-only rewrite changed body: %q", final)
+	// 终稿由系统写成「# 第 N 章 标题」加正文：标题换了，正文不变。
+	if want := domain.ChapterText(2, "更准确的新标题", body); final != want {
+		t.Fatalf("title-only rewrite final = %q, want %q", final, want)
 	}
 }
 
@@ -1552,5 +1553,35 @@ func TestCommitChapterLayeredNoAutoCompleteWithOpenThreads(t *testing.T) {
 	}
 	if p, _ := s.Progress.Load(); p.Phase == domain.PhaseComplete {
 		t.Fatal("活跃长线未收束时不应自动完结")
+	}
+}
+
+// 终稿的章号与标题由系统按提交的 title 统一写成「# 第 N 章 标题」，草稿里自带的标题行剥掉。
+func TestCommitChapterWritesCanonicalHeading(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.Init(10); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drafts.SaveDraft(1, "第 1 章《雨夜》\n\n他望着窗外。"); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"chapter": 1, "title": "雨夜归人", "summary": "推进", "characters": []string{"主角"}, "key_events": []string{"归来"},
+	})
+	if _, err := newTestCommitChapterTool(s).Execute(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	final, err := s.Drafts.LoadChapterText(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "# 第 1 章 雨夜归人\n\n他望着窗外。"; final != want {
+		t.Fatalf("final = %q, want %q", final, want)
 	}
 }

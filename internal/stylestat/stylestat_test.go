@@ -135,3 +135,14 @@ func TestComputeTitleFormats(t *testing.T) {
 		t.Errorf("uniform titles should not report: %+v", s.TitleFormats)
 	}
 }
+
+func TestComputeTitleFormatsAcceptsCanonicalHeading(t *testing.T) {
+	titles := []string{"# 第 1 章 风起", "# 风起", "第 3 章 风起", "风起", "### 第两百章 风起", "# 风起"}
+	got := titleFormats(titles)
+	if got == nil || got.WithPrefix != 3 || got.WithoutPrefix != 3 {
+		t.Fatalf("应按正文章号统计，兼容系统生成的空格和 Markdown 标题: %+v", got)
+	}
+	if got := titleFormats([]string{"# 第 1 章 风起", "第2章 云涌", "## 第 三 章 雷动"}); got != nil {
+		t.Fatalf("空格与 Markdown 层级不同不应误报有无章号混用: %+v", got)
+	}
+}

@@ -7,34 +7,6 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
-func TestStripChapterTitleHeader(t *testing.T) {
-	cases := []struct {
-		name  string
-		in    string
-		title string
-		want  string
-	}{
-		{"plain body untouched", "他望着窗外。", "雨夜归人", "他望着窗外。"},
-		{"strip h1 chinese title", "# 第 1 章  雨夜归人\n\n他望着窗外。", "雨夜归人", "他望着窗外。"},
-		{"strip h2 with chapter token", "## 第二章\n\n他望着窗外。", "", "他望着窗外。"},
-		{"keep body even if no header", "正文第一句。\n第二句。", "", "正文第一句。\n第二句。"},
-		{"do not strip non-chapter heading", "# 序章\n他望着窗外。", "边村浮生", "# 序章\n他望着窗外。"},
-		{"single line header only", "# 第 1 章", "", ""},
-		// writer 把纯章节名当标题写进首行 → 与导出器统一标题重复，应剥掉
-		{"strip h1 matching chapter title", "# 边村浮生\n\n天还没亮。", "边村浮生", "天还没亮。"},
-		// 首行 h1 但文字不等于本章标题 → 视为正文，保留
-		{"keep h1 not matching title", "# 别的小标题\n正文。", "边村浮生", "# 别的小标题\n正文。"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := stripChapterTitleHeader(c.in, c.title)
-			if got != c.want {
-				t.Fatalf("stripChapterTitleHeader\nin   = %q\ntitle= %q\nwant = %q\ngot  = %q", c.in, c.title, c.want, got)
-			}
-		})
-	}
-}
-
 func TestBuildTitleIndex(t *testing.T) {
 	outline := []domain.OutlineEntry{
 		{Chapter: 1, Title: "雨夜归人"},

@@ -7,6 +7,28 @@ import (
 	"strings"
 )
 
+// UnresolvedReviewRecheck 展示一次复核后仍存在的问题，不自动派发第二轮返工。
+func UnresolvedReviewRecheck(snap *Snapshot) []Finding {
+	var findings []Finding
+	for _, r := range snap.Reviews {
+		if r.Recheck == nil || r.Recheck.Result == nil || len(r.Recheck.Result.UnresolvedIssues) == 0 {
+			continue
+		}
+		var evidence []string
+		for _, issue := range r.Recheck.Result.UnresolvedIssues {
+			evidence = append(evidence, fmt.Sprintf("原问题%d: %s", issue.Issue, issue.Evidence))
+		}
+		findings = append(findings, Finding{
+			Rule: "UnresolvedReviewRecheck", Category: CatQuality, Severity: SevWarning,
+			Confidence: ConfHigh, AutoLevel: AutoNone, Target: "quality.review",
+			Title:      fmt.Sprintf("第 %d 章评审返工复核仍有 %d 项未解决", r.Chapter, len(evidence)),
+			Evidence:   strings.Join(evidence, "；"),
+			Suggestion: "查看原评审的 recheck.result 与对应正文，按需决定后续修改；单次复核不会自动循环返工。",
+		})
+	}
+	return findings
+}
+
 // ChronicLowDimension 检测某评审维度跨多章持续低分。
 func ChronicLowDimension(snap *Snapshot) []Finding {
 	if len(snap.Reviews) < 2 {

@@ -83,6 +83,39 @@ func (s *CharacterStore) LoadLatestSnapshots() ([]domain.CharacterSnapshot, erro
 	return nil, nil
 }
 
+// LoadSnapshotsBefore 读取目标章之前已结束弧的最近快照；当前弧的快照包含
+// 该弧写完后的状态，不能用作弧内旧章节的前置事实。无历史快照时返回 nil。
+func (s *CharacterStore) LoadSnapshotsBefore(chapter int) ([]domain.CharacterSnapshot, error) {
+	volumes, err := s.outline.LoadLayeredOutline()
+	if err != nil {
+		return nil, err
+	}
+	var prior [][2]int
+	endChapter := 0
+scan:
+	for _, volume := range volumes {
+		for _, arc := range volume.Arcs {
+			endChapter += len(arc.Chapters)
+			if endChapter >= chapter {
+				break scan
+			}
+			if len(arc.Chapters) > 0 {
+				prior = append(prior, [2]int{volume.Index, arc.Index})
+			}
+		}
+	}
+	for i := len(prior) - 1; i >= 0; i-- {
+		snapshots, err := s.LoadSnapshots(prior[i][0], prior[i][1])
+		if err != nil {
+			return nil, err
+		}
+		if len(snapshots) > 0 {
+			return snapshots, nil
+		}
+	}
+	return nil, nil
+}
+
 func renderCharacters(chars []domain.Character) string {
 	var b strings.Builder
 	b.WriteString("# 角色档案\n\n")

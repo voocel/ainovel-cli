@@ -46,6 +46,12 @@ func LoadState(store *storepkg.Store) (State, error) {
 	}
 
 	s.LastCompleted = progress.LatestCompleted()
+	if len(progress.PendingRewrites) == 0 {
+		s.ReviewRecheck, err = store.World.LoadPendingReviewRecheck()
+		if err != nil {
+			return s, fmt.Errorf("load review recheck: %w", err)
+		}
+	}
 
 	// 弧边界仅在分层模式且有已完成章节时才计算
 	if progress.Layered && s.LastCompleted > 0 {

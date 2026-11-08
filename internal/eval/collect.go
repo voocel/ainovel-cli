@@ -145,39 +145,11 @@ func collectStyle(s *store.Store, prog *domain.Progress, check func(string, erro
 func chapterTitle(s *store.Store, chapter int, text string, check func(string, error)) string {
 	summary, err := s.Summaries.LoadSummary(chapter)
 	check(fmt.Sprintf("summary:%d", chapter), err)
-	if summary != nil && strings.TrimSpace(summary.Title) != "" {
-		return summary.Title
+	summaryTitle := ""
+	if summary != nil {
+		summaryTitle = summary.Title
 	}
-	entries, err := s.Outline.LoadOutline()
-	check("outline", err)
-	for _, entry := range entries {
-		if entry.Chapter == chapter && strings.TrimSpace(entry.Title) != "" {
-			return entry.Title
-		}
-	}
-	volumes, err := s.Outline.LoadLayeredOutline()
-	check("layered_outline", err)
-	for _, v := range volumes {
-		for _, a := range v.Arcs {
-			for _, entry := range a.Chapters {
-				if entry.Chapter == chapter && strings.TrimSpace(entry.Title) != "" {
-					return entry.Title
-				}
-			}
-		}
-	}
-	return firstMarkdownTitle(text)
-}
-
-func firstMarkdownTitle(text string) string {
-	for line := range strings.SplitSeq(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		return strings.TrimSpace(strings.TrimLeft(line, "#"))
-	}
-	return ""
+	return stylestat.TitleFromChapter(text, summaryTitle)
 }
 
 func collectUsage(s *store.Store, check func(string, error)) UsageMetrics {

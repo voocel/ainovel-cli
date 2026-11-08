@@ -84,7 +84,11 @@ func Load(s *store.Store) Snapshot {
 			} else {
 				check(fmt.Sprintf("summary_ch%d", ch), err)
 			}
-			if review, err := s.World.LoadReview(ch); err == nil && review != nil {
+			review, err := s.World.LoadReview(ch)
+			if err == nil && review == nil {
+				review, err = s.World.LoadGlobalReview(ch)
+			}
+			if err == nil && review != nil {
 				snap.Reviews[ch] = review
 			} else {
 				check(fmt.Sprintf("review_ch%d", ch), err)

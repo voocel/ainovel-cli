@@ -12,6 +12,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/stylestat"
 )
 
 func newTestContextTool(st *store.Store, refs References, style string) *ContextTool {
@@ -207,14 +208,14 @@ func TestStyleStatsTitleBoundsOversizedInput(t *testing.T) {
 	if err := st.Drafts.SaveFinalChapter(1, body); err != nil {
 		t.Fatal(err)
 	}
-	longSummary := strings.Repeat("第", styleStatsTitleScanBytes) + "一章 开端"
+	longSummary := strings.Repeat("第", stylestat.TitleScanBytes) + "一章 开端"
 	if err := st.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 1, Title: longSummary}); err != nil {
 		t.Fatal(err)
 	}
 	tool := newTestContextTool(st, References{}, "default")
 	got := tool.styleStatsTitle(1, &contextReads{})
-	if len(got) == 0 || len(got) > styleStatsTitleScanBytes {
-		t.Fatalf("final title len=%d, bound=%d", len(got), styleStatsTitleScanBytes)
+	if len(got) == 0 || len(got) > stylestat.TitleScanBytes {
+		t.Fatalf("final title len=%d, bound=%d", len(got), stylestat.TitleScanBytes)
 	}
 	if !strings.HasPrefix(got, "# 第一章 ") {
 		t.Fatalf("oversized final title = %q", got)
@@ -230,8 +231,8 @@ func TestStyleStatsTitleBoundsOversizedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = tool.styleStatsTitle(2, &contextReads{})
-	if len(got) == 0 || len(got) > styleStatsTitleScanBytes {
-		t.Fatalf("summary title len=%d, bound=%d", len(got), styleStatsTitleScanBytes)
+	if len(got) == 0 || len(got) > stylestat.TitleScanBytes {
+		t.Fatalf("summary title len=%d, bound=%d", len(got), stylestat.TitleScanBytes)
 	}
 	if strings.Contains(got, "一章 开端") {
 		t.Fatal("oversized summary title kept the tail past the scan bound")

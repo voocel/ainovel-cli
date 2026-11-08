@@ -15,19 +15,20 @@ import (
 const defaultStoreSummaryBudgetTokens = 7000
 
 type writerStoreSummaryState struct {
-	progress          *domain.Progress
-	chapter           int
-	currentOutline    *domain.OutlineEntry
-	chapterPlan       *domain.ChapterPlan
-	recentSummaries   []domain.ChapterSummary
-	currentArcSummary *domain.ArcSummary
-	currentVolSummary *domain.VolumeSummary
-	snapshots         []domain.CharacterSnapshot
-	foreshadow        []domain.ForeshadowEntry
-	timeline          []domain.TimelineEvent
-	styleRules        *domain.WritingStyleRules
-	pendingReviews    []writerPendingReview
-	warnings          []string
+	progress        *domain.Progress
+	chapter         int
+	boundary        *store.ArcBoundary
+	currentOutline  *domain.OutlineEntry
+	chapterPlan     *domain.ChapterPlan
+	recentSummaries []domain.ChapterSummary
+	priorArcSummary *domain.ArcSummary
+	priorVolSummary *domain.VolumeSummary
+	snapshots       []domain.CharacterSnapshot
+	foreshadow      []domain.ForeshadowEntry
+	timeline        []domain.TimelineEvent
+	styleRules      *domain.WritingStyleRules
+	pendingReviews  []writerPendingReview
+	warnings        []string
 }
 
 func (s *writerStoreSummaryState) warn(scope string, err error) {
@@ -91,6 +92,17 @@ func buildWriterRestoreText(s *store.Store, budgetTokens int) (string, bool, err
 	return "<post-compact-context>\n" + strings.Join(parts, "\n\n") + "\n</post-compact-context>", true, nil
 }
 
+func writerContextChapter(progress *domain.Progress) int {
+	if progress.InProgressChapter > 0 {
+		return progress.InProgressChapter
+	}
+	// Engine 在预标 InProgressChapter 之前就会刷新恢复包，返工目标来自队列头。
+	if len(progress.PendingRewrites) > 0 {
+		return progress.PendingRewrites[0]
+	}
+	return progress.CurrentChapter
+}
+
 func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool, error) {
 	if s == nil {
 		return nil, false, nil
@@ -100,10 +112,7 @@ func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool
 		return nil, false, err
 	}
 
-	chapter := progress.CurrentChapter
-	if progress.InProgressChapter > 0 {
-		chapter = progress.InProgressChapter
-	}
+	chapter := writerContextChapter(progress)
 	if chapter <= 1 {
 		return nil, false, nil
 	}
@@ -138,10 +147,6 @@ func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool
 	if err != nil {
 		state.warn("recent_summaries", err)
 	}
-	state.snapshots, err = s.Characters.LoadLatestSnapshots()
-	if err != nil {
-		state.warn("character_snapshots", err)
-	}
 	state.foreshadow, err = s.World.LoadActiveForeshadow()
 	if err != nil {
 		state.warn("foreshadow", err)
@@ -150,18 +155,14 @@ func loadWriterStoreSummaryState(s *store.Store) (*writerStoreSummaryState, bool
 	if err != nil {
 		state.warn("timeline", err)
 	}
-	state.styleRules, err = s.World.LoadStyleRules()
-	if err != nil {
-		state.warn("style_rules", err)
-	}
 	state.pendingReviews, err = loadPendingReviewsForStoreState(s, chapter)
 	if err != nil {
 		state.warn("pending_reviews", err)
 	}
 
-	loadLayeredSummariesForStoreState(s, progress, chapter, state)
+	loadWriterChapterMemory(s, state)
 
-	hasSummaries := len(state.recentSummaries) > 0 || state.currentArcSummary != nil || state.currentVolSummary != nil
+	hasSummaries := len(state.recentSummaries) > 0 || state.priorArcSummary != nil || state.priorVolSummary != nil
 	hasWorkingState := state.chapterPlan != nil || state.currentOutline != nil
 	if !hasSummaries || !hasWorkingState {
 		return nil, false, nil
@@ -178,10 +179,7 @@ func loadWriterRestoreState(s *store.Store) (*writerStoreSummaryState, error) {
 		return nil, err
 	}
 
-	chapter := progress.CurrentChapter
-	if progress.InProgressChapter > 0 {
-		chapter = progress.InProgressChapter
-	}
+	chapter := writerContextChapter(progress)
 	if chapter <= 0 {
 		return nil, nil
 	}
@@ -203,21 +201,17 @@ func loadWriterRestoreState(s *store.Store) (*writerStoreSummaryState, error) {
 		state.currentOutline, err = s.Outline.GetChapterFromLayered(chapter)
 		state.warn("layered_chapter_outline", err)
 	}
-	state.snapshots, err = s.Characters.LoadLatestSnapshots()
-	state.warn("character_snapshots", err)
 	state.foreshadow, err = s.World.LoadActiveForeshadow()
 	state.warn("foreshadow", err)
 	state.pendingReviews, err = loadPendingReviewsForStoreState(s, chapter)
 	state.warn("pending_reviews", err)
-	state.styleRules, err = s.World.LoadStyleRules()
-	state.warn("style_rules", err)
 	state.timeline, err = s.World.LoadRecentTimeline(chapter, profile.TimelineWindow)
 	state.warn("timeline", err)
 	if chapter > 1 {
 		state.recentSummaries, err = s.Summaries.LoadRecentSummaries(chapter, min(profile.SummaryWindow, 2))
 		state.warn("recent_summaries", err)
 	}
-	loadLayeredSummariesForStoreState(s, progress, chapter, state)
+	loadWriterChapterMemory(s, state)
 	if isEmptySummarySection(state.chapterPlan) &&
 		isEmptySummarySection(state.currentOutline) &&
 		isEmptySummarySection(state.snapshots) &&
@@ -238,14 +232,18 @@ func writerStoreProgressSection(state *writerStoreSummaryState) map[string]any {
 	if state == nil || state.progress == nil {
 		return nil
 	}
+	volume, arc := state.progress.CurrentVolume, state.progress.CurrentArc
+	if state.boundary != nil {
+		volume, arc = state.boundary.Volume, state.boundary.Arc
+	}
 	return map[string]any{
 		"phase":               state.progress.Phase,
 		"flow":                state.progress.Flow,
 		"current_chapter":     state.chapter,
 		"completed_chapters":  state.progress.CompletedChapters,
 		"completed_count":     len(state.progress.CompletedChapters),
-		"current_volume":      state.progress.CurrentVolume,
-		"current_arc":         state.progress.CurrentArc,
+		"current_volume":      volume,
+		"current_arc":         arc,
 		"in_progress_chapter": state.progress.InProgressChapter,
 	}
 }
@@ -257,8 +255,8 @@ func writerStoreSummarySections(state *writerStoreSummaryState) []writerStoreSec
 		{heading: "最近章节摘要", data: state.recentSummaries},
 		{heading: "当前章节计划", data: state.chapterPlan},
 		{heading: "当前章节大纲", data: state.currentOutline},
-		{heading: "当前弧摘要", data: state.currentArcSummary},
-		{heading: "当前卷摘要", data: state.currentVolSummary},
+		{heading: "前弧摘要", data: state.priorArcSummary},
+		{heading: "前卷摘要", data: state.priorVolSummary},
 		{heading: "角色快照", data: state.snapshots},
 		{heading: "活跃伏笔", data: state.foreshadow},
 		{heading: "待修审稿问题", data: state.pendingReviews},
@@ -277,8 +275,8 @@ func writerRestoreSections(state *writerStoreSummaryState) []writerStoreSection 
 		{heading: "角色快照", data: state.snapshots},
 		{heading: "最近章节摘要", data: state.recentSummaries},
 		{heading: "活跃伏笔", data: state.foreshadow},
-		{heading: "当前弧摘要", data: state.currentArcSummary},
-		{heading: "当前卷摘要", data: state.currentVolSummary},
+		{heading: "前弧摘要", data: state.priorArcSummary},
+		{heading: "前卷摘要", data: state.priorVolSummary},
 		{heading: "最近时间线", data: state.timeline},
 		{heading: "风格规则", data: state.styleRules},
 	}
@@ -367,37 +365,38 @@ func compactPendingReview(review *domain.ReviewEntry) (writerPendingReview, bool
 	return item, true
 }
 
-func loadLayeredSummariesForStoreState(s *store.Store, progress *domain.Progress, chapter int, state *writerStoreSummaryState) {
-	if s == nil || progress == nil || state == nil {
+// 压缩和恢复沿用目标章的历史边界，不能把 Progress 的全书前沿重新注入为当前事实。
+func loadWriterChapterMemory(s *store.Store, state *writerStoreSummaryState) {
+	if !state.progress.Layered {
+		var err error
+		state.snapshots, err = s.Characters.LoadLatestSnapshots()
+		state.warn("character_snapshots", err)
+		state.styleRules, err = s.World.LoadStyleRules()
+		state.warn("style_rules", err)
 		return
 	}
-	if !progress.Layered {
+	b, err := s.Outline.CheckArcBoundary(state.chapter)
+	state.warn("chapter_location", err)
+	if err != nil || b == nil {
 		return
 	}
-	volume, arc := progress.CurrentVolume, progress.CurrentArc
-	if volume <= 0 || arc <= 0 {
-		if v, a, err := s.Outline.LocateChapter(chapter); err == nil {
-			volume, arc = v, a
-		} else if v, a, err := s.Outline.LocateChapter(max(chapter-1, 1)); err == nil {
-			volume, arc = v, a
-		} else {
-			state.warn("chapter_location", err)
-		}
-	}
-	if volume <= 0 {
-		return
-	}
-	if sum, err := s.Summaries.LoadVolumeSummary(volume); err == nil {
-		state.currentVolSummary = sum
-	} else {
+	state.boundary = b
+	state.snapshots, err = s.Characters.LoadSnapshotsBefore(state.chapter)
+	state.warn("character_snapshots", err)
+	state.styleRules, err = s.World.LoadStyleRulesBefore(b.Volume, b.Arc)
+	state.warn("style_rules", err)
+	if b.Volume > 1 {
+		state.priorVolSummary, err = s.Summaries.LoadVolumeSummary(b.Volume - 1)
 		state.warn("volume_summary", err)
 	}
-	if arc > 0 {
-		if sum, err := s.Summaries.LoadArcSummary(volume, arc); err == nil {
-			state.currentArcSummary = sum
-		} else {
-			state.warn("arc_summary", err)
-		}
+	if b.StartChapter <= 1 {
+		return
+	}
+	prior, err := s.Outline.CheckArcBoundary(b.StartChapter - 1)
+	state.warn("prior_arc_location", err)
+	if err == nil && prior != nil {
+		state.priorArcSummary, err = s.Summaries.LoadArcSummary(prior.Volume, prior.Arc)
+		state.warn("arc_summary", err)
 	}
 }
 

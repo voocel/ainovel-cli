@@ -394,8 +394,12 @@ func createModelFromConfig(providerKey, model string, pc ProviderConfig, cache m
 	if err != nil {
 		return nil, fmt.Errorf("provider %s (%s): %w: %w", providerKey, providerType, errs.ErrProvider, err)
 	}
-	cache[cacheKey] = m
-	return m, nil
+	var modelClient agentcore.ChatModel = m
+	if providerType == "openai" {
+		modelClient = &openAICacheModel{LiteLLMAdapter: m}
+	}
+	cache[cacheKey] = modelClient
+	return modelClient, nil
 }
 
 type failoverModel struct {
