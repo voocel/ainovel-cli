@@ -111,6 +111,21 @@ func (s *ChapterRecordStore) LoadCompleted(chapters []int) ([]domain.ChapterReco
 	return records, nil
 }
 
+// LoadVersions 从已校验的接纳记录提取版本快照，顺序与 LoadCompleted 一致。
+func (s *ChapterRecordStore) LoadVersions(chapters []int) ([]domain.ChapterVersion, error) {
+	records, err := s.LoadCompleted(chapters)
+	if err != nil {
+		return nil, err
+	}
+	versions := make([]domain.ChapterVersion, 0, len(records))
+	for _, record := range records {
+		versions = append(versions, domain.ChapterVersion{
+			Chapter: record.Chapter, Revision: record.Revision, ContentSHA256: record.ContentSHA256,
+		})
+	}
+	return versions, nil
+}
+
 func validateChapterRecord(record domain.ChapterRecord) error {
 	switch {
 	case record.Version != domain.ChapterRecordVersion:

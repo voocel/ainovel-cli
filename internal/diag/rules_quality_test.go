@@ -7,6 +7,23 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
+func TestUnverifiedReviewRevisions(t *testing.T) {
+	version := domain.ChapterVersion{Chapter: 3, Revision: 2, ContentSHA256: "revised"}
+	review := &domain.ReviewEntry{Chapter: 4, Scope: "arc", RevisedChapters: []domain.ChapterVersion{version}}
+	snap := &Snapshot{Reviews: map[int]*domain.ReviewEntry{4: review}}
+	if findings := UnverifiedReviewRevisions(snap); len(findings) != 1 || findings[0].AutoLevel != AutoNone {
+		t.Fatalf("改后正文未复核必须可见，但不得自动派单: %+v", findings)
+	}
+	review.Recheck = &domain.ReviewRecheck{Chapters: []int{3}, Result: &domain.ReviewRecheckResult{Basis: []domain.ChapterVersion{version}}}
+	if findings := UnverifiedReviewRevisions(snap); len(findings) != 0 {
+		t.Fatalf("已经复核的同一版本不应重复告警: %+v", findings)
+	}
+	review.RevisedChapters[0].Revision++
+	if findings := UnverifiedReviewRevisions(snap); len(findings) != 1 {
+		t.Fatalf("再次返工不能复用旧版复核: %+v", findings)
+	}
+}
+
 func TestHookWeakChain(t *testing.T) {
 	snap := &Snapshot{
 		Reviews: map[int]*domain.ReviewEntry{

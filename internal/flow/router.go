@@ -83,7 +83,7 @@ type State struct {
 	// 自然结构操作统一吸收，不为每章额外派发规划师。
 	ImmediateFeedbackCount int
 
-	// 外部修订后最早一个需要由 Editor 重新生成的弧/卷工件。
+	// 正常收尾或修订/返工后最早一个需要由 Editor 生成的聚合工件。
 	AggregateRefresh *AggregateRefresh
 
 	// 整批正文返工结束后的单次定向复核，优先于摘要和续写。

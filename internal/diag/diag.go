@@ -39,6 +39,7 @@ var allRules = []RuleFunc{
 	ExcessiveRewrites,
 	WordCountAnomaly,
 	UnresolvedReviewRecheck,
+	UnverifiedReviewRevisions,
 	// Planning
 	StaleForeshadow,
 	CompassDrift,

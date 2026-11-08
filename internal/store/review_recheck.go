@@ -42,7 +42,7 @@ func (s *WorldStore) QueueReviewRecheck(chapter int) error {
 
 // LoadPendingReviewRecheck 只读持久化评审元数据，不回读全书正文。
 func (s *WorldStore) LoadPendingReviewRecheck() (*domain.ReviewEntry, error) {
-	reviews, err := s.loadReviews()
+	reviews, err := s.LoadReviews()
 	if err != nil {
 		return nil, err
 	}

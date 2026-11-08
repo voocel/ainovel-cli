@@ -967,7 +967,7 @@ func TestCommitChapterNonLayeredRecompletesAfterRework(t *testing.T) {
 }
 
 // TestCommitChapterLayeredReopenRecompletesDespiteOpenThread 验证收口：分层书经 reopen
-// 返工后，即便 compass 仍有未收束长线（返工可能扰动），排空后也按"结构完整"重新完结——
+// 返工后，即便 compass 仍有未收束长线（返工可能扰动），聚合重建后也按"结构完整"重新完结——
 // 不卡在 writing，杜绝终卷末越界续写死循环（§6.5 / known_outline_exhaustion 家族）。
 // 反证：若 reopen 路径仍用质量级 layeredBookComplete，本例 open thread 会让其返 false、
 // book_complete 为假，测试即失败。
@@ -1015,6 +1015,15 @@ func TestCommitChapterLayeredReopenRecompletesDespiteOpenThread(t *testing.T) {
 			t.Fatalf("MarkChapterComplete %d: %v", ch, err)
 		}
 	}
+	if err := s.World.SaveReview(domain.ReviewEntry{Chapter: 2, Scope: "arc", Verdict: "accept", Summary: "原评审"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveArcSummary(domain.ArcSummary{Volume: 1, Arc: 1, Summary: "旧弧摘要"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveVolumeSummary(domain.VolumeSummary{Volume: 1, Summary: "旧卷摘要"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Progress.MarkComplete(); err != nil {
 		t.Fatalf("MarkComplete: %v", err)
 	}
@@ -1043,8 +1052,12 @@ func TestCommitChapterLayeredReopenRecompletesDespiteOpenThread(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if bc, _ := out["book_complete"].(bool); !bc {
-		t.Error("reopen 返工排空后应按结构完整重新完结（即便长线未收束）")
+	if bc, _ := out["book_complete"].(bool); bc {
+		t.Error("reopen 返工排空后仍须等待聚合工件重建")
+	}
+	saveRebuiltArc(t, s, 1, 1)
+	if !saveRebuiltVolume(t, s, 1) {
+		t.Fatal("重建后应按结构完整重新完结（即便长线未收束）")
 	}
 	p, _ := s.Progress.Load()
 	if p.Phase != domain.PhaseComplete {
@@ -1235,7 +1248,7 @@ func TestCommitChapterLayeredRejectsOutOfRangeChapter(t *testing.T) {
 
 // TestCommitChapterLayeredAutoCompletesWhenDone 验证分层模式确定性完结兜底：
 // 大纲全部展开并写完 + 无骨架弧 + 无返工 + 活跃伏笔为零 + 指南针长线收束时，
-// 最后一章 commit 自动推 Phase=Complete，不依赖架构师主动调 complete_book。
+// 末弧评审与摘要收尾后自动推 Phase=Complete，不依赖架构师主动调 complete_book。
 // 这是 9bf26a5 删掉分层自动完结后引入的 livelock 的修复（终卷末尾模型既不 append
 // 也不 complete → 写手裸跑越界死循环）。
 func TestCommitChapterLayeredAutoCompletesWhenDone(t *testing.T) {
@@ -1300,9 +1313,16 @@ func TestCommitChapterLayeredAutoCompletesWhenDone(t *testing.T) {
 		t.Fatal("写完第 1 章 phase 不应为 complete")
 	}
 
-	// 第 2 章（最后一章）：应自动完结
-	if bc, _ := commit(2)["book_complete"].(bool); !bc {
-		t.Fatal("写完最后一章应自动完结")
+	// 第 2 章（最后一章）：仍须等待评审与摘要，而不是越过质量收尾。
+	if bc, _ := commit(2)["book_complete"].(bool); bc {
+		t.Fatal("写完最后一章不应跳过聚合工件")
+	}
+	if _, err := NewSaveReviewTool(s).Execute(t.Context(), basisReviewArgs(t, "arc", 2)); err != nil {
+		t.Fatal(err)
+	}
+	saveRebuiltArc(t, s, 1, 1)
+	if !saveRebuiltVolume(t, s, 1) {
+		t.Fatal("评审与摘要全部收尾后应自动完结")
 	}
 	if p, _ := s.Progress.Load(); p.Phase != domain.PhaseComplete {
 		t.Fatalf("expected phase=complete, got %s", p.Phase)

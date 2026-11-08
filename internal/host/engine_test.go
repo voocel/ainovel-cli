@@ -1003,6 +1003,13 @@ func TestEngine_PauseWithEditorDispatchWaitsForRewriteQueue(t *testing.T) {
 	if err := st.Progress.MarkChapterComplete(1, 1200, "crisis", "quest"); err != nil {
 		t.Fatalf("complete ch1: %v", err)
 	}
+	originalContent := strings.Repeat("原文", 600)
+	if err := st.Drafts.SaveFinalChapter(1, originalContent); err != nil {
+		t.Fatalf("save ch1: %v", err)
+	}
+	if _, err := st.ChapterRecords.Accept(1, domain.ChapterOriginGenerated, originalContent, domain.ChapterFacts{Title: "一", Summary: "原摘要"}, domain.StyleDelta{}); err != nil {
+		t.Fatalf("accept ch1: %v", err)
+	}
 
 	// editor:一次 save_review(verdict=rewrite, affected=[1]) 把第 1 章入队。
 	editorModel := &scriptedChatModel{fn: func(msgs []agentcore.Message) agentcore.Message {

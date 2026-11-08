@@ -14,6 +14,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/chapterfacts"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/voocel/ainovel-cli/internal/flow"
 	"github.com/voocel/ainovel-cli/internal/revision"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -530,9 +531,8 @@ func (t *CommitChapterTool) checkRules(text string) []rules.Violation {
 	return append(violations, rules.Check(text, structured)...)
 }
 
-// executeRewriteCommit 处理打磨/重写章节的提交：覆盖终稿与摘要、更新字数、drain 队列。
-// 跳过所有世界状态追加（timeline / foreshadow / relationship / state_changes）与弧边界检测，
-// 这些已在章节原始提交时应用。
+// executeRewriteCommit 按冻结载荷覆盖终稿、接纳记录和章摘要，重建章节级投影并排空队列。
+// 正文变化时先登记复核与聚合失效，再覆盖终稿，沿用 PendingCommit 的崩溃恢复协议。
 func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.Progress, pending domain.PendingCommit, recovering bool) (json.RawMessage, error) {
 	chapter := a.Chapter
 	// 1. 只使用首次提交时冻结的返工正文，崩溃恢复不得采用随后被覆盖的 draft。
@@ -615,6 +615,10 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 			if err := t.store.World.QueueReviewRecheck(chapter); err != nil {
 				return nil, fmt.Errorf("rewrite: queue review recheck: %w: %w", errs.ErrStoreWrite, err)
 			}
+			version := domain.ChapterVersion{Chapter: chapter, Revision: candidate.Revision, ContentSHA256: candidate.ContentSHA256}
+			if err := t.store.InvalidateRewriteAggregates(version); err != nil {
+				return nil, fmt.Errorf("rewrite: invalidate aggregates: %w: %w", errs.ErrStoreWrite, err)
+			}
 		}
 
 		// 4. 校验通过后再覆盖权威记录与终稿；同一冻结载荷可安全重放。
@@ -673,7 +677,7 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 	// 队列清空后再判完结：返工提交不经过主路径 applyCompletion，完结只能在此触发。
 	//   - 分层 + 正向写作：layeredComplete 总判定（收官卷结构写完 / 未宣告走质量级）。
 	//   - 分层 + reopen 返工（ReopenedFromComplete）：返工只改已有章、不增减结构，按结构完整
-	//     即重新完结——若因返工扰动了某条线索就卡在 writing，终卷末会落到越界续写死循环。
+	//     且复核/聚合维护全部完成才重新完结，不因旧长线卡在终卷末越界续写。
 	//   - 非分层：写满 TotalChapters 即完结（返工不增减章数，原本就满）。
 	bookComplete, err := ReconcileRewrittenBook(t.store, latest)
 	if err != nil {
@@ -893,11 +897,11 @@ func finaleWrapped(st *store.Store, progress *domain.Progress) (bool, error) {
 //   - 未宣告 → 质量级 layeredBookComplete，防模型既不收官也不完本时在大纲耗尽处
 //     过早收尾。
 func layeredComplete(st *store.Store, progress *domain.Progress) (bool, error) {
-	check, err := st.World.LoadPendingReviewRecheck()
+	state, err := flow.LoadState(st)
 	if err != nil {
-		return false, fmt.Errorf("load review recheck: %w", err)
+		return false, fmt.Errorf("load completion state: %w", err)
 	}
-	if check != nil {
+	if state.ReviewRecheck != nil || state.AggregateRefresh != nil {
 		return false, nil
 	}
 	volumes, err := st.Outline.LoadLayeredOutline()
@@ -915,7 +919,7 @@ func layeredComplete(st *store.Store, progress *domain.Progress) (bool, error) {
 }
 
 // ReconcileRewrittenBook 在返工排空、单次复核完成及 Engine 恢复时补齐完结状态。
-// 待复核时不得提前结束全书；传入的 progress 必须是当前持久化快照。
+// 待复核或待重建聚合工件时不得提前结束全书；progress 必须是当前持久化快照。
 func ReconcileRewrittenBook(st *store.Store, progress *domain.Progress) (bool, error) {
 	if progress == nil || len(progress.PendingRewrites) > 0 {
 		return false, nil
@@ -923,11 +927,11 @@ func ReconcileRewrittenBook(st *store.Store, progress *domain.Progress) (bool, e
 	if progress.Phase == domain.PhaseComplete {
 		return true, nil
 	}
-	check, err := st.World.LoadPendingReviewRecheck()
+	state, err := flow.LoadState(st)
 	if err != nil {
-		return false, fmt.Errorf("load review recheck: %w: %w", errs.ErrStoreRead, err)
+		return false, fmt.Errorf("load completion state: %w: %w", errs.ErrStoreRead, err)
 	}
-	if check != nil {
+	if state.ReviewRecheck != nil || state.AggregateRefresh != nil {
 		return false, nil
 	}
 	complete := false
@@ -967,14 +971,7 @@ func ReconcileLayeredCompletion(st *store.Store) (bool, error) {
 	if progress.Phase != domain.PhaseWriting {
 		return false, nil
 	}
-	complete, err := layeredComplete(st, progress)
-	if err != nil || !complete {
-		return complete, err
-	}
-	if err := st.Progress.MarkComplete(); err != nil {
-		return false, fmt.Errorf("mark complete: %w", err)
-	}
-	return true, nil
+	return ReconcileRewrittenBook(st, progress)
 }
 
 // layeredBookComplete 用客观事实判断分层长篇是否真正写完，对照 architect-long.md 完结判定

@@ -209,6 +209,21 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 `commit_chapter` 承担弧/卷/全书完成检测，返回结构化事实；`save_review` 不做文学阈值裁定，只校验审阅事实并把 Editor 给出的 verdict 原子映射为 Flow 与返工队列。
 
+`save_review` 自动从已接纳的章节记录采集 `basis`，按章保存 `chapter / revision / content_sha256`，
+单章评审覆盖该章，弧评审覆盖本弧，全局评审覆盖截至评审终点的已完成章节。
+`save_review_check` 在 `recheck.result.basis` 单独保存修改章的复核版本；保存重试沿用原快照。
+版本仅用于审计溯源，不注入模型上下文，也不参与 `HasArcReview`、路由或自动复审判断。
+旧评审和旧复核缺少 `basis` 表示版本未知，不追溯补填；新保存时接纳记录缺失或损坏则报错。
+
+内部返工的正文变化会在覆盖终稿前失效**所在弧**的摘要、角色快照和风格规则，以及所属卷摘要；
+其他弧/卷保留，纯标题和换行格式变化不触发重建。失效沿用 `PendingCommit` 恢复协议，
+返工队列与单次复核完成后，由已有聚合路由重建缺失工件，不删除原评审或重启整轮评分。
+原评审通过 `revised_chapters` 记录改后版本，未被同版本 `recheck.result.basis` 覆盖的修改在诊断中
+标明尚未复核；完本表示写作与聚合收尾完成，不代表这些修改已重新验收。
+自动完本和显式 `complete_book` 都等待聚合重建完成；重开书仍按结构完整收尾，避免旧长线阻塞。
+弧风格规则另存于 `meta/style_rules/vNNaNN.json`，重建旧弧只更新本弧规则，不覆盖后续弧的当前规则，
+保存重试仍核对本弧工件并保留不同内容的覆盖保护。
+
 新增审阅只追加返工要求：保留 `PendingRewrites` 既有顺序和理由，去重追加新章节，不能隐式取消尚未完成的任务。
 审阅通过也不会清空旧队列；只有实际完成相应章节或显式取消任务才能出队。
 

@@ -93,7 +93,28 @@ type ReviewEntry struct {
 	Verdict          string             `json:"verdict"`                   // accept / polish / rewrite
 	Summary          string             `json:"summary"`
 	AffectedChapters []int              `json:"affected_chapters,omitempty"` // 需要重写/打磨的章节号
+	Basis            []ChapterVersion   `json:"basis,omitempty"`             // 保存时已接纳正文的版本快照；旧评审为空，不参与路由
+	RevisedChapters  []ChapterVersion   `json:"revised_chapters,omitempty"`  // 评审后正文返工的版本；原结论仍属于原稿
 	Recheck          *ReviewRecheck     `json:"recheck,omitempty"`           // 正文返工后的一次定向复核；不改写原评审
+}
+
+// ChapterVersion 是正文版本的审计引用，不复制章节内容或触发有效性重判。
+type ChapterVersion struct {
+	Chapter       int    `json:"chapter"`
+	Revision      int    `json:"revision"`
+	ContentSHA256 string `json:"content_sha256"`
+}
+
+// UnverifiedChapters 区分正文已返工与原问题已复核，不据此自动重启评审。
+func (r ReviewEntry) UnverifiedChapters() []int {
+	var chapters []int
+	for _, version := range r.RevisedChapters {
+		if r.Recheck != nil && r.Recheck.Result != nil && slices.Contains(r.Recheck.Result.Basis, version) {
+			continue
+		}
+		chapters = append(chapters, version.Chapter)
+	}
+	return chapters
 }
 
 // ReviewRecheck 只记录本次评审引起的正文改动。Result 落盘后不再自动复审或入队。
@@ -105,6 +126,7 @@ type ReviewRecheck struct {
 type ReviewRecheckResult struct {
 	Summary          string                  `json:"summary"`
 	UnresolvedIssues []UnresolvedReviewIssue `json:"unresolved_issues"`
+	Basis            []ChapterVersion        `json:"basis,omitempty"` // 复核修改章时的版本，与原评审 Basis 分开保留
 }
 
 type UnresolvedReviewIssue struct {

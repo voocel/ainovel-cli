@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -61,6 +62,9 @@ func (s *Store) InvalidateChapterAggregates(fromChapter int) error {
 				if err := s.Characters.io.RemoveFile(fmt.Sprintf("meta/snapshots/v%02da%02d.json", volume.Index, arc.Index)); err != nil {
 					return err
 				}
+				if err := s.World.io.RemoveFile(ArcStyleRulesPath(volume.Index, arc.Index)); err != nil {
+					return err
+				}
 			}
 			chapter = end + 1
 			volumeEnd = end
@@ -85,6 +89,65 @@ func (s *Store) InvalidateChapterAggregates(fromChapter int) error {
 		}
 	}
 	return s.invalidateReviewsFrom(fromChapter)
+}
+
+// InvalidateRewriteAggregates 只失效返工所在弧及所属卷的派生工件。
+// 在覆盖终稿前调用，使 PendingCommit 的重放可以完成中断的失效操作；
+// 原评审保留为历史结论，记录改后版本，不因删除评审重新启动返工循环。
+func (s *Store) InvalidateRewriteAggregates(version domain.ChapterVersion) error {
+	boundary, err := s.Outline.CheckArcBoundary(version.Chapter)
+	if err != nil {
+		return err
+	}
+	reviews, err := s.World.LoadReviews()
+	if err != nil {
+		return err
+	}
+	for _, review := range reviews {
+		covered := false
+		switch review.Scope {
+		case "chapter":
+			covered = review.Chapter == version.Chapter
+		case "global":
+			covered = version.Chapter <= review.Chapter
+		case "arc":
+			covered = boundary != nil && review.Chapter == boundary.EndChapter
+		}
+		if !covered {
+			continue
+		}
+		index := slices.IndexFunc(review.RevisedChapters, func(v domain.ChapterVersion) bool { return v.Chapter == version.Chapter })
+		if index >= 0 {
+			review.RevisedChapters[index] = version
+		} else {
+			review.RevisedChapters = append(review.RevisedChapters, version)
+			slices.SortFunc(review.RevisedChapters, func(a, b domain.ChapterVersion) int { return a.Chapter - b.Chapter })
+		}
+		if err := s.World.SaveReview(review); err != nil {
+			return err
+		}
+	}
+	if boundary == nil {
+		return nil // 非分层书没有弧/卷派生工件。
+	}
+	for _, path := range []string{
+		fmt.Sprintf("summaries/arc-v%02da%02d.json", boundary.Volume, boundary.Arc),
+		fmt.Sprintf("summaries/vol-v%02d.json", boundary.Volume),
+		fmt.Sprintf("meta/snapshots/v%02da%02d.json", boundary.Volume, boundary.Arc),
+		ArcStyleRulesPath(boundary.Volume, boundary.Arc),
+	} {
+		if err := s.World.io.RemoveFile(path); err != nil {
+			return err
+		}
+	}
+	rules, err := s.World.LoadStyleRules()
+	if err != nil {
+		return err
+	}
+	if rules != nil && rules.Volume == boundary.Volume && rules.Arc == boundary.Arc {
+		return s.World.io.RemoveFile("meta/style_rules.json")
+	}
+	return nil
 }
 
 func (s *Store) invalidateReviewsFrom(fromChapter int) error {

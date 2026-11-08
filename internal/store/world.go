@@ -339,9 +339,47 @@ func (s *WorldStore) LoadWorldRules() ([]domain.WorldRule, error) {
 
 // ── 风格规则 ──
 
-// SaveStyleRules 保存写作风格规则。
+// ArcStyleRulesPath 按弧保留规则，供旧弧重建和保存重试使用。
+func ArcStyleRulesPath(volume, arc int) string {
+	return fmt.Sprintf("meta/style_rules/v%02da%02d.json", volume, arc)
+}
+
+// SaveStyleRules 保存当前写作风格规则。
 func (s *WorldStore) SaveStyleRules(rules domain.WritingStyleRules) error {
 	return s.io.WriteJSON("meta/style_rules.json", rules)
+}
+
+// SaveArcStyleRules 保存本弧规则；重建旧弧不能覆盖后续弧的当前规则。
+func (s *WorldStore) SaveArcStyleRules(rules domain.WritingStyleRules) error {
+	latest, err := s.LoadStyleRules()
+	if err != nil {
+		return err
+	}
+	if err := s.io.WriteJSON(ArcStyleRulesPath(rules.Volume, rules.Arc), rules); err != nil {
+		return err
+	}
+	if latest != nil && (latest.Volume > rules.Volume || (latest.Volume == rules.Volume && latest.Arc > rules.Arc)) {
+		return nil
+	}
+	return s.SaveStyleRules(rules)
+}
+
+// LoadArcStyleRules 读取本弧规则；旧数据只在最新规则确属该弧时可重放。
+func (s *WorldStore) LoadArcStyleRules(volume, arc int) (*domain.WritingStyleRules, error) {
+	var rules domain.WritingStyleRules
+	if err := s.io.ReadJSON(ArcStyleRulesPath(volume, arc), &rules); err == nil {
+		return &rules, nil
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	latest, err := s.LoadStyleRules()
+	if err != nil || latest == nil {
+		return nil, err
+	}
+	if latest.Volume == volume && latest.Arc == arc {
+		return latest, nil
+	}
+	return nil, nil
 }
 
 // LoadStyleRules 读取写作风格规则。
@@ -457,7 +495,7 @@ func (s *WorldStore) LoadLastReview(fromChapter int) (*domain.ReviewEntry, error
 // LoadReviewsAffectingChapter 返回所有明确把 chapter 纳入返工队列的评审，
 // 新到旧排列。弧/全局评审存放在评审终点，不能再按目标章节文件名查找。
 func (s *WorldStore) LoadReviewsAffectingChapter(chapter int) ([]domain.ReviewEntry, error) {
-	all, err := s.loadReviews()
+	all, err := s.LoadReviews()
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +512,8 @@ func (s *WorldStore) LoadReviewsAffectingChapter(chapter int) ([]domain.ReviewEn
 	return reviews, nil
 }
 
-func (s *WorldStore) loadReviews() ([]domain.ReviewEntry, error) {
+// LoadReviews 读取已保存的评审工件；目录和非 JSON 文件不属于评审。
+func (s *WorldStore) LoadReviews() ([]domain.ReviewEntry, error) {
 	entries, err := os.ReadDir(s.io.path("reviews"))
 	if os.IsNotExist(err) {
 		return nil, nil

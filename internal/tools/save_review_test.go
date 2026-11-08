@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,15 @@ import (
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
+
+func saveReviewTestChapter(t *testing.T, s *store.Store, chapter int) {
+	t.Helper()
+	content := fmt.Sprintf("第%d章既有正文。", chapter)
+	if err := s.Drafts.SaveFinalChapter(chapter, content); err != nil {
+		t.Fatal(err)
+	}
+	saveTestChapterRecord(t, s, chapter, content)
+}
 
 func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 	s := store.NewStore(t.TempDir())
@@ -25,6 +35,7 @@ func TestSaveReviewPersistsContractAssessment(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
+	saveReviewTestChapter(t, s, 3)
 
 	tool := NewSaveReviewTool(s)
 	if !tool.StrictSchema() {
@@ -214,6 +225,7 @@ func TestSaveReviewKeepsModelDefinedDimension(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
+	saveReviewTestChapter(t, s, 3)
 
 	tool := NewSaveReviewTool(s)
 	args, err := json.Marshal(map[string]any{
@@ -325,6 +337,7 @@ func TestSaveReviewDoesNotDirtyQueueOnIllegalFlowTransition(t *testing.T) {
 		if err := s.Progress.MarkChapterComplete(ch, 3000, "", ""); err != nil {
 			t.Fatalf("MarkChapterComplete(%d): %v", ch, err)
 		}
+		saveReviewTestChapter(t, s, ch)
 	}
 	if err := s.Progress.SetPendingRewrites([]int{8, 9}, "返工"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
@@ -385,6 +398,7 @@ func TestSaveReviewKeepsOutcomeWhenReviewArtifactWriteFails(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(3, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
+	saveReviewTestChapter(t, s, 3)
 	// 让目标文件路径成为目录，稳定触发原子 rename 失败。
 	if err := os.MkdirAll(filepath.Join(dir, "reviews", "03.json"), 0o755); err != nil {
 		t.Fatal(err)
@@ -451,6 +465,7 @@ func setupArcReviewStore(t *testing.T) *store.Store {
 		if err := s.Progress.MarkChapterComplete(chapter, 100, "", ""); err != nil {
 			t.Fatal(err)
 		}
+		saveReviewTestChapter(t, s, chapter)
 	}
 	// 第一弧已经完整收尾，因此 Router 当前唯一待补工件是第二弧评审。
 	if err := s.World.SaveReview(domain.ReviewEntry{Chapter: 2, Scope: "arc", Verdict: "accept", Summary: "第一弧评审"}); err != nil {

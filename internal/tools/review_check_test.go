@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -70,6 +73,11 @@ func commitReviewChange(t *testing.T, s *store.Store, chapter int, title, body s
 
 func TestReviewCheckBatchesChangesAndDoesNotLoop(t *testing.T) {
 	s, originalArgs := reviewCheckFixture(t, []int{3, 4})
+	original, err := s.World.LoadReview(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalBasis := slices.Clone(original.Basis)
 	commitReviewChange(t, s, 3, "标题3", "主角离开门槛，找到新的证人。")
 	checkArgs := []byte(`{"chapter":4,"scope":"arc","summary":"行动仍缺少代价","unresolved_issues":[{"issue":1,"evidence":"仍然只是在门外等待"}]}`)
 	if _, err := NewSaveReviewCheckTool(s).Execute(context.Background(), checkArgs); !errors.Is(err, errs.ErrToolPrecondition) {
@@ -126,6 +134,7 @@ func TestReviewCheckBatchesChangesAndDoesNotLoop(t *testing.T) {
 		`{"chapter":4,"scope":"arc","summary":"越界问题","unresolved_issues":[{"issue":2,"evidence":"无关的语气问题"}]}`,
 		`{"chapter":4,"scope":"arc","summary":"伪造问题","unresolved_issues":[{"issue":9,"evidence":"原评审不存在"}]}`,
 		`{"chapter":4,"scope":"arc","summary":"无证据","unresolved_issues":[{"issue":1,"evidence":""}]}`,
+		`{"chapter":4,"scope":"arc","summary":"伪造版本","unresolved_issues":[],"basis":[]}`,
 	} {
 		if _, err := tool.Execute(context.Background(), []byte(bad)); !errors.Is(err, errs.ErrToolArgs) {
 			t.Fatalf("应拒绝无效复核结果: %v", err)
@@ -133,6 +142,26 @@ func TestReviewCheckBatchesChangesAndDoesNotLoop(t *testing.T) {
 	}
 	if raw, err := tool.Execute(context.Background(), checkArgs); err != nil || !strings.Contains(string(raw), `"resolved":false`) {
 		t.Fatalf("应如实保留未解决问题: raw=%s err=%v", raw, err)
+	} else if strings.Contains(string(raw), `"basis"`) {
+		t.Fatalf("版本快照不得进入模型工具结果: %s", raw)
+	}
+	review, err := s.World.LoadReview(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(review.Basis, originalBasis) {
+		t.Fatalf("复核不能覆盖原评审版本: got=%+v want=%+v", review.Basis, originalBasis)
+	}
+	var checkedBasis []domain.ChapterVersion
+	for _, chapter := range []int{3, 4} {
+		record, err := s.ChapterRecords.Load(chapter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkedBasis = append(checkedBasis, domain.ChapterVersion{Chapter: chapter, Revision: record.Revision, ContentSHA256: record.ContentSHA256})
+	}
+	if !reflect.DeepEqual(review.Recheck.Result.Basis, checkedBasis) || reflect.DeepEqual(checkedBasis, originalBasis) {
+		t.Fatalf("复核应记录改后版本: got=%+v original=%+v want=%+v", review.Recheck.Result.Basis, originalBasis, checkedBasis)
 	}
 	if _, err := tool.Execute(context.Background(), checkArgs); err != nil {
 		t.Fatalf("相同复核结果应幂等: %v", err)
@@ -180,6 +209,92 @@ func TestReviewCheckBatchesChangesAndDoesNotLoop(t *testing.T) {
 	}
 	if r := next.Planning.Review.Recheck; r == nil || r.Result == nil || len(r.Result.UnresolvedIssues) != 1 {
 		t.Fatalf("自然扩弧时必须收到上一轮未解决问题: %s", planning)
+	} else if r.Result.Basis != nil {
+		t.Fatalf("版本快照不得占用后续规划的模型上下文: %s", planning)
+	}
+	if err := os.Remove(filepath.Join(s.Dir(), store.ChapterRecordPath(3))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(context.Background(), checkArgs); err != nil {
+		t.Fatalf("已保存复核重放不得重新读取或覆盖版本: %v", err)
+	}
+	review, err = s.World.LoadReview(4)
+	if err != nil || !reflect.DeepEqual(review.Recheck.Result.Basis, checkedBasis) {
+		t.Fatalf("复核重放必须保留原快照: review=%+v err=%v", review, err)
+	}
+}
+
+func TestLegacyReviewCheckReplayKeepsMissingBasis(t *testing.T) {
+	s, _ := reviewCheckFixture(t, []int{3})
+	review, err := s.World.LoadReview(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review.Basis = nil
+	review.Recheck = &domain.ReviewRecheck{
+		Chapters: []int{3},
+		Result:   &domain.ReviewRecheckResult{Summary: "原问题已解决", UnresolvedIssues: []domain.UnresolvedReviewIssue{}},
+	}
+	if err := s.World.SaveReview(*review); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.Dir(), store.ChapterRecordPath(3))); err != nil {
+		t.Fatal(err)
+	}
+	args := []byte(`{"chapter":4,"scope":"arc","summary":"原问题已解决","unresolved_issues":[]}`)
+	if _, err := NewSaveReviewCheckTool(s).Execute(t.Context(), args); err != nil {
+		t.Fatalf("旧复核重放不能要求补造版本: %v", err)
+	}
+	review, err = s.World.LoadReview(4)
+	if err != nil || review.Basis != nil || review.Recheck.Result.Basis != nil {
+		t.Fatalf("旧评审和复核仍须保留未知版本: review=%+v err=%v", review, err)
+	}
+}
+
+func TestReviewCheckDoesNotSaveResultWithoutBasis(t *testing.T) {
+	s, _ := reviewCheckFixture(t, []int{3})
+	commitReviewChange(t, s, 3, "标题3", "主角找到证人，付出代价。")
+	if err := os.Remove(filepath.Join(s.Dir(), store.ChapterRecordPath(3))); err != nil {
+		t.Fatal(err)
+	}
+	args := []byte(`{"chapter":4,"scope":"arc","summary":"原问题已解决","unresolved_issues":[]}`)
+	if _, err := NewSaveReviewCheckTool(s).Execute(t.Context(), args); !errors.Is(err, errs.ErrStoreRead) {
+		t.Fatalf("缺少已接纳版本须明确报错: %v", err)
+	}
+	review, err := s.World.LoadReview(4)
+	if err != nil || review.Recheck == nil || review.Recheck.Result != nil {
+		t.Fatalf("版本采集失败不得伪造复核完成: review=%+v err=%v", review, err)
+	}
+}
+
+func TestFurtherRewriteDoesNotRestartCompletedReviewCheck(t *testing.T) {
+	s, originalArgs := reviewCheckFixture(t, []int{3})
+	commitReviewChange(t, s, 3, "标题3", "主角找到证人，付出代价。")
+	args := []byte(`{"chapter":4,"scope":"arc","summary":"原问题已解决","unresolved_issues":[]}`)
+	if _, err := NewSaveReviewCheckTool(s).Execute(t.Context(), args); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.World.LoadReview(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.UnverifiedChapters()) != 0 {
+		t.Fatalf("当前版本已完成原问题复核: %+v", before)
+	}
+	if err := s.Progress.SetPendingRewrites([]int{3}, "再次人工修改"); err != nil {
+		t.Fatal(err)
+	}
+	commitReviewChange(t, s, 3, "标题3", "主角改走另一条路，留下证据。")
+	after, err := s.World.LoadReview(4)
+	if err != nil || !reflect.DeepEqual(after.Recheck.Result, before.Recheck.Result) || !slices.Equal(after.UnverifiedChapters(), []int{3}) {
+		t.Fatalf("再次修改须标记未验收，不能冒用旧复核: %+v %v", after, err)
+	}
+	state, err := flow.LoadState(s)
+	if err != nil || state.ReviewRecheck != nil || len(state.Progress.PendingRewrites) != 0 {
+		t.Fatalf("不得因再次修改自动开启第二轮复核或返工: %+v %v", state, err)
+	}
+	if _, err := NewSaveReviewTool(s).Execute(t.Context(), originalArgs); err != nil {
+		t.Fatalf("系统更新的返工版本不改变原评审的幂等身份: %v", err)
 	}
 }
 
@@ -248,8 +363,15 @@ func TestReviewCheckBlocksFinaleCompletionUntilResult(t *testing.T) {
 	if _, err := NewSaveReviewCheckTool(s).Execute(context.Background(), args); err != nil {
 		t.Fatal(err)
 	}
+	if p, err := s.Progress.Load(); err != nil || p.Phase == domain.PhaseComplete {
+		t.Fatalf("复核后仍须等待已失效摘要的重建: p=%+v err=%v", p, err)
+	}
+	saveRebuiltArc(t, s, 1, 2)
+	if !saveRebuiltVolume(t, s, 1) {
+		t.Fatal("复核与聚合重建完成后应完本")
+	}
 	p, err := s.Progress.Load()
 	if err != nil || p.Phase != domain.PhaseComplete {
-		t.Fatalf("最后一项复核落盘后应完本: p=%+v err=%v", p, err)
+		t.Fatalf("复核与聚合重建完成后应完本: p=%+v err=%v", p, err)
 	}
 }

@@ -54,6 +54,9 @@ func (t *SaveReviewCheckTool) Execute(_ context.Context, args json.RawMessage) (
 	if a.Chapter <= 0 || strings.TrimSpace(a.Summary) == "" || a.UnresolvedIssues == nil {
 		return nil, fmt.Errorf("chapter, summary and unresolved_issues are required: %w", errs.ErrToolArgs)
 	}
+	if a.Basis != nil {
+		return nil, fmt.Errorf("basis is captured by the system; do not submit it: %w", errs.ErrToolArgs)
+	}
 	var review *domain.ReviewEntry
 	var err error
 	switch a.Scope {
@@ -78,7 +81,9 @@ func (t *SaveReviewCheckTool) Execute(_ context.Context, args json.RawMessage) (
 		seen[issue.Issue] = true
 	}
 	if review.Recheck.Result != nil {
-		if !reflect.DeepEqual(*review.Recheck.Result, a.ReviewRecheckResult) {
+		original := *review.Recheck.Result
+		original.Basis = nil
+		if !reflect.DeepEqual(original, a.ReviewRecheckResult) {
 			return nil, fmt.Errorf("复核已完成，不可覆盖或启动第二轮: %w", errs.ErrToolConflict)
 		}
 	} else {
@@ -90,6 +95,10 @@ func (t *SaveReviewCheckTool) Execute(_ context.Context, args json.RawMessage) (
 		if state.Progress == nil || state.Progress.Phase != domain.PhaseWriting || len(state.Progress.PendingRewrites) > 0 ||
 			due == nil || due.Chapter != a.Chapter || due.Scope != a.Scope {
 			return nil, fmt.Errorf("须先排空全部返工，再按路由指定目标复核: %w", errs.ErrToolPrecondition)
+		}
+		a.Basis, err = t.store.ChapterRecords.LoadVersions(review.Recheck.Chapters)
+		if err != nil {
+			return nil, fmt.Errorf("capture review check basis: %w: %w", errs.ErrStoreRead, err)
 		}
 		review.Recheck.Result = &a.ReviewRecheckResult
 		if err := t.store.World.SaveReview(*review); err != nil {

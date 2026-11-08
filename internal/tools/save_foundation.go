@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/voocel/ainovel-cli/internal/flow"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -272,6 +273,13 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		}
 		if check != nil {
 			return nil, fmt.Errorf("第 %d 章评审的返工尚待复核，不可完本: %w", check.Chapter, errs.ErrToolPrecondition)
+		}
+		state, err := flow.LoadState(t.store)
+		if err != nil {
+			return nil, fmt.Errorf("load completion state: %w: %w", errs.ErrStoreRead, err)
+		}
+		if state.AggregateRefresh != nil {
+			return nil, fmt.Errorf("还有聚合工件待生成（%s），不可完本: %w", state.AggregateRefresh.Kind, errs.ErrToolPrecondition)
 		}
 		// 可枚举的完本前置校验必须在代码层(三分法),不能只依赖提示词里的
 		// "完结判定清单"——真实事故:规划刚落盘 phase 翻到 writing,弱模型顺手

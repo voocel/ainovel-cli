@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -137,6 +138,40 @@ func TestSaveArcSummaryRetriesCheckpointWithoutOverwriting(t *testing.T) {
 	}
 	if cp := s.Checkpoints.LatestByStep(domain.ArcScope(1, 2), "arc_summary"); cp == nil {
 		t.Fatal("checkpoint retry must finish the aggregate write")
+	}
+}
+
+func TestSaveArcSummaryReplaysLegacyRulesWithoutHistory(t *testing.T) {
+	s := setupArcSummaryStore(t)
+	tool := NewSaveArcSummaryTool(s)
+	args := validArcSummaryArgs(t)
+	if _, err := tool.Execute(t.Context(), args); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.World.LoadStyleRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 旧格式仅有 meta/style_rules.json，没有按弧保存的规则工件。
+	if err := os.Remove(filepath.Join(s.Dir(), store.ArcStyleRulesPath(1, 2))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(t.Context(), args); err != nil {
+		t.Fatalf("旧规则也须可完成幂等收尾: %v", err)
+	}
+	after, err := s.World.LoadArcStyleRules(1, 2)
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("补齐历史规则不能改写原规则或时间戳: %+v %v", after, err)
+	}
+	checkpoints := len(s.Checkpoints.All())
+	if err := s.World.SaveArcStyleRules(domain.WritingStyleRules{Volume: 2, Arc: 1, Prose: []string{"后期规则"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(t.Context(), args); err != nil {
+		t.Fatalf("后期规则推进不能破坏历史弧的重放: %v", err)
+	}
+	if len(s.Checkpoints.All()) != checkpoints {
+		t.Fatal("其他弧规则推进不应为同一弧重复生成 checkpoint")
 	}
 }
 

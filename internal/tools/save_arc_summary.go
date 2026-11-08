@@ -103,7 +103,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 		Taboos:    a.StyleRules.Taboos,
 		UpdatedAt: time.Now().Format(time.RFC3339),
 	}
-	replay, err := t.arcSummaryReplay(arcSummary, a.CharacterSnapshots, rules)
+	replay, err := t.arcSummaryReplay(arcSummary, a.CharacterSnapshots, &rules)
 	if err != nil {
 		return nil, err
 	}
@@ -116,10 +116,13 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 				return nil, fmt.Errorf("save character snapshots: %w: %w", errs.ErrStoreWrite, err)
 			}
 		}
-		if err := t.store.World.SaveStyleRules(rules); err != nil {
-			return nil, fmt.Errorf("save style rules: %w: %w", errs.ErrStoreWrite, err)
-		}
+	}
+	// 重放沿用已保存规则的时间戳；旧数据也能补齐本弧规则工件，完成 checkpoint。
+	if err := t.store.World.SaveArcStyleRules(rules); err != nil {
+		return nil, fmt.Errorf("save style rules: %w: %w", errs.ErrStoreWrite, err)
+	}
 
+	if !replay {
 		// 弧摘要是 Router 的完成标记，作为最后一个语义工件写入。此前任一步
 		// 失败时摘要保持缺失，恢复后 Router 仍会重派本任务。
 		if err := t.store.Summaries.SaveArcSummary(arcSummary); err != nil {
@@ -131,7 +134,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 	if len(a.CharacterSnapshots) > 0 {
 		artifacts = append(artifacts, fmt.Sprintf("meta/snapshots/v%02da%02d.json", a.Volume, a.Arc))
 	}
-	artifacts = append(artifacts, "meta/style_rules.json")
+	artifacts = append(artifacts, store.ArcStyleRulesPath(a.Volume, a.Arc))
 
 	if _, err := t.store.Checkpoints.AppendArtifacts(
 		domain.ArcScope(a.Volume, a.Arc), "arc_summary", artifacts...,
@@ -152,7 +155,7 @@ func (t *SaveArcSummaryTool) Execute(_ context.Context, args json.RawMessage) (j
 func (t *SaveArcSummaryTool) arcSummaryReplay(
 	summary domain.ArcSummary,
 	snapshots []domain.CharacterSnapshot,
-	rules domain.WritingStyleRules,
+	rules *domain.WritingStyleRules,
 ) (bool, error) {
 	existing, err := t.store.Summaries.LoadArcSummary(summary.Volume, summary.Arc)
 	if err != nil {
@@ -165,7 +168,7 @@ func (t *SaveArcSummaryTool) arcSummaryReplay(
 	if err != nil {
 		return false, fmt.Errorf("load character snapshots: %w: %w", errs.ErrStoreRead, err)
 	}
-	storedRules, err := t.store.World.LoadStyleRules()
+	storedRules, err := t.store.World.LoadArcStyleRules(summary.Volume, summary.Arc)
 	if err != nil {
 		return false, fmt.Errorf("load style rules: %w: %w", errs.ErrStoreRead, err)
 	}
@@ -174,7 +177,7 @@ func (t *SaveArcSummaryTool) arcSummaryReplay(
 	}
 	if !reflect.DeepEqual(*existing, summary) ||
 		!slices.Equal(storedSnapshots, snapshots) ||
-		storedRules == nil || !reflect.DeepEqual(*storedRules, rules) {
+		storedRules == nil || !reflect.DeepEqual(*storedRules, *rules) {
 		return false, fmt.Errorf("第 %d 卷第 %d 弧摘要已存在但关联工件不同，拒绝覆盖: %w", summary.Volume, summary.Arc, errs.ErrToolConflict)
 	}
 	return true, nil

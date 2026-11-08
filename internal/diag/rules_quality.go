@@ -7,6 +7,25 @@ import (
 	"strings"
 )
 
+// UnverifiedReviewRevisions 展示尚未经过原问题复核的返工版本，不自动派单。
+func UnverifiedReviewRevisions(snap *Snapshot) []Finding {
+	var findings []Finding
+	for _, review := range snap.Reviews {
+		chapters := review.UnverifiedChapters()
+		if len(chapters) == 0 {
+			continue
+		}
+		findings = append(findings, Finding{
+			Rule: "UnverifiedReviewRevisions", Category: CatQuality, Severity: SevWarning,
+			Confidence: ConfHigh, AutoLevel: AutoNone, Target: "quality.review",
+			Title:      fmt.Sprintf("第 %d 章评审之后有 %d 章返工尚未复核", review.Chapter, len(chapters)),
+			Evidence:   fmt.Sprintf("修改章节：%v；原评审结论仍属于修改前正文", chapters),
+			Suggestion: "查看原评审的 revised_chapters 与当前正文；完本表示写作及摘要收尾完成，不表示这些修改已重新验收。按需人工检查，不自动循环评审。",
+		})
+	}
+	return findings
+}
+
 // UnresolvedReviewRecheck 展示一次复核后仍存在的问题，不自动派发第二轮返工。
 func UnresolvedReviewRecheck(snap *Snapshot) []Finding {
 	var findings []Finding

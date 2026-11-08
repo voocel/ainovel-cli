@@ -729,9 +729,19 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 					"description": issue.Description, "suggestion": issue.Suggestion,
 				})
 			}
+			recheck := review.Recheck
+			if recheck != nil && recheck.Result != nil {
+				// 版本哈希只用于落盘审计，不占用后续规划的模型上下文。
+				compact := *recheck
+				result := *recheck.Result
+				result.Basis = nil
+				compact.Result = &result
+				recheck = &compact
+			}
 			envelope.Planning["previous_review"] = map[string]any{
 				"chapter": review.Chapter, "summary": review.Summary,
-				"issues": issues, "recheck": review.Recheck,
+				"issues": issues, "recheck": recheck,
+				"unverified_chapters": review.UnverifiedChapters(),
 			}
 		}
 	}

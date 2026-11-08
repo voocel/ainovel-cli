@@ -13,7 +13,7 @@ import (
 // 完本后 completePhaseGate 硬拦一切 subagent 派发，用户无法返工已写章节。
 // 本函数不经 subagent，complete 期可调：原子地把 phase 切回 writing、目标章入
 // PendingRewrites、flow=rewriting，随后 Flow Router 照既有返工队列派 writer 逐章重写，
-// 队列跑完 commit_chapter 自动重新收尾完结。Gate / Router / edit / commit 重逻辑均无需改动。
+// 队列排空并完成单次复核、受影响聚合重建后自动重新收尾完结。
 func ReopenBook(s *store.Store, chapters []int, reason string) error {
 	if len(chapters) == 0 {
 		return fmt.Errorf("chapters 不能为空，需指明要返工的章节: %w", errs.ErrToolArgs)

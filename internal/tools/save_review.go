@@ -97,9 +97,9 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 	var existing *domain.ReviewEntry
 	switch r.Scope {
 	case "chapter":
-		// 只识别已有返工评审的重放；写入目标尚不是文件时，仍须先持久化
+		// 识别已保存单章评审的重放；写入目标尚不是文件时，仍须先持久化
 		// 新的返工意图，再由 SaveReview 显式报告工件写入失败。
-		reviews, err := t.store.World.LoadReviewsAffectingChapter(r.Chapter)
+		reviews, err := t.store.World.LoadReviews()
 		if err != nil {
 			return nil, fmt.Errorf("load chapter review: %w", err)
 		}
@@ -128,6 +128,8 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 	if existing != nil {
 		original := *existing
 		original.Recheck = nil // 系统登记的返工复核不改变原评审的幂等身份。
+		original.Basis = nil   // 重试沿用已保存的版本快照，不重新绑定当前正文。
+		original.RevisedChapters = nil
 		if reflect.DeepEqual(original, r) {
 			return t.finishReview(r, progress, scope, artifact)
 		}
@@ -151,6 +153,22 @@ func (t *SaveReviewTool) Execute(_ context.Context, args json.RawMessage) (json.
 		if err := requireAggregateTarget(t.store, flow.AggregateGlobalReview, 0, 0, r.Chapter); err != nil {
 			return nil, err
 		}
+	}
+	start := r.Chapter
+	if r.Scope == "arc" {
+		start = boundary.StartChapter
+	} else if r.Scope == "global" {
+		start = 1
+	}
+	var chapters []int
+	for _, chapter := range progress.CompletedChapters {
+		if chapter >= start && chapter <= r.Chapter {
+			chapters = append(chapters, chapter)
+		}
+	}
+	r.Basis, err = t.store.ChapterRecords.LoadVersions(chapters)
+	if err != nil {
+		return nil, fmt.Errorf("capture review basis: %w: %w", errs.ErrStoreRead, err)
 	}
 
 	// 先原子应用控制状态，再保存审阅工件。若第二步失败，返工意图仍然存在；
@@ -183,13 +201,17 @@ func (t *SaveReviewTool) finishReview(
 		nextFlow = string(progress.Flow)
 		nextChapter = progress.NextChapter()
 	}
+	affected := r.AffectedChapters
+	if affected == nil {
+		affected = []int{}
+	}
 
 	return json.Marshal(map[string]any{
 		"saved":             true,
 		"chapter":           r.Chapter,
 		"scope":             r.Scope,
 		"verdict":           r.Verdict,
-		"affected_chapters": r.AffectedChapters,
+		"affected_chapters": affected,
 		"issues":            len(r.Issues),
 		"next_flow":         nextFlow,
 		"next_chapter":      nextChapter,
@@ -197,6 +219,12 @@ func (t *SaveReviewTool) finishReview(
 }
 
 func (t *SaveReviewTool) normalizeReviewEntry(r *domain.ReviewEntry) (*store.ArcBoundary, error) {
+	if r.Basis != nil {
+		return nil, fmt.Errorf("basis is captured by the system; do not submit it: %w", errs.ErrToolArgs)
+	}
+	if r.RevisedChapters != nil {
+		return nil, fmt.Errorf("revised_chapters is maintained by the system; do not submit it: %w", errs.ErrToolArgs)
+	}
 	if r.Recheck != nil {
 		return nil, fmt.Errorf("recheck is maintained by the system; use save_review_check for its result")
 	}
@@ -218,6 +246,9 @@ func (t *SaveReviewTool) normalizeReviewEntry(r *domain.ReviewEntry) (*store.Arc
 		if strings.TrimSpace(miss) == "" {
 			return nil, fmt.Errorf("contract_misses cannot contain empty entries")
 		}
+	}
+	if len(r.ContractMisses) == 0 {
+		r.ContractMisses = nil // omitempty 的空数组往返后为 nil，保持保存重试的身份稳定。
 	}
 	var boundary *store.ArcBoundary
 	if r.Scope == "arc" {
@@ -275,7 +306,7 @@ func (t *SaveReviewTool) normalizeReviewEntry(r *domain.ReviewEntry) (*store.Arc
 	if err := validateDimensions(r.Dimensions); err != nil {
 		return nil, err
 	}
-	derived := make([]int, 0, len(affectedSet))
+	var derived []int
 	for chapter := range affectedSet {
 		derived = append(derived, chapter)
 	}
