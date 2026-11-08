@@ -12,6 +12,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/stylestat"
 )
 
 func newTestContextTool(st *store.Store, refs References, style string) *ContextTool {
@@ -105,6 +106,136 @@ func TestContextToolInjectsStyleStats(t *testing.T) {
 	}
 	if usage, ok := payload.Episodic["_usage"]; !ok || len(usage) == 0 {
 		t.Error("expected episodic_memory._usage annotation")
+	}
+}
+
+func TestContextToolStyleStatsTitleSource(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		mixedFinals     bool
+		unwrittenPrefix bool
+		summaryFallback bool
+		withPrefix      int
+		withoutPrefix   int
+	}{
+		{name: "committed headings", mixedFinals: true, withPrefix: 3, withoutPrefix: 3},
+		{name: "unwritten outline", unwrittenPrefix: true},
+		{name: "summary fallback", summaryFallback: true, withPrefix: 1, withoutPrefix: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := store.NewStore(t.TempDir())
+			if err := st.Init(); err != nil {
+				t.Fatal(err)
+			}
+			progress := &domain.Progress{TotalChapters: 8}
+			var outline []domain.OutlineEntry
+			for ch := 1; ch <= 8; ch++ {
+				title := "风起"
+				if tc.unwrittenPrefix && ch > 6 {
+					title = "第一章 未写"
+				}
+				outline = append(outline, domain.OutlineEntry{Chapter: ch, Title: title})
+				if ch > 6 {
+					continue
+				}
+				body := "\n  # 风起  \n夜色落下。"
+				if tc.mixedFinals && ch%2 == 0 {
+					body = "\n  # 第一章 风起  \n夜色落下。"
+				}
+				summaryTitle := "风起"
+				if tc.summaryFallback && ch == 6 {
+					body = " \n\t"
+					summaryTitle = "第一章 开端"
+				}
+				if err := st.Drafts.SaveFinalChapter(ch, body); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := st.ChapterRecords.Accept(ch, domain.ChapterOriginGenerated, body, domain.ChapterFacts{
+					Title: summaryTitle, Summary: "摘要", KeyEvents: []string{"事件"},
+				}, domain.StyleDelta{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := st.Summaries.SaveSummary(domain.ChapterSummary{Chapter: ch, Title: summaryTitle}); err != nil {
+					t.Fatal(err)
+				}
+				progress.CompletedChapters = append(progress.CompletedChapters, ch)
+			}
+			if err := st.Outline.SaveOutline(outline); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Progress.Save(progress); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := newTestContextTool(st, References{}, "default").Execute(context.Background(), json.RawMessage(`{"chapter":7}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				Episodic struct {
+					StyleStats *struct {
+						TitleFormats *struct {
+							WithPrefix    int `json:"with_prefix"`
+							WithoutPrefix int `json:"without_prefix"`
+						} `json:"title_formats"`
+					} `json:"style_stats"`
+				} `json:"episodic_memory"`
+			}
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Episodic.StyleStats == nil {
+				t.Fatal("expected style_stats")
+			}
+			formats := payload.Episodic.StyleStats.TitleFormats
+			if tc.withPrefix == 0 {
+				if formats != nil {
+					t.Fatalf("expected no title_formats, got %+v", formats)
+				}
+			} else if formats == nil || formats.WithPrefix != tc.withPrefix || formats.WithoutPrefix != tc.withoutPrefix {
+				t.Fatalf("title_formats = %+v, want with_prefix=%d without_prefix=%d", formats, tc.withPrefix, tc.withoutPrefix)
+			}
+		})
+	}
+}
+
+func TestStyleStatsTitleBoundsOversizedInput(t *testing.T) {
+	st := store.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	heading := "# 第一章 " + strings.Repeat("甲", 8000)
+	body := heading + "\n" + strings.Repeat("。\n", 8000)
+	if err := st.Drafts.SaveFinalChapter(1, body); err != nil {
+		t.Fatal(err)
+	}
+	longSummary := strings.Repeat("第", stylestat.TitleScanBytes) + "一章 开端"
+	if err := st.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 1, Title: longSummary}); err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestContextTool(st, References{}, "default")
+	got := tool.styleStatsTitle(1, &contextReads{})
+	if len(got) == 0 || len(got) > stylestat.TitleScanBytes {
+		t.Fatalf("final title len=%d, bound=%d", len(got), stylestat.TitleScanBytes)
+	}
+	if !strings.HasPrefix(got, "# 第一章 ") {
+		t.Fatalf("oversized final title = %q", got)
+	}
+	if strings.Contains(got, "一章 开端") {
+		t.Fatal("summary title overrode a non-empty final heading")
+	}
+
+	if err := st.Drafts.SaveFinalChapter(2, " \n\t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 2, Title: longSummary}); err != nil {
+		t.Fatal(err)
+	}
+	got = tool.styleStatsTitle(2, &contextReads{})
+	if len(got) == 0 || len(got) > stylestat.TitleScanBytes {
+		t.Fatalf("summary title len=%d, bound=%d", len(got), stylestat.TitleScanBytes)
+	}
+	if strings.Contains(got, "一章 开端") {
+		t.Fatal("oversized summary title kept the tail past the scan bound")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/voocel/ainovel-cli/internal/stylestat"
 )
 
 type contextBuildState struct {
@@ -431,13 +432,9 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 		return
 	}
 
-	var titles []string
-	if outline, err := t.store.Outline.LoadOutline(); err == nil {
-		for _, entry := range outline {
-			titles = append(titles, entry.Title)
-		}
-	} else {
-		reads.warn("style_stats.outline", err)
+	titles := make([]string, len(state.progress.CompletedChapters))
+	for i, chapter := range state.progress.CompletedChapters {
+		titles[i] = t.styleStatsTitle(chapter, reads)
 	}
 
 	stats, err := t.styleStats.Snapshot(
@@ -453,6 +450,21 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 		return
 	}
 	envelope.Episodic["style_stats"] = stats
+}
+
+func (t *ContextTool) styleStatsTitle(chapter int, reads *contextReads) string {
+	text, err := t.store.Drafts.LoadChapterText(chapter)
+	if err != nil {
+		reads.warn("style_stats.titles", err)
+	}
+	if title := stylestat.TitleFromChapter(text, ""); title != "" {
+		return title
+	}
+	title, err := t.store.Summaries.LoadSummaryTitle(chapter)
+	if err != nil {
+		reads.warn("style_stats.titles", err)
+	}
+	return stylestat.TitleFromChapter("", title)
 }
 
 // styleStopwords 收集角色名与别名供短语挖掘过滤——出场人名天然高频，不是文风问题。

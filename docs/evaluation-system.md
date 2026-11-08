@@ -53,7 +53,7 @@
 - variant 的句式模式章均次数 vs baseline（`patterns[].per_chapter`）
 - 章末短句收尾占比（`ending.short_ratio` 逼近 1 是病）
 - 跨章逐字重复句条数（`repeated_sentences`）
-- 标题格式混用（`title_formats`）
+- 标题格式混用（`title_formats`）：运行时与离线评测都按已完成章节的终稿首个非空行统计，保留 Markdown 与章号；无可用首行时才回落到摘要标题，不使用计划大纲。章号识别兼容系统生成的“第 N 章”及无空格写法。
 - 开篇时间词率（`opening_time_rate`）
 
 这些是零 LLM 成本、确定性、且正打在质量瓶颈上的指标。**LLM Judge 是补充，stylestat delta 是主线。**

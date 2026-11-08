@@ -24,7 +24,7 @@ const phraseWindow = 20
 // 动态短语挖掘时跳过（出场人名天然高频，不是文风问题）。
 type Input struct {
 	Chapters  []string
-	Titles    []string
+	Titles    []string // 已完成章节的终稿首行，保留 Markdown 与章号；缺失时回落到摘要标题
 	Stopwords []string
 }
 
@@ -90,7 +90,7 @@ var patternDefs = []struct {
 var (
 	sentenceSplit = regexp.MustCompile(`[。！？\n]+`)
 	openingTimeRe = regexp.MustCompile(`夜|清晨|黎明|天亮|醒来|晨光|一整夜`)
-	titlePrefixRe = regexp.MustCompile(`^#{0,2}\s*第[零〇一二三四五六七八九十百千万\d]+章`)
+	titlePrefixRe = regexp.MustCompile(`^#{0,6}\s*第\s*[零〇一二三四五六七八九十百千万两\d]+\s*章`)
 )
 
 // shortEndingRunes 末行不超过此字数计为"短结尾"。
@@ -315,7 +315,8 @@ func titleFormats(titles []string) *TitleStat {
 	}
 	t := &TitleStat{}
 	for _, title := range titles {
-		if strings.TrimSpace(title) == "" {
+		title = strings.TrimSpace(title)
+		if title == "" {
 			continue
 		}
 		if titlePrefixRe.MatchString(title) {
