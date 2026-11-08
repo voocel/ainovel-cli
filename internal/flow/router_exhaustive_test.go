@@ -30,6 +30,7 @@ const (
 	expectFoundationFill
 	expectGlobalReview
 	expectOutlineFeedback
+	expectReviewCheck
 )
 
 // expectedInstruction 按架构规格计算某 State 应得的裁定。
@@ -59,6 +60,9 @@ func expectedInstruction(s State) expectKind {
 	}
 	if p.Flow == domain.FlowReviewing || p.Flow == domain.FlowSteering {
 		return expectNil
+	}
+	if s.ReviewRecheck != nil {
+		return expectReviewCheck
 	}
 	if s.AggregateRefresh != nil {
 		return expectArcSummary
@@ -106,6 +110,8 @@ func classify(t *testing.T, inst *Instruction) expectKind {
 		}
 	case "editor":
 		switch {
+		case contains(inst.Task, "save_review_check"):
+			return expectReviewCheck
 		case contains(inst.Task, "弧级评审"):
 			return expectArcReview
 		case contains(inst.Task, "全局审阅"):

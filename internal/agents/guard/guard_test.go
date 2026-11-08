@@ -186,6 +186,22 @@ func TestSubAgentGuard_BlockHookReceivesAgentAndReason(t *testing.T) {
 // 不算完成，必须产出 arc_summary 才放行——封堵卷中骨架弧死循环的起点 Defect C。
 func TestEditorStopGuard_TaskAware(t *testing.T) {
 	normalStop := agentcore.StopInfo{TurnIndex: 1, Message: agentcore.Message{StopReason: agentcore.StopReasonStop}}
+	t.Run("recheck requires its own result", func(t *testing.T) {
+		s := newTestStore(t)
+		guard := NewEditorStopGuard(s, "复核返工，调用 save_review_check", nil)
+		if _, err := s.Checkpoints.Append(domain.ChapterScope(5), "review", "reviews/05.json", "d1"); err != nil {
+			t.Fatal(err)
+		}
+		if d := guard(context.Background(), normalStop); d.Allow {
+			t.Fatal("重新保存原评审不能代替定向复核")
+		}
+		if _, err := s.Checkpoints.Append(domain.ChapterScope(5), "review_check", "reviews/05.json", "d2"); err != nil {
+			t.Fatal(err)
+		}
+		if d := guard(context.Background(), normalStop); !d.Allow {
+			t.Fatal("定向复核落盘后必须允许退出")
+		}
+	})
 
 	// 摘要任务 + 只存了 review → 必须阻拦（review 不满足 arc_summary 要求）。
 	t.Run("summary task blocks on review only", func(t *testing.T) {

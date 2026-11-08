@@ -201,6 +201,7 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 | `check_consistency` | 无（只读，inline 返回） | consistency_check |
 | `commit_chapter` | chapters/chXX.md + Progress（+ 反馈池/违规记录 best-effort） | commit |
 | `save_review` | reviews/chXX.json（global 为 chXX-global.json） | review |
+| `save_review_check` | 原评审内的 recheck.result | review_check |
 | `save_arc_summary` | summaries/arc-vNNaNN.json | arc_summary |
 | `save_volume_summary` | summaries/vol-vNN.json | volume_summary |
 | `save_foundation` | foundation/*.json（append_volume/update_compass 成功即消费反馈池） | premise / outline / layered_outline / characters / world_rules / append_volume / update_compass / complete_book |
@@ -210,6 +211,14 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 新增审阅只追加返工要求：保留 `PendingRewrites` 既有顺序和理由，去重追加新章节，不能隐式取消尚未完成的任务。
 审阅通过也不会清空旧队列；只有实际完成相应章节或显式取消任务才能出队。
+
+评审引起的正文返工在覆盖终稿前登记到原评审的 `recheck.chapters`；纯标题修改不登记。
+整批 `PendingRewrites` 排空后，Router 在摘要和续写之前派发一次定向复核：只回读修改章，
+核对原评审要求修复的问题，通过 `save_review_check` 保存结论，不重新做全量评分。
+`recheck.result` 存在即不再自动复核；未解决项保留原问题序号与当前正文证据，诊断显示告警，
+不追加下一轮返工。复核状态持久化于原评审，重启沿用；待复核时不得提前标记全书完结。
+跨章不可逆事实与跨弧推进检查并入原有 Editor 评审；最近评审的简要问题与复核结果随现有
+Architect 上下文传递，在自然扩弧/续卷时吸收，不另派检查任务。
 
 `edit_chapter` 是 `agentcore.EditTool` 的薄封装，仅允许编辑已完成且位于 `PendingRewrites` 的章节；新章初稿需通过 `draft_chapter(mode="write")` 整章覆盖。
 
@@ -269,7 +278,7 @@ Worker 之间不直接通信，所有信息流经 Store 中的结构化工件：
 
 | 层 | 落点 | 作用 |
 |---|---|---|
-| `StopAfterTools` / `StopAfterToolResult` | `agents/build.go` SubAgentConfig | 关键工具成功即退出 Worker run（终态退出仍咨询 StopGuard，见契约测试）。Writer `commit_chapter` 命中即停；Editor 的 `save_review`/`save_arc_summary`/`save_volume_summary`、Architect 弧/卷收尾走 `StopAfterToolResult` |
+| `StopAfterTools` / `StopAfterToolResult` | `agents/build.go` SubAgentConfig | 关键工具成功即退出 Worker run（终态退出仍咨询 StopGuard，见契约测试）。Writer `commit_chapter` 命中即停；Editor 的 `save_review`/`save_review_check`/`save_arc_summary`/`save_volume_summary`、Architect 弧/卷收尾走 `StopAfterToolResult` |
 | `CheckpointDeltaGuard` | `agents/guard/subagent_guards.go` | 以 baseline checkpoint 为分界，本轮结束前必须看到对应 step 的新 checkpoint，否则拒绝 `end_turn`；连续拦 3 次升级 terminate（弱模型死循环兜底）。Editor 的 guard 任务感知：被派生成摘要时仅复核不算完成 |
 | 工具内联 `next_step` | 各工具返回值字段 | 每个事实自带"下一步建议"，LLM 看到事实就知道下一步 |
 | 工具内归属/前置检查 | `edit_chapter` `commit_chapter` 等 | 数据层物理拦截：初稿定点编辑、改未入队的已完成章、空提交均被拒，`ConcurrencySafe=false` 阻止并发竞态 |

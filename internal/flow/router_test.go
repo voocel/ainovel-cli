@@ -126,6 +126,28 @@ func TestRoute_PendingPolishingVerb(t *testing.T) {
 	}
 }
 
+func TestRoute_ReviewCheckPriority(t *testing.T) {
+	p := writingProgress([]int{1, 2}, domain.FlowWriting)
+	s := State{
+		Progress:               p,
+		ReviewRecheck:          &domain.ReviewEntry{Chapter: 2, Scope: "arc", Recheck: &domain.ReviewRecheck{Chapters: []int{1, 2}}},
+		AggregateRefresh:       &AggregateRefresh{Kind: AggregateArcSummary, Volume: 1, Arc: 1, EndChapter: 2},
+		ImmediateFeedbackCount: 1,
+	}
+	if got := Route(s); got == nil || got.Agent != "editor" || !strings.Contains(got.Task, "save_review_check") {
+		t.Fatalf("整批返工后复核应优先于摘要与规划: %+v", got)
+	}
+	p.PendingRewrites = []int{2}
+	if got := Route(s); got == nil || got.Agent != "writer" || got.Chapter != 2 {
+		t.Fatalf("复核必须等待整批返工排空: %+v", got)
+	}
+	p.PendingRewrites = nil
+	p.Flow = domain.FlowSteering
+	if got := Route(s); got != nil {
+		t.Fatalf("用户干预优先于复核: %+v", got)
+	}
+}
+
 func TestRoute_ReviewingDelegatesToLLM(t *testing.T) {
 	p := writingProgress([]int{1, 2}, domain.FlowReviewing)
 	if got := Route(State{Progress: p}); got != nil {

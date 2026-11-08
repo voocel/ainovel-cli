@@ -26,7 +26,7 @@ import (
 
 // editorStopAfterToolResult 与 build.go 中 editor 的配置保持同一判据。
 func editorStopAfterToolResult(toolName string, _ json.RawMessage) bool {
-	return toolName == "save_review" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
+	return toolName == "save_review" || toolName == "save_review_check" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
 }
 
 func checkpointTool(t *testing.T, st *store.Store, name, step string) agentcore.Tool {
@@ -121,4 +121,20 @@ func TestEditorFlow_ReviewTaskStopsAtSaveReview(t *testing.T) {
 	if got := model.calls(); got != 1 {
 		t.Fatalf("评审任务应恰好一次模型调用后收尾，got %d", got)
 	}
+}
+
+func TestEditorFlow_ReviewCheckStopsWithoutExtraTurn(t *testing.T) {
+	st := store.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	model := &contractModel{fn: func(i int, _ []agentcore.Message) (*agentcore.LLMResponse, error) {
+		if i > 0 {
+			t.Fatal("定向复核落盘后不得再增加模型轮次")
+		}
+		return &agentcore.LLMResponse{Message: assistantToolCall("save_review_check", `{}`)}, nil
+	}}
+	runEditorLike(t, st, "复核原问题并用 save_review_check 落盘", model, []agentcore.Tool{
+		checkpointTool(t, st, "save_review_check", "review_check"),
+	})
 }

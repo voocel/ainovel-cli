@@ -145,6 +145,7 @@ func BuildWorkers(
 		contextTool,
 		readChapter,
 		tools.NewSaveReviewTool(store),
+		tools.NewSaveReviewCheckTool(store),
 		tools.NewSaveArcSummaryTool(store),
 		tools.NewSaveVolumeSummaryTool(store),
 	}
@@ -316,7 +317,7 @@ func BuildWorkers(
 		// TerminalToolExitConsultsStopGuard），任务感知的 NewEditorStopGuard 负责
 		// 否决"被派生成摘要却只做了复核"的提前退出，所以 save_review 可以安全硬停。
 		StopAfterToolResult: func(toolName string, _ json.RawMessage) bool {
-			return toolName == "save_review" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
+			return toolName == "save_review" || toolName == "save_review_check" || toolName == "save_arc_summary" || toolName == "save_volume_summary"
 		},
 		StopGuardFactory: func(_, task string) agentcore.StopGuard {
 			return guard.NewEditorStopGuard(store, task, onGuardBlock)

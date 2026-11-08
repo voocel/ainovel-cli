@@ -38,6 +38,7 @@ var allRules = []RuleFunc{
 	PayoffMissPattern,
 	ExcessiveRewrites,
 	WordCountAnomaly,
+	UnresolvedReviewRecheck,
 	// Planning
 	StaleForeshadow,
 	CompassDrift,

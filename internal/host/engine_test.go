@@ -376,6 +376,49 @@ func TestEngine_StalePairedDispatchDoesNotBypassHold(t *testing.T) {
 	}
 }
 
+// 复核语义工件已落盘时，Engine 直接补齐返工完结状态，不追加模型调用。
+func TestEngine_ResumesAfterReviewCheckBeforeCompletion(t *testing.T) {
+	st := storepkg.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.MarkChapterComplete(1, 100, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.MarkComplete(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Reopen([]int{1}, "补充动机"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.CompleteRewrite(1); err != nil {
+		t.Fatal(err)
+	}
+	// 复核结果已保存，但在 MarkComplete 前退出；重启不应再询问模型或续写。
+	if err := st.World.SaveReview(domain.ReviewEntry{
+		Chapter: 1, Scope: "chapter", Verdict: "polish", Summary: "补充动机",
+		Recheck: &domain.ReviewRecheck{
+			Chapters: []int{1},
+			Result:   &domain.ReviewRecheckResult{Summary: "动机已补齐", UnresolvedIssues: []domain.UnresolvedReviewIssue{}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st = storepkg.NewStore(st.Dir())
+	e, _, done := newTestEngine(t, st, subagent.NewRunner(), nil)
+	if !e.start(nil) {
+		t.Fatal("engine start")
+	}
+	waitEngineDone(t, done)
+	p, err := st.Progress.Load()
+	if err != nil || p.Phase != domain.PhaseComplete || p.ReopenedFromComplete {
+		t.Fatalf("无 Worker/模型也应按已落盘事实完成收尾: p=%+v err=%v", p, err)
+	}
+}
+
 // TestEngine_WritesBookToCompletion 完整链路:两章非分层书从 writing 写到 complete。
 func TestEngine_WritesBookToCompletion(t *testing.T) {
 	st := storepkg.NewStore(t.TempDir())

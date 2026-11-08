@@ -25,6 +25,7 @@ var toolDisplays = map[string]toolDisplay{
 	"edit_chapter":        {header: "✻ 打磨"},
 	"commit_chapter":      {header: "✻ 章节提交"},
 	"save_review":         {header: "✻ 审阅"},
+	"save_review_check":   {header: "✻ 返工复核"},
 	"save_arc_summary":    {header: "✻ 弧摘要"},
 	"save_volume_summary": {header: "✻ 卷摘要"},
 	"save_foundation":     {header: "✻ 设定"},

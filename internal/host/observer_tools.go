@@ -233,7 +233,7 @@ func displayToolName(tool string, args json.RawMessage) string {
 		if json.Unmarshal(args, &p) == nil && p.Chapter > 0 {
 			return fmt.Sprintf("%s(第%d章)", tool, p.Chapter)
 		}
-	case "save_review":
+	case "save_review", "save_review_check":
 		var p struct {
 			Chapter int    `json:"chapter"`
 			Scope   string `json:"scope"`

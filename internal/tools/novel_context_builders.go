@@ -706,6 +706,23 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 	}
 	progress, progressErr := t.store.Progress.Load()
 	reads.require("progress_for_planning", progressErr)
+	if progress != nil && progress.LatestCompleted() > 0 {
+		review, err := t.store.World.LoadReview(progress.LatestCompleted())
+		reads.require("previous_review", err)
+		if review != nil {
+			issues := make([]map[string]any, 0, len(review.Issues))
+			for i, issue := range review.Issues {
+				issues = append(issues, map[string]any{
+					"number": i + 1, "type": issue.Type, "severity": issue.Severity,
+					"description": issue.Description, "suggestion": issue.Suggestion,
+				})
+			}
+			envelope.Planning["previous_review"] = map[string]any{
+				"chapter": review.Chapter, "summary": review.Summary,
+				"issues": issues, "recheck": review.Recheck,
+			}
+		}
+	}
 
 	layered, err := t.store.Outline.LoadLayeredOutline()
 	reads.require("layered_outline", err)

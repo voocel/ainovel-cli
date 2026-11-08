@@ -79,8 +79,23 @@ func TestSaveReviewPreservesReopenedWorkUntilAllChaptersCommit(t *testing.T) {
 				}
 			}
 		}
-		if i == 2 && (!result.BookComplete || p.Phase != domain.PhaseComplete || len(p.PendingRewrites) != 0) {
-			t.Fatalf("全部返工完成后应正常完结: result=%+v progress=%+v", result, p)
+		if i == 2 && (result.BookComplete || p.Phase != domain.PhaseWriting || len(p.PendingRewrites) != 0) {
+			t.Fatalf("返工排空后应等待原评审的单次复核: result=%+v progress=%+v", result, p)
 		}
+	}
+	args := []byte(`{"chapter":1,"scope":"chapter","summary":"动机已补齐","unresolved_issues":[]}`)
+	if _, err := NewSaveReviewCheckTool(s).Execute(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.Progress.Load()
+	if err != nil || p.Phase != domain.PhaseComplete || len(p.PendingRewrites) != 0 {
+		t.Fatalf("返工与复核均完成后应正常完结: p=%+v err=%v", p, err)
+	}
+	if _, err := NewSaveReviewTool(s).Execute(context.Background(), review); err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.Progress.Load()
+	if err != nil || len(p.PendingRewrites) != 0 {
+		t.Fatalf("相同章节评审重放不得重启已复核的返工: p=%+v err=%v", p, err)
 	}
 }

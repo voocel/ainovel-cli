@@ -166,6 +166,9 @@ func NewArchitectStopGuard(st *store.Store, onBlock BlockHook) agentcore.StopGua
 // 否决该次退出并催促，直到对应摘要落盘。
 func NewEditorStopGuard(st *store.Store, task string, onBlock BlockHook) agentcore.StopGuard {
 	switch {
+	case strings.Contains(task, "save_review_check"):
+		return newCheckpointDeltaGuard(st, "editor", []string{"review_check"},
+			staticBlockMsg("本次任务是返工后的单次定向复核：必须调用 save_review_check 保存结论，不得用 save_review 发起新一轮返工。"), onBlock)
 	case strings.Contains(task, "save_volume_summary") || strings.Contains(task, "卷摘要"):
 		return newCheckpointDeltaGuard(st, "editor", []string{"volume_summary"},
 			staticBlockMsg("本次任务是生成卷摘要：你必须调用 save_volume_summary 落盘后才能结束，save_review 复核不算完成。"), onBlock)

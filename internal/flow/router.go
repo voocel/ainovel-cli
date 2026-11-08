@@ -85,6 +85,9 @@ type State struct {
 
 	// 外部修订后最早一个需要由 Editor 重新生成的弧/卷工件。
 	AggregateRefresh *AggregateRefresh
+
+	// 整批正文返工结束后的单次定向复核，优先于摘要和续写。
+	ReviewRecheck *domain.ReviewEntry
 }
 
 // Route 根据事实返回下一步确定性指令；返回 nil 由 Engine 按调用上下文处理。
@@ -157,6 +160,16 @@ func Route(s State) *Instruction {
 	// 5. 用户干预处理中：Arbiter 正在裁定，Engine 不抢占
 	if p.Flow == domain.FlowSteering {
 		return nil
+	}
+	if review := s.ReviewRecheck; review != nil {
+		return &Instruction{
+			Agent: "editor",
+			Task: fmt.Sprintf(
+				"复核 scope=%s、chapter=%d 的原评审返工：调用 novel_context(chapter=%d)，仅回读 working_memory.review_recheck 指定的修改章节并核对原问题，用 save_review_check 保存一次复核结论；保留未解决项，不新增返工或重做全量评审",
+				review.Scope, review.Chapter, review.Chapter,
+			),
+			Reason: "正文返工已排空，定向复核尚未完成",
+		}
 	}
 	if refresh := s.AggregateRefresh; refresh != nil {
 		switch refresh.Kind {

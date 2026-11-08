@@ -1,5 +1,7 @@
 package domain
 
+import "slices"
+
 // TimelineEvent 时间线事件。
 type TimelineEvent struct {
 	Chapter    int      `json:"chapter"`
@@ -91,6 +93,40 @@ type ReviewEntry struct {
 	Verdict          string             `json:"verdict"`                   // accept / polish / rewrite
 	Summary          string             `json:"summary"`
 	AffectedChapters []int              `json:"affected_chapters,omitempty"` // 需要重写/打磨的章节号
+	Recheck          *ReviewRecheck     `json:"recheck,omitempty"`           // 正文返工后的一次定向复核；不改写原评审
+}
+
+// ReviewRecheck 只记录本次评审引起的正文改动。Result 落盘后不再自动复审或入队。
+type ReviewRecheck struct {
+	Chapters []int                `json:"chapters"`
+	Result   *ReviewRecheckResult `json:"result,omitempty"`
+}
+
+type ReviewRecheckResult struct {
+	Summary          string                  `json:"summary"`
+	UnresolvedIssues []UnresolvedReviewIssue `json:"unresolved_issues"`
+}
+
+type UnresolvedReviewIssue struct {
+	Issue    int    `json:"issue"` // 原评审 issues 中的序号，从 1 开始
+	Evidence string `json:"evidence"`
+}
+
+// RecheckIssue 判断原问题是否属于这次正文返工的复核范围。
+func (r *ReviewEntry) RecheckIssue(number int) bool {
+	if r.Recheck == nil || number < 1 || number > len(r.Issues) {
+		return false
+	}
+	issue := r.Issues[number-1]
+	if !issue.RequiresChange {
+		return false
+	}
+	for _, ch := range issue.Chapters {
+		if slices.Contains(r.Recheck.Chapters, ch) {
+			return true
+		}
+	}
+	return false
 }
 
 // CriticalCount 返回 critical 级别问题数量。
