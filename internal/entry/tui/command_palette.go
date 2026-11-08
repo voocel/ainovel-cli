@@ -14,6 +14,8 @@ type commandPaletteItem struct {
 	Usage       string
 	Description string
 	AutoExecute bool
+	NeedsIdle   bool
+	Unavailable string
 }
 
 func builtinCommandItems() []commandPaletteItem {
@@ -140,6 +142,35 @@ func (m *Model) acceptCommandCompletion() (commandPaletteItem, bool) {
 	return item, true
 }
 
+// commandUnavailable 由当前状态判定，执行时仍重新校验，不信任候选生成时的快照。
+func (m Model) commandUnavailable(needsIdle bool) string {
+	if !needsIdle {
+		return ""
+	}
+	if m.abortPending || m.snapshot.RuntimeState == "pausing" {
+		return "正在暂停，请等待暂停完成后重试"
+	}
+	if m.starting {
+		return "正在启动创作，请等待启动完成后重试"
+	}
+	if m.snapshot.IsRunning {
+		if m.compActive {
+			return "Esc 关闭面板，再按 Esc 暂停；等待暂停完成"
+		}
+		return "请按 Esc 暂停创作，等待暂停完成后重试"
+	}
+	return ""
+}
+
+// commandPaletteItems 在渲染时投影可用性，面板打开期间也随运行状态实时变化。
+func (m Model) commandPaletteItems() []commandPaletteItem {
+	items := slices.Clone(m.compItems)
+	for i := range items {
+		items[i].Unavailable = m.commandUnavailable(items[i].NeedsIdle)
+	}
+	return items
+}
+
 func renderCommandPalette(width int, items []commandPaletteItem, cursor int) string {
 	if len(items) == 0 || width <= 0 {
 		return ""
@@ -181,7 +212,12 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 		name := nameRenderer.Render(item.Name)
 		// truncateWidth 按视觉宽度截断（中文字符算 2 列）；用 truncate 会按 rune 数算，
 		// 中文场景实际宽度 = 期望的 2 倍，导致弹窗溢出。
-		desc := truncateWidth(item.Description, max(12, contentW-18))
+		description := item.Description
+		if item.Unavailable != "" {
+			description = "暂不可用 · " + description
+			descRenderer = mutedStyle
+		}
+		desc := truncateWidth(description, max(12, contentW-18))
 		descText := descRenderer.Render(desc)
 		line := prefix + name
 		gap := contentW - lipgloss.Width(line) - lipgloss.Width(descText)
@@ -194,14 +230,19 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 	if selectedIdx < 0 || selectedIdx >= len(visible) {
 		selectedIdx = 0
 	}
-	hint := mutedStyle.Render("↑↓ 选择 · Tab/Enter 接受 · Esc 关闭")
+	hint := "↑↓ 选择 · Tab/Enter 接受 · Esc 关闭"
+	if unavailable := visible[selectedIdx].Unavailable; unavailable != "" {
+		hint = unavailable
+	}
 	usage := "Usage: " + visible[selectedIdx].Usage
 	if remaining > 0 {
 		usage = usage + " · 还有 " + strconv.Itoa(remaining) + " 个命令"
 	}
 	usageLine := mutedStyle.Render(truncateWidth(usage, contentW))
 	body = append(body, usageLine+strings.Repeat(" ", max(0, contentW-lipgloss.Width(usageLine))))
-	body = append(body, hint+strings.Repeat(" ", max(0, contentW-lipgloss.Width(hint))))
+	for _, line := range wrapRunes(hint, contentW) {
+		body = append(body, mutedStyle.Render(line)+strings.Repeat(" ", max(0, contentW-lipgloss.Width(line))))
+	}
 
 	return renderPaddedModalFrame(boxW, len(body)+2, "命令", "", body)
 }

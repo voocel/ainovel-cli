@@ -208,6 +208,7 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 | `expand_next_arc` | layered_outline.json（成功即消费反馈池） | 系统定位下一骨架弧；模型仅提交 title / goal / chapters |
 
 `commit_chapter` 承担弧/卷/全书完成检测，返回结构化事实；`save_review` 不做文学阈值裁定，只校验审阅事实并把 Editor 给出的 verdict 原子映射为 Flow 与返工队列。
+`accept` 不得同时包含 `critical/error`；矛盾组合会要求 Editor 修正结论或严重度，不自动修改 `requires_change` 或扩大返工范围。
 
 `save_review` 自动从已接纳的章节记录采集 `basis`，按章保存 `chapter / revision / content_sha256`，
 单章评审覆盖该章，弧评审覆盖本弧，全局评审覆盖截至评审终点的已完成章节。

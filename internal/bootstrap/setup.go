@@ -58,6 +58,7 @@ var setupProviders = []setupProvider{
 	{name: "qwen", label: "Qwen"},
 	{name: "glm", label: "GLM"},
 	{name: "grok", label: "Grok"},
+	{name: "mimo", label: "MiMo"},
 	{name: "ollama", label: "Ollama", baseURL: "http://localhost:11434/v1", apiKeyOptional: true},
 	{name: "bedrock", label: "Bedrock", apiKeyOptional: true},
 	{name: "custom", label: "Custom Proxy", needType: true, apiKeyOptional: true},

@@ -12,12 +12,13 @@ import (
 // TUI 按 ID 定位原行原地更新，避免"开始一行、完成又一行"的冗余。
 //
 // SYSTEM / ERROR / CONTEXT 等非调用类事件 ID 为空，每条独立追加。
+// ANSWER 保存面向用户的完整回答，由 TUI 折行展示，不按状态事件截断。
 type Event struct {
 	ID         string    // 同一次调用的开始/结束共用；非调用事件为空
 	Time       time.Time // 首次发出时间（开始时刻）
 	FinishedAt time.Time // 零值 = 进行中；非零 = 已完成
 	Failed     bool      // 已完成但失败（仅完成态有意义）
-	Category   string    // DISPATCH / MODEL / TOOL / DECISION / SYSTEM / REVIEW / CHECK / ERROR / CONTEXT
+	Category   string    // DISPATCH / MODEL / TOOL / DECISION / ANSWER / SYSTEM / REVIEW / CHECK / ERROR / CONTEXT
 	Agent      string    // 产生事件的 agent
 	Summary    string
 	Detail     string        // 完整文案，写入日志不截断供排查；为空回退 Summary。UI 只读 Summary

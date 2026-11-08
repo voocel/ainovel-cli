@@ -152,9 +152,15 @@ func (m Model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		}
 		return m, nil, true
 	case tea.KeyTab:
+		if item, ok := m.selectedCommandItem(); ok && m.commandUnavailable(item.NeedsIdle) != "" {
+			return m, nil, true
+		}
 		m.acceptCommandCompletion()
 		return m, nil, true
 	case tea.KeyEnter:
+		if item, ok := m.selectedCommandItem(); ok && m.commandUnavailable(item.NeedsIdle) != "" {
+			return m, nil, true
+		}
 		item, ok := m.acceptCommandCompletion()
 		if !ok {
 			return m, nil, true
@@ -512,7 +518,8 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime)), true
 	case abortResultMsg:
-		if msg.stopped {
+		// Done 可能先于暂停命令回执到达；已经结束时不能重新进入暂停中。
+		if msg.stopped && m.snapshot.IsRunning {
 			m.abortPending = true
 			m.textarea.Placeholder = "正在暂停创作..."
 		}

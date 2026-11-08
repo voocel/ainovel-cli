@@ -54,6 +54,39 @@ func TestRenderErrorEventKeepsOneLineSummary(t *testing.T) {
 	}
 }
 
+func TestRenderAnswerKeepsFullTextAndAlignsContinuation(t *testing.T) {
+	answer := strings.Repeat("正文分析需要完整展示。", 20) + "\r\n\r\n请使用 /reopen 以八十年大限开新卷。"
+	for _, width := range []int{50, 61, 81, 100} {
+		ev := host.Event{Time: time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC), Category: "ANSWER", Summary: answer}
+		out := ansi.Strip(renderEventLine(ev, width, 0))
+		lines := strings.Split(out, "\n")
+		if len(lines) < 3 {
+			t.Fatalf("回答必须按宽度换行: %s", out)
+		}
+		var recovered strings.Builder
+		for i, line := range lines {
+			if lipgloss.Width(line) > width {
+				t.Fatalf("回答不能超宽: width=%d line=%q", width, line)
+			}
+			prefix := strings.Repeat(" ", 11)
+			if i == 0 {
+				prefix = "12:00:00 ✦ "
+			}
+			if !strings.HasPrefix(line, prefix) {
+				t.Fatalf("回答续行必须对齐正文: %q", line)
+			}
+			recovered.WriteString(strings.TrimPrefix(line, prefix))
+		}
+		if strings.Join(strings.Fields(recovered.String()), "") != strings.Join(strings.Fields(answer), "") {
+			t.Fatalf("回答正文或操作指引丢失: %s", out)
+		}
+		following := host.Event{Time: ev.Time.Add(time.Second), Category: "SYSTEM", Summary: "后续状态"}
+		if flow := ansi.Strip(renderEventContent([]host.Event{ev, following}, width, 0)); !strings.HasSuffix(flow, "\n12:00:01 ⚙ 后续状态") {
+			t.Fatalf("后续事件必须另起一行: %s", flow)
+		}
+	}
+}
+
 func TestRenderRunningModelShowsStateAndElapsed(t *testing.T) {
 	out := ansi.Strip(renderEventLine(host.Event{
 		ID:       "model-1",

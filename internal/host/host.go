@@ -696,7 +696,7 @@ func (h *Host) doIntervention(text string, restart bool) error {
 
 	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "裁定: " + decision.Reason, Level: "info"})
 	if decision.Answer != "" {
-		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: decision.Answer, Level: "info"})
+		h.emitEvent(Event{Time: time.Now(), Category: "ANSWER", Agent: "arbiter", Summary: decision.Answer, Detail: decision.Answer, Level: "info"})
 	}
 	// 任一动作持久化失败 → 保留 PendingSteer(恢复时整条重放重新裁定;
 	// hold/reopen 幂等、dispatch 经新事实重询,重放安全)。

@@ -3,14 +3,17 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/errs"
 	"github.com/voocel/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
@@ -22,6 +25,70 @@ func saveReviewTestChapter(t *testing.T, s *store.Store, chapter int) {
 		t.Fatal(err)
 	}
 	saveTestChapterRecord(t, s, chapter, content)
+}
+
+func TestSaveReviewRejectsAcceptWithSeriousIssues(t *testing.T) {
+	for _, severity := range []string{"critical", "error", "warning"} {
+		t.Run(severity, func(t *testing.T) {
+			s := setupArcReviewStore(t)
+			before, err := s.Progress.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			review := domain.ReviewEntry{
+				Chapter: 4, Scope: "arc", Verdict: "accept", Summary: "本弧评审",
+				Dimensions: []domain.DimensionScore{{Dimension: "consistency", Score: 20, Comment: "依据当前正文评审"}},
+				Issues:     []domain.ConsistencyIssue{{Type: "consistency", Severity: severity, Description: "需要核对的矛盾", Evidence: "第3章正文", Chapters: []int{3}}},
+			}
+			args, err := json.Marshal(review)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewSaveReviewTool(s).Execute(t.Context(), args)
+			if severity == "warning" {
+				if err != nil {
+					t.Fatalf("warning 和低分不得自动推翻 accept: %v", err)
+				}
+			} else {
+				if !errors.Is(err, errs.ErrToolArgs) {
+					t.Fatalf("accept 与严重问题矛盾，应要求修正评审: %v", err)
+				}
+				if saved, err := s.World.LoadReview(4); err != nil || saved != nil {
+					t.Fatalf("矛盾评审不得落盘: %+v %v", saved, err)
+				}
+			}
+			p, err := s.Progress.Load()
+			if err != nil || len(p.PendingRewrites) != 0 {
+				t.Fatalf("不得替模型扩大返工队列或改变流程: %+v %v", p, err)
+			}
+			if severity != "warning" && !reflect.DeepEqual(p, before) {
+				t.Fatalf("拒绝保存前不能更改原进度: before=%+v after=%+v", before, p)
+			}
+		})
+	}
+}
+
+func TestSaveReviewKeepsExplicitRewriteScopeForSeriousIssues(t *testing.T) {
+	s := setupArcReviewStore(t)
+	review := domain.ReviewEntry{
+		Chapter: 4, Scope: "arc", Verdict: "polish", Summary: "只修改授权范围内的问题",
+		Dimensions: []domain.DimensionScore{{Dimension: "consistency", Score: 60, Comment: "仅第3章需本轮修改"}},
+		Issues: []domain.ConsistencyIssue{
+			{Type: "consistency", Severity: "error", Description: "本轮修改", Evidence: "第3章正文", Chapters: []int{3}, RequiresChange: true},
+			{Type: "continuity", Severity: "error", Description: "本轮范围以外的问题", Evidence: "第4章正文", Chapters: []int{4}},
+		},
+	}
+	args, err := json.Marshal(review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSaveReviewTool(s).Execute(t.Context(), args); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Progress.Load()
+	if err != nil || !slices.Equal(p.PendingRewrites, []int{3}) {
+		t.Fatalf("严重度校验不得扩大模型明确选择的返工范围: %+v %v", p, err)
+	}
 }
 
 func TestSaveReviewPersistsContractAssessment(t *testing.T) {

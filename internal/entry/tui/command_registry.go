@@ -42,6 +42,7 @@ func (r commandRegistry) PaletteItems() []commandPaletteItem {
 			Usage:       spec.Usage,
 			Description: spec.Description,
 			AutoExecute: spec.AutoExecute,
+			NeedsIdle:   spec.NeedsIdle,
 		})
 	}
 	return items

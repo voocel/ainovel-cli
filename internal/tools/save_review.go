@@ -61,7 +61,7 @@ func (t *SaveReviewTool) Schema() map[string]any {
 		schema.Property("contract_status", llmcontract.Nullable(schema.Enum("章节契约完成度；不适用时为 null", "met", "partial", "missed"))).Required(),
 		schema.Property("contract_misses", schema.Array("未完成或违背的 contract 条目；无则为空数组", schema.String(""))).Required(),
 		schema.Property("contract_notes", llmcontract.Nullable(schema.String("对 contract 履行情况的简要说明；无则为 null"))).Required(),
-		schema.Property("verdict", schema.Enum("审阅结论", "accept", "polish", "rewrite")).Required(),
+		schema.Property("verdict", schema.Enum("审阅结论；accept 只允许 warning 或无问题，不得同时声明 critical/error", "accept", "polish", "rewrite")).Required(),
 		schema.Property("summary", schema.String("审阅总结")).Required(),
 	)
 }
@@ -311,6 +311,9 @@ func (t *SaveReviewTool) normalizeReviewEntry(r *domain.ReviewEntry) (*store.Arc
 		derived = append(derived, chapter)
 	}
 	slices.Sort(derived)
+	if r.Verdict == "accept" && (r.CriticalCount() > 0 || r.ErrorCount() > 0) {
+		return nil, fmt.Errorf("verdict=accept cannot contain critical/error issues; correct the severity or verdict: %w", errs.ErrToolArgs)
+	}
 	if r.Verdict == "accept" && len(derived) > 0 {
 		return nil, fmt.Errorf("accept review cannot contain issues with requires_change=true")
 	}

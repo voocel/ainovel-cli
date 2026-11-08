@@ -687,7 +687,7 @@ func (m Model) View() string {
 	} else if m.modelConfig != nil {
 		view = overlayAboveInput(view, renderModelConfigModal(m.width, m.modelConfig), inputH)
 	} else if m.compActive {
-		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
+		commandBar := renderCommandPalette(m.width, m.commandPaletteItems(), m.compIdx)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
 	return view

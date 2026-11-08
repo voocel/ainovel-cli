@@ -44,6 +44,18 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 	durStr := renderEventDuration(ev.Duration)
 
 	switch {
+	case ev.Category == "ANSWER":
+		// 回答是用户需要完整阅读的内容，单独折行；状态事件仍保持单行。
+		icon := lipgloss.NewStyle().Foreground(colorContext).Render("✦")
+		prefix := tsStr + " " + indent + icon + " "
+		padding := strings.Repeat(" ", lipgloss.Width(prefix))
+		lines := wrapStreamText(ev.Summary, max(2, width-lipgloss.Width(prefix)))
+		style := lipgloss.NewStyle().Foreground(bodyTextColor)
+		for i := range lines {
+			lines[i] = style.Render(lines[i])
+		}
+		return prefix + strings.Join(lines, "\n"+padding)
+
 	case ev.Category == "DECISION":
 		var icon string
 		switch {

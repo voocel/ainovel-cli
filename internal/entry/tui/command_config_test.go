@@ -53,6 +53,27 @@ func TestSelectingProviderOpensHub(t *testing.T) {
 	}
 }
 
+func TestMiMoPresetUsesNativeProviderFromConfigMenu(t *testing.T) {
+	state := &modelConfigState{editModelIdx: -1}
+	state.buildProviderMenus()
+	for _, choice := range state.presetChoices {
+		if choice.preset == nil || choice.preset.Name != "mimo" {
+			continue
+		}
+		state.applyProviderChoice(choice)
+		state.models = []bootstrap.ModelConfig{{Name: "mimo-v2.5-pro"}}
+		draft := state.draft()
+		if state.step != configStepHub || choice.custom || state.apiKeyOptional || draft.Provider != "mimo" || draft.Type != "" || draft.API != "" {
+			t.Fatalf("MiMo 应按内置 Provider 配置，不套自定义 OpenAI 协议: %+v", draft)
+		}
+		if protocol, err := (bootstrap.ProviderConfig{Type: draft.Type}).ProviderType(draft.Provider); err != nil || protocol != "mimo" {
+			t.Fatalf("配置应解析到原生 MiMo 适配器: %q %v", protocol, err)
+		}
+		return
+	}
+	t.Fatal("初始化和 /config 共用的 Provider 目录须包含 MiMo")
+}
+
 // 自定义（显式 openai 协议）Provider 的 hub 才展示协议与 Endpoint。
 func TestCustomProviderHubShowsProtocolAndEndpoint(t *testing.T) {
 	st := &modelConfigState{editModelIdx: -1}

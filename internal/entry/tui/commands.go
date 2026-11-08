@@ -371,9 +371,9 @@ func (m Model) handleSlashCommand(cmd slashCommand) (tea.Model, tea.Cmd) {
 		m.refreshEventViewport()
 		return m, nil
 	}
-	if spec.NeedsIdle && m.snapshot.IsRunning {
+	if unavailable := m.commandUnavailable(spec.NeedsIdle); unavailable != "" {
 		m.applyEvent(host.Event{
-			Time: time.Now(), Category: "ERROR", Summary: "命令仅可在空闲状态执行：/" + spec.Name, Level: "error",
+			Time: time.Now(), Category: "ERROR", Summary: "命令暂不可用：/" + spec.Name + "；" + unavailable, Level: "error",
 		})
 		m.refreshEventViewport()
 		return m, nil
